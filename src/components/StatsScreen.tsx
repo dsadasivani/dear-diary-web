@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { 
   Flame, BookOpen, FileText, Camera, BarChart2, 
   Settings, Award, Smile, ShieldAlert, ArrowRight, Image as ImageIcon,
-  Sparkles, X, Calendar, Grid
+  Sparkles, X, Calendar, Grid, ChevronDown
 } from 'lucide-react';
 import { Diary, Entry, Note, UserProfile } from '../types';
 import { calculateStreak } from '../utils/storage';
@@ -33,11 +33,26 @@ export default function StatsScreen({
 }: StatsScreenProps) {
   const [streak, setStreak] = useState<number>(0);
   const [totalPhotos, setTotalPhotos] = useState<number>(0);
-  const [selectedPixelYear, setSelectedPixelYear] = useState<number>(2026);
-  const [pixelViewMode, setPixelViewMode] = useState<'year' | 'month'>('year');
+  const [selectedPixelYear, setSelectedPixelYear] = useState<number>(() => new Date().getFullYear());
+  const [pixelViewMode, setPixelViewMode] = useState<'year' | 'month'>('month');
   const [selectedPixelMonth, setSelectedPixelMonth] = useState<number>(() => new Date().getMonth());
   const [selectedPixelEntry, setSelectedPixelEntry] = useState<Entry | null>(null);
   const [selectedPixelDate, setSelectedPixelDate] = useState<string>('');
+
+  // Dynamically extract all years where entries exist, plus current year
+  const availableYears = React.useMemo(() => {
+    const yearsSet = new Set<number>();
+    yearsSet.add(new Date().getFullYear()); // always include current year
+    entries.forEach(e => {
+      if (e.date) {
+        const yr = parseInt(e.date.split('-')[0], 10);
+        if (!isNaN(yr)) {
+          yearsSet.add(yr);
+        }
+      }
+    });
+    return Array.from(yearsSet).sort((a, b) => b - a);
+  }, [entries]);
 
   useEffect(() => {
     // calculate real streak
@@ -358,45 +373,70 @@ export default function StatsScreen({
                     })}
                   </div>
 
-                  {/* Year selector pills */}
-                  <div className="flex bg-brand-bg/80 dark:bg-brand-card-bg/50 p-1 rounded-2xl border border-brand-border/60 dark:border-white/5 shadow-inner gap-0.5 animate-fade-in">
-                    {[
-                      { year: 2026, activeBg: 'bg-brand-pink-dark', activeShadow: 'shadow-[0_2px_8px_rgba(117,31,53,0.2)]', colorClass: 'text-brand-pink-dark dark:text-brand-pink' },
-                      { year: 2025, activeBg: 'bg-brand-sage', activeShadow: 'shadow-[0_2px_8px_rgba(69,98,80,0.2)]', colorClass: 'text-brand-sage' }
-                    ].map(tab => {
-                      const isActive = selectedPixelYear === tab.year;
-                      return (
-                        <button
-                          key={tab.year}
-                          onClick={() => {
-                            setSelectedPixelYear(tab.year);
-                            setSelectedPixelEntry(null);
-                            setSelectedPixelDate('');
-                          }}
-                          className="relative px-3 py-1.5 text-[10px] font-bold rounded-xl transition-all flex items-center justify-center cursor-pointer select-none group active:scale-[0.96]"
-                        >
-                          {isActive && (
-                            <motion.div
-                              layoutId="pixelYearTab"
-                              className={`absolute inset-0 ${tab.activeBg} rounded-xl ${tab.activeShadow}`}
-                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                            />
-                          )}
-                          <span className={`relative z-10 transition-colors duration-200 ${
-                            isActive 
-                              ? 'text-white scale-[1.03]' 
-                              : 'text-brand-text-muted dark:text-brand-text-muted/80 group-hover:text-brand-plum dark:group-hover:text-brand-text'
-                          }`}>
-                            {tab.year}
-                          </span>
-                          
-                          {!isActive && (
-                            <div className="absolute inset-0 rounded-xl bg-brand-blush-light/0 dark:bg-white/0 group-hover:bg-brand-blush-light/40 dark:group-hover:bg-white/5 transition-colors duration-200 -z-0 pointer-events-none" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {/* Year selector pills / dropdown adaptive container */}
+                  {availableYears.length > 5 ? (
+                    <div className="relative animate-fade-in">
+                      <select
+                        value={selectedPixelYear}
+                        onChange={(e) => {
+                          setSelectedPixelYear(parseInt(e.target.value, 10));
+                          setSelectedPixelEntry(null);
+                          setSelectedPixelDate('');
+                        }}
+                        className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
+                      >
+                        {availableYears.map(yr => (
+                          <option key={yr} value={yr}>
+                            Year {yr}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border border-brand-border/60 dark:border-white/10 bg-brand-bg/80 dark:bg-brand-card-bg/50 shadow-inner text-[10px] font-bold text-brand-plum dark:text-brand-pink-dark">
+                        <span>Year: {selectedPixelYear}</span>
+                        <ChevronDown className="w-3.5 h-3.5 text-brand-sage" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex bg-brand-bg/80 dark:bg-brand-card-bg/50 p-1 rounded-2xl border border-brand-border/60 dark:border-white/5 shadow-inner gap-0.5 animate-fade-in">
+                      {availableYears.map((yr, idx) => {
+                        const isActive = selectedPixelYear === yr;
+                        const isEven = idx % 2 === 0;
+                        const activeBg = isEven ? 'bg-brand-pink-dark' : 'bg-brand-sage';
+                        const activeShadow = isEven ? 'shadow-[0_2px_8px_rgba(117,31,53,0.2)]' : 'shadow-[0_2px_8px_rgba(69,98,80,0.2)]';
+                        
+                        return (
+                          <button
+                            key={yr}
+                            onClick={() => {
+                              setSelectedPixelYear(yr);
+                              setSelectedPixelEntry(null);
+                              setSelectedPixelDate('');
+                            }}
+                            className="relative px-3 py-1.5 text-[10px] font-bold rounded-xl transition-all flex items-center justify-center cursor-pointer select-none group active:scale-[0.96]"
+                          >
+                            {isActive && (
+                              <motion.div
+                                layoutId="pixelYearTab"
+                                className={`absolute inset-0 ${activeBg} rounded-xl ${activeShadow}`}
+                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                              />
+                            )}
+                            <span className={`relative z-10 transition-colors duration-200 ${
+                              isActive 
+                                ? 'text-white scale-[1.03]' 
+                                : 'text-brand-text-muted dark:text-brand-text-muted/80 group-hover:text-brand-plum dark:group-hover:text-brand-text'
+                            }`}>
+                              {yr}
+                            </span>
+                            
+                            {!isActive && (
+                              <div className="absolute inset-0 rounded-xl bg-brand-blush-light/0 dark:bg-white/0 group-hover:bg-brand-blush-light/40 dark:group-hover:bg-white/5 transition-colors duration-200 -z-0 pointer-events-none" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
 

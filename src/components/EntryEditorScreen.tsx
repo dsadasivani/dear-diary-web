@@ -25,6 +25,7 @@ interface EntryEditorScreenProps {
   initialDate?: string;
   initialPrompt?: string;
   onShowToast?: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+  showDiarySelector?: boolean;
 }
 
 export default function EntryEditorScreen({
@@ -36,7 +37,8 @@ export default function EntryEditorScreen({
   initialFocusMode = false,
   initialDate,
   initialPrompt,
-  onShowToast
+  onShowToast,
+  showDiarySelector = false
 }: EntryEditorScreenProps) {
   const diaries = getDiaries();
   
@@ -213,7 +215,13 @@ export default function EntryEditorScreen({
       setSelectedTags(prev => [...prev, formattedTag]);
     }
   };
-  const [isDockMinimized, setIsDockMinimized] = useState<boolean>(false);
+  const [isDockMinimized, setIsDockMinimized] = useState<boolean>(initialFocusMode);
+  
+  useEffect(() => {
+    if (isFocusMode) {
+      setIsDockMinimized(true);
+    }
+  }, [isFocusMode]);
   const [activeFormats, setActiveFormats] = useState({
     bold: false,
     italic: false,
@@ -1186,37 +1194,63 @@ export default function EntryEditorScreen({
 
   if (isFocusMode) {
     return (
-      <div className="fixed inset-0 z-50 bg-brand-bg flex flex-col h-screen overflow-y-auto px-6 py-8 md:py-16 pb-28">
-        <div className="max-w-2xl mx-auto w-full flex-grow flex flex-col gap-6">
+      <div className="fixed inset-0 z-50 bg-brand-bg flex flex-col h-screen overflow-y-auto px-6 py-8 md:py-12 pb-28">
+        <div className="max-w-2xl mx-auto w-full flex-grow flex flex-col gap-5">
           
           {/* Distraction-Free Minimalist Top Controls */}
-          <header className="flex justify-between items-center text-brand-sage/60 hover:opacity-100 transition-opacity duration-300 select-none pb-4 border-b border-brand-border/10">
+          <header className="flex justify-between items-center text-brand-sage/60 hover:opacity-100 transition-opacity duration-300 select-none pb-3 border-b border-brand-border/10">
             <button 
               onClick={() => {
                 setIsFocusMode(false);
                 onFocusModeChange?.(false);
               }}
-              className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 bg-brand-card-bg rounded-xl border border-brand-border text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-all active:scale-95 shadow-sm"
+              className="flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 bg-brand-card-bg rounded-lg border border-brand-border/60 text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-all active:scale-95"
               title="Exit Focus Mode"
             >
-              <Minimize2 className="w-3.5 h-3.5 text-brand-pink" />
-              <span>Exit Focus Mode</span>
+              <Minimize2 className="w-3 h-3 text-brand-pink" />
+              <span>Exit Focus</span>
             </button>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              {showDiarySelector && diaries.length > 0 && (
+                <div className="relative">
+                  <select
+                    value={diaryId}
+                    onChange={(e) => setDiaryId(e.target.value)}
+                    className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
+                  >
+                    {diaries.map(d => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="px-2.5 py-1 rounded-lg bg-brand-card-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1.5 border border-brand-border/60 text-brand-plum select-none">
+                    <span 
+                      className="w-2 h-2 rounded-full border border-white/20 shadow-inner" 
+                      style={{ backgroundColor: diaries.find(d => d.id === diaryId)?.color || '#8A3D55' }}
+                    />
+                    <span className="truncate max-w-[80px]">
+                      {diaries.find(d => d.id === diaryId)?.name || 'Select'}
+                    </span>
+                    <ChevronDown className="w-3 h-3 text-brand-sage" />
+                  </div>
+                </div>
+              )}
+
               <button
                 type="button"
                 onClick={() => setFontFamily(prev => prev === 'serif' ? 'sans' : prev === 'sans' ? 'mono' : 'serif')}
-                className="px-3 py-1.5 rounded-xl bg-brand-card-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1.5 border border-brand-border text-brand-plum shadow-sm"
+                className="px-2.5 py-1 rounded-lg bg-brand-card-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 border border-brand-border/60 text-brand-plum"
                 title="Change font style"
               >
-                <Type className="w-3.5 h-3.5 text-brand-pink" />
+                <Type className="w-3 h-3 text-brand-pink" />
                 <span>Font: <span className="capitalize">{fontFamily}</span></span>
               </button>
 
               <button 
                 onClick={handleSave}
-                className="bg-brand-sage hover:bg-brand-sage-dark text-white px-4 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-sm"
+                className="bg-brand-sage hover:bg-brand-sage-dark text-white px-3.5 py-1 rounded-lg text-[11px] font-bold transition-all active:scale-95 shadow-sm"
               >
                 Save
               </button>
@@ -1224,20 +1258,17 @@ export default function EntryEditorScreen({
           </header>
 
           {/* Minimalist Title */}
-          <div className="pt-4">
+          <div className="w-full pt-1">
             <input 
               type="text" 
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Give this moment a title..."
-              className={`w-full bg-transparent p-0 border-none font-bold text-brand-plum placeholder-brand-sage/30 focus:outline-none focus:ring-0 text-3xl md:text-4xl ${
+              className={`w-full bg-transparent p-0 border-none font-bold text-brand-plum placeholder-brand-sage/35 focus:outline-none focus:ring-0 text-lg md:text-xl pb-1 border-b border-brand-border/15 focus:border-brand-pink/40 transition-colors ${
                 fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
               }`}
             />
           </div>
-
-          {/* Minimalist Divider */}
-          <div className="h-px w-full bg-brand-border/20" />
 
           {/* Large Body Area */}
           <div className="flex-grow flex flex-col min-h-[450px]">
@@ -1346,19 +1377,21 @@ export default function EntryEditorScreen({
               )}
 
               {/* Single editing input card area for NEW moments */}
-              <div className="flex flex-col gap-4 flex-grow border-t border-brand-pink/10 pt-8 mt-4">
-                <div className="flex items-center justify-between bg-brand-pink/5 px-4 py-2 rounded-2xl border border-brand-pink/15">
-                  <div className="flex items-center gap-2 select-none">
-                    <Clock className="w-3.5 h-3.5 text-brand-pink" />
-                    <span className="text-xs font-bold text-brand-pink uppercase tracking-widest">
-                      Drafting New Moment for {formatTime12(currentTimeText)}
+              <div className={`flex flex-col gap-3 flex-grow ${blocks.length > 0 ? 'border-t border-brand-pink/10 pt-4 mt-2' : ''}`}>
+                <div className="flex items-center justify-between bg-brand-pink/5 px-3 py-1.5 rounded-xl border border-brand-pink/15">
+                  <div className="flex items-center gap-1.5 select-none w-full">
+                    <Clock className="w-3.5 h-3.5 text-brand-pink flex-shrink-0" />
+                    <span className="text-[10px] font-bold text-brand-pink uppercase tracking-wider truncate">
+                      Drafting Moment for {formatTime12(currentTimeText)}
                     </span>
-                    <input 
-                      type="time" 
-                      value={currentTimeText}
-                      onChange={(e) => setCurrentTimeText(e.target.value)}
-                      className="ml-2 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0.5"
-                    />
+                    <div className="ml-auto flex items-center">
+                      <input 
+                        type="time" 
+                        value={currentTimeText}
+                        onChange={(e) => setCurrentTimeText(e.target.value)}
+                        className="text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -1550,279 +1583,339 @@ export default function EntryEditorScreen({
         </div>
       </header>
 
-      {/* Date, Diary Picker and Header Meta elements */}
-      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
+      {/* Unified Writing Canvas */}
+      <div className="bg-brand-card-bg p-4 md:p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3 flex-grow">
         
-        {/* Diary Selector */}
-        <div className="flex justify-between items-center pb-3 border-b border-brand-border/40">
-          <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Diary Location</label>
-          <select 
-            value={diaryId}
-            onChange={(e) => setDiaryId(e.target.value)}
-            className="text-xs font-bold text-brand-sage-dark bg-brand-sage-light/20 dark:bg-brand-sage-light/10 border border-brand-border px-3 py-1.5 rounded-xl focus:outline-none"
-          >
-            {diaries.map(d => (
-              <option key={d.id} value={d.id}>{d.emoji} {d.name}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Date and Time Fields */}
-        <div className="flex flex-wrap items-center gap-4 text-xs font-semibold text-brand-sage justify-between">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-1.5">
-              <Calendar className="w-4 h-4 text-brand-pink" />
-              <input 
-                type="date" 
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="bg-transparent border-b border-brand-border text-brand-plum font-serif-diary font-bold py-1.5 focus:outline-none focus:border-brand-pink"
-              />
-            </div>
-            
-            <div className="flex items-center gap-1.5">
-              <Clock className="w-4 h-4 text-brand-pink" />
-              <input 
-                type="time" 
-                value={time}
-                onChange={(e) => setTime(e.target.value)}
-                className="bg-transparent border-b border-brand-border text-brand-plum font-serif-diary font-bold py-1.5 focus:outline-none focus:border-brand-pink"
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5 text-brand-sage/80 bg-brand-rose-light dark:bg-brand-rose-light/10 px-2.5 py-1.5 rounded-xl border border-brand-border">
-            <span className="w-1.5 h-1.5 bg-brand-pink rounded-full" />
-            <span>Word Count: {liveWordCount}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Title text input */}
-      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-1">
-        <input 
-          type="text" 
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title your entry..."
-          className={`w-full bg-transparent p-0 border-none text-xl md:text-2xl font-bold text-brand-plum placeholder-brand-sage/40 focus:outline-none focus:ring-0 ${
-            fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
-          }`}
-        />
-      </div>
-
-      {/* Mood Selector horizontal list */}
-      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-        <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">How are you feeling?</label>
-        <div className="flex overflow-x-auto no-scrollbar gap-2.5 py-1">
-          {availableMoods.map(m => (
-            <button
-              key={m.name}
-              type="button"
-              onClick={() => setMood(m)}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full border transition-all flex-shrink-0 active:scale-95 ${
-                mood.name === m.name
-                  ? 'bg-brand-sage-light dark:bg-brand-sage-light/10 text-brand-sage-dark border-brand-sage scale-105 shadow-sm'
-                  : 'bg-brand-bg text-brand-sage hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 border-brand-border'
-              }`}
-            >
-              <span className="text-base">{m.emoji}</span>
-              <span className="text-xs font-semibold">{m.name}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Main long-form body text editor */}
-      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3 flex-grow min-h-[300px]">
-        {/* Editor Controls with Font family switcher and Distraction-free Writing Toggle */}
-        <div className="flex justify-between items-center pb-2.5 border-b border-brand-border/40 text-brand-sage select-none">
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setFontFamily(prev => prev === 'serif' ? 'sans' : prev === 'sans' ? 'mono' : 'serif')}
-              className="px-3 py-1.5 rounded-xl bg-brand-bg dark:bg-brand-bg/50 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1.5 text-brand-plum border border-brand-border shadow-sm active:scale-95"
-              title="Change Writing Font style"
-            >
-              <Type className="w-3.5 h-3.5 text-brand-pink" />
-              <span>Font: <span className="capitalize">{fontFamily}</span></span>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => toggleRecording('voice-dictation')}
-              className="px-3 py-1.5 rounded-xl bg-brand-bg dark:bg-brand-bg/50 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1.5 text-brand-plum border border-brand-border shadow-sm active:scale-95"
-              title="Record Voice Note / Speech-to-Text"
-            >
-              <Mic className="w-3.5 h-3.5 text-brand-pink" />
-              <span>Voice Dictation</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setIsFocusMode(true);
-                onFocusModeChange?.(true);
-              }}
-              className="px-3 py-1.5 rounded-xl bg-brand-bg dark:bg-brand-bg/50 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1.5 text-brand-plum border border-brand-border shadow-sm active:scale-95"
-              title="Distraction-free Writing Mode"
-            >
-              <Maximize2 className="w-3.5 h-3.5 text-brand-pink animate-pulse" />
-              <span>Maximize Area (Focus)</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-5 text-left w-full h-full mt-2">
-          {/* List of blocks in edit mode for mobile */}
-          {blocks.length > 0 && (
-            <div className="flex flex-col gap-5 mb-4">
-              <span className="text-[10px] font-extrabold text-brand-pink uppercase tracking-wider pl-1 border-b border-brand-pink/10 pb-1.5">
-                Saved Moments ({blocks.length})
-              </span>
-              <div className="flex flex-col gap-5">
-                {blocks.map((b, index) => {
-                  const isMinimized = minimizedBlockIds.has(b.id);
-                  return (
-                    <div 
-                      key={b.id} 
-                      className="relative pl-6 border-l-2 border-brand-pink/20 flex flex-col gap-2"
-                    >
-                      {/* Timeline point */}
-                      <div className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-brand-bg border-2 border-brand-pink" />
-                      
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 overflow-hidden">
-                          <span className="font-mono text-[10px] font-bold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded flex items-center gap-1 border border-brand-pink/10">
-                            <Clock className="w-3 h-3" />
-                            {formatTime12(b.time)}
-                          </span>
-                          <input 
-                            type="time" 
-                            value={b.time}
-                            onChange={(e) => {
-                              const updated = [...blocks];
-                              updated[index].time = e.target.value;
-                              setBlocks(updated);
-                            }}
-                            className="text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0 transition-colors w-20"
-                          />
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setMinimizedBlockIds(prev => {
-                                const next = new Set(prev);
-                                if (isMinimized) next.delete(b.id);
-                                else next.add(b.id);
-                                return next;
-                              });
-                            }}
-                            className="p-1 text-brand-plum/60 hover:text-brand-pink"
-                          >
-                            {isMinimized ? <Maximize2 className="w-3.5 h-3.5" /> : <Minimize2 className="w-3.5 h-3.5" />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setBlocks(prev => prev.filter(item => item.id !== b.id));
-                            }}
-                            className="p-1 text-brand-rose/60"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {!isMinimized && (
-                        <div className="bg-white/40 dark:bg-brand-bg/20 p-3 rounded-xl border border-brand-border/20 flex flex-col gap-3">
-                          <RichTextEditor
-                            html={b.body}
-                            onChange={(newHtml) => {
-                              const updated = [...blocks];
-                              updated[index].body = newHtml;
-                              setBlocks(updated);
-                            }}
-                            onFocus={() => setActiveBlockId(b.id)}
-                            placeholder="Edit moment..."
-                            className={`rich-text-editor w-full text-base leading-relaxed text-brand-plum focus:outline-none focus:ring-0 ${
-                              fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
-                            }`}
-                          />
-
-                          {b.audioUri && (
-                            <div className="border-t border-brand-border/10 pt-2 flex flex-col gap-2">
-                              <AudioWaveformPlayer 
-                                src={b.audioUri} 
-                                title={`Voice moment`}
-                                variant="minimal"
-                                onDelete={() => {
-                                  const updated = [...blocks];
-                                  updated[index].audioUri = undefined;
-                                  setBlocks(updated);
-                                }}
-                              />
-
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+        {showDiarySelector && diaries.length > 0 && (
+          <div className="flex flex-col gap-1.5 pb-3 border-b border-brand-border/20">
+            <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest pl-0.5 select-none">
+              Choose Destination Journal
+            </label>
+            <div className="relative">
+              <select
+                value={diaryId}
+                onChange={(e) => setDiaryId(e.target.value)}
+                className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
+              >
+                {diaries.map(d => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-brand-border/60 bg-brand-bg/30 text-brand-plum text-xs font-semibold hover:border-brand-pink/30 hover:bg-brand-blush-light/15 transition-all shadow-inner">
+                <div className="flex items-center gap-2 overflow-hidden select-none">
+                  <span 
+                    className="w-3 h-3 rounded-full shadow-md border border-white/20 flex-shrink-0" 
+                    style={{ backgroundColor: diaries.find(d => d.id === diaryId)?.color || '#8A3D55' }}
+                  />
+                  <span className="font-serif-diary italic text-sm truncate pr-1">
+                    {diaries.find(d => d.id === diaryId)?.name || 'Select a Journal'}
+                  </span>
+                </div>
+                <ChevronDown className="w-3.5 h-3.5 text-brand-sage flex-shrink-0" />
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* New Moment area for mobile */}
-          <div className="flex flex-col gap-3 flex-grow border-t border-brand-pink/10 pt-4">
-            <div className="flex items-center justify-between bg-brand-pink/5 px-3 py-1.5 rounded-2xl border border-brand-pink/15">
-              <div className="flex items-center gap-1.5 select-none overflow-hidden">
-                <Clock className="w-3.5 h-3.5 text-brand-pink flex-shrink-0" />
-                <span className="text-[10px] font-bold text-brand-pink uppercase tracking-wider truncate">
-                  New Moment at {formatTime12(currentTimeText)}
-                </span>
-                <input 
-                  type="time" 
-                  value={currentTimeText}
-                  onChange={(e) => setCurrentTimeText(e.target.value)}
-                  className="ml-1 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0"
-                />
-              </div>
-            </div>
-
-            <RichTextEditor
-              html={body}
-              onChange={setBody}
-              onFocus={() => setActiveBlockId(null)}
-              placeholder="Write a brand-new moment reflection..."
-              className={`rich-text-editor w-full text-base leading-relaxed text-brand-plum min-h-[180px] ${
-                fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
-              }`}
+        {/* Modern Inline Metadata Ribbon */}
+        <div className="flex flex-wrap items-center gap-2 text-xs text-brand-sage/80 border-b border-brand-border/20 pb-2 mb-1 select-none">
+          {/* Inline Date Field */}
+          <div className="flex items-center gap-1 hover:text-brand-pink transition-colors cursor-pointer">
+            <Calendar className="w-3.5 h-3.5 text-brand-pink" />
+            <input 
+              type="date" 
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="bg-transparent border-none text-brand-plum font-serif-diary font-bold py-0 p-0 focus:outline-none focus:ring-0 cursor-pointer w-[105px]"
             />
+          </div>
 
-            {audioUri && (
-              <div className="mt-2 border-t border-brand-border/10 pt-3 flex flex-col items-center gap-2">
-                <AudioWaveformPlayer 
-                  src={audioUri} 
-                  variant="minimal"
-                  onDelete={() => setAudioUri(undefined)}
-                />
+          <span className="text-brand-border/60">•</span>
 
+          {/* Inline Time Field */}
+          <div className="flex items-center gap-1 hover:text-brand-pink transition-colors cursor-pointer">
+            <Clock className="w-3.5 h-3.5 text-brand-pink" />
+            <input 
+              type="time" 
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="bg-transparent border-none text-brand-plum font-serif-diary font-bold py-0 p-0 focus:outline-none focus:ring-0 cursor-pointer w-[65px]"
+            />
+          </div>
+
+          <span className="text-brand-border/60">•</span>
+
+          {/* Word Count */}
+          <div className="text-[11px] font-semibold text-brand-sage/80 bg-brand-rose-light/40 dark:bg-brand-rose-light/10 px-2 py-0.5 rounded-md border border-brand-border/20">
+            {liveWordCount} words
+          </div>
+        </div>
+
+        {/* Title Input */}
+        <div className="w-full">
+          <input 
+            type="text" 
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Title your entry..."
+            className={`w-full bg-transparent p-0 border-none text-base md:text-lg font-bold text-brand-plum placeholder-brand-sage/35 focus:outline-none focus:ring-0 pb-1 border-b border-brand-border/15 focus:border-brand-pink/40 transition-colors ${
+              fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+            }`}
+          />
+        </div>
+
+        {/* Cohesive Inline Mood & Tags Row */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-brand-border/20 pb-2.5 mb-1.5">
+          {/* Active Mood Button with overlay dropdown */}
+          <div className="relative">
+            <select
+              value={mood.name}
+              onChange={(e) => {
+                const found = availableMoods.find(m => m.name === e.target.value);
+                if (found) setMood(found);
+              }}
+              className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
+            >
+              {availableMoods.map(m => (
+                <option key={m.name} value={m.name}>{m.emoji} {m.name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-brand-border bg-white dark:bg-brand-card-bg text-brand-plum text-[11px] font-semibold hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-all shadow-sm"
+            >
+              <span>{mood.emoji}</span>
+              <span>Feeling {mood.name}</span>
+              <ChevronDown className="w-3 h-3 text-brand-sage/80" />
+            </button>
+          </div>
+
+          {selectedTags.length > 0 && <span className="text-brand-border/40 font-light">|</span>}
+
+          {/* Active Tags list */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {selectedTags.map(tag => (
+              <span 
+                key={tag}
+                className="text-[10px] font-semibold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded-full border border-brand-pink/15 flex items-center gap-1"
+              >
+                #{tag}
+                <button 
+                  type="button" 
+                  onClick={() => handleTagToggle(tag)} 
+                  className="hover:text-red-500 font-extrabold ml-1 leading-none text-xs text-brand-pink/60 hover:text-brand-rose transition-colors"
+                  title="Remove tag"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowTagPicker(true)}
+              className="flex items-center gap-1 text-[10px] font-bold text-brand-sage hover:text-brand-pink px-2 py-0.5 rounded-full border border-dashed border-brand-border/60 bg-transparent hover:border-brand-pink/40 transition-all cursor-pointer"
+            >
+              <Plus className="w-2.5 h-2.5 text-brand-pink" />
+              <span>Tag</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Content Canvas (Timelines, text body inputs) */}
+        <div className="flex flex-col gap-2.5 flex-grow mt-1">
+          
+          {/* Editor Header controls inline */}
+          <div className="flex justify-between items-center pb-1 text-brand-sage select-none">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setFontFamily(prev => prev === 'serif' ? 'sans' : prev === 'sans' ? 'mono' : 'serif')}
+                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
+                title="Change Writing Font style"
+              >
+                <Type className="w-3 h-3 text-brand-pink" />
+                <span>Font: <span className="capitalize">{fontFamily}</span></span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => toggleRecording('voice-dictation')}
+                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
+                title="Record Voice Note / Speech-to-Text"
+              >
+                <Mic className="w-3 h-3 text-brand-pink" />
+                <span>Dictation</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFocusMode(true);
+                  setIsDockMinimized(true);
+                  onFocusModeChange?.(true);
+                }}
+                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
+                title="Distraction-free Writing Mode"
+              >
+                <Maximize2 className="w-3 h-3 text-brand-pink animate-pulse" />
+                <span>Focus</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-5 text-left w-full h-full mt-2">
+            {/* List of blocks in edit mode for mobile */}
+            {blocks.length > 0 && (
+              <div className="flex flex-col gap-5 mb-4">
+                <span className="text-[10px] font-extrabold text-brand-pink uppercase tracking-wider pl-1 border-b border-brand-pink/10 pb-1.5">
+                  Saved Moments ({blocks.length})
+                </span>
+                <div className="flex flex-col gap-5 animate-fade-in">
+                  {blocks.map((b, index) => {
+                    const isMinimized = minimizedBlockIds.has(b.id);
+                    return (
+                      <div 
+                        key={b.id} 
+                        className="relative pl-6 border-l-2 border-brand-pink/20 flex flex-col gap-2 group"
+                      >
+                        {/* Timeline point */}
+                        <div className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-brand-bg border-2 border-brand-pink group-hover:scale-110 transition-transform" />
+                        
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 overflow-hidden">
+                            <span className="font-mono text-[10px] font-bold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded flex items-center gap-1 border border-brand-pink/10 shadow-sm">
+                              <Clock className="w-3.5 h-3.5" />
+                              {formatTime12(b.time)}
+                            </span>
+                            <input 
+                              type="time" 
+                              value={b.time}
+                              onChange={(e) => {
+                                const updated = [...blocks];
+                                updated[index].time = e.target.value;
+                                setBlocks(updated);
+                              }}
+                              className="text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0 transition-colors w-20 cursor-pointer"
+                            />
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMinimizedBlockIds(prev => {
+                                  const next = new Set(prev);
+                                  if (isMinimized) next.delete(b.id);
+                                  else next.add(b.id);
+                                  return next;
+                                });
+                              }}
+                              className="p-1 text-brand-plum/60 hover:text-brand-pink hover:bg-brand-pink/10 rounded"
+                            >
+                              {isMinimized ? <Maximize2 className="w-3.5 h-3.5" /> : <Minimize2 className="w-3.5 h-3.5" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBlocks(prev => prev.filter(item => item.id !== b.id));
+                              }}
+                              className="p-1 text-brand-rose/60 hover:text-brand-rose hover:bg-brand-rose/10 rounded"
+                              title="Delete moment"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {!isMinimized && (
+                          <div className="bg-white/45 dark:bg-brand-bg/25 p-3 rounded-xl border border-brand-border/20 flex flex-col gap-3 shadow-inner">
+                            <RichTextEditor
+                              html={b.body}
+                              onChange={(newHtml) => {
+                                const updated = [...blocks];
+                                updated[index].body = newHtml;
+                                setBlocks(updated);
+                              }}
+                              onFocus={() => setActiveBlockId(b.id)}
+                              placeholder="Edit moment..."
+                              className={`rich-text-editor w-full text-base leading-relaxed text-brand-plum focus:outline-none focus:ring-0 ${
+                                fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                              }`}
+                            />
+
+                            {b.audioUri && (
+                              <div className="border-t border-brand-border/10 pt-2 flex flex-col gap-2">
+                                <AudioWaveformPlayer 
+                                  src={b.audioUri} 
+                                  title={`Voice moment`}
+                                  variant="minimal"
+                                  onDelete={() => {
+                                    const updated = [...blocks];
+                                    updated[index].audioUri = undefined;
+                                    setBlocks(updated);
+                                  }}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
+
+            {/* New Moment drafting area */}
+            <div className={`flex flex-col gap-2.5 flex-grow ${blocks.length > 0 ? 'border-t border-brand-pink/10 pt-3' : ''}`}>
+              <div className="flex items-center justify-between bg-brand-pink/5 px-2.5 py-1 rounded-xl border border-brand-pink/15">
+                <div className="flex items-center gap-1.5 select-none overflow-hidden w-full">
+                  <Clock className="w-3.5 h-3.5 text-brand-pink flex-shrink-0" />
+                  <span className="text-[10px] font-bold text-brand-pink uppercase tracking-wider truncate">
+                    Drafting Moment at {formatTime12(currentTimeText)}
+                  </span>
+                  <div className="ml-auto flex items-center">
+                    <input 
+                      type="time" 
+                      value={currentTimeText}
+                      onChange={(e) => setCurrentTimeText(e.target.value)}
+                      className="ml-1 text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <RichTextEditor
+                html={body}
+                onChange={setBody}
+                onFocus={() => setActiveBlockId(null)}
+                placeholder="Write a brand-new moment reflection..."
+                className={`rich-text-editor w-full text-base leading-relaxed text-brand-plum min-h-[180px] focus:outline-none focus:ring-0 ${
+                  fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                }`}
+              />
+
+              {audioUri && (
+                <div className="mt-2 border-t border-brand-border/10 pt-3 flex flex-col items-center gap-2">
+                  <AudioWaveformPlayer 
+                    src={audioUri} 
+                    variant="minimal"
+                    onDelete={() => setAudioUri(undefined)}
+                  />
+                </div>
+              )}
+            </div>
           </div>
         </div>
-
-        {/* Removed global audio player from here as it's now per-moment */}
 
         {/* Thumbnail attachments list */}
         {photoUris.length > 0 && (
-          <div className="flex flex-col gap-1.5 border-t border-brand-border/40 pt-3">
+          <div className="flex flex-col gap-1.5 border-t border-brand-border/40 pt-3 mt-2">
             <p className="text-[10px] font-bold text-brand-sage uppercase tracking-widest">
-              Attached Photos (Long-press or tap X to remove)
+              Attached Photos
             </p>
             <div className="flex overflow-x-auto gap-3 py-1">
               {photoUris.map((photo, idx) => (
@@ -1842,120 +1935,7 @@ export default function EntryEditorScreen({
         )}
       </div>
 
-      {/* Point 2: Mindful Reflection Guide (Local offline analyzer) */}
-      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-2.5">
-            <span className="p-2 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-xl">
-              <Sparkles className="w-4 h-4 fill-brand-pink/10 text-brand-pink" />
-            </span>
-            <div>
-              <h3 className="text-sm font-bold text-brand-plum">Mindful Reflection Guide</h3>
-              <p className="text-[10px] text-brand-sage mt-0.5">Get supportive reflections, suggested moods & tags (works 100% locally)</p>
-            </div>
-          </div>
-        </div>
 
-        {aiError && (
-          <p className="text-xs font-semibold text-brand-pink-dark bg-brand-pink/5 p-3 rounded-2xl border border-brand-pink/20">
-            {aiError}
-          </p>
-        )}
-
-        {aiLoading ? (
-          <div className="flex flex-col items-center justify-center py-6 gap-3 text-center">
-            <div className="relative w-10 h-10">
-              <motion.div 
-                animate={{ rotate: 360 }}
-                transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
-                className="w-10 h-10 rounded-full border-4 border-brand-pink/10 border-t-brand-pink"
-              />
-              <Sparkles className="w-4 h-4 text-brand-pink absolute inset-0 m-auto animate-pulse" />
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-bold text-brand-plum">Reflection Guide is contemplating...</p>
-              <motion.p 
-                animate={{ opacity: [0.5, 1, 0.5] }}
-                transition={{ duration: 2, repeat: Infinity }}
-                className="text-[10px] text-brand-sage italic"
-              >
-                "Tending to your thoughts with absolute care..."
-              </motion.p>
-            </div>
-          </div>
-        ) : aiResult ? (
-          <div className="flex flex-col gap-4 animate-fade-in pt-1">
-            <div className="bg-brand-bg/50 p-4 rounded-2xl border border-brand-border/60">
-              <p className="text-[10px] font-bold text-brand-pink uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Sparkles className="w-3 h-3" /> Empathetic Reflection
-              </p>
-              <p className="text-xs leading-relaxed text-brand-plum italic font-serif-diary">
-                "{aiResult.reflection}"
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3.5">
-              <div className="flex flex-col gap-2 bg-brand-bg/35 p-3.5 rounded-2xl border border-brand-border/40">
-                <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Suggested Mood</span>
-                <button
-                  type="button"
-                  onClick={() => applyAiMood(aiResult.mood)}
-                  className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-brand-card-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 border border-brand-border rounded-xl text-left transition-all group scale-100 hover:scale-[1.01]"
-                >
-                  <span className="text-xl">
-                    {aiResult.mood.toLowerCase() === 'joyful' ? '😊' :
-                     aiResult.mood.toLowerCase() === 'calm' ? '😌' :
-                     aiResult.mood.toLowerCase() === 'sad' ? '😢' :
-                     aiResult.mood.toLowerCase() === 'anxious' ? '😟' :
-                     aiResult.mood.toLowerCase() === 'excited' ? '🤩' :
-                     aiResult.mood.toLowerCase() === 'reflective' ? '💭' :
-                     aiResult.mood.toLowerCase() === 'tired' ? '😴' :
-                     aiResult.mood.toLowerCase() === 'creative' ? '🎨' : '📝'}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-brand-plum truncate">{aiResult.mood}</p>
-                    <p className="text-[9px] text-brand-pink font-semibold group-hover:underline">Tap to apply</p>
-                  </div>
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-2 bg-brand-bg/35 p-3.5 rounded-2xl border border-brand-border/40">
-                <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Suggested Tags</span>
-                <div className="flex flex-wrap gap-1.5 max-h-16 overflow-y-auto no-scrollbar">
-                  {aiResult.tags.map(tag => {
-                    const exists = selectedTags.includes(tag.toLowerCase());
-                    return (
-                      <button
-                        key={tag}
-                        type="button"
-                        onClick={() => applyAiTag(tag)}
-                        disabled={exists}
-                        className={`text-[10px] px-2 py-1 rounded-lg font-semibold transition-all ${
-                          exists 
-                            ? 'bg-brand-sage-light/35 text-brand-sage-dark cursor-not-allowed border border-transparent' 
-                            : 'bg-white dark:bg-brand-card-bg border border-brand-border hover:border-brand-pink text-brand-plum hover:scale-105 active:scale-95'
-                        }`}
-                      >
-                        #{tag.toLowerCase()}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={handleAiEnhance}
-            disabled={!body || body.trim().length < 10}
-            className="w-full py-3 bg-brand-sage hover:bg-brand-sage-dark disabled:bg-brand-sage-light text-white font-bold text-xs rounded-2xl shadow-sm transition-colors flex items-center justify-center gap-2 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Sparkles className="w-4 h-4 fill-white/10" />
-            Analyze & Spark Reflection
-          </button>
-        )}
-      </div>
 
       {/* Styles formatting toolbar (Inline for normal mode) */}
       <div className="mt-4 mb-16 bg-brand-card-bg/50 border border-brand-border/60 shadow-sm rounded-2xl p-2 transition-all">

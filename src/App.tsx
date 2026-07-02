@@ -216,9 +216,12 @@ export default function App() {
               entryId={selectedEntryId}
               initialDate={selectedDate}
               initialPrompt={selectedPrompt}
+              showDiarySelector={!!selectedPrompt}
               onBack={() => {
                 setIsEditorFocusMode(false);
-                if (selectedDiaryId) {
+                if (selectedPrompt) {
+                  handleNavigate('home');
+                } else if (selectedDiaryId) {
                   handleNavigate('diaries', 'diaryDetail', selectedDiaryId);
                 } else {
                   handleNavigate('diaries', 'list');
@@ -342,80 +345,82 @@ export default function App() {
       </main>
 
       {/* Bottom Floating Navigation Bar */}
-      <nav className="fixed bottom-4 left-4 right-4 max-w-md mx-auto bg-white/75 dark:bg-brand-card-bg/50 backdrop-blur-xl border border-brand-border/70 dark:border-white/10 rounded-3xl py-2 px-3 flex justify-between items-center z-40 shadow-[0_8px_32px_0_rgba(60,43,48,0.06),_inset_0_1px_1px_0_rgba(255,255,255,0.8)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.3),_inset_0_1px_1px_0_rgba(255,255,255,0.05)]">
-        
-        {/* Navigation Tabs */}
-        <button 
-          onClick={() => handleNavigate('home')}
-          className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-            activeTab === 'home' 
-              ? 'text-brand-pink scale-105 font-bold' 
-              : 'text-brand-sage hover:text-brand-plum'
-          }`}
-        >
-          <Home className={`w-5 h-5 ${activeTab === 'home' ? 'stroke-[2.5px]' : ''}`} />
-          <span className="text-[9px] uppercase tracking-wider">Home</span>
-        </button>
+      {currentScreen !== 'entryEditor' && (
+        <nav className="fixed bottom-4 left-4 right-4 max-w-md mx-auto bg-white/75 dark:bg-brand-card-bg/50 backdrop-blur-xl border border-brand-border/70 dark:border-white/10 rounded-3xl py-2 px-3 flex justify-between items-center z-40 shadow-[0_8px_32px_0_rgba(60,43,48,0.06),_inset_0_1px_1px_0_rgba(255,255,255,0.8)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.3),_inset_0_1px_1px_0_rgba(255,255,255,0.05)]">
+          
+          {/* Navigation Tabs */}
+          <button 
+            onClick={() => handleNavigate('home')}
+            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
+              activeTab === 'home' 
+                ? 'text-brand-pink scale-105 font-bold' 
+                : 'text-brand-sage hover:text-brand-plum'
+            }`}
+          >
+            <Home className={`w-5 h-5 ${activeTab === 'home' ? 'stroke-[2.5px]' : ''}`} />
+            <span className="text-[9px] uppercase tracking-wider">Home</span>
+          </button>
 
-        <button 
-          onClick={() => handleNavigate('diaries')}
-          className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-            activeTab === 'diaries' 
-              ? 'text-brand-pink scale-105 font-bold' 
-              : 'text-brand-sage hover:text-brand-plum'
-          }`}
-        >
-          <BookOpen className={`w-5 h-5 ${activeTab === 'diaries' ? 'stroke-[2.5px]' : ''}`} />
-          <span className="text-[9px] uppercase tracking-wider">Diaries</span>
-        </button>
+          <button 
+            onClick={() => handleNavigate('diaries')}
+            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
+              activeTab === 'diaries' 
+                ? 'text-brand-pink scale-105 font-bold' 
+                : 'text-brand-sage hover:text-brand-plum'
+            }`}
+          >
+            <BookOpen className={`w-5 h-5 ${activeTab === 'diaries' ? 'stroke-[2.5px]' : ''}`} />
+            <span className="text-[9px] uppercase tracking-wider">Diaries</span>
+          </button>
 
-        <button 
-          onClick={() => handleNavigate('notes')}
-          className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-            activeTab === 'notes' 
-              ? 'text-brand-pink scale-105 font-bold' 
-              : 'text-brand-sage hover:text-brand-plum'
-          }`}
-        >
-          <ClipboardList className={`w-5 h-5 ${activeTab === 'notes' ? 'stroke-[2.5px]' : ''}`} />
-          <span className="text-[9px] uppercase tracking-wider">Notes</span>
-        </button>
+          <button 
+            onClick={() => handleNavigate('notes')}
+            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
+              activeTab === 'notes' 
+                ? 'text-brand-pink scale-105 font-bold' 
+                : 'text-brand-sage hover:text-brand-plum'
+            }`}
+          >
+            <ClipboardList className={`w-5 h-5 ${activeTab === 'notes' ? 'stroke-[2.5px]' : ''}`} />
+            <span className="text-[9px] uppercase tracking-wider">Notes</span>
+          </button>
 
-        <button 
-          onClick={() => handleNavigate('search')}
-          className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-            activeTab === 'search' 
-              ? 'text-brand-pink scale-105 font-bold' 
-              : 'text-brand-sage hover:text-brand-plum'
-          }`}
-        >
-          <Search className={`w-5 h-5 ${activeTab === 'search' ? 'stroke-[2.5px]' : ''}`} />
-          <span className="text-[9px] uppercase tracking-wider">Search</span>
-        </button>
+          <button 
+            onClick={() => handleNavigate('search')}
+            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
+              activeTab === 'search' 
+                ? 'text-brand-pink scale-105 font-bold' 
+                : 'text-brand-sage hover:text-brand-plum'
+            }`}
+          >
+            <Search className={`w-5 h-5 ${activeTab === 'search' ? 'stroke-[2.5px]' : ''}`} />
+            <span className="text-[9px] uppercase tracking-wider">Search</span>
+          </button>
 
-        <button 
-          onClick={() => handleNavigate('stats')}
-          className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-            activeTab === 'stats' 
-              ? 'text-brand-pink scale-105 font-bold' 
-              : 'text-brand-sage hover:text-brand-plum'
-          }`}
-        >
-          <BarChart2 className={`w-5 h-5 ${activeTab === 'stats' ? 'stroke-[2.5px]' : ''}`} />
-          <span className="text-[9px] uppercase tracking-wider">Stats</span>
-        </button>
+          <button 
+            onClick={() => handleNavigate('stats')}
+            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
+              activeTab === 'stats' 
+                ? 'text-brand-pink scale-105 font-bold' 
+                : 'text-brand-sage hover:text-brand-plum'
+            }`}
+          >
+            <BarChart2 className={`w-5 h-5 ${activeTab === 'stats' ? 'stroke-[2.5px]' : ''}`} />
+            <span className="text-[9px] uppercase tracking-wider">Stats</span>
+          </button>
 
-        <div className="w-px h-6 bg-brand-rose-light mx-1" />
+          <div className="w-px h-6 bg-brand-rose-light mx-1" />
 
-        {/* Lock App Button (Interactive test action) */}
-        <button 
-          onClick={() => setIsAuthenticated(false)}
-          className="p-2 text-brand-sage hover:text-brand-pink transition-all rounded-full flex items-center justify-center hover:bg-brand-blush-light active:scale-95"
-          title="Secure/Lock App Now"
-        >
-          <Lock className="w-4 h-4" />
-        </button>
-      </nav>
+          {/* Lock App Button (Interactive test action) */}
+          <button 
+            onClick={() => setIsAuthenticated(false)}
+            className="p-2 text-brand-sage hover:text-brand-pink transition-all rounded-full flex items-center justify-center hover:bg-brand-blush-light active:scale-95"
+            title="Secure/Lock App Now"
+          >
+            <Lock className="w-4 h-4" />
+          </button>
+        </nav>
+      )}
 
       {/* Elegant, Non-blocking Floating Toast Notification System */}
       <AnimatePresence>

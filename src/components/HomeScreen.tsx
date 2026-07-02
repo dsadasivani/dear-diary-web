@@ -271,12 +271,13 @@ export default function HomeScreen({
               >
                 {/* 3D Physical Book Structure */}
                 <div className="aspect-[3/4.2] relative mb-3.5 select-none">
-                  {/* Outer glow and shadow underneath the book */}
-                  <div className="absolute inset-y-1.5 left-2 right-1.5 bg-black/15 blur-md rounded-r-xl pointer-events-none z-0" />
+                  {/* Double-layered realistic skeuomorphic shadow (shady effect) */}
+                  <div className="absolute inset-y-1 left-2.5 right-1 bg-black/35 blur-[2px] rounded-r-xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-1 group-hover:translate-y-1 group-hover:blur-[3px] group-hover:bg-black/40" />
+                  <div className="absolute inset-y-3 left-4 right-0 bg-black/15 blur-lg rounded-r-xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-2 group-hover:translate-y-2 group-hover:blur-xl group-hover:bg-black/20" />
 
                   {/* Tactile Satin Bookmark Ribbon peeking from the bottom */}
                   <div 
-                    className="absolute bottom-[-10px] right-6 w-2.5 h-5 rounded-b shadow-sm z-0 origin-top group-hover:scale-y-110 transition-transform duration-300" 
+                    className="absolute bottom-[-10px] right-6 w-2.5 h-5 rounded-b shadow-[1px_2px_4px_rgba(0,0,0,0.3)] z-0 origin-top group-hover:scale-y-115 transition-all duration-300" 
                     style={{ backgroundColor: diary.color === '#8A3D55' ? '#DCA153' : '#8A3D55' }}
                   />
 
@@ -293,7 +294,7 @@ export default function HomeScreen({
 
                   {/* Real Front Book Cover */}
                   <div 
-                    className="absolute inset-y-0 left-0 right-2 rounded-r-[14px] rounded-l-[4px] shadow-[3px_3px_10px_rgba(0,0,0,0.22)] border-y border-r border-white/10 flex flex-col justify-between p-3 z-10 overflow-hidden"
+                    className="absolute inset-y-0 left-0 right-2 rounded-r-[14px] rounded-l-[4px] shadow-[3px_3px_12px_rgba(0,0,0,0.25)] group-hover:shadow-[6px_8px_18px_rgba(0,0,0,0.32)] border-y border-r border-white/10 flex flex-col justify-between p-3 z-10 overflow-hidden transition-all duration-300"
                     style={{ 
                       backgroundColor: diary.color,
                       backgroundImage: diary.coverImage ? `url(${diary.coverImage})` : undefined,
@@ -302,10 +303,17 @@ export default function HomeScreen({
                     }}
                   >
                     {/* Cover Gloss/Matte highlights */}
-                    <div className="absolute inset-0 bg-gradient-to-tr from-black/15 via-white/[0.03] to-white/[0.12] pointer-events-none z-20" />
+                    <div className="absolute inset-0 bg-gradient-to-tr from-black/25 via-white/[0.04] to-white/[0.15] pointer-events-none z-20" />
                     
-                    {/* Realistic spine fold shading (hinge crease) */}
-                    <div className="absolute left-0 top-0 bottom-0 w-3 bg-gradient-to-r from-black/30 via-black/10 to-transparent pointer-events-none z-20" />
+                    {/* Hover Sheen sweep effect (high fidelity gloss shine) */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out pointer-events-none z-20" />
+                    
+                    {/* Realistic spine fold shading (hinge crease) with stronger skeuomorphic depth */}
+                    <div className="absolute left-0 top-0 bottom-0 w-3.5 bg-gradient-to-r from-black/45 via-black/15 to-transparent pointer-events-none z-20" />
+                    
+                    {/* Page opening edge soft shadow to convey cover thickness */}
+                    <div className="absolute right-0 top-0 bottom-0 w-2 bg-gradient-to-l from-black/20 to-transparent pointer-events-none z-20" />
+                    <div className="absolute right-1 top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
                     
                     {/* Vertical binding groove line */}
                     <div className="absolute left-[11px] top-0 bottom-0 w-[1px] bg-black/25 pointer-events-none z-20" />

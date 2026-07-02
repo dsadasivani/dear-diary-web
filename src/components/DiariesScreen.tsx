@@ -208,12 +208,13 @@ export default function DiariesScreen({
                           isFeatured ? 'sm:col-span-2 aspect-[16/9.5] sm:aspect-[21/9.5]' : 'aspect-square'
                         }`}
                       >
-                        {/* 3D Under-book Shadow */}
-                        <div className="absolute inset-y-2 left-3 right-2 bg-black/20 blur-md rounded-r-2xl pointer-events-none z-0" />
+                        {/* Double-layered realistic skeuomorphic shadow (shady effect) */}
+                        <div className="absolute inset-y-1.5 left-3.5 right-1.5 bg-black/35 blur-[2.5px] rounded-r-2xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-1.5 group-hover:translate-y-1.5 group-hover:blur-[3.5px] group-hover:bg-black/40" />
+                        <div className="absolute inset-y-3.5 left-5 right-0.5 bg-black/20 blur-xl rounded-r-2xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-2.5 group-hover:translate-y-2.5 group-hover:blur-2xl group-hover:bg-black/25" />
 
                         {/* Tactile Satin Bookmark Ribbon */}
                         <div 
-                          className="absolute bottom-[-12px] right-8 w-3.5 h-6 rounded-b shadow-sm z-0 origin-top group-hover:scale-y-110 transition-transform duration-300" 
+                          className="absolute bottom-[-10px] right-8 w-3.5 h-5 rounded-b shadow-[1px_2px_4px_rgba(0,0,0,0.3)] z-0 origin-top group-hover:scale-y-115 transition-all duration-300" 
                           style={{ backgroundColor: diary.color === '#8A3D55' ? '#DCA153' : '#8A3D55' }}
                         />
 
@@ -228,7 +229,7 @@ export default function DiariesScreen({
 
                         {/* Real Front Cover */}
                         <div 
-                          className="absolute inset-y-0 left-0 right-2 rounded-r-[22px] rounded-l-[6px] shadow-[4px_4px_12px_rgba(0,0,0,0.22)] border-y border-r border-white/10 flex flex-col justify-between p-6 z-10 overflow-hidden"
+                          className="absolute inset-y-0 left-0 right-2 rounded-r-[22px] rounded-l-[6px] shadow-[4px_4px_15px_rgba(0,0,0,0.25)] group-hover:shadow-[8px_12px_24px_rgba(0,0,0,0.35)] border-y border-r border-white/10 flex flex-col justify-between p-6 z-10 overflow-hidden transition-all duration-300"
                           style={{ 
                             backgroundColor: (isFeatured && !diary.coverImage) ? undefined : (diary.coverImage ? undefined : diary.color),
                             backgroundImage: diary.coverImage ? `url(${diary.coverImage})` : (isFeatured ? `url('https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=1200&auto=format&fit=crop&q=75')` : undefined),
@@ -236,8 +237,8 @@ export default function DiariesScreen({
                             backgroundPosition: 'center'
                           }}
                         >
-                          {/* Rich physical binding lines and spine on the left */}
-                          <div className="absolute left-0 top-0 bottom-0 w-4 bg-gradient-to-r from-black/35 via-black/10 to-transparent pointer-events-none z-20" />
+                          {/* Rich physical binding lines and spine on the left with deep skeuomorphic shading */}
+                          <div className="absolute left-0 top-0 bottom-0 w-4 bg-gradient-to-r from-black/45 via-black/15 to-transparent pointer-events-none z-20" />
                           <div className="absolute left-[13px] top-0 bottom-0 w-[1px] bg-black/25 pointer-events-none z-20" />
                           <div className="absolute left-[14px] top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
 
@@ -259,7 +260,15 @@ export default function DiariesScreen({
                           {(diary.coverImage || isFeatured) && (
                             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-black/10 group-hover:via-black/45 transition-colors duration-300 z-10" />
                           )}
-                          <div className="absolute inset-0 bg-gradient-to-tr from-white/0 via-white/[0.03] to-white/[0.08] pointer-events-none z-10" />
+                          {/* Cover Gloss/Matte highlights */}
+                          <div className="absolute inset-0 bg-gradient-to-tr from-black/25 via-white/[0.04] to-white/[0.15] pointer-events-none z-10" />
+                          
+                          {/* Hover Sheen sweep effect (high fidelity gloss shine) */}
+                          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/12 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out pointer-events-none z-10" />
+
+                          {/* Page opening edge soft shadow to convey cover thickness */}
+                          <div className="absolute right-0 top-0 bottom-0 w-3 bg-gradient-to-l from-black/20 to-transparent pointer-events-none z-20" />
+                          <div className="absolute right-1.5 top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
 
                           {/* Cover contents */}
                           <div className="absolute inset-0 p-5.5 flex flex-col justify-between z-20">
@@ -358,12 +367,13 @@ export default function DiariesScreen({
                       onClick={() => handleDiaryClick(diary)}
                       className="group relative aspect-[3/4.2] cursor-pointer select-none"
                     >
-                      {/* Outer under-book glow shadow */}
-                      <div className="absolute inset-y-1.5 left-2.5 right-1.5 bg-black/15 blur-md rounded-r-xl pointer-events-none z-0" />
+                      {/* Double-layered realistic skeuomorphic shadow (shady effect) */}
+                      <div className="absolute inset-y-1 left-3 right-1 bg-black/35 blur-[2px] rounded-r-xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-1 group-hover:translate-y-1 group-hover:blur-[3px] group-hover:bg-black/40" />
+                      <div className="absolute inset-y-3 left-4 right-0 bg-black/15 blur-lg rounded-r-xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-2 group-hover:translate-y-2 group-hover:blur-xl group-hover:bg-black/20" />
 
                       {/* Tactile Satin Bookmark Ribbon */}
                       <div 
-                        className="absolute bottom-[-10px] right-6 w-2.5 h-5 rounded-b shadow-sm z-0 origin-top group-hover:scale-y-110 transition-transform duration-300" 
+                        className="absolute bottom-[-10px] right-6 w-2.5 h-5 rounded-b shadow-[1px_2px_4px_rgba(0,0,0,0.3)] z-0 origin-top group-hover:scale-y-115 transition-all duration-300" 
                         style={{ backgroundColor: diary.color === '#8A3D55' ? '#DCA153' : '#8A3D55' }}
                       />
 
@@ -378,7 +388,7 @@ export default function DiariesScreen({
 
                       {/* Front Cover */}
                       <div 
-                        className="absolute inset-y-0 left-0 right-2 rounded-r-[14px] rounded-l-[4px] shadow-[3px_3px_10px_rgba(0,0,0,0.22)] border-y border-r border-white/10 flex flex-col justify-between p-3.5 z-10 overflow-hidden"
+                        className="absolute inset-y-0 left-0 right-2 rounded-r-[14px] rounded-l-[4px] shadow-[3px_3px_12px_rgba(0,0,0,0.25)] group-hover:shadow-[6px_8px_18px_rgba(0,0,0,0.32)] border-y border-r border-white/10 flex flex-col justify-between p-3.5 z-10 overflow-hidden transition-all duration-300"
                         style={{
                           backgroundColor: diary.color,
                           backgroundImage: diary.coverImage ? `url(${diary.coverImage})` : undefined,
@@ -386,11 +396,18 @@ export default function DiariesScreen({
                           backgroundPosition: 'center'
                         }}
                       >
-                        {/* Cover highlight gloss */}
-                        <div className="absolute inset-0 bg-gradient-to-tr from-black/15 via-white/[0.03] to-white/[0.12] pointer-events-none z-20" />
+                        {/* Cover highlight gloss with sheen sweep effect */}
+                        <div className="absolute inset-0 bg-gradient-to-tr from-black/25 via-white/[0.04] to-white/[0.15] pointer-events-none z-20" />
                         
-                        {/* Realistic spine fold shading */}
-                        <div className="absolute left-0 top-0 bottom-0 w-3 bg-gradient-to-r from-black/30 via-black/10 to-transparent pointer-events-none z-20" />
+                        {/* Hover Sheen sweep effect (high fidelity gloss shine) */}
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out pointer-events-none z-20" />
+                        
+                        {/* Realistic spine fold shading (hinge crease) */}
+                        <div className="absolute left-0 top-0 bottom-0 w-3.5 bg-gradient-to-r from-black/45 via-black/15 to-transparent pointer-events-none z-20" />
+
+                        {/* Page opening edge soft shadow to convey cover thickness */}
+                        <div className="absolute right-0 top-0 bottom-0 w-2 bg-gradient-to-l from-black/20 to-transparent pointer-events-none z-20" />
+                        <div className="absolute right-1 top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
                         
                         {/* Spine binding lines */}
                         <div className="absolute left-[11px] top-0 bottom-0 w-[1px] bg-black/25 pointer-events-none z-20" />
@@ -547,12 +564,13 @@ export default function DiariesScreen({
               {/* Cover Preview Card with Custom cover and Foil seals support */}
               <div className="flex flex-col items-center py-6 select-none">
                 <div className="w-44 aspect-[3/4.2] relative">
-                  {/* Outer shadow */}
-                  <div className="absolute inset-y-1.5 left-2.5 right-1.5 bg-black/20 blur-md rounded-r-xl pointer-events-none z-0" />
+                  {/* Double-layered realistic skeuomorphic shadow (shady effect) */}
+                  <div className="absolute inset-y-1 left-3 right-1 bg-black/35 blur-[2px] rounded-r-xl pointer-events-none z-0 transition-all duration-300" />
+                  <div className="absolute inset-y-3 left-4 right-0 bg-black/15 blur-lg rounded-r-xl pointer-events-none z-0 transition-all duration-300" />
 
                   {/* Bookmark ribbon */}
                   <div 
-                    className="absolute bottom-[-10px] right-8 w-2.5 h-5 rounded-b shadow-sm z-0" 
+                    className="absolute bottom-[-10px] right-8 w-2.5 h-5 rounded-b shadow-[1px_2px_4px_rgba(0,0,0,0.3)] z-0" 
                     style={{ backgroundColor: selectedColor === '#8A3D55' ? '#DCA153' : '#8A3D55' }}
                   />
 
@@ -568,28 +586,30 @@ export default function DiariesScreen({
                   {/* Front Cover */}
                   <motion.div 
                     animate={{ backgroundColor: coverImage ? undefined : selectedColor }}
-                    className="absolute inset-y-0 left-0 right-2 rounded-r-[14px] rounded-l-[4px] shadow-[3px_3px_10px_rgba(0,0,0,0.22)] border-y border-r border-white/10 flex flex-col justify-between p-3.5 z-10 overflow-hidden"
+                    className="absolute inset-y-0 left-0 right-2 rounded-r-[14px] rounded-l-[4px] shadow-[3px_3px_12px_rgba(0,0,0,0.25)] border-y border-r border-white/10 flex flex-col justify-between p-3.5 z-10 overflow-hidden"
                     style={{
                       backgroundImage: coverImage ? `url(${coverImage})` : undefined,
                       backgroundSize: 'cover',
                       backgroundPosition: 'center'
                     }}
                   >
-                    {/* Cover gloss */}
-                    <div className="absolute inset-0 bg-gradient-to-tr from-black/15 via-white/[0.03] to-white/[0.12] pointer-events-none z-20" />
+                    {/* Cover gloss highlight */}
+                    <div className="absolute inset-0 bg-gradient-to-tr from-black/25 via-white/[0.04] to-white/[0.15] pointer-events-none z-20" />
                     
-                    {/* Spine binding details */}
-                    <div className="absolute left-0 top-0 bottom-0 w-3 bg-gradient-to-r from-black/30 via-black/10 to-transparent pointer-events-none z-20" />
+                    {/* Spine shading with skeuomorphic fold depth */}
+                    <div className="absolute left-0 top-0 bottom-0 w-3.5 bg-gradient-to-r from-black/45 via-black/15 to-transparent pointer-events-none z-20" />
+                    
+                    {/* Vertical binding lines */}
                     <div className="absolute left-[11px] top-0 bottom-0 w-[1px] bg-black/25 pointer-events-none z-20" />
                     <div className="absolute left-[12px] top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
 
-                    {/* Spine horizontal ridges */}
+                    {/* Spine ridges */}
                     <div className="absolute left-0 top-[20%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
                     <div className="absolute left-0 top-[40%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
                     <div className="absolute left-0 top-[60%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
                     <div className="absolute left-0 top-[80%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
 
-                    {/* Corner accents */}
+                    {/* Vintage corners */}
                     {!coverImage && (
                       <>
                         <div className="absolute top-0 right-0 w-3 h-3 border-t border-r border-yellow-500/40 rounded-tr-lg pointer-events-none z-20" />
