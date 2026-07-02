@@ -2,6 +2,13 @@ import CryptoJS from 'crypto-js';
 import { Diary, Entry, Note, SecurityConfig, AppSettings, DiaryBackupData, Mood, UserProfile } from '../types';
 import { auth, db } from './firebase';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
+import { syncReminderNotification } from '../mobile/reminders';
+
+const setStorageItem = (key: string, value: string): void => {
+  window.localStorage.setItem(key, value);
+  persistNativeLocalStorageItem(key, value);
+};
 
 // Predefined Moods and Tags
 export const PREDEFINED_MOODS = [
@@ -80,13 +87,13 @@ const STORAGE_KEYS = {
 // State initializers
 export const initializeDatabase = () => {
   if (!localStorage.getItem(STORAGE_KEYS.DIARIES)) {
-    localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify(INITIAL_DIARIES));
+    setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify(INITIAL_DIARIES));
   }
   if (!localStorage.getItem(STORAGE_KEYS.ENTRIES)) {
-    localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(INITIAL_ENTRIES));
+    setStorageItem(STORAGE_KEYS.ENTRIES, JSON.stringify(INITIAL_ENTRIES));
   }
   if (!localStorage.getItem(STORAGE_KEYS.NOTES)) {
-    localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(INITIAL_NOTES));
+    setStorageItem(STORAGE_KEYS.NOTES, JSON.stringify(INITIAL_NOTES));
   }
   if (!localStorage.getItem(STORAGE_KEYS.SECURITY)) {
     const defaultSecurity: SecurityConfig = {
@@ -96,7 +103,7 @@ export const initializeDatabase = () => {
       isBiometricsEnabled: false,
       isLocked: true // Start locked by default
     };
-    localStorage.setItem(STORAGE_KEYS.SECURITY, JSON.stringify(defaultSecurity));
+    setStorageItem(STORAGE_KEYS.SECURITY, JSON.stringify(defaultSecurity));
   }
   if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
     const defaultSettings: AppSettings = {
@@ -106,7 +113,7 @@ export const initializeDatabase = () => {
       autoSyncOnLaunch: true,
       syncOnEntryCreation: true
     };
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(defaultSettings));
+    setStorageItem(STORAGE_KEYS.SETTINGS, JSON.stringify(defaultSettings));
   }
   if (!localStorage.getItem(STORAGE_KEYS.USER_PROFILE)) {
     const currentUser = auth.currentUser;
@@ -127,7 +134,7 @@ export const initializeDatabase = () => {
       writingGoal: 100,
       joinedDate: 'June 2026'
     };
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(defaultProfile));
+    setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(defaultProfile));
   }
 };
 
@@ -165,7 +172,7 @@ export const getUserProfile = (): UserProfile => {
       writingGoal: 100,
       joinedDate: 'June 2026'
     };
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
+    setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
   } else {
     // If profile is still using 'Sophie' (the hardcoded default) and there's a logged in user with a different email,
     // or if the name is 'Sophie' or 'Journalist' and we can derive a more specific default name, let's update it!
@@ -179,7 +186,7 @@ export const getUserProfile = (): UserProfile => {
       updated = true;
     }
     if (updated) {
-      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
+      setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
     }
   }
 
@@ -187,7 +194,7 @@ export const getUserProfile = (): UserProfile => {
 };
 
 export const saveUserProfile = (profile: UserProfile) => {
-  localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
+  setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
   try {
     const user = auth.currentUser;
     if (user) {
@@ -227,7 +234,7 @@ export const getSecurityConfig = (): SecurityConfig => {
 };
 
 export const saveSecurityConfig = (config: SecurityConfig) => {
-  localStorage.setItem(STORAGE_KEYS.SECURITY, JSON.stringify(config));
+  setStorageItem(STORAGE_KEYS.SECURITY, JSON.stringify(config));
 };
 
 export const setPinCode = (pin: string): SecurityConfig => {
@@ -304,7 +311,8 @@ export const getAppSettings = (): AppSettings => {
 };
 
 export const saveAppSettings = (settings: AppSettings) => {
-  localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+  setStorageItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+  void syncReminderNotification(settings);
   try {
     const user = auth.currentUser;
     if (user) {
@@ -322,7 +330,7 @@ export const getDiaries = (): Diary[] => {
 };
 
 export const saveDiaries = (diaries: Diary[]) => {
-  localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify(diaries));
+  setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify(diaries));
 };
 
 export const createDiary = (name: string, emoji: string, color: string, isLocked: boolean, coverImage?: string, foilIcons?: string[]): Diary => {
@@ -400,7 +408,7 @@ export const getEntries = (): Entry[] => {
 };
 
 export const saveEntries = (entries: Entry[]) => {
-  localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(entries));
+  setStorageItem(STORAGE_KEYS.ENTRIES, JSON.stringify(entries));
   updateDiaryEntryCounts();
 };
 
@@ -475,7 +483,7 @@ export const getNotes = (): Note[] => {
 };
 
 export const saveNotes = (notes: Note[]) => {
-  localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(notes));
+  setStorageItem(STORAGE_KEYS.NOTES, JSON.stringify(notes));
 };
 
 export const createNote = (noteData: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>): Note => {
@@ -563,7 +571,7 @@ export const updateDiaryEntryCounts = () => {
     };
   });
   
-  localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify(updatedDiaries));
+  setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify(updatedDiaries));
 };
 
 // Streak Calculation Logic
@@ -608,7 +616,7 @@ export const calculateStreak = (entries: Entry[]): number => {
 
 // Reset Database Zone
 export const resetDatabase = () => {
-  localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify([
+  setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify([
     {
       id: 'diary-default',
       name: 'My Diary',
@@ -619,8 +627,8 @@ export const resetDatabase = () => {
       lastUpdated: 'No entries yet'
     }
   ]));
-  localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify([]));
-  localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify([]));
+  setStorageItem(STORAGE_KEYS.ENTRIES, JSON.stringify([]));
+  setStorageItem(STORAGE_KEYS.NOTES, JSON.stringify([]));
   // Note: Reset does not delete PIN, reminder settings or storage keys per the product boundaries!
 };
 
@@ -659,14 +667,14 @@ export const importEncryptedBackup = (encryptedData: string, password: string): 
     }
     
     // Overwrite database
-    localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify(parsedData.diaries));
-    localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(parsedData.entries));
-    localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(parsedData.notes || []));
+    setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify(parsedData.diaries));
+    setStorageItem(STORAGE_KEYS.ENTRIES, JSON.stringify(parsedData.entries));
+    setStorageItem(STORAGE_KEYS.NOTES, JSON.stringify(parsedData.notes || []));
     if (parsedData.settings) {
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsedData.settings));
+      setStorageItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsedData.settings));
     }
     if (parsedData.userProfile) {
-      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(parsedData.userProfile));
+      setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(parsedData.userProfile));
     }
     
     updateDiaryEntryCounts();

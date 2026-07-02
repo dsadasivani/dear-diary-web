@@ -14,11 +14,13 @@ import {
   PREDEFINED_COLORS, getEntries, getNotes, getStorageUsageDetails, StorageDetails,
   saveSecurityConfig
 } from '../utils/storage';
-import { registerLocalPasskey } from '../utils/webauthn';
 import { User, Mail } from 'lucide-react';
 import { auth } from '../utils/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { syncLocalAndCloud, checkCloudDataExists, wipeCloudData, restoreFromCloud, getSyncComparison, SyncComparison } from '../utils/sync';
+import { isNativePlatform } from '../platform';
+import { secureAuthService } from '../platform/security';
+import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
 
 interface AppSettingsScreenProps {
   onBack: () => void;
@@ -205,6 +207,7 @@ export default function AppSettingsScreen({
       setSyncStep(4);
       const now = Date.now();
       localStorage.setItem('deardiary_last_sync', String(now));
+      persistNativeLocalStorageItem('deardiary_last_sync', String(now));
       setLastSyncedStr(new Date(now).toLocaleString());
       await delay(350);
       setSyncStep(5);
@@ -231,6 +234,7 @@ export default function AppSettingsScreen({
       await syncLocalAndCloud(pendingSyncUid);
       const now = Date.now();
       localStorage.setItem('deardiary_last_sync', String(now));
+      persistNativeLocalStorageItem('deardiary_last_sync', String(now));
       setLastSyncedStr(new Date(now).toLocaleString());
       if (onShowToast) {
         onShowToast('Local and Cloud databases merged successfully! App is refreshing...', 'success');
@@ -259,6 +263,7 @@ export default function AppSettingsScreen({
       await syncLocalAndCloud(pendingSyncUid);
       const now = Date.now();
       localStorage.setItem('deardiary_last_sync', String(now));
+      persistNativeLocalStorageItem('deardiary_last_sync', String(now));
       setLastSyncedStr(new Date(now).toLocaleString());
       if (onShowToast) {
         onShowToast('Cloud database wiped and synchronized successfully.', 'success');
@@ -282,6 +287,7 @@ export default function AppSettingsScreen({
       await restoreFromCloud(pendingSyncUid);
       const now = Date.now();
       localStorage.setItem('deardiary_last_sync', String(now));
+      persistNativeLocalStorageItem('deardiary_last_sync', String(now));
       setLastSyncedStr(new Date(now).toLocaleString());
       if (onShowToast) {
         onShowToast('Journal restored from cloud! App is refreshing...', 'success');
@@ -470,18 +476,26 @@ export default function AppSettingsScreen({
 
     setIsWebAuthnLoading(true);
     try {
-      const result = await registerLocalPasskey(currentUser?.email || profile.email || 'dear.diary.user');
+      const result = await secureAuthService.enroll(currentUser?.email || profile.email || 'dear.diary.user');
       if (result) {
         const newConfig = {
           ...security,
           isBiometricsEnabled: true,
           passkeyCredentialId: result.credentialId,
-          isBiometricsSimulated: false
+          isBiometricsSimulated: !!result.simulated
         };
         setSecurity(newConfig);
         saveSecurityConfig(newConfig);
-        setWebAuthnSuccess('Secure WebAuthn Passkey enrolled and enabled successfully!');
-        onShowToast?.('WebAuthn Passkey registered successfully.', 'success');
+        const successText = isNativePlatform()
+          ? 'Native biometric unlock enabled successfully!'
+          : 'Secure WebAuthn Passkey enrolled and enabled successfully!';
+        setWebAuthnSuccess(successText);
+        onShowToast?.(successText, 'success');
+      } else if (isNativePlatform()) {
+        setWebAuthnError('No enrolled fingerprint or strong biometric credential is available. Add one in Android Settings, then try again.');
+        onShowToast?.('Add a fingerprint in Android Settings, then enable biometric unlock again.', 'warning');
+      } else {
+        setWebAuthnError('This browser could not enroll a passkey. Please continue using your PIN.');
       }
     } catch (err: any) {
       console.warn('WebAuthn registration error:', err);
@@ -1022,7 +1036,9 @@ export default function AppSettingsScreen({
                 <div className="text-xs space-y-2 leading-relaxed">
                   {isWebAuthnLoading && (
                     <p className="text-[11px] text-brand-sage animate-pulse">
-                      Please follow your browser prompt to register your device passkey...
+                      {isNativePlatform()
+                        ? 'Confirm the Android biometric prompt to enable fingerprint unlock...'
+                        : 'Please follow your browser prompt to register your device passkey...'}
                     </p>
                   )}
                   
@@ -1058,12 +1074,16 @@ export default function AppSettingsScreen({
                       <span>
                         {security.isBiometricsSimulated 
                           ? 'Simulated Biometric Lock is Active.' 
-                          : 'Real hardware-backed WebAuthn Passkey is Active.'}
+                          : isNativePlatform()
+                            ? 'Native biometric unlock is active.'
+                            : 'Real hardware-backed WebAuthn Passkey is Active.'}
                       </span>
                     </div>
                   ) : (
                     <p className="text-[10px] text-brand-sage">
-                      Enrolling triggers your browser's native credential manager (Windows Hello, Face ID, or Touch ID). PIN is required as your primary backup.
+                      {isNativePlatform()
+                        ? 'Enable after adding a fingerprint or strong biometric in Android Settings. PIN remains your primary backup and is removed by Android Clear storage.'
+                        : "Enrolling triggers your browser's native credential manager (Windows Hello, Face ID, or Touch ID). PIN is required as your primary backup."}
                     </p>
                   )}
                 </div>
