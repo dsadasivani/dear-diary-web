@@ -1,0 +1,92 @@
+export interface Diary {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string; // One of predefined hex or class colors
+  isLocked: boolean; // requires biometric/PIN verification
+  entryCount: number;
+  lastUpdated: string; // Date string or relative
+  coverImage?: string; // Base64 data URI of uploaded cover image
+  foilIcons?: string[]; // Multiple gold foil embossed icons
+}
+
+export interface EntryBlock {
+  id: string;
+  time: string; // HH:MM time stamp
+  body: string; // HTML content
+  audioUri?: string; // Optional audio recording for this specific moment
+}
+
+export interface Entry {
+  id: string;
+  diaryId: string; // Parent diary
+  date: string; // YYYY-MM-DD
+  time?: string; // HH:MM time stamp
+  title: string;
+  body: string;
+  moodName: string;
+  moodEmoji: string;
+  tags: string[];
+  photoUris: string[]; // Attached photo references (Base64 data URIs or object URLs on web)
+  photoCount: number;
+  wordCount: number;
+  audioUri?: string; // Base64 raw audio data
+  createdAt: number;
+  updatedAt: number;
+  isTimelineBifurcated?: boolean;
+  blocks?: EntryBlock[];
+}
+
+export interface Note {
+  id: string;
+  title: string;
+  body: string;
+  isPinned: boolean;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SecurityConfig {
+  isPinCreated: boolean;
+  pinHash: string; // SHA-256 hash of PIN + salt
+  pinSalt: string; // Salt used for hashing
+  isBiometricsEnabled: boolean; // Biometrics enabled status (now uses real/simulated WebAuthn)
+  isLocked: boolean; // Whether the app is currently locked
+  passkeyCredentialId?: string; // Standard WebAuthn registered credential ID
+  isBiometricsSimulated?: boolean; // True if the biometric is simulated (due to sandbox/iframe restrictions)
+}
+
+export interface Mood {
+  name: string;
+  emoji: string;
+}
+
+export interface AppSettings {
+  remindersEnabled: boolean;
+  reminderTime: string; // Fixed at "08:00 PM"
+  customTags?: string[];
+  customMoods?: Mood[];
+  theme?: 'light' | 'dark';
+  autoSyncOnLaunch?: boolean;
+  syncOnEntryCreation?: boolean;
+}
+
+export interface UserProfile {
+  name: string;
+  email: string;
+  bio: string;
+  avatarEmoji: string;
+  avatarColor: string;
+  writingGoal: number; // Daily target in words
+  joinedDate: string; // Formatting MM/YYYY
+}
+
+export interface DiaryBackupData {
+  version: string; // e.g. "1.0.0"
+  diaries: Diary[];
+  entries: Entry[];
+  notes: Note[];
+  settings: AppSettings;
+  userProfile?: UserProfile;
+}

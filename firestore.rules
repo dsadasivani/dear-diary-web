@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable, hardened security helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Flat match for user profiles
+    match /users/{userId} {
+      allow get, write, list: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Flat match for settings
+    match /users/{userId}/settings/{settingsId} {
+      allow list: if isSignedIn() && request.auth.uid == userId;
+      allow get, write: if isSignedIn() && request.auth.uid == userId && isValidId(settingsId);
+    }
+
+    // Flat match for diaries
+    match /users/{userId}/diaries/{diaryId} {
+      allow list: if isSignedIn() && request.auth.uid == userId;
+      allow get, write: if isSignedIn() && request.auth.uid == userId && isValidId(diaryId);
+    }
+
+    // Flat match for entries
+    match /users/{userId}/entries/{entryId} {
+      allow list: if isSignedIn() && request.auth.uid == userId;
+      allow get, write: if isSignedIn() && request.auth.uid == userId && isValidId(entryId);
+    }
+
+    // Flat match for notes
+    match /users/{userId}/notes/{noteId} {
+      allow list: if isSignedIn() && request.auth.uid == userId;
+      allow get, write: if isSignedIn() && request.auth.uid == userId && isValidId(noteId);
+    }
+  }
+}

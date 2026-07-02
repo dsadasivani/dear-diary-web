@@ -1,0 +1,2180 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { 
+  ArrowLeft, Save, Trash2, Calendar, Smile, Tag, Camera, 
+  Plus, X, HelpCircle, Bold, Italic, Underline, List, Lock, LockOpen, Info,
+  Strikethrough, Maximize2, Minimize2, Type, Heading2, Quote,
+  ChevronUp, ChevronDown, Mic, MicOff, Pause, Play, Square, Circle, Sparkles,
+  Clock, Edit
+} from 'lucide-react';
+import { Diary, Entry, EntryBlock } from '../types';
+import { 
+  getDiaries, createEntry, updateEntry, deleteEntry, 
+  getMoods, getTags
+} from '../utils/storage';
+import RichTextEditor from './RichTextEditor';
+import AudioWaveformPlayer from './AudioWaveformPlayer';
+
+interface EntryEditorScreenProps {
+  diaryId?: string; // Optional default diary ID
+  entryId?: string; // Optional entry ID if editing
+  onBack: () => void;
+  onRefreshEntries: () => void;
+  onFocusModeChange?: (active: boolean) => void;
+  initialFocusMode?: boolean;
+  initialDate?: string;
+  initialPrompt?: string;
+  onShowToast?: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+}
+
+export default function EntryEditorScreen({
+  diaryId: initialDiaryId,
+  entryId,
+  onBack,
+  onRefreshEntries,
+  onFocusModeChange,
+  initialFocusMode = false,
+  initialDate,
+  initialPrompt,
+  onShowToast
+}: EntryEditorScreenProps) {
+  const diaries = getDiaries();
+  
+  // Find current entry if editing
+  const isEditing = !!entryId;
+  
+  // State variables
+  const [diaryId, setDiaryId] = useState<string>(initialDiaryId || diaries[0]?.id || 'diary-default');
+  const [date, setDate] = useState<string>(initialDate || new Date().toISOString().split('T')[0]); // Default to today
+  const [time, setTime] = useState<string>(() => {
+    const now = new Date();
+    return now.toTimeString().split(' ')[0].substring(0, 5); // Default to current time "HH:MM"
+  });
+  const [title, setTitle] = useState<string>('');
+  const [body, setBody] = useState<string>('');
+  const [blocks, setBlocks] = useState<EntryBlock[]>([]);
+  const [activeBlockId, setActiveBlockId] = useState<string | null>(null);
+  const [minimizedBlockIds, setMinimizedBlockIds] = useState<Set<string>>(new Set());
+  const [currentTimeText, setCurrentTimeText] = useState<string>(() => {
+    const now = new Date();
+    return now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
+  });
+  
+  const availableMoods = getMoods();
+  const availableTags = getTags();
+
+  const [mood, setMood] = useState(availableMoods[0] || { name: 'Joyful', emoji: '😊' });
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [photoUris, setPhotoUris] = useState<string[]>([]);
+  const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
+  const [audioUri, setAudioUri] = useState<string | undefined>(undefined);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const [showTagPicker, setShowTagPicker] = useState<boolean>(false);
+  const [fontFamily, setFontFamily] = useState<'serif' | 'sans' | 'mono'>('serif');
+  const [isFocusMode, setIsFocusMode] = useState<boolean>(initialFocusMode);
+
+  // Convert "HH:MM" to "HH:MM AM/PM"
+  const formatTime12 = (time24?: string) => {
+    if (!time24) return '';
+    const [hourStr, minStr] = time24.split(':');
+    const hour = parseInt(hourStr, 10);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${String(hour12).padStart(2, '0')}:${minStr} ${ampm}`;
+  };
+  
+  // Point 2: AI state variables and handlers
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [aiResult, setAiResult] = useState<{ reflection: string; tags: string[]; mood: string } | null>(null);
+  const [aiError, setAiError] = useState<string>('');
+
+  const handleAiEnhance = async () => {
+    // Strip HTML formatting
+    const plainText = body.replace(/<[^>]*>/g, '').trim();
+    if (!plainText || plainText.length < 10) {
+      setAiError('Please write at least a few sentences (at least 10 characters) before asking for reflection.');
+      return;
+    }
+    setAiLoading(true);
+    setAiError('');
+    setAiResult(null);
+
+    try {
+      // Simulate a small, elegant processing delay to feel tactile and deep
+      await new Promise(resolve => setTimeout(resolve, 850));
+
+      const lowerText = plainText.toLowerCase();
+
+      // Heuristic Mood Detection
+      const moodKeywords: { [key: string]: string[] } = {
+        Joyful: ["happy", "joy", "smile", "laugh", "wonderful", "great", "delighted", "love", "cheerful", "glad", "blessed", "good", "amazing", "pleasant", "sunny", "thrilled", "nice", "fun", "celebrate"],
+        Calm: ["peace", "quiet", "calm", "relax", "silent", "gentle", "soft", "serene", "breathe", "still", "harmony", "rest", "cozy", "warm", "nature", "meditate", "slow", "ambient"],
+        Sad: ["sad", "cry", "grief", "tear", "hurt", "blue", "unhappy", "lonely", "broken", "disappointed", "sorrow", "pain", "miss", "gloomy", "tears", "loss", "alone", "heavy"],
+        Anxious: ["anxious", "worry", "stress", "nervous", "fear", "scared", "afraid", "panic", "tense", "overwhelm", "shaky", "unsettled", "scary", "doubt", "pressure", "jittery"],
+        Excited: ["excited", "hype", "thrill", "awesome", "incredible", "energy", "enthusiastic", "victory", "celebrate", "cant wait", "can't wait", "pumping", "super"],
+        Reflective: ["reflect", "think", "wonder", "ponder", "memory", "past", "journal", "write", "learn", "understand", "realize", "grow", "mindful", "future", "reason", "myself"],
+        Tired: ["tired", "sleep", "exhausted", "fatigue", "drain", "burnout", "heavy", "slow", "lazy", "restless", "weary", "yawn", "sleepy", "asleep", "nap"],
+        Creative: ["create", "paint", "draw", "write", "build", "design", "inspire", "art", "music", "project", "idea", "craft", "photo", "imagination", "sketch", "code", "novel"]
+      };
+
+      let detectedMood = 'Reflective';
+      let maxMatches = 0;
+
+      Object.entries(moodKeywords).forEach(([moodName, keywords]) => {
+        let matches = 0;
+        keywords.forEach(keyword => {
+          const regex = new RegExp(`\\b${keyword}\\b`, 'g');
+          const count = (lowerText.match(regex) || []).length;
+          matches += count;
+        });
+        if (matches > maxMatches) {
+          maxMatches = matches;
+          detectedMood = moodName;
+        }
+      });
+
+      // Heuristic Tag Detection
+      const tagKeywords: { [key: string]: string[] } = {
+        happy: ["happy", "joy", "smile", "laugh", "wonderful", "great", "glad", "blessed", "cheerful"],
+        travel: ["travel", "trip", "flight", "osaka", "kyoto", "japan", "hotel", "explore", "vacation", "journey", "city", "train", "adventure", "road", "outdoor", "walk"],
+        summer: ["summer", "hot", "sun", "beach", "pool", "june", "july", "august", "warm", "weather", "sunny", "shines"],
+        family: ["family", "mom", "dad", "sister", "brother", "parent", "home", "cousin", "kid", "child", "son", "daughter", "wife", "husband", "relative", "grandma", "grandpa"],
+        calm: ["calm", "peace", "relax", "meditate", "breathe", "quiet", "cozy", "harmony", "rest", "serene", "silent", "gentle"],
+        dream: ["dream", "sleep", "night", "asleep", "wish", "future", "hope", "ambition", "desire", "goal"],
+        reading: ["read", "book", "novel", "author", "chapter", "library", "page", "literature", "poem", "poetry", "essay"],
+        errands: ["errand", "work", "chore", "grocery", "buy", "clean", "task", "job", "career", "office", "meeting"],
+        quotes: ["quote", "saying", "wisdom", "heard", "phrase", "proverb", "verse"],
+        ideas: ["idea", "thought", "creative", "brainstorm", "concept", "project", "plan", "future", "solution", "inspiration"],
+        thoughts: ["think", "mind", "ponder", "wonder", "feeling", "feel", "reflection", "self", "realize", "reminisce"]
+      };
+
+      const suggestedTags: string[] = [];
+      Object.entries(tagKeywords).forEach(([tagName, keywords]) => {
+        let hasMatch = false;
+        keywords.forEach(keyword => {
+          if (lowerText.includes(keyword)) {
+            hasMatch = true;
+          }
+        });
+        if (hasMatch) {
+          suggestedTags.push(tagName);
+        }
+      });
+
+      // Always ensure 2-3 suggested tags
+      if (suggestedTags.length < 2) {
+        if (!suggestedTags.includes('thoughts')) suggestedTags.push('thoughts');
+        if (!suggestedTags.includes('ideas')) suggestedTags.push('ideas');
+      }
+
+      // Empathy Reflections Map
+      const reflections: { [key: string]: string } = {
+        Joyful: "It's beautiful to see you celebrating this moment of joy! Savoring these happy experiences is a powerful way to build emotional resilience and lasting memories. Keep shining bright.",
+        Calm: "You've captured a wonderfully peaceful state of mind. Pausing to appreciate quiet, cozy moments is a gentle gift to yourself. May this sense of serenity stay with you.",
+        Sad: "I'm holding space for you as you process these heavy or sad feelings. It is completely okay not to be okay. Remember to be exceptionally kind and gentle with yourself right now.",
+        Anxious: "It sounds like there's a lot on your mind, and things might feel overwhelming. Take a soft, deep breath. Focus on just this single present moment—you are safe here.",
+        Excited: "Your excitement and vibrant energy are absolutely contagious! Harness this wonderful momentum to propel your dreams forward. Embrace the journey ahead.",
+        Reflective: "Your deep reflection shows a beautiful level of self-awareness. Taking the time to look inward and ponder your path is how we grow. Your journey is uniquely yours.",
+        Tired: "You seem to be carrying a heavy load and feeling depleted. Please give yourself permission to fully rest and recharge. You don't have to carry it all today.",
+        Creative: "What an inspiring spark of creativity and imagination! Bringing new ideas or art into the world is a wonderful expression of who you are. Keep creating."
+      };
+
+      const reflectionText = reflections[detectedMood] || reflections.Reflective;
+
+      setAiResult({
+        reflection: reflectionText,
+        tags: suggestedTags.slice(0, 4),
+        mood: detectedMood
+      });
+    } catch (err: any) {
+      setAiError('An error occurred during local reflection analysis.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const applyAiMood = (moodName: string) => {
+    const foundMood = availableMoods.find(m => m.name.toLowerCase() === moodName.toLowerCase());
+    if (foundMood) {
+      setMood(foundMood);
+    } else {
+      const standardEmojis: { [key: string]: string } = {
+        joyful: '😊', calm: '😌', sad: '😢', anxious: '😟', excited: '🤩', reflective: '💭', tired: '😴', creative: '🎨'
+      };
+      const emoji = standardEmojis[moodName.toLowerCase()] || '📝';
+      setMood({ name: moodName, emoji });
+    }
+  };
+
+  const applyAiTag = (tag: string) => {
+    const formattedTag = tag.trim().toLowerCase();
+    if (formattedTag && !selectedTags.includes(formattedTag)) {
+      setSelectedTags(prev => [...prev, formattedTag]);
+    }
+  };
+  const [isDockMinimized, setIsDockMinimized] = useState<boolean>(false);
+  const [activeFormats, setActiveFormats] = useState({
+    bold: false,
+    italic: false,
+    underline: false,
+    strikeThrough: false,
+    h2: false,
+    blockquote: false,
+    list: false,
+  });
+  
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [showRecordingOverlay, setShowRecordingOverlay] = useState<boolean>(false);
+  const [interimText, setInterimText] = useState<string>('');
+  const interimTextRef = useRef<string>('');
+  const isOverlayActiveRef = useRef<boolean>(false);
+  const [recordedSessionText, setRecordedSessionText] = useState<string>('');
+  const recordedSessionTextRef = useRef<string>('');
+  const [isTranscriptionEnabled, setIsTranscriptionEnabled] = useState<boolean>(true);
+  const isTranscriptionEnabledRef = useRef<boolean>(true);
+  const [recordingOverlayMode, setRecordingOverlayMode] = useState<'voice-dictation' | 'speech-to-text'>('voice-dictation');
+  const shouldDiscardRecordingRef = useRef<boolean>(false);
+  const savedSelectionRef = useRef<Range | null>(null);
+  const currentSessionIdRef = useRef<number>(0);
+  const recognitionRef = useRef<any>(null);
+  const shouldBeRecordingRef = useRef<boolean>(false);
+  const shouldRestartSpeechRef = useRef<boolean>(true);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+  const [billingErrorOpen, setBillingErrorOpen] = useState<boolean>(false);
+
+  // Clean up speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      shouldBeRecordingRef.current = false;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.onstart = null;
+          recognitionRef.current.onresult = null;
+          recognitionRef.current.onerror = null;
+          recognitionRef.current.onend = null;
+          recognitionRef.current.stop();
+        } catch (e) {}
+      }
+    };
+  }, []);
+
+  const startSpeechRecognitionInstance = (isResume: boolean = false) => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    // Discard any existing recognition instance to prevent collision
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch (e) {}
+    }
+
+    // Generate a fresh unique session ID
+    currentSessionIdRef.current += 1;
+    const thisSessionId = currentSessionIdRef.current;
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    // Keep instance-specific finalized index in closure to prevent cross-session leaking
+    let lastFinalizedIndex = -1;
+
+    recognition.onstart = () => {
+      if (thisSessionId !== currentSessionIdRef.current) return;
+      setIsRecording(true);
+    };
+
+    recognition.onresult = (event: any) => {
+      if (thisSessionId !== currentSessionIdRef.current) return;
+      if (!isOverlayActiveRef.current || !isTranscriptionEnabledRef.current) return;
+
+      let currentInterim = '';
+      let hasChanges = false;
+
+      for (let i = lastFinalizedIndex + 1; i < event.results.length; ++i) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          const text = result[0].transcript.trim();
+          if (text) {
+            const current = recordedSessionTextRef.current;
+            const needsSpace = current && !current.endsWith(' ') && !text.startsWith(' ');
+            recordedSessionTextRef.current += (needsSpace ? ' ' : '') + text + ' ';
+            hasChanges = true;
+          }
+          lastFinalizedIndex = i;
+        } else {
+          currentInterim += result[0].transcript;
+        }
+      }
+
+      interimTextRef.current = currentInterim;
+      setInterimText(currentInterim);
+
+      if (hasChanges) {
+        setRecordedSessionText(recordedSessionTextRef.current);
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      if (thisSessionId !== currentSessionIdRef.current) return;
+      console.error('Speech recognition error:', event.error);
+      if (event.error === 'no-speech') {
+        return;
+      }
+      if (event.error === 'not-allowed') {
+        if (onShowToast) {
+          onShowToast('Microphone access was denied. Please allow microphone permissions in your browser/device settings.', 'error');
+        } else {
+          alert('Microphone access was denied. Please allow microphone permissions to use voice dictation and audio recording.');
+        }
+        shouldBeRecordingRef.current = false;
+        setIsRecording(false);
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+          try { mediaRecorderRef.current.stop(); } catch (e) {}
+        }
+      } else if (event.error === 'network') {
+        setSpeechError('network');
+        shouldRestartSpeechRef.current = false;
+      } else if (event.error !== 'aborted') {
+        setSpeechError(event.error || 'unknown');
+        shouldRestartSpeechRef.current = false;
+      }
+    };
+
+    recognition.onend = () => {
+      if (thisSessionId !== currentSessionIdRef.current) return;
+      if (shouldBeRecordingRef.current && shouldRestartSpeechRef.current) {
+        // Automatically restart speech recognition in a new clean session instance
+        startSpeechRecognitionInstance(true);
+      }
+    };
+
+    recognitionRef.current = recognition;
+
+    try {
+      recognition.start();
+    } catch (e: any) {
+      if (e.name === 'InvalidStateError') {
+        setIsRecording(true);
+      } else {
+        console.error('Error starting recognition:', e);
+        setSpeechError('network');
+      }
+    }
+  };
+
+  const startRecording = (isResume: boolean = false, mode: 'voice-dictation' | 'speech-to-text' = 'voice-dictation') => {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      savedSelectionRef.current = selection.getRangeAt(0);
+    }
+    
+    if (isResume && mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
+      try {
+        mediaRecorderRef.current.resume();
+      } catch (e) {
+        console.error('Failed to resume mediaRecorder:', e);
+      }
+      isOverlayActiveRef.current = true;
+      shouldBeRecordingRef.current = true;
+      shouldRestartSpeechRef.current = true;
+      startSpeechRecognitionInstance(true);
+      setIsRecording(true);
+      setSpeechError(null);
+      return;
+    }
+
+    if (!isResume) {
+      recordedSessionTextRef.current = '';
+      setRecordedSessionText('');
+      setInterimText('');
+      interimTextRef.current = '';
+      setSpeechError(null);
+      shouldRestartSpeechRef.current = true;
+      setRecordingOverlayMode(mode);
+      shouldDiscardRecordingRef.current = false;
+
+      // Update timestamp for new moment if starting a fresh recording
+      if (!activeBlockId) {
+        const now = new Date();
+        setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
+      }
+      
+      // If speech-to-text mode, force transcription enabled
+      if (mode === 'speech-to-text') {
+        setIsTranscriptionEnabled(true);
+        isTranscriptionEnabledRef.current = true;
+      }
+    }
+    
+    isOverlayActiveRef.current = true;
+    setShowRecordingOverlay(true);
+    shouldBeRecordingRef.current = true;
+
+
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+          const mediaRecorder = new MediaRecorder(stream);
+          mediaRecorderRef.current = mediaRecorder;
+          
+          if (!isResume) {
+            audioChunksRef.current = [];
+          }
+          
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+              audioChunksRef.current.push(e.data);
+            }
+          };
+          
+          mediaRecorder.onstop = () => {
+            if (shouldDiscardRecordingRef.current) {
+              stream.getTracks().forEach(track => track.stop());
+              return;
+            }
+
+            const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || 'audio/webm' });
+
+            if (isTranscriptionEnabledRef.current && recordingOverlayMode === 'voice-dictation') {
+              stream.getTracks().forEach(track => track.stop());
+              return;
+            }
+
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const base64data = reader.result as string;
+              
+              if (activeBlockId) {
+                setBlocks(prev => prev.map(b => b.id === activeBlockId ? { ...b, audioUri: base64data } : b));
+              } else {
+                setAudioUri(base64data);
+              }
+            };
+            reader.readAsDataURL(audioBlob);
+            
+            stream.getTracks().forEach(track => track.stop());
+          };
+
+          const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+          if (SpeechRecognition) {
+            startSpeechRecognitionInstance(isResume);
+          } else {
+            setIsRecording(true);
+            setSpeechError('unsupported');
+          }
+
+          mediaRecorder.start(250);
+        })
+        .catch(err => {
+          console.error('Media stream error:', err);
+          if (onShowToast) {
+            onShowToast('Microphone access was denied or could not be initialized. Please check permission settings.', 'error');
+          } else {
+            alert('Microphone access was denied or could not be initialized. Please allow microphone permissions.');
+          }
+          shouldBeRecordingRef.current = false;
+          setIsRecording(false);
+        });
+    } else {
+      if (onShowToast) {
+        onShowToast('Audio recording is not supported in this browser environment.', 'warning');
+      } else {
+        alert('Audio recording is not supported in this browser environment.');
+      }
+      shouldBeRecordingRef.current = false;
+      setIsRecording(false);
+    }
+  };
+
+  const pauseRecording = () => {
+    shouldBeRecordingRef.current = false;
+    try {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    } catch (e) {}
+    setIsRecording(false);
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      try {
+        mediaRecorderRef.current.pause();
+      } catch (e) {}
+    }
+  };
+
+  const cancelRecording = () => {
+    shouldDiscardRecordingRef.current = true;
+    shouldBeRecordingRef.current = false;
+    isOverlayActiveRef.current = false;
+    try {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    } catch (e) {}
+    setIsRecording(false);
+    setShowRecordingOverlay(false);
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (e) {}
+    }
+    
+    setInterimText('');
+    interimTextRef.current = '';
+    recordedSessionTextRef.current = '';
+    setRecordedSessionText('');
+  };
+
+  const insertTranscribedText = (text: string) => {
+    if (!text) return;
+    
+    let inserted = false;
+    
+    // 1. Try to insert at the cursor position using DOM execCommand (nice for UX if supported)
+    const activeEditor = document.activeElement as HTMLElement;
+    const isEditorActive = activeEditor && activeEditor.hasAttribute('contenteditable') && activeEditor.classList.contains('rich-text-editor');
+    
+    if (isEditorActive) {
+      try {
+        if (savedSelectionRef.current) {
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(savedSelectionRef.current);
+        }
+        
+        document.execCommand('insertText', false, text + ' ');
+        // Trigger input event to update React state
+        activeEditor.dispatchEvent(new Event('input', { bubbles: true }));
+        inserted = true;
+      } catch (err) {
+        console.warn('execCommand failed, falling back to state update:', err);
+      }
+    }
+    
+    // 2. If cursor insertion was not successful or not in an active editor, append directly to state
+    if (!inserted) {
+      if (activeBlockId) {
+        setBlocks(prev => prev.map(b => {
+          if (b.id === activeBlockId) {
+            const currentBody = b.body || '';
+            const newBody = currentBody ? `${currentBody} ${text}` : text;
+            return { ...b, body: newBody };
+          }
+          return b;
+        }));
+      } else {
+        setBody(prev => {
+          const currentBody = prev || '';
+          return currentBody ? `${currentBody} ${text}` : text;
+        });
+      }
+    }
+  };
+
+
+  const stopRecording = () => {
+    shouldBeRecordingRef.current = false;
+    isOverlayActiveRef.current = false;
+    try {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    } catch (e) {}
+    setIsRecording(false);
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (e) {}
+    }
+    
+    const finalInterim = interimTextRef.current.trim();
+    let textToInsert = isTranscriptionEnabledRef.current ? recordedSessionTextRef.current.trim() : '';
+    if (isTranscriptionEnabledRef.current && finalInterim) {
+      textToInsert += (textToInsert ? ' ' : '') + finalInterim;
+    }
+    
+    setInterimText('');
+    interimTextRef.current = '';
+    
+
+    setShowRecordingOverlay(false);
+    
+    if (textToInsert) {
+      insertTranscribedText(textToInsert);
+    }
+    
+    recordedSessionTextRef.current = '';
+    setRecordedSessionText('');
+  };
+
+  const toggleRecording = (mode: 'voice-dictation' | 'speech-to-text' = 'voice-dictation') => {
+    if (showRecordingOverlay) {
+      stopRecording();
+    } else {
+      startRecording(false, mode);
+    }
+  };
+
+  const renderInkBleedingText = (fullText: string, isInterim: boolean = false) => {
+    if (!fullText) return null;
+    const words = fullText.split(' ');
+    return words.map((word, idx) => {
+      if (!word) return null;
+      return (
+        <span
+          key={`${word}-${idx}`}
+          className={`inline-block mr-1.5 ${
+            isInterim ? 'text-brand-pink font-semibold' : 'text-brand-plum'
+          }`}
+          style={{
+            animation: 'ink-bleed 1.1s cubic-bezier(0.15, 0.85, 0.35, 1) forwards',
+            opacity: 0,
+          }}
+        >
+          {word}
+        </span>
+      );
+    });
+  };
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load entry details if editing or deep-linking
+  useEffect(() => {
+    if (isEditing) {
+      const allEntries = JSON.parse(localStorage.getItem('deardiary_entries') || '[]');
+      const entryObj = allEntries.find((e: Entry) => e.id === entryId);
+      if (entryObj) {
+        setDiaryId(entryObj.diaryId);
+        setDate(entryObj.date);
+        
+        // Load time if present, otherwise extract from createdAt
+        const entryTime = entryObj.time || new Date(entryObj.createdAt).toTimeString().split(' ')[0].substring(0, 5);
+        setTime(entryTime);
+        setCurrentTimeText(entryTime);
+
+        setTitle(entryObj.title === 'Untitled entry' ? '' : entryObj.title);
+        
+        const entryBlocks = entryObj.blocks || [];
+        // If it's an existing standard entry with no blocks, wrap the body in an initial block
+        let migratedAudio = false;
+        if (entryBlocks.length === 0 && (entryObj.body || entryObj.audioUri)) {
+          entryBlocks.push({
+            id: `block-initial-${Date.now()}`,
+            time: entryTime,
+            body: entryObj.body || '',
+            audioUri: entryObj.audioUri
+          });
+          migratedAudio = true;
+        }
+        
+        setBlocks(entryBlocks);
+        
+        // Start the single editor box empty for writing a fresh moment
+        setBody('');
+        setActiveBlockId(null);
+        
+        // Update current time text to actual now for the new moment
+        const now = new Date();
+        setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
+        
+        // Match pre-saved mood
+        const matchedMood = availableMoods.find(m => m.name === entryObj.moodName) || availableMoods[0] || { name: 'Joyful', emoji: '😊' };
+        setMood(matchedMood);
+        setSelectedTags(entryObj.tags || []);
+        setPhotoUris(entryObj.photoUris || []);
+        if (!migratedAudio) {
+          setAudioUri(entryObj.audioUri);
+        } else {
+          setAudioUri(undefined);
+        }
+      }
+    } else {
+      const now = new Date();
+      setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
+      
+      if (initialDate) {
+        setDate(initialDate);
+      }
+      if (initialPrompt) {
+        setBody(`<blockquote>${initialPrompt}</blockquote><br/>`);
+      }
+      if (availableTags.includes('happy')) {
+        setSelectedTags(['happy']);
+      }
+    }
+  }, [entryId, isEditing, initialDate, initialPrompt]);
+
+  const liveWordCount = useMemo(() => {
+    const previousBlocksWords = blocks
+      .filter(b => b.id !== activeBlockId)
+      .reduce((acc, b) => {
+        const text = b.body ? b.body.replace(/<[^>]*>?/gm, '').trim() : '';
+        return acc + (text ? text.split(/\s+/).filter(Boolean).length : 0);
+      }, 0);
+    const currentWords = body ? body.replace(/<[^>]*>?/gm, '').trim() : '';
+    const currentWordsCount = currentWords ? currentWords.split(/\s+/).filter(Boolean).length : 0;
+    return previousBlocksWords + currentWordsCount;
+  }, [blocks, body, activeBlockId]);
+
+
+
+  // Handle local photo file upload
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach((file: File) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setPhotoUris(prev => [...prev, event.target!.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const removePhoto = (idx: number) => {
+    setPhotoUris(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleTagToggle = (tag: string) => {
+    if (selectedTags.includes(tag)) {
+      setSelectedTags(prev => prev.filter(t => t !== tag));
+    } else {
+      setSelectedTags(prev => [...prev, tag]);
+    }
+  };
+
+  const handleSave = () => {
+    const finalTitle = title.trim() || 'Untitled entry';
+    
+    let finalBlocks = [...blocks].filter(b => {
+      const hasText = b.body && b.body.replace(/<[^>]*>?/gm, '').trim() !== '';
+      return hasText || b.audioUri;
+    });
+    
+    // Add new moment block if drafting area is not empty OR there is an audio note
+    const hasDraftText = body && body.replace(/<[^>]*>?/gm, '').trim() !== '';
+    if (hasDraftText || audioUri) {
+      const newBlock: EntryBlock = {
+        id: `block-${Date.now()}`,
+        time: currentTimeText,
+        body,
+        audioUri // Store the current recording in the block
+      };
+      finalBlocks.push(newBlock);
+      setAudioUri(undefined); // Reset for next recording
+      setBody(''); // Reset body after saving new moment
+    }
+    
+    // If absolutely everything is empty, don't save (or maybe show warning)
+    if (finalBlocks.length === 0 && !title.trim()) {
+      onBack(); // Just go back if they saved nothing
+      return;
+    }
+    
+    finalBlocks.sort((a, b) => a.time.localeCompare(b.time));
+    // Save all block texts combined as the overall entry body so standard view displays them
+    const finalBody = finalBlocks.map(b => b.body).filter(Boolean).join('<br/><br/>');
+
+    if (isEditing && entryId) {
+      const allEntries = JSON.parse(localStorage.getItem('deardiary_entries') || '[]');
+      const entryObj = allEntries.find((e: Entry) => e.id === entryId);
+      if (entryObj) {
+        const updated: Entry = {
+          ...entryObj,
+          diaryId,
+          date,
+          time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
+          title: finalTitle,
+          body: finalBody,
+          moodName: mood.name,
+          moodEmoji: mood.emoji,
+          tags: selectedTags,
+          photoUris,
+          photoCount: photoUris.length,
+          wordCount: liveWordCount,
+          audioUri: undefined, // Always clear top-level, recordings live in blocks
+          updatedAt: Date.now(),
+          blocks: finalBlocks
+        };
+        updateEntry(updated);
+      }
+    } else {
+      createEntry({
+        diaryId,
+        date,
+        time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
+        title: finalTitle,
+        body: finalBody,
+        moodName: mood.name,
+        moodEmoji: mood.emoji,
+        tags: selectedTags,
+        photoUris,
+        audioUri: undefined, // Always clear top-level, recordings live in blocks
+        blocks: finalBlocks
+      } as any);
+    }
+
+    onRefreshEntries();
+    onBack();
+  };
+
+  const handleDeleteEntry = () => {
+    if (entryId) {
+      deleteEntry(entryId);
+      onRefreshEntries();
+      onBack();
+    }
+  };
+
+  const triggerPhotoInput = () => {
+    fileInputRef.current?.click();
+  };
+
+  const isInsideBlockElement = (tagName: string): boolean => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return false;
+    let node: Node | null = selection.anchorNode;
+    while (node && node !== document.body) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as HTMLElement;
+        if (el.tagName.toLowerCase() === tagName.toLowerCase()) {
+          return true;
+        }
+      }
+      node = node.parentNode;
+    }
+    return false;
+  };
+
+  const updateActiveFormats = () => {
+    setActiveFormats({
+      bold: document.queryCommandState('bold'),
+      italic: document.queryCommandState('italic'),
+      underline: document.queryCommandState('underline'),
+      strikeThrough: document.queryCommandState('strikeThrough'),
+      h2: document.queryCommandValue('formatBlock') === 'h2' || isInsideBlockElement('h2'),
+      blockquote: document.queryCommandValue('formatBlock') === 'blockquote' || isInsideBlockElement('blockquote'),
+      list: document.queryCommandState('insertUnorderedList'),
+    });
+  };
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      updateActiveFormats();
+    };
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => {
+      document.removeEventListener('selectionchange', handleSelectionChange);
+    };
+  }, []);
+
+  const execCommand = (command: string) => {
+    document.execCommand(command, false, undefined);
+    setTimeout(updateActiveFormats, 10);
+  };
+
+  const toggleFormatBlock = (tagName: string) => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    
+    // Find nearest ancestor block or container to check tag
+    let node: Node | null = selection.anchorNode;
+    let isInsideTag = false;
+    while (node && node !== document.body) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as HTMLElement;
+        if (el.tagName.toLowerCase() === tagName.toLowerCase()) {
+          isInsideTag = true;
+          break;
+        }
+      }
+      node = node.parentNode;
+    }
+
+    if (isInsideTag) {
+      document.execCommand('formatBlock', false, '<p>');
+    } else {
+      document.execCommand('formatBlock', false, `<${tagName}>`);
+    }
+    setTimeout(updateActiveFormats, 10);
+  };
+
+  const recordingOverlayUI = (
+    <AnimatePresence>
+      {showRecordingOverlay && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[100] overflow-y-auto bg-brand-bg/95 dark:bg-brand-plum/95 backdrop-blur-2xl select-none"
+        >
+          {/* Top action dismiss button */}
+          <div className="absolute top-4 right-4 sm:top-6 sm:right-6">
+            <motion.button 
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={cancelRecording}
+              className="p-2.5 sm:p-3 text-brand-pink hover:text-brand-pink-dark bg-white dark:bg-brand-card-bg rounded-full shadow-md border border-brand-border/40"
+              title="Discard recording and exit"
+            >
+              <X className="w-5 h-5 sm:w-6 sm:h-6" />
+            </motion.button>
+          </div>
+          
+          <div className="min-h-screen flex flex-col items-center justify-start md:justify-center w-full max-w-xl mx-auto gap-4 sm:gap-6 md:gap-8 py-16 px-4 sm:px-6">
+            <div className="text-center space-y-1 select-none">
+              <span className="text-[9px] sm:text-[10px] font-extrabold text-brand-pink uppercase tracking-[0.25em] bg-brand-pink/10 px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full">
+                {recordingOverlayMode === 'speech-to-text' ? 'Voice to Text' : 'Voice Sanctuary'}
+              </span>
+              <h2 className="text-xl sm:text-2xl font-serif-diary font-bold text-brand-plum italic pt-1.5 sm:pt-2">
+                {recordingOverlayMode === 'speech-to-text' ? 'Voice Transcription' : 'Spill Your Heart Out'}
+              </h2>
+              {recordingOverlayMode === 'voice-dictation' && (
+                <p className="text-[11px] sm:text-xs text-brand-text-muted font-medium px-2">
+                  Just start speaking—we will transcribe your voice into your diary in real-time.
+                </p>
+              )}
+              
+              {/* Transcription Toggle (Only in Voice Sanctuary mode) */}
+              {recordingOverlayMode === 'voice-dictation' && (
+                <div className="flex justify-center pt-3">
+                  <button
+                    onClick={() => {
+                      const newValue = !isTranscriptionEnabled;
+                      setIsTranscriptionEnabled(newValue);
+                      isTranscriptionEnabledRef.current = newValue;
+                    }}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-300 ${
+                      isTranscriptionEnabled 
+                        ? 'bg-brand-pink/10 border-brand-pink/30 text-brand-pink' 
+                        : 'bg-brand-sage/10 border-brand-sage/30 text-brand-sage'
+                    }`}
+                  >
+                    <div className={`w-3 h-3 rounded-full ${isTranscriptionEnabled ? 'bg-brand-pink animate-pulse' : 'bg-brand-sage'}`} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider">
+                      Transcription: {isTranscriptionEnabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+            
+            <div className="relative flex flex-col items-center justify-center py-2 sm:py-4">
+              {isRecording ? (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  {/* Multiple cascading breath rings */}
+                  <motion.div 
+                    animate={{ scale: [1, 1.8, 1], opacity: [0.3, 0, 0.3] }}
+                    transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                    className="absolute w-24 h-24 sm:w-32 sm:h-32 rounded-full border-2 border-brand-pink/20"
+                  />
+                  <motion.div 
+                    animate={{ scale: [1, 2.3, 1], opacity: [0.15, 0, 0.15] }}
+                    transition={{ duration: 4, repeat: Infinity, ease: "easeInOut", delay: 1 }}
+                    className="absolute w-24 h-24 sm:w-32 sm:h-32 rounded-full border border-brand-pink/10"
+                  />
+                </div>
+              ) : null}
+
+              <motion.div 
+                whileHover={{ scale: 1.02 }}
+                className={`relative z-10 p-5 sm:p-[30px] rounded-full shadow-xl border transition-all duration-500 ${
+                  isRecording 
+                    ? 'bg-brand-pink text-white border-brand-pink/20 shadow-brand-pink/30 scale-105' 
+                    : 'bg-white dark:bg-brand-card-bg text-brand-pink border-brand-border/80 shadow-md'
+                }`}
+              >
+                {isRecording ? <Mic className="w-8 h-8 sm:w-12 sm:h-12" /> : <MicOff className="w-8 h-8 sm:w-12 sm:h-12" />}
+              </motion.div>
+
+              {/* Simulated bouncing wave equalizer indicator */}
+              {isRecording && (
+                <div className="flex items-center gap-1 sm:gap-1.5 mt-4 sm:mt-6 h-5 sm:h-6 select-none">
+                  {[0.4, 0.9, 0.6, 0.3, 0.8, 0.5, 0.9, 0.4, 0.7, 0.3].map((delay, idx) => (
+                    <motion.div
+                      key={idx}
+                      animate={{ height: [5, 18, 5] }}
+                      transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut", delay: delay }}
+                      className="w-1 sm:w-1.5 bg-brand-pink rounded-full"
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Status indicators and Connection notices */}
+            {recordingOverlayMode === 'voice-dictation' && (
+              <div className="flex flex-col items-center gap-2 max-w-md w-full">
+                <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 bg-white/70 dark:bg-brand-card-bg/85 px-3 py-1.5 sm:px-4 sm:py-2 rounded-2xl border border-brand-border/60 text-[10px] sm:text-xs font-semibold">
+                  <span className={`flex items-center gap-1.5 ${isTranscriptionEnabled ? 'text-brand-text-muted opacity-50' : 'text-brand-plum'}`}>
+                    <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isTranscriptionEnabled ? 'bg-brand-text-muted/40' : 'bg-emerald-500 animate-pulse'}`} />
+                    <span>Raw Audio: {isTranscriptionEnabled ? 'Off' : 'Active'} 🎙️</span>
+                  </span>
+                  <span className="hidden sm:inline w-px h-4 bg-brand-border" />
+                  <span className={`flex items-center gap-1.5 ${!isTranscriptionEnabled ? 'text-brand-text-muted opacity-50' : 'text-brand-plum'}`}>
+                    {speechError || !isTranscriptionEnabled ? (
+                      <>
+                        <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${!isTranscriptionEnabled ? 'bg-brand-text-muted/40' : 'bg-amber-500'}`} />
+                        <span>Dictation: {speechError ? 'Offline' : 'Off'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>Dictation: Transcribing ✍️</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {speechError && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[10px] sm:text-xs px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl text-center leading-relaxed font-semibold shadow-sm"
+                  >
+                    {speechError === 'network' ? (
+                      "A speech recognition connection dropout occurred, but your high-quality raw audio voice note is still recording perfectly! Keep speaking freely."
+                    ) : speechError === 'unsupported' ? (
+                      "Real-time dictation is unsupported in this browser environment, but your voice note is being recorded successfully and will be transcribed by Gemini AI when you click 'Finish'!"
+                    ) : (
+                      `Dictation paused (${speechError}), but your voice note is being recorded successfully and will be transcribed by Gemini AI when you click 'Finish'!`
+                    )}
+                  </motion.div>
+                )}
+              </div>
+            )}
+
+            {/* Live Transcription Box */}
+            <div className="text-center w-full space-y-2 sm:space-y-4">
+              <h3 className="text-[10px] sm:text-xs font-bold text-brand-pink uppercase tracking-widest">
+                {isRecording 
+                  ? (isTranscriptionEnabled ? 'Listening and translating...' : 'Voice Sanctuary Active') 
+                  : 'Recording is paused'}
+              </h3>
+              
+              <div className="min-h-[100px] sm:min-h-[140px] w-full p-4 sm:p-6 bg-white/70 dark:bg-brand-card-bg/75 backdrop-blur-md rounded-2xl sm:rounded-3xl border border-brand-border/60 text-brand-plum text-sm sm:text-base md:text-lg leading-[1.6] sm:leading-[1.7] shadow-inner max-h-36 sm:max-h-48 overflow-y-auto no-scrollbar text-left font-serif-diary italic flex flex-wrap content-start">
+                <div className="w-full flex flex-wrap">
+                  {renderInkBleedingText(recordedSessionText, false)}
+                  {renderInkBleedingText(interimText, true)}
+                </div>
+                {!recordedSessionText && !interimText && (
+                  <span className="opacity-45 text-center block w-full py-4 sm:py-8 font-sans text-xs font-semibold uppercase tracking-wider">
+                    {isTranscriptionEnabled ? 'Start speaking to write...' : 'Transcription is disabled. Recording raw audio only.'}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Audio Command Controls */}
+            <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4.5">
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={cancelRecording}
+                className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-red-50 hover:bg-red-100 text-red-600 font-bold rounded-full shadow-md border border-red-200 text-[10px] sm:text-xs uppercase tracking-wider"
+              >
+                <X className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500" /> 
+                <span>Cancel</span>
+              </motion.button>
+
+              {isRecording ? (
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={pauseRecording}
+                  className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-white dark:bg-brand-card-bg text-brand-plum font-bold rounded-full shadow-md hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-colors border border-brand-border text-[10px] sm:text-xs uppercase tracking-wider"
+                >
+                  <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-brand-pink" /> 
+                  <span>Pause</span>
+                </motion.button>
+              ) : (
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => startRecording(true)}
+                  className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-brand-pink text-white font-bold rounded-full shadow-lg hover:bg-brand-pink-dark transition-all shadow-brand-pink/15 text-[10px] sm:text-xs uppercase tracking-wider"
+                >
+                  <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> 
+                  <span>Resume</span>
+                </motion.button>
+              )}
+              
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={stopRecording}
+                className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-brand-plum dark:bg-white text-white dark:text-brand-plum font-bold rounded-full shadow-md hover:opacity-90 transition-colors text-[10px] sm:text-xs uppercase tracking-wider"
+              >
+                <Square className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-brand-pink" /> 
+                <span>Finish</span>
+              </motion.button>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
+  const billingErrorUI = (
+    <AnimatePresence>
+      {billingErrorOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md"
+        >
+          <motion.div
+            initial={{ scale: 0.95, y: 15 }}
+            animate={{ scale: 1, y: 0 }}
+            exit={{ scale: 0.95, y: 15 }}
+            className="bg-white dark:bg-brand-card-bg w-full max-w-md rounded-3xl p-6 sm:p-8 shadow-2xl border border-brand-border/80 text-center"
+          >
+            <div className="mx-auto w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center text-amber-500 mb-4">
+              <Info className="w-6 h-6" />
+            </div>
+            
+            <h3 className="text-xl font-serif-diary font-bold text-brand-plum italic mb-2">
+              Gemini Credits Depleted
+            </h3>
+            
+            <p className="text-sm text-brand-text-muted mb-6 leading-relaxed">
+              Your Google AI Studio prepayment credits are depleted. Please top up your billing account or use the standard offline audio fallback! Your raw audio voice note has been safely preserved.
+            </p>
+            
+            <div className="flex flex-col gap-3">
+              <a 
+                href="https://ai.studio/projects" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="w-full bg-brand-pink hover:bg-brand-pink-dark text-white font-sans text-sm font-semibold py-3 px-4 rounded-xl shadow transition-colors flex items-center justify-center gap-2"
+              >
+                <Sparkles className="w-4 h-4" />
+                Go to AI Studio Billing
+              </a>
+              
+              <button
+                onClick={() => setBillingErrorOpen(false)}
+                className="w-full bg-brand-bg/50 hover:bg-brand-bg/80 text-brand-plum font-sans text-sm font-semibold py-3 px-4 rounded-xl border border-brand-border/40 transition-colors"
+              >
+                Continue with Saved Raw Audio
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
+  if (isFocusMode) {
+    return (
+      <div className="fixed inset-0 z-50 bg-brand-bg flex flex-col h-screen overflow-y-auto px-6 py-8 md:py-16 pb-28">
+        <div className="max-w-2xl mx-auto w-full flex-grow flex flex-col gap-6">
+          
+          {/* Distraction-Free Minimalist Top Controls */}
+          <header className="flex justify-between items-center text-brand-sage/60 hover:opacity-100 transition-opacity duration-300 select-none pb-4 border-b border-brand-border/10">
+            <button 
+              onClick={() => {
+                setIsFocusMode(false);
+                onFocusModeChange?.(false);
+              }}
+              className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 bg-brand-card-bg rounded-xl border border-brand-border text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-all active:scale-95 shadow-sm"
+              title="Exit Focus Mode"
+            >
+              <Minimize2 className="w-3.5 h-3.5 text-brand-pink" />
+              <span>Exit Focus Mode</span>
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setFontFamily(prev => prev === 'serif' ? 'sans' : prev === 'sans' ? 'mono' : 'serif')}
+                className="px-3 py-1.5 rounded-xl bg-brand-card-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1.5 border border-brand-border text-brand-plum shadow-sm"
+                title="Change font style"
+              >
+                <Type className="w-3.5 h-3.5 text-brand-pink" />
+                <span>Font: <span className="capitalize">{fontFamily}</span></span>
+              </button>
+
+              <button 
+                onClick={handleSave}
+                className="bg-brand-sage hover:bg-brand-sage-dark text-white px-4 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-sm"
+              >
+                Save
+              </button>
+            </div>
+          </header>
+
+          {/* Minimalist Title */}
+          <div className="pt-4">
+            <input 
+              type="text" 
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Give this moment a title..."
+              className={`w-full bg-transparent p-0 border-none font-bold text-brand-plum placeholder-brand-sage/30 focus:outline-none focus:ring-0 text-3xl md:text-4xl ${
+                fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+              }`}
+            />
+          </div>
+
+          {/* Minimalist Divider */}
+          <div className="h-px w-full bg-brand-border/20" />
+
+          {/* Large Body Area */}
+          <div className="flex-grow flex flex-col min-h-[450px]">
+            <div className="flex flex-col gap-4 text-left w-full h-full">
+              {/* Scrollable history stream of blocks - NOW ALL IN EDIT MODE */}
+              {blocks.length > 0 && (
+                <div className="flex flex-col gap-6 mb-8">
+                  <span className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest pl-1 border-b border-brand-pink/20 pb-2">
+                    Earlier Saved Moments ({blocks.length})
+                  </span>
+                  <div className="flex flex-col gap-6">
+                    {blocks.map((b, index) => {
+                      const isMinimized = minimizedBlockIds.has(b.id);
+                      return (
+                        <div 
+                          key={b.id} 
+                          className="relative pl-8 border-l-2 border-brand-pink/20 flex flex-col gap-3 group transition-all"
+                        >
+                          {/* Timeline point */}
+                          <div className="absolute -left-[9px] top-2.5 w-4 h-4 rounded-full bg-brand-bg border-2 border-brand-pink group-hover:scale-110 transition-transform" />
+                          
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <span className="font-mono text-xs font-bold text-brand-pink bg-brand-pink/5 px-3 py-1 rounded-full flex items-center gap-1.5 border border-brand-pink/10 shadow-sm">
+                                <Clock className="w-3.5 h-3.5" />
+                                {formatTime12(b.time)}
+                              </span>
+                              <input 
+                                type="time" 
+                                value={b.time}
+                                onChange={(e) => {
+                                  const updated = [...blocks];
+                                  updated[index].time = e.target.value;
+                                  setBlocks(updated);
+                                }}
+                                className="text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0.5 transition-colors"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMinimizedBlockIds(prev => {
+                                    const next = new Set(prev);
+                                    if (isMinimized) next.delete(b.id);
+                                    else next.add(b.id);
+                                    return next;
+                                  });
+                                }}
+                                className="p-1.5 text-brand-plum/60 hover:text-brand-pink hover:bg-brand-pink/10 rounded-lg transition-all"
+                                title={isMinimized ? "Expand" : "Minimize"}
+                              >
+                                {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setBlocks(prev => prev.filter(item => item.id !== b.id));
+                                }}
+                                className="p-1.5 text-brand-rose/60 hover:text-brand-rose hover:bg-brand-rose/10 rounded-lg transition-all"
+                                title="Delete moment"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {!isMinimized && (
+                            <div className="bg-white/40 dark:bg-brand-bg/20 p-4 rounded-2xl border border-brand-border/30 shadow-sm hover:shadow-md transition-shadow flex flex-col gap-4">
+                              <RichTextEditor
+                                html={b.body}
+                                onChange={(newHtml) => {
+                                  const updated = [...blocks];
+                                  updated[index].body = newHtml;
+                                  setBlocks(updated);
+                                }}
+                                onFocus={() => setActiveBlockId(b.id)}
+                                placeholder="Edit this moment's reflection..."
+                                className={`rich-text-editor w-full text-lg leading-relaxed text-brand-plum focus:outline-none focus:ring-0 ${
+                                  fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                                }`}
+                              />
+
+                              {b.audioUri && (
+                                <div className="border-t border-brand-border/20 pt-3 flex flex-col gap-2">
+                                  <AudioWaveformPlayer 
+                                    src={b.audioUri} 
+                                    title={`Voice moment from ${formatTime12(b.time)}`}
+                                    variant="minimal"
+                                    onDelete={() => {
+                                      const updated = [...blocks];
+                                      updated[index].audioUri = undefined;
+                                      setBlocks(updated);
+                                    }}
+                                  />
+
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Single editing input card area for NEW moments */}
+              <div className="flex flex-col gap-4 flex-grow border-t border-brand-pink/10 pt-8 mt-4">
+                <div className="flex items-center justify-between bg-brand-pink/5 px-4 py-2 rounded-2xl border border-brand-pink/15">
+                  <div className="flex items-center gap-2 select-none">
+                    <Clock className="w-3.5 h-3.5 text-brand-pink" />
+                    <span className="text-xs font-bold text-brand-pink uppercase tracking-widest">
+                      Drafting New Moment for {formatTime12(currentTimeText)}
+                    </span>
+                    <input 
+                      type="time" 
+                      value={currentTimeText}
+                      onChange={(e) => setCurrentTimeText(e.target.value)}
+                      className="ml-2 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0.5"
+                    />
+                  </div>
+                </div>
+
+                <RichTextEditor
+                  html={body}
+                  onChange={setBody}
+                  onFocus={() => setActiveBlockId(null)}
+                  placeholder="Write a brand-new moment reflection for this hourly block..."
+                  className={`rich-text-editor w-full text-lg leading-relaxed text-brand-plum focus:outline-none focus:ring-0 flex-grow min-h-[250px] ${
+                    fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                  }`}
+                />
+
+                {audioUri && (
+                  <div className="mt-2 border-t border-brand-border/20 pt-4 flex flex-col items-center gap-2">
+                    <AudioWaveformPlayer 
+                      src={audioUri} 
+                      variant="minimal"
+                      onDelete={() => setAudioUri(undefined)}
+                    />
+
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Floating Sticky Styling Controls at bottom of screen */}
+          {isDockMinimized ? (
+            <button
+              onClick={() => setIsDockMinimized(false)}
+              className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-brand-card-bg/95 backdrop-blur-md text-brand-plum rounded-full border border-brand-border shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 text-xs font-bold animate-fade-in"
+              title="Show Formatting Toolbar"
+            >
+              <Type className="w-4 h-4 text-brand-pink" />
+              <span>Format</span>
+              <ChevronUp className="w-3.5 h-3.5 ml-0.5 opacity-70" />
+            </button>
+          ) : (
+            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-brand-card-bg/95 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-brand-border shadow-xl flex items-center gap-1 transition-all">
+              <button 
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); execCommand('bold'); }}
+                className={`p-2 rounded-xl transition-all ${
+                  activeFormats.bold 
+                    ? 'bg-brand-pink text-white shadow-sm' 
+                    : 'text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                }`}
+                title="Bold"
+              >
+                <Bold className="w-4 h-4" />
+              </button>
+              <button 
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); execCommand('italic'); }}
+                className={`p-2 rounded-xl transition-all ${
+                  activeFormats.italic 
+                    ? 'bg-brand-pink text-white shadow-sm' 
+                    : 'text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                }`}
+                title="Italic"
+              >
+                <Italic className="w-4 h-4" />
+              </button>
+              <button 
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); execCommand('underline'); }}
+                className={`p-2 rounded-xl transition-all ${
+                  activeFormats.underline 
+                    ? 'bg-brand-pink text-white shadow-sm' 
+                    : 'text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                }`}
+                title="Underline"
+              >
+                <Underline className="w-4 h-4" />
+              </button>
+              <button 
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); execCommand('strikeThrough'); }}
+                className={`p-2 rounded-xl transition-all ${
+                  activeFormats.strikeThrough 
+                    ? 'bg-brand-pink text-white shadow-sm' 
+                    : 'text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                }`}
+                title="Strikethrough"
+              >
+                <Strikethrough className="w-4 h-4" />
+              </button>
+              
+              <div className="w-px h-5 bg-brand-border/50 mx-1" />
+
+              <button 
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); toggleFormatBlock('h2'); }}
+                className={`p-2 rounded-xl transition-all ${
+                  activeFormats.h2 
+                    ? 'bg-brand-pink text-white shadow-sm' 
+                    : 'text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                }`}
+                title="Heading style"
+              >
+                <Heading2 className="w-4 h-4" />
+              </button>
+
+              <button 
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); toggleFormatBlock('blockquote'); }}
+                className={`p-2 rounded-xl transition-all ${
+                  activeFormats.blockquote 
+                    ? 'bg-brand-pink text-white shadow-sm' 
+                    : 'text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                }`}
+                title="Quote format"
+              >
+                <Quote className="w-4 h-4" />
+              </button>
+
+              <button 
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); execCommand('insertUnorderedList'); }}
+                className={`p-2 rounded-xl transition-all ${
+                  activeFormats.list 
+                    ? 'bg-brand-pink text-white shadow-sm' 
+                    : 'text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                }`}
+                title="List format"
+              >
+                <List className="w-4 h-4" />
+              </button>
+
+              <div className="w-px h-5 bg-brand-border/50 mx-1" />
+
+              <button 
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); toggleRecording('speech-to-text'); }}
+                className={`p-2 rounded-xl transition-all ${
+                  showRecordingOverlay && recordingOverlayMode === 'speech-to-text'
+                    ? 'bg-red-100 text-red-500 shadow-sm' 
+                    : 'text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                }`}
+                title="Start Voice to Text"
+              >
+                <Mic className="w-4 h-4" />
+              </button>
+
+              <div className="w-px h-5 bg-brand-border/50 mx-1" />
+
+              <button 
+                type="button"
+                onClick={() => setIsDockMinimized(true)}
+                className="p-2 rounded-xl transition-all hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-brand-plum opacity-70 hover:opacity-100"
+                title="Minimize Formatting"
+              >
+                <ChevronDown className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+        </div>
+        {recordingOverlayUI}
+        {billingErrorUI}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5 font-sans relative pb-28">
+      {/* Top Header */}
+      <header className="flex justify-between items-center bg-brand-bg sticky top-0 py-3 z-30 border-b border-brand-rose-light/40">
+        <button 
+          onClick={onBack}
+          className="p-2 text-brand-plum hover:bg-brand-blush-light rounded-full transition-all active:scale-90"
+        >
+          <X className="w-5 h-5" />
+        </button>
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={onBack}
+            className="px-4 py-2 font-bold text-xs text-brand-sage hover:text-brand-plum transition-colors"
+          >
+            Discard
+          </button>
+          <button 
+            onClick={handleSave}
+            className="bg-brand-sage hover:bg-brand-sage-dark text-white px-5 py-2 rounded-full text-xs font-bold transition-all active:scale-95 shadow-sm"
+          >
+            Save Entry
+          </button>
+        </div>
+      </header>
+
+      {/* Date, Diary Picker and Header Meta elements */}
+      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
+        
+        {/* Diary Selector */}
+        <div className="flex justify-between items-center pb-3 border-b border-brand-border/40">
+          <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Diary Location</label>
+          <select 
+            value={diaryId}
+            onChange={(e) => setDiaryId(e.target.value)}
+            className="text-xs font-bold text-brand-sage-dark bg-brand-sage-light/20 dark:bg-brand-sage-light/10 border border-brand-border px-3 py-1.5 rounded-xl focus:outline-none"
+          >
+            {diaries.map(d => (
+              <option key={d.id} value={d.id}>{d.emoji} {d.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Date and Time Fields */}
+        <div className="flex flex-wrap items-center gap-4 text-xs font-semibold text-brand-sage justify-between">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-1.5">
+              <Calendar className="w-4 h-4 text-brand-pink" />
+              <input 
+                type="date" 
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="bg-transparent border-b border-brand-border text-brand-plum font-serif-diary font-bold py-1.5 focus:outline-none focus:border-brand-pink"
+              />
+            </div>
+            
+            <div className="flex items-center gap-1.5">
+              <Clock className="w-4 h-4 text-brand-pink" />
+              <input 
+                type="time" 
+                value={time}
+                onChange={(e) => setTime(e.target.value)}
+                className="bg-transparent border-b border-brand-border text-brand-plum font-serif-diary font-bold py-1.5 focus:outline-none focus:border-brand-pink"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 text-brand-sage/80 bg-brand-rose-light dark:bg-brand-rose-light/10 px-2.5 py-1.5 rounded-xl border border-brand-border">
+            <span className="w-1.5 h-1.5 bg-brand-pink rounded-full" />
+            <span>Word Count: {liveWordCount}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Title text input */}
+      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-1">
+        <input 
+          type="text" 
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Title your entry..."
+          className={`w-full bg-transparent p-0 border-none text-xl md:text-2xl font-bold text-brand-plum placeholder-brand-sage/40 focus:outline-none focus:ring-0 ${
+            fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+          }`}
+        />
+      </div>
+
+      {/* Mood Selector horizontal list */}
+      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
+        <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">How are you feeling?</label>
+        <div className="flex overflow-x-auto no-scrollbar gap-2.5 py-1">
+          {availableMoods.map(m => (
+            <button
+              key={m.name}
+              type="button"
+              onClick={() => setMood(m)}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full border transition-all flex-shrink-0 active:scale-95 ${
+                mood.name === m.name
+                  ? 'bg-brand-sage-light dark:bg-brand-sage-light/10 text-brand-sage-dark border-brand-sage scale-105 shadow-sm'
+                  : 'bg-brand-bg text-brand-sage hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 border-brand-border'
+              }`}
+            >
+              <span className="text-base">{m.emoji}</span>
+              <span className="text-xs font-semibold">{m.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main long-form body text editor */}
+      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3 flex-grow min-h-[300px]">
+        {/* Editor Controls with Font family switcher and Distraction-free Writing Toggle */}
+        <div className="flex justify-between items-center pb-2.5 border-b border-brand-border/40 text-brand-sage select-none">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setFontFamily(prev => prev === 'serif' ? 'sans' : prev === 'sans' ? 'mono' : 'serif')}
+              className="px-3 py-1.5 rounded-xl bg-brand-bg dark:bg-brand-bg/50 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1.5 text-brand-plum border border-brand-border shadow-sm active:scale-95"
+              title="Change Writing Font style"
+            >
+              <Type className="w-3.5 h-3.5 text-brand-pink" />
+              <span>Font: <span className="capitalize">{fontFamily}</span></span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => toggleRecording('voice-dictation')}
+              className="px-3 py-1.5 rounded-xl bg-brand-bg dark:bg-brand-bg/50 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1.5 text-brand-plum border border-brand-border shadow-sm active:scale-95"
+              title="Record Voice Note / Speech-to-Text"
+            >
+              <Mic className="w-3.5 h-3.5 text-brand-pink" />
+              <span>Voice Dictation</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsFocusMode(true);
+                onFocusModeChange?.(true);
+              }}
+              className="px-3 py-1.5 rounded-xl bg-brand-bg dark:bg-brand-bg/50 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1.5 text-brand-plum border border-brand-border shadow-sm active:scale-95"
+              title="Distraction-free Writing Mode"
+            >
+              <Maximize2 className="w-3.5 h-3.5 text-brand-pink animate-pulse" />
+              <span>Maximize Area (Focus)</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-5 text-left w-full h-full mt-2">
+          {/* List of blocks in edit mode for mobile */}
+          {blocks.length > 0 && (
+            <div className="flex flex-col gap-5 mb-4">
+              <span className="text-[10px] font-extrabold text-brand-pink uppercase tracking-wider pl-1 border-b border-brand-pink/10 pb-1.5">
+                Saved Moments ({blocks.length})
+              </span>
+              <div className="flex flex-col gap-5">
+                {blocks.map((b, index) => {
+                  const isMinimized = minimizedBlockIds.has(b.id);
+                  return (
+                    <div 
+                      key={b.id} 
+                      className="relative pl-6 border-l-2 border-brand-pink/20 flex flex-col gap-2"
+                    >
+                      {/* Timeline point */}
+                      <div className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-brand-bg border-2 border-brand-pink" />
+                      
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <span className="font-mono text-[10px] font-bold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded flex items-center gap-1 border border-brand-pink/10">
+                            <Clock className="w-3 h-3" />
+                            {formatTime12(b.time)}
+                          </span>
+                          <input 
+                            type="time" 
+                            value={b.time}
+                            onChange={(e) => {
+                              const updated = [...blocks];
+                              updated[index].time = e.target.value;
+                              setBlocks(updated);
+                            }}
+                            className="text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0 transition-colors w-20"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setMinimizedBlockIds(prev => {
+                                const next = new Set(prev);
+                                if (isMinimized) next.delete(b.id);
+                                else next.add(b.id);
+                                return next;
+                              });
+                            }}
+                            className="p-1 text-brand-plum/60 hover:text-brand-pink"
+                          >
+                            {isMinimized ? <Maximize2 className="w-3.5 h-3.5" /> : <Minimize2 className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBlocks(prev => prev.filter(item => item.id !== b.id));
+                            }}
+                            className="p-1 text-brand-rose/60"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {!isMinimized && (
+                        <div className="bg-white/40 dark:bg-brand-bg/20 p-3 rounded-xl border border-brand-border/20 flex flex-col gap-3">
+                          <RichTextEditor
+                            html={b.body}
+                            onChange={(newHtml) => {
+                              const updated = [...blocks];
+                              updated[index].body = newHtml;
+                              setBlocks(updated);
+                            }}
+                            onFocus={() => setActiveBlockId(b.id)}
+                            placeholder="Edit moment..."
+                            className={`rich-text-editor w-full text-base leading-relaxed text-brand-plum focus:outline-none focus:ring-0 ${
+                              fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                            }`}
+                          />
+
+                          {b.audioUri && (
+                            <div className="border-t border-brand-border/10 pt-2 flex flex-col gap-2">
+                              <AudioWaveformPlayer 
+                                src={b.audioUri} 
+                                title={`Voice moment`}
+                                variant="minimal"
+                                onDelete={() => {
+                                  const updated = [...blocks];
+                                  updated[index].audioUri = undefined;
+                                  setBlocks(updated);
+                                }}
+                              />
+
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* New Moment area for mobile */}
+          <div className="flex flex-col gap-3 flex-grow border-t border-brand-pink/10 pt-4">
+            <div className="flex items-center justify-between bg-brand-pink/5 px-3 py-1.5 rounded-2xl border border-brand-pink/15">
+              <div className="flex items-center gap-1.5 select-none overflow-hidden">
+                <Clock className="w-3.5 h-3.5 text-brand-pink flex-shrink-0" />
+                <span className="text-[10px] font-bold text-brand-pink uppercase tracking-wider truncate">
+                  New Moment at {formatTime12(currentTimeText)}
+                </span>
+                <input 
+                  type="time" 
+                  value={currentTimeText}
+                  onChange={(e) => setCurrentTimeText(e.target.value)}
+                  className="ml-1 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0"
+                />
+              </div>
+            </div>
+
+            <RichTextEditor
+              html={body}
+              onChange={setBody}
+              onFocus={() => setActiveBlockId(null)}
+              placeholder="Write a brand-new moment reflection..."
+              className={`rich-text-editor w-full text-base leading-relaxed text-brand-plum min-h-[180px] ${
+                fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+              }`}
+            />
+
+            {audioUri && (
+              <div className="mt-2 border-t border-brand-border/10 pt-3 flex flex-col items-center gap-2">
+                <AudioWaveformPlayer 
+                  src={audioUri} 
+                  variant="minimal"
+                  onDelete={() => setAudioUri(undefined)}
+                />
+
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Removed global audio player from here as it's now per-moment */}
+
+        {/* Thumbnail attachments list */}
+        {photoUris.length > 0 && (
+          <div className="flex flex-col gap-1.5 border-t border-brand-border/40 pt-3">
+            <p className="text-[10px] font-bold text-brand-sage uppercase tracking-widest">
+              Attached Photos (Long-press or tap X to remove)
+            </p>
+            <div className="flex overflow-x-auto gap-3 py-1">
+              {photoUris.map((photo, idx) => (
+                <div key={idx} className="relative w-20 h-20 rounded-xl overflow-hidden shadow-sm border border-brand-rose-light flex-shrink-0">
+                  <img src={photo} alt="" className="w-full h-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => removePhoto(idx)}
+                    className="absolute top-1 right-1 p-1 bg-black/60 backdrop-blur-sm text-white rounded-full hover:bg-red-600 transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Point 2: Mindful Reflection Guide (Local offline analyzer) */}
+      <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
+        <div className="flex justify-between items-center">
+          <div className="flex items-center gap-2.5">
+            <span className="p-2 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-xl">
+              <Sparkles className="w-4 h-4 fill-brand-pink/10 text-brand-pink" />
+            </span>
+            <div>
+              <h3 className="text-sm font-bold text-brand-plum">Mindful Reflection Guide</h3>
+              <p className="text-[10px] text-brand-sage mt-0.5">Get supportive reflections, suggested moods & tags (works 100% locally)</p>
+            </div>
+          </div>
+        </div>
+
+        {aiError && (
+          <p className="text-xs font-semibold text-brand-pink-dark bg-brand-pink/5 p-3 rounded-2xl border border-brand-pink/20">
+            {aiError}
+          </p>
+        )}
+
+        {aiLoading ? (
+          <div className="flex flex-col items-center justify-center py-6 gap-3 text-center">
+            <div className="relative w-10 h-10">
+              <motion.div 
+                animate={{ rotate: 360 }}
+                transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                className="w-10 h-10 rounded-full border-4 border-brand-pink/10 border-t-brand-pink"
+              />
+              <Sparkles className="w-4 h-4 text-brand-pink absolute inset-0 m-auto animate-pulse" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs font-bold text-brand-plum">Reflection Guide is contemplating...</p>
+              <motion.p 
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 2, repeat: Infinity }}
+                className="text-[10px] text-brand-sage italic"
+              >
+                "Tending to your thoughts with absolute care..."
+              </motion.p>
+            </div>
+          </div>
+        ) : aiResult ? (
+          <div className="flex flex-col gap-4 animate-fade-in pt-1">
+            <div className="bg-brand-bg/50 p-4 rounded-2xl border border-brand-border/60">
+              <p className="text-[10px] font-bold text-brand-pink uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                <Sparkles className="w-3 h-3" /> Empathetic Reflection
+              </p>
+              <p className="text-xs leading-relaxed text-brand-plum italic font-serif-diary">
+                "{aiResult.reflection}"
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3.5">
+              <div className="flex flex-col gap-2 bg-brand-bg/35 p-3.5 rounded-2xl border border-brand-border/40">
+                <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Suggested Mood</span>
+                <button
+                  type="button"
+                  onClick={() => applyAiMood(aiResult.mood)}
+                  className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-brand-card-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 border border-brand-border rounded-xl text-left transition-all group scale-100 hover:scale-[1.01]"
+                >
+                  <span className="text-xl">
+                    {aiResult.mood.toLowerCase() === 'joyful' ? '😊' :
+                     aiResult.mood.toLowerCase() === 'calm' ? '😌' :
+                     aiResult.mood.toLowerCase() === 'sad' ? '😢' :
+                     aiResult.mood.toLowerCase() === 'anxious' ? '😟' :
+                     aiResult.mood.toLowerCase() === 'excited' ? '🤩' :
+                     aiResult.mood.toLowerCase() === 'reflective' ? '💭' :
+                     aiResult.mood.toLowerCase() === 'tired' ? '😴' :
+                     aiResult.mood.toLowerCase() === 'creative' ? '🎨' : '📝'}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-brand-plum truncate">{aiResult.mood}</p>
+                    <p className="text-[9px] text-brand-pink font-semibold group-hover:underline">Tap to apply</p>
+                  </div>
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-2 bg-brand-bg/35 p-3.5 rounded-2xl border border-brand-border/40">
+                <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Suggested Tags</span>
+                <div className="flex flex-wrap gap-1.5 max-h-16 overflow-y-auto no-scrollbar">
+                  {aiResult.tags.map(tag => {
+                    const exists = selectedTags.includes(tag.toLowerCase());
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => applyAiTag(tag)}
+                        disabled={exists}
+                        className={`text-[10px] px-2 py-1 rounded-lg font-semibold transition-all ${
+                          exists 
+                            ? 'bg-brand-sage-light/35 text-brand-sage-dark cursor-not-allowed border border-transparent' 
+                            : 'bg-white dark:bg-brand-card-bg border border-brand-border hover:border-brand-pink text-brand-plum hover:scale-105 active:scale-95'
+                        }`}
+                      >
+                        #{tag.toLowerCase()}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={handleAiEnhance}
+            disabled={!body || body.trim().length < 10}
+            className="w-full py-3 bg-brand-sage hover:bg-brand-sage-dark disabled:bg-brand-sage-light text-white font-bold text-xs rounded-2xl shadow-sm transition-colors flex items-center justify-center gap-2 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className="w-4 h-4 fill-white/10" />
+            Analyze & Spark Reflection
+          </button>
+        )}
+      </div>
+
+      {/* Styles formatting toolbar (Inline for normal mode) */}
+      <div className="mt-4 mb-16 bg-brand-card-bg/50 border border-brand-border/60 shadow-sm rounded-2xl p-2 transition-all">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1">
+            <button 
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); execCommand('bold'); }}
+              className={`p-2 rounded-xl transition-all ${
+                activeFormats.bold 
+                  ? 'bg-brand-pink text-white shadow-sm' 
+                  : 'text-brand-sage hover:bg-brand-blush-light'
+              }`}
+              title="Bold"
+            >
+              <Bold className="w-4 h-4" />
+            </button>
+            <button 
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); execCommand('italic'); }}
+              className={`p-2 rounded-xl transition-all ${
+                activeFormats.italic 
+                  ? 'bg-brand-pink text-white shadow-sm' 
+                  : 'text-brand-sage hover:bg-brand-blush-light'
+              }`}
+              title="Italic"
+            >
+              <Italic className="w-4 h-4" />
+            </button>
+            <button 
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); execCommand('underline'); }}
+              className={`p-2 rounded-xl transition-all ${
+                activeFormats.underline 
+                  ? 'bg-brand-pink text-white shadow-sm' 
+                  : 'text-brand-sage hover:bg-brand-blush-light'
+              }`}
+              title="Underline"
+            >
+              <Underline className="w-4 h-4" />
+            </button>
+            <button 
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); execCommand('strikeThrough'); }}
+              className={`p-2 rounded-xl transition-all ${
+                activeFormats.strikeThrough 
+                  ? 'bg-brand-pink text-white shadow-sm' 
+                  : 'text-brand-sage hover:bg-brand-blush-light'
+              }`}
+              title="Strikethrough"
+            >
+              <Strikethrough className="w-4 h-4" />
+            </button>
+            
+            <div className="w-px h-6 bg-brand-rose-light mx-1" />
+
+            <button 
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); toggleFormatBlock('h2'); }}
+              className={`p-2 rounded-xl transition-all ${
+                activeFormats.h2 
+                  ? 'bg-brand-pink text-white shadow-sm' 
+                  : 'text-brand-sage hover:bg-brand-blush-light'
+              }`}
+              title="Heading style"
+            >
+              <Heading2 className="w-4 h-4" />
+            </button>
+            <button 
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); toggleFormatBlock('blockquote'); }}
+              className={`p-2 rounded-xl transition-all ${
+                activeFormats.blockquote 
+                  ? 'bg-brand-pink text-white shadow-sm' 
+                  : 'text-brand-sage hover:bg-brand-blush-light'
+              }`}
+              title="Quote format"
+            >
+              <Quote className="w-4 h-4" />
+            </button>
+            <button 
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); execCommand('insertUnorderedList'); }}
+              className={`p-2 rounded-xl transition-all ${
+                activeFormats.list 
+                  ? 'bg-brand-pink text-white shadow-sm' 
+                  : 'text-brand-sage hover:bg-brand-blush-light'
+              }`}
+              title="List format"
+            >
+              <List className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {/* Voice to text Button */}
+            <button 
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); toggleRecording(); }}
+              className={`p-2 rounded-xl transition-all relative ${
+                showRecordingOverlay 
+                  ? 'bg-red-100 text-red-500 shadow-sm' 
+                  : 'text-brand-sage hover:bg-brand-blush-light'
+              }`}
+              title="Start Voice to Text"
+            >
+              <Mic className="w-4 h-4" />
+            </button>
+
+            {/* Attachment Button */}
+            <button 
+              type="button"
+              onClick={triggerPhotoInput}
+              className="p-2 text-brand-sage hover:bg-brand-blush-light rounded-xl relative"
+              title="Attach photo from library"
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+            
+            {/* Tag Selection Trigger Toggle */}
+            <button 
+              type="button"
+              onClick={() => setShowTagPicker(!showTagPicker)}
+              className={`p-2 rounded-xl transition-all ${showTagPicker ? 'bg-brand-pink text-white' : 'text-brand-sage hover:bg-brand-blush-light'}`}
+            >
+              <Tag className="w-4 h-4" />
+            </button>
+
+            {/* Hidden Photo File uploader input */}
+            <input 
+              type="file" 
+              ref={fileInputRef}
+              onChange={handlePhotoUpload}
+              multiple
+              accept="image/*"
+              className="hidden"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Floating Tag Selection Picker Overlay */}
+      <AnimatePresence>
+        {showTagPicker && (
+          <motion.div 
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 20, opacity: 0 }}
+            className="fixed bottom-24 left-0 right-0 p-4 bg-brand-card-bg/95 backdrop-blur-md border-t border-brand-border shadow-lg rounded-t-3xl z-40"
+          >
+            <div className="max-w-md mx-auto flex flex-col gap-3">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-brand-sage uppercase tracking-widest">Select Diary Tags</span>
+                <button onClick={() => setShowTagPicker(false)} className="text-brand-sage">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2 py-2 max-h-40 overflow-y-auto no-scrollbar">
+                {availableTags.map(tag => {
+                  const isSelected = selectedTags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => handleTagToggle(tag)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                        isSelected 
+                          ? 'bg-brand-pink text-white border-2 border-brand-pink shadow-sm scale-105' 
+                          : 'bg-brand-bg text-brand-sage-dark border border-brand-border hover:bg-brand-rose-light/40'
+                      }`}
+                    >
+                      #{tag}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Entry Danger Confirmation Zone when editing */}
+      {isEditing && (
+        <div className="bg-red-50/50 p-5 rounded-3xl border border-red-100 flex flex-col gap-3 mt-4">
+          <p className="text-xs text-red-600/90 leading-relaxed">
+            Need to clear this reflection? Deleting this journal entry is irreversible.
+          </p>
+
+          {!showConfirmDelete ? (
+            <button
+              onClick={() => setShowConfirmDelete(true)}
+              className="py-2.5 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+            >
+              <Trash2 className="w-4 h-4" />
+              Delete Entry
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowConfirmDelete(false)}
+                className="flex-grow py-2 bg-brand-card-bg border border-red-200 text-red-700 rounded-xl text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteEntry}
+                className="flex-grow py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-colors"
+              >
+                Yes, Delete entry
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {recordingOverlayUI}
+      {billingErrorUI}
+    </div>
+  );
+}
