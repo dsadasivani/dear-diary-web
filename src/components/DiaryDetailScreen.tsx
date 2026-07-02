@@ -1,5 +1,6 @@
 import React, { useState, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import type { Variants } from 'motion/react';
 import { 
   ArrowLeft, Edit, Download, Settings, ChevronLeft, ChevronRight, 
   Smile, Tag, Camera, Plus, Trash2, Calendar, X, Maximize2,
@@ -277,7 +278,8 @@ export default function DiaryDetailScreen({
   };
 
   // 3D paper fold and curling variants (Point 4)
-  const entryTransitionVariants = {
+  const paperEase = [0.16, 1, 0.3, 1] as const;
+  const entryTransitionVariants: Variants = {
     initial: (dir: 'left' | 'right') => ({
       rotateY: dir === 'left' ? 95 : -95,
       skewY: dir === 'left' ? -7 : 7,
@@ -292,7 +294,7 @@ export default function DiaryDetailScreen({
       scale: 1,
       transition: {
         duration: 0.75,
-        ease: [0.16, 1, 0.3, 1] // realistic elastic paper swing
+        ease: paperEase // realistic elastic paper swing
       }
     },
     exit: (dir: 'left' | 'right') => ({
@@ -303,7 +305,7 @@ export default function DiaryDetailScreen({
       transformOrigin: dir === 'left' ? 'left center' : 'right center',
       transition: {
         duration: 0.65,
-        ease: [0.16, 1, 0.3, 1]
+        ease: paperEase
       }
     })
   };

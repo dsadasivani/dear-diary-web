@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, Trash2, Check, Lock, ShieldAlert, Smile, Palette, Save, Upload, X, ShieldCheck } from 'lucide-react';
 import { Diary } from '../types';
 import { updateDiary, deleteDiary, PREDEFINED_COLORS } from '../utils/storage';
+import { persistMediaDataUri } from '../mobile/mediaStorage';
 
 interface DiarySettingsScreenProps {
   diary: Diary;
@@ -58,9 +59,14 @@ export default function DiarySettingsScreen({
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       if (event.target?.result) {
-        setCoverImage(event.target.result as string);
+        const coverUri = await persistMediaDataUri(
+          event.target.result as string,
+          'cover',
+          file.type || 'image/jpeg',
+        );
+        setCoverImage(coverUri);
       }
     };
     reader.readAsDataURL(file);

@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import { Diary, Entry } from '../types';
 import { createDiary, PREDEFINED_COLORS } from '../utils/storage';
+import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
+import { persistMediaDataUri } from '../mobile/mediaStorage';
 
 interface DiariesScreenProps {
   diaries: Diary[];
@@ -34,6 +36,7 @@ export default function DiariesScreen({
   const handleViewModeChange = (mode: 'bento' | 'compact' | 'list') => {
     setViewMode(mode);
     localStorage.setItem('deardiary_diary_viewmode', mode);
+    persistNativeLocalStorageItem('deardiary_diary_viewmode', mode);
   };
 
   // New diary form state
@@ -77,9 +80,14 @@ export default function DiariesScreen({
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       if (event.target?.result) {
-        setCoverImage(event.target.result as string);
+        const coverUri = await persistMediaDataUri(
+          event.target.result as string,
+          'cover',
+          file.type || 'image/jpeg',
+        );
+        setCoverImage(coverUri);
       }
     };
     reader.readAsDataURL(file);

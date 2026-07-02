@@ -9,7 +9,7 @@ import { getSecurityConfig, setPinCode, verifyPinCode, resetPinCode, getAppSetti
 import { auth } from '../utils/firebase';
 import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { SecurityConfig } from '../types';
-import { authenticateLocalPasskey } from '../utils/webauthn';
+import { secureAuthService } from '../platform/security';
 
 interface LockScreenProps {
   onUnlock: () => void;
@@ -164,7 +164,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     } else {
       setSuccessMsg('Initializing secure credential authorization...');
       try {
-        const success = await authenticateLocalPasskey(security.passkeyCredentialId);
+        const success = await secureAuthService.authenticate(security.passkeyCredentialId);
         if (success) {
           triggerHaptic(40);
           setSuccessMsg('Passkey verified successfully!');

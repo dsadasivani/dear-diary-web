@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Dear Diary</string>
+    <string name="title_activity_main">Dear Diary</string>
+    <string name="package_name">com.deardiary.app</string>
+    <string name="custom_url_scheme">com.deardiary.app</string>
+</resources>

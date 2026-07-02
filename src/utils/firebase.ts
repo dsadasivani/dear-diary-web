@@ -2,19 +2,40 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
+const requiredEnv = [
+  'VITE_FIREBASE_API_KEY',
+  'VITE_FIREBASE_AUTH_DOMAIN',
+  'VITE_FIREBASE_PROJECT_ID',
+  'VITE_FIREBASE_STORAGE_BUCKET',
+  'VITE_FIREBASE_MESSAGING_SENDER_ID',
+  'VITE_FIREBASE_APP_ID',
+  'VITE_FIRESTORE_DATABASE_ID',
+] as const;
+
+const missingEnv = requiredEnv.filter(key => !import.meta.env[key]);
+
+if (missingEnv.length > 0) {
+  console.error(
+    `Missing Firebase environment variables: ${missingEnv.join(', ')}. ` +
+    'Cloud sync and Google sign-in may not work until these VITE_* values are configured.'
+  );
+}
+
 const firebaseConfig = {
-  apiKey: "AIzaSyDn6Fuck2eqBCBKm_qdQe0yC_NAK-jdvXk",
-  authDomain: "gen-lang-client-0436458109.firebaseapp.com",
-  projectId: "gen-lang-client-0436458109",
-  storageBucket: "gen-lang-client-0436458109.firebasestorage.app",
-  messagingSenderId: "112252331270",
-  appId: "1:112252331270:web:a872ef6eefadcfd979aa87"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'missing-api-key',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'missing-auth-domain',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'missing-project-id',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'missing-storage-bucket',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || 'missing-messaging-sender-id',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || 'missing-app-id'
 };
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-// Use custom firestore databaseId from config
-export const db = getFirestore(app, "ai-studio-deardiary-b3e3fc2e-1674-403a-a1fb-363c51fbd5cc");
+// Use custom Firestore databaseId when configured.
+export const db = import.meta.env.VITE_FIRESTORE_DATABASE_ID
+  ? getFirestore(app, import.meta.env.VITE_FIRESTORE_DATABASE_ID)
+  : getFirestore(app);
 
 export enum OperationType {
   CREATE = 'create',

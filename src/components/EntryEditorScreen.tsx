@@ -14,6 +14,11 @@ import {
 } from '../utils/storage';
 import RichTextEditor from './RichTextEditor';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
+import { audioService } from '../platform/audio';
+import { persistMediaDataUri } from '../mobile/mediaStorage';
+import { isNativePlatform } from '../platform';
+import { VoiceRecorder } from '@independo/capacitor-voice-recorder';
+import { SpeechRecognition as NativeSpeechRecognition } from '@capacitor-community/speech-recognition';
 
 interface EntryEditorScreenProps {
   diaryId?: string; // Optional default diary ID
@@ -238,6 +243,8 @@ export default function EntryEditorScreen({
   const savedSelectionRef = useRef<Range | null>(null);
   const currentSessionIdRef = useRef<number>(0);
   const recognitionRef = useRef<any>(null);
+  const nativeRecordingActiveRef = useRef<boolean>(false);
+  const nativeSpeechActiveRef = useRef<boolean>(false);
   const shouldBeRecordingRef = useRef<boolean>(false);
   const shouldRestartSpeechRef = useRef<boolean>(true);
   const [speechError, setSpeechError] = useState<string | null>(null);
@@ -256,10 +263,214 @@ export default function EntryEditorScreen({
           recognitionRef.current.stop();
         } catch (e) {}
       }
+      if (isNativePlatform()) {
+        void stopNativeSpeechRecognition();
+        if (nativeRecordingActiveRef.current) {
+          VoiceRecorder.stopRecording()
+            .catch(() => {})
+            .finally(() => {
+              nativeRecordingActiveRef.current = false;
+            });
+        }
+      }
     };
   }, []);
 
+  const stopNativeSpeechRecognition = async () => {
+    if (!nativeSpeechActiveRef.current) return;
+    try {
+      await NativeSpeechRecognition.stop();
+    } catch (e) {}
+    try {
+      await NativeSpeechRecognition.removeAllListeners();
+    } catch (e) {}
+    nativeSpeechActiveRef.current = false;
+  };
+
+  const startNativeSpeechRecognition = async (): Promise<boolean> => {
+    if (!isTranscriptionEnabledRef.current) return false;
+
+    try {
+      const available = await NativeSpeechRecognition.available();
+      if (!available.available) {
+        setSpeechError('unsupported');
+        return false;
+      }
+
+      const permission = await NativeSpeechRecognition.requestPermissions();
+      if (permission.speechRecognition !== 'granted') {
+        setSpeechError('not-allowed');
+        return false;
+      }
+
+      await NativeSpeechRecognition.removeAllListeners();
+      await NativeSpeechRecognition.addListener('partialResults', (data) => {
+        const text = data.matches?.[0]?.trim() || '';
+        interimTextRef.current = text;
+        setInterimText(text);
+      });
+
+      await NativeSpeechRecognition.start({
+        language: 'en-US',
+        maxResults: 3,
+        partialResults: true,
+        popup: false,
+      });
+      nativeSpeechActiveRef.current = true;
+      setSpeechError(null);
+      return true;
+    } catch (error) {
+      console.error('Native speech recognition error:', error);
+      setSpeechError('native');
+      nativeSpeechActiveRef.current = false;
+      return false;
+    }
+  };
+
+  const startNativeRecording = async (
+    isResume: boolean = false,
+    mode: 'voice-dictation' | 'speech-to-text' = 'voice-dictation',
+  ) => {
+    try {
+      if (isResume && mode === 'speech-to-text') {
+        shouldBeRecordingRef.current = true;
+        isOverlayActiveRef.current = true;
+        setIsRecording(true);
+        const speechStarted = await startNativeSpeechRecognition();
+        if (!speechStarted) {
+          shouldBeRecordingRef.current = false;
+          setIsRecording(false);
+          onShowToast?.('Voice-to-text is not available. Check microphone permission and Android speech services.', 'warning');
+        }
+        return;
+      }
+
+      if (isResume && nativeRecordingActiveRef.current) {
+        await VoiceRecorder.resumeRecording();
+        shouldBeRecordingRef.current = true;
+        isOverlayActiveRef.current = true;
+        setIsRecording(true);
+        await startNativeSpeechRecognition();
+        return;
+      }
+
+      if (!isResume) {
+        recordedSessionTextRef.current = '';
+        setRecordedSessionText('');
+        setInterimText('');
+        interimTextRef.current = '';
+        setSpeechError(null);
+        shouldRestartSpeechRef.current = true;
+        setRecordingOverlayMode(mode);
+        shouldDiscardRecordingRef.current = false;
+
+        if (!activeBlockId) {
+          const now = new Date();
+          setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
+        }
+
+        if (mode === 'speech-to-text') {
+          setIsTranscriptionEnabled(true);
+          isTranscriptionEnabledRef.current = true;
+        }
+      }
+
+      if (mode === 'speech-to-text') {
+        isOverlayActiveRef.current = true;
+        setShowRecordingOverlay(true);
+        shouldBeRecordingRef.current = true;
+        setIsRecording(true);
+        const speechStarted = await startNativeSpeechRecognition();
+        if (!speechStarted) {
+          shouldBeRecordingRef.current = false;
+          isOverlayActiveRef.current = false;
+          setIsRecording(false);
+          setShowRecordingOverlay(false);
+          onShowToast?.('Voice-to-text is not available. Check microphone permission and Android speech services.', 'warning');
+        }
+        return;
+      }
+
+      const canRecord = await VoiceRecorder.canDeviceVoiceRecord();
+      if (!canRecord.value) {
+        onShowToast?.('This device cannot record audio.', 'warning');
+        setShowRecordingOverlay(false);
+        return;
+      }
+
+      const permission = await VoiceRecorder.requestAudioRecordingPermission();
+      if (!permission.value) {
+        onShowToast?.('Microphone permission is required for voice recording.', 'error');
+        setShowRecordingOverlay(false);
+        return;
+      }
+
+      isOverlayActiveRef.current = true;
+      setShowRecordingOverlay(true);
+      shouldBeRecordingRef.current = true;
+      await VoiceRecorder.startRecording();
+      nativeRecordingActiveRef.current = true;
+      setIsRecording(true);
+      await startNativeSpeechRecognition();
+    } catch (error) {
+      console.error('Native recording start failed:', error);
+      onShowToast?.('Native voice recording could not start. Check microphone permissions.', 'error');
+      nativeRecordingActiveRef.current = false;
+      shouldBeRecordingRef.current = false;
+      setIsRecording(false);
+      setShowRecordingOverlay(false);
+    }
+  };
+
+  const finishNativeRecording = async (discard: boolean = false) => {
+    shouldBeRecordingRef.current = false;
+    isOverlayActiveRef.current = false;
+    await stopNativeSpeechRecognition();
+    setIsRecording(false);
+
+    try {
+      if (nativeRecordingActiveRef.current) {
+        const recording = await VoiceRecorder.stopRecording();
+        nativeRecordingActiveRef.current = false;
+
+        if (!discard && recording.value.recordDataBase64) {
+          const mimeType = recording.value.mimeType || 'audio/aac';
+          const dataUri = `data:${mimeType};base64,${recording.value.recordDataBase64}`;
+          const mediaUri = await persistMediaDataUri(dataUri, 'audio', mimeType);
+
+          if (activeBlockId) {
+            setBlocks(prev => prev.map(b => b.id === activeBlockId ? { ...b, audioUri: mediaUri } : b));
+          } else {
+            setAudioUri(mediaUri);
+          }
+        }
+      }
+    } catch (error) {
+      if (!discard) {
+        console.error('Native recording stop failed:', error);
+        onShowToast?.('Could not save the voice recording.', 'error');
+      }
+      nativeRecordingActiveRef.current = false;
+    }
+
+    const finalInterim = interimTextRef.current.trim();
+    const textToInsert = isTranscriptionEnabledRef.current ? finalInterim : '';
+
+    setInterimText('');
+    interimTextRef.current = '';
+    setShowRecordingOverlay(false);
+
+    if (!discard && textToInsert) {
+      insertTranscribedText(textToInsert);
+    }
+
+    recordedSessionTextRef.current = '';
+    setRecordedSessionText('');
+  };
+
   const startSpeechRecognitionInstance = (isResume: boolean = false) => {
+    if (!audioService.getRecordingSupport().speechRecognition) return;
+
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) return;
 
@@ -371,6 +582,11 @@ export default function EntryEditorScreen({
   };
 
   const startRecording = (isResume: boolean = false, mode: 'voice-dictation' | 'speech-to-text' = 'voice-dictation') => {
+    if (isNativePlatform()) {
+      void startNativeRecording(isResume, mode);
+      return;
+    }
+
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0) {
       savedSelectionRef.current = selection.getRangeAt(0);
@@ -419,10 +635,25 @@ export default function EntryEditorScreen({
     shouldBeRecordingRef.current = true;
 
 
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    const recordingSupport = audioService.getRecordingSupport();
+
+    if (recordingSupport.mediaRecorder) {
       navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => {
-          const mediaRecorder = new MediaRecorder(stream);
+          let mediaRecorder: MediaRecorder;
+          try {
+            mediaRecorder = new MediaRecorder(stream);
+          } catch (err) {
+            console.error('MediaRecorder initialization error:', err);
+            stream.getTracks().forEach(track => track.stop());
+            if (onShowToast) {
+              onShowToast('Audio recording is not supported in this device WebView yet.', 'warning');
+            }
+            shouldBeRecordingRef.current = false;
+            setIsRecording(false);
+            setShowRecordingOverlay(false);
+            return;
+          }
           mediaRecorderRef.current = mediaRecorder;
           
           if (!isResume) {
@@ -443,19 +674,19 @@ export default function EntryEditorScreen({
 
             const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || 'audio/webm' });
 
-            if (isTranscriptionEnabledRef.current && recordingOverlayMode === 'voice-dictation') {
-              stream.getTracks().forEach(track => track.stop());
-              return;
-            }
-
             const reader = new FileReader();
-            reader.onloadend = () => {
+            reader.onloadend = async () => {
               const base64data = reader.result as string;
+              const mediaUri = await persistMediaDataUri(
+                base64data,
+                'audio',
+                mediaRecorder.mimeType || 'audio/webm',
+              );
               
               if (activeBlockId) {
-                setBlocks(prev => prev.map(b => b.id === activeBlockId ? { ...b, audioUri: base64data } : b));
+                setBlocks(prev => prev.map(b => b.id === activeBlockId ? { ...b, audioUri: mediaUri } : b));
               } else {
-                setAudioUri(base64data);
+                setAudioUri(mediaUri);
               }
             };
             reader.readAsDataURL(audioBlob);
@@ -463,8 +694,7 @@ export default function EntryEditorScreen({
             stream.getTracks().forEach(track => track.stop());
           };
 
-          const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-          if (SpeechRecognition) {
+          if (recordingSupport.speechRecognition) {
             startSpeechRecognitionInstance(isResume);
           } else {
             setIsRecording(true);
@@ -482,19 +712,35 @@ export default function EntryEditorScreen({
           }
           shouldBeRecordingRef.current = false;
           setIsRecording(false);
+          setShowRecordingOverlay(false);
         });
     } else {
       if (onShowToast) {
-        onShowToast('Audio recording is not supported in this browser environment.', 'warning');
+        onShowToast('Audio recording is not supported in this browser or native WebView environment.', 'warning');
       } else {
         alert('Audio recording is not supported in this browser environment.');
       }
       shouldBeRecordingRef.current = false;
       setIsRecording(false);
+      setShowRecordingOverlay(false);
     }
   };
 
-  const pauseRecording = () => {
+  const pauseRecording = async () => {
+    if (isNativePlatform()) {
+      shouldBeRecordingRef.current = false;
+      await stopNativeSpeechRecognition();
+      setIsRecording(false);
+      if (nativeRecordingActiveRef.current) {
+        try {
+          await VoiceRecorder.pauseRecording();
+        } catch (error) {
+          console.warn('Native recording pause failed:', error);
+        }
+      }
+      return;
+    }
+
     shouldBeRecordingRef.current = false;
     try {
       if (recognitionRef.current) {
@@ -511,6 +757,12 @@ export default function EntryEditorScreen({
   };
 
   const cancelRecording = () => {
+    if (isNativePlatform()) {
+      shouldDiscardRecordingRef.current = true;
+      void finishNativeRecording(true);
+      return;
+    }
+
     shouldDiscardRecordingRef.current = true;
     shouldBeRecordingRef.current = false;
     isOverlayActiveRef.current = false;
@@ -582,6 +834,11 @@ export default function EntryEditorScreen({
 
 
   const stopRecording = () => {
+    if (isNativePlatform()) {
+      void finishNativeRecording(false);
+      return;
+    }
+
     shouldBeRecordingRef.current = false;
     isOverlayActiveRef.current = false;
     try {
@@ -736,9 +993,14 @@ export default function EntryEditorScreen({
 
     Array.from(files).forEach((file: File) => {
       const reader = new FileReader();
-      reader.onload = (event) => {
+      reader.onload = async (event) => {
         if (event.target?.result) {
-          setPhotoUris(prev => [...prev, event.target!.result as string]);
+          const photoUri = await persistMediaDataUri(
+            event.target.result as string,
+            'photo',
+            file.type || 'image/jpeg',
+          );
+          setPhotoUris(prev => [...prev, photoUri]);
         }
       };
       reader.readAsDataURL(file);
@@ -1049,9 +1311,9 @@ export default function EntryEditorScreen({
                     {speechError === 'network' ? (
                       "A speech recognition connection dropout occurred, but your high-quality raw audio voice note is still recording perfectly! Keep speaking freely."
                     ) : speechError === 'unsupported' ? (
-                      "Real-time dictation is unsupported in this browser environment, but your voice note is being recorded successfully and will be transcribed by Gemini AI when you click 'Finish'!"
+                      "Real-time dictation is unsupported in this environment, but your voice note is still being recorded successfully."
                     ) : (
-                      `Dictation paused (${speechError}), but your voice note is being recorded successfully and will be transcribed by Gemini AI when you click 'Finish'!`
+                      `Dictation paused (${speechError}), but your voice note is still being recorded successfully.`
                     )}
                   </motion.div>
                 )}
@@ -1108,7 +1370,7 @@ export default function EntryEditorScreen({
                   type="button"
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
-                  onClick={() => startRecording(true)}
+                  onClick={() => startRecording(true, recordingOverlayMode)}
                   className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-brand-pink text-white font-bold rounded-full shadow-lg hover:bg-brand-pink-dark transition-all shadow-brand-pink/15 text-[10px] sm:text-xs uppercase tracking-wider"
                 >
                   <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> 
@@ -1186,7 +1448,7 @@ export default function EntryEditorScreen({
 
   if (isFocusMode) {
     return (
-      <div className="fixed inset-0 z-50 bg-brand-bg flex flex-col h-screen overflow-y-auto px-6 py-8 md:py-16 pb-28">
+      <div className="fixed inset-0 z-50 bg-brand-bg flex flex-col h-screen overflow-y-auto px-6 py-8 md:py-16 pb-28 focus-mode-safe">
         <div className="max-w-2xl mx-auto w-full flex-grow flex flex-col gap-6">
           
           {/* Distraction-Free Minimalist Top Controls */}
@@ -2104,7 +2366,7 @@ export default function EntryEditorScreen({
             initial={{ y: 20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 20, opacity: 0 }}
-            className="fixed bottom-24 left-0 right-0 p-4 bg-brand-card-bg/95 backdrop-blur-md border-t border-brand-border shadow-lg rounded-t-3xl z-40"
+            className="fixed bottom-24 left-0 right-0 p-4 bg-brand-card-bg/95 backdrop-blur-md border-t border-brand-border shadow-lg rounded-t-3xl z-40 mobile-overlay-safe"
           >
             <div className="max-w-md mx-auto flex flex-col gap-3">
               <div className="flex justify-between items-center">

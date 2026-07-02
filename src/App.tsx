@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Home, BookOpen, ClipboardList, Search, BarChart2, Lock, X
@@ -17,6 +17,8 @@ import StatsScreen from './components/StatsScreen';
 import AppSettingsScreen from './components/AppSettingsScreen';
 
 import { Diary, Entry, Note, UserProfile } from './types';
+import { addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
+import { isAndroid } from './platform';
 
 // Import our local storage utilities
 import { 
@@ -40,9 +42,9 @@ export default function App() {
   const [selectedNoteId, setSelectedNoteId] = useState<string>('');
   
   // Toast notification state
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
 
-  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+  const showToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
     setToast({ message, type });
   };
 
@@ -79,6 +81,7 @@ export default function App() {
     } else {
       document.documentElement.classList.remove('dark');
     }
+    void syncNativeStatusBar(currentTheme);
   };
 
   // On mount: load initial state
@@ -120,6 +123,52 @@ export default function App() {
     reloadData();
     reloadTheme();
   };
+
+  const handleBackNavigation = useCallback(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    if (isEditorFocusMode && activeTab === 'diaries' && currentScreen === 'entryEditor') {
+      setIsEditorFocusMode(false);
+      return;
+    }
+
+    if (activeTab === 'diaries') {
+      if (currentScreen === 'diarySettings') {
+        handleNavigate('diaries', 'diaryDetail', selectedDiaryId);
+        return;
+      }
+      if (currentScreen === 'entryEditor') {
+        if (selectedDiaryId) {
+          handleNavigate('diaries', 'diaryDetail', selectedDiaryId);
+        } else {
+          handleNavigate('diaries', 'list');
+        }
+        return;
+      }
+      if (currentScreen === 'diaryDetail') {
+        handleNavigate('diaries', 'list');
+        return;
+      }
+    }
+
+    if (activeTab === 'stats' && currentScreen === 'appSettings') {
+      handleNavigate('stats', 'list');
+      return;
+    }
+
+    if (activeTab !== 'home' || currentScreen !== 'list') {
+      handleNavigate('home', 'list');
+      return;
+    }
+
+    if (isAndroid()) {
+      void exitNativeApp();
+    }
+  }, [activeTab, currentScreen, isAuthenticated, isEditorFocusMode, selectedDiaryId]);
+
+  useEffect(() => addNativeBackListener(handleBackNavigation), [handleBackNavigation]);
 
   // Convert quick note into formal diary entry helper
   const handleConvertToDiaryEntry = (noteTitle: string, noteBody: string, tags: string[]) => {
@@ -303,7 +352,7 @@ export default function App() {
   // If in editor focus mode, render only the editor at root level (bypasses transformed motion.div containers and options dock)
   if (isEditorFocusMode && activeTab === 'diaries' && currentScreen === 'entryEditor') {
     return (
-      <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col font-sans select-none relative">
+      <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col font-sans select-none relative safe-area-root">
         {/* Background Soft Ambient Light Blurs */}
         <div className="fixed inset-0 z-0 pointer-events-none opacity-20">
           <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full bg-brand-blush-dark blur-[120px]" />
@@ -317,7 +366,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none pb-24 relative">
+    <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none pb-24 relative safe-area-root app-shell">
       
       {/* Background Soft Ambient Light Blurs */}
       <div className="fixed inset-0 z-0 pointer-events-none opacity-20">
@@ -326,7 +375,7 @@ export default function App() {
       </div>
 
       {/* Main Container */}
-      <main className="w-full max-w-lg z-10 px-4 pt-1 pb-6 flex-grow flex flex-col justify-between">
+      <main className="w-full max-w-lg z-10 px-4 pt-1 pb-6 flex-grow flex flex-col justify-between app-main">
         <AnimatePresence mode="wait">
           <motion.div
             key={`${activeTab}-${currentScreen}`}
@@ -342,7 +391,7 @@ export default function App() {
       </main>
 
       {/* Bottom Floating Navigation Bar */}
-      <nav className="fixed bottom-4 left-4 right-4 max-w-md mx-auto bg-white/75 dark:bg-brand-card-bg/50 backdrop-blur-xl border border-brand-border/70 dark:border-white/10 rounded-3xl py-2 px-3 flex justify-between items-center z-40 shadow-[0_8px_32px_0_rgba(60,43,48,0.06),_inset_0_1px_1px_0_rgba(255,255,255,0.8)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.3),_inset_0_1px_1px_0_rgba(255,255,255,0.05)]">
+      <nav className="fixed bottom-4 left-4 right-4 max-w-md mx-auto bg-white/75 dark:bg-brand-card-bg/50 backdrop-blur-xl border border-brand-border/70 dark:border-white/10 rounded-3xl py-2 px-3 flex justify-between items-center z-40 shadow-[0_8px_32px_0_rgba(60,43,48,0.06),_inset_0_1px_1px_0_rgba(255,255,255,0.8)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.3),_inset_0_1px_1px_0_rgba(255,255,255,0.05)] bottom-nav-safe">
         
         {/* Navigation Tabs */}
         <button 
@@ -425,11 +474,11 @@ export default function App() {
             animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
             exit={{ opacity: 0, y: -15, scale: 0.95, x: '-50%' }}
             transition={{ type: "spring", stiffness: 350, damping: 25 }}
-            className="fixed top-6 left-1/2 z-50 flex items-center gap-3 bg-white/95 dark:bg-brand-card-bg/95 backdrop-blur-md px-5 py-3.5 rounded-2xl border border-brand-border/80 shadow-2xl max-w-sm w-[90%] select-none pointer-events-auto"
+            className="fixed top-6 left-1/2 z-50 flex items-center gap-3 bg-white/95 dark:bg-brand-card-bg/95 backdrop-blur-md px-5 py-3.5 rounded-2xl border border-brand-border/80 shadow-2xl max-w-sm w-[90%] select-none pointer-events-auto toast-safe"
           >
             <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 animate-pulse ${
               toast.type === 'success' ? 'bg-brand-sage' :
-              toast.type === 'error' ? 'bg-brand-rose' : 'bg-brand-pink'
+              toast.type === 'error' || toast.type === 'warning' ? 'bg-brand-rose' : 'bg-brand-pink'
             }`} />
             
             <p className="text-xs font-bold text-brand-plum leading-snug flex-grow">
