@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Lock, Fingerprint, BookOpen, ShieldCheck, Check, Delete, 
   KeyRound, Eye, EyeOff, Sparkles, Sun, Moon, ArrowLeft, 
-  AlertCircle, RefreshCw 
+  AlertCircle, RefreshCw, CalendarDays
 } from 'lucide-react';
 import { getSecurityConfig, setPinCode, verifyPinCode, resetPinCode, getAppSettings, saveAppSettings } from '../utils/storage';
 import { auth } from '../utils/firebase';
@@ -405,24 +405,30 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
               className="w-full flex flex-col items-center text-center justify-between h-[65vh] sm:h-[70vh] py-4"
             >
               {/* Live Elegant Clock / Calendar */}
-              <div className="space-y-2 mt-4 select-none">
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.08, duration: 0.55 }}
+                className="w-full max-w-[310px] mt-3 select-none px-5 py-5"
+              >
                 <motion.h2 
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.1, duration: 0.6 }}
-                  className="font-serif text-6xl sm:text-7xl font-extralight tracking-tight text-brand-plum leading-none"
+                  className="font-serif-diary text-[4.75rem] font-bold text-brand-plum dark:text-[#ECE6E1] leading-none"
                 >
                   {time}
                 </motion.h2>
-                <motion.p 
+                <motion.div 
                   initial={{ opacity: 0, y: 5 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.2, duration: 0.6 }}
-                  className="text-[11px] sm:text-xs font-semibold tracking-[0.2em] text-brand-text-muted uppercase"
+                  className="mt-3 inline-flex items-center justify-center gap-2 text-[12px] font-bold text-brand-text-muted dark:text-[#EADCD1]/80"
                 >
-                  {date}
-                </motion.p>
-              </div>
+                  <CalendarDays className="w-3.5 h-3.5 text-brand-pink" />
+                  <span>{date}</span>
+                </motion.div>
+              </motion.div>
 
               {/* Pulsing Lock / Biometric Trigger Button */}
               <div className="flex flex-col items-center gap-4">
@@ -491,7 +497,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                   triggerHaptic(15);
                   setScreenMode('keypad');
                 }}
-                className="w-full max-w-xs bg-white dark:bg-[#1A1517]/35 border border-brand-border dark:border-white/10 p-4 rounded-2xl shadow-md shadow-[#2C1D21]/5 text-center flex flex-col gap-2 relative group overflow-hidden cursor-pointer hover:bg-brand-pink/[0.02] dark:hover:bg-[#1A1517]/45 transition-colors"
+                className="w-full max-w-xs bg-white dark:bg-[#1A1517]/35 border border-brand-border dark:border-white/10 px-4 py-4.5 rounded-2xl shadow-md shadow-[#2C1D21]/5 text-center flex flex-col gap-2.5 relative group overflow-hidden cursor-pointer hover:bg-brand-pink/[0.02] dark:hover:bg-[#1A1517]/45 transition-colors"
               >
                 {/* Book spine aesthetic */}
                 <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-r from-brand-pink/15 to-transparent" />
@@ -500,7 +506,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                   Mindful Sanctuary
                 </p>
                 
-                <div className="min-h-[48px] flex items-center justify-center px-2">
+                <div className="min-h-[58px] flex items-center justify-center px-2">
                   <AnimatePresence mode="wait">
                     <motion.p
                       key={quoteIndex}
@@ -508,7 +514,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -5 }}
                       transition={{ duration: 0.4 }}
-                      className="font-serif-diary text-xs sm:text-[13px] text-[#4F3C42] dark:text-[#ECE6E1] italic leading-relaxed"
+                      className="font-serif-diary text-[15px] text-[#4F3C42] dark:text-[#ECE6E1] italic leading-relaxed"
                     >
                       "{SANCTUARY_QUOTES[quoteIndex]}"
                     </motion.p>

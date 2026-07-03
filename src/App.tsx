@@ -84,6 +84,12 @@ export default function App() {
     void syncNativeStatusBar(currentTheme);
   };
 
+  const handleUnlock = () => {
+    reloadData();
+    reloadTheme();
+    setIsAuthenticated(true);
+  };
+
   // On mount: load initial state
   useEffect(() => {
     reloadData();
@@ -351,7 +357,7 @@ export default function App() {
 
   // If locked, return LockScreen view
   if (!isAuthenticated) {
-    return <LockScreen onUnlock={() => setIsAuthenticated(true)} />;
+    return <LockScreen onUnlock={handleUnlock} />;
   }
 
   // If in editor focus mode, render only the editor at root level (bypasses transformed motion.div containers and options dock)
@@ -464,7 +470,9 @@ export default function App() {
 
           {/* Lock App Button (Interactive test action) */}
           <button 
-            onClick={() => setIsAuthenticated(false)}
+            onClick={() => {
+              setIsAuthenticated(false);
+            }}
             className="p-2 text-brand-sage hover:text-brand-pink transition-all rounded-full flex items-center justify-center hover:bg-brand-blush-light active:scale-95"
             title="Secure/Lock App Now"
           >

@@ -84,6 +84,53 @@ const STORAGE_KEYS = {
   USER_PROFILE: 'deardiary_userprofile'
 };
 
+const DEFAULT_PROFILE_NAME = 'Writer';
+const DEFAULT_PROFILE_EMAIL = '';
+const DEFAULT_PROFILE_BIO = 'Savoring the simple, quiet moments of life.';
+
+const LEGACY_PERSONAL_DEFAULT_NAME_HASHES = new Set([
+  '5d243f6096bb88ae977f3119ac5aeee239a2caa4266095808bd0b16ca350aa17'
+]);
+
+const LEGACY_PERSONAL_DEFAULT_EMAIL_HASHES = new Set([
+  '9cd5af0e9a54cd570a134cacd3a7389fa5e8e14410bcebdd3f2054ce941800d6'
+]);
+
+const deriveNameFromEmail = (email?: string | null): string => {
+  if (!email) return '';
+  const part = email.split('@')[0];
+  return part
+    .split(/[._-]/)
+    .filter(Boolean)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
+const isLegacyPersonalDefault = (value: string | undefined, hashes: Set<string>): boolean => {
+  if (!value) return false;
+  return hashes.has(CryptoJS.SHA256(value).toString());
+};
+
+export const getDefaultUserProfile = (): UserProfile => {
+  const currentUser = auth.currentUser;
+  const userEmail = currentUser?.email || DEFAULT_PROFILE_EMAIL;
+  const defaultName = currentUser?.displayName || deriveNameFromEmail(userEmail) || DEFAULT_PROFILE_NAME;
+  const joinedDate = new Date().toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric'
+  });
+
+  return {
+    name: defaultName,
+    email: userEmail,
+    bio: DEFAULT_PROFILE_BIO,
+    avatarEmoji: '\uD83C\uDF38',
+    avatarColor: '#8A3D55', // Velvet Fig
+    writingGoal: 100,
+    joinedDate
+  };
+};
+
 // State initializers
 export const initializeDatabase = () => {
   if (!localStorage.getItem(STORAGE_KEYS.DIARIES)) {
@@ -116,25 +163,7 @@ export const initializeDatabase = () => {
     setStorageItem(STORAGE_KEYS.SETTINGS, JSON.stringify(defaultSettings));
   }
   if (!localStorage.getItem(STORAGE_KEYS.USER_PROFILE)) {
-    const currentUser = auth.currentUser;
-    const userEmail = currentUser?.email || 'dili.cherry77@gmail.com';
-    let defaultName = 'Journalist';
-    if (currentUser?.displayName) {
-      defaultName = currentUser.displayName;
-    } else if (userEmail) {
-      const part = userEmail.split('@')[0];
-      defaultName = part.split(/[._-]/).map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-    }
-    const defaultProfile: UserProfile = {
-      name: defaultName,
-      email: userEmail,
-      bio: 'Savoring the simple, quiet moments of life.',
-      avatarEmoji: '🌸',
-      avatarColor: '#8A3D55', // Velvet Fig
-      writingGoal: 100,
-      joinedDate: 'June 2026'
-    };
-    setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(defaultProfile));
+    setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(getDefaultUserProfile()));
   }
 };
 
@@ -142,7 +171,6 @@ export const initializeDatabase = () => {
 export const getUserProfile = (): UserProfile => {
   initializeDatabase();
   const profileStr = localStorage.getItem(STORAGE_KEYS.USER_PROFILE);
-  const currentUser = auth.currentUser;
   
   let profile: UserProfile | null = null;
   if (profileStr) {
@@ -153,38 +181,27 @@ export const getUserProfile = (): UserProfile => {
     }
   }
 
-  const userEmail = currentUser?.email || 'dili.cherry77@gmail.com';
-  let defaultName = 'Journalist';
-  if (currentUser?.displayName) {
-    defaultName = currentUser.displayName;
-  } else if (userEmail) {
-    const part = userEmail.split('@')[0];
-    defaultName = part.split(/[._-]/).map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-  }
+  const defaultProfile = getDefaultUserProfile();
 
   if (!profile) {
-    profile = {
-      name: defaultName,
-      email: userEmail,
-      bio: 'Savoring the simple, quiet moments of life.',
-      avatarEmoji: '🌸',
-      avatarColor: '#8A3D55',
-      writingGoal: 100,
-      joinedDate: 'June 2026'
-    };
+    profile = defaultProfile;
     setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
   } else {
-    // If profile is still using 'Sophie' (the hardcoded default) and there's a logged in user with a different email,
-    // or if the name is 'Sophie' or 'Journalist' and we can derive a more specific default name, let's update it!
     let updated = false;
-    if (profile.name === 'Sophie') {
-      profile.name = defaultName;
+
+    if (!profile.name?.trim() || isLegacyPersonalDefault(profile.name, LEGACY_PERSONAL_DEFAULT_NAME_HASHES)) {
+      profile.name = defaultProfile.name;
       updated = true;
     }
-    if (profile.email === 'dili.cherry77@gmail.com' && currentUser?.email && currentUser.email !== 'dili.cherry77@gmail.com') {
-      profile.email = currentUser.email;
+
+    if (isLegacyPersonalDefault(profile.email, LEGACY_PERSONAL_DEFAULT_EMAIL_HASHES)) {
+      profile.email = defaultProfile.email;
+      updated = true;
+    } else if (!profile.email?.trim() && defaultProfile.email) {
+      profile.email = defaultProfile.email;
       updated = true;
     }
+
     if (updated) {
       setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
     }

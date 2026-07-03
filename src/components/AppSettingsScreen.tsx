@@ -12,7 +12,7 @@ import {
   exportEncryptedBackup, importEncryptedBackup, resetDatabase,
   PREDEFINED_TAGS, PREDEFINED_MOODS, getUserProfile, saveUserProfile,
   PREDEFINED_COLORS, getEntries, getNotes, getStorageUsageDetails, StorageDetails,
-  saveSecurityConfig
+  saveSecurityConfig, getDefaultUserProfile
 } from '../utils/storage';
 import { User, Mail } from 'lucide-react';
 import { auth } from '../utils/firebase';
@@ -532,11 +532,11 @@ export default function AppSettingsScreen({
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
-    const defaultName = currentUser?.displayName || (currentUser?.email ? currentUser.email.split('@')[0] : 'Journalist');
+    const defaultProfile = getDefaultUserProfile();
     const updatedProfile: UserProfile = {
       ...profile,
-      name: profileName.trim() || defaultName,
-      email: profileEmail.trim() || (currentUser?.email || 'dili.cherry77@gmail.com'),
+      name: profileName.trim() || defaultProfile.name,
+      email: profileEmail.trim() || defaultProfile.email,
       bio: profileBio.trim(),
       avatarEmoji: profileEmoji,
       avatarColor: profileColor,
@@ -863,7 +863,7 @@ export default function AppSettingsScreen({
                           type="text"
                           value={profileName}
                           onChange={(e) => setProfileName(e.target.value)}
-                          placeholder={currentUser?.displayName || "Sophie"}
+                          placeholder={currentUser?.displayName || "Your nickname"}
                           className="w-full bg-brand-bg border border-brand-border py-2.5 pl-10 pr-4 rounded-xl text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
                           required
                         />
@@ -878,7 +878,7 @@ export default function AppSettingsScreen({
                           type="email"
                           value={profileEmail}
                           onChange={(e) => setProfileEmail(e.target.value)}
-                          placeholder={currentUser?.email || "dili.cherry77@gmail.com"}
+                          placeholder={currentUser?.email || "Email address"}
                           className="w-full bg-brand-bg border border-brand-border py-2.5 pl-10 pr-4 rounded-xl text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
                           required
                         />
@@ -1385,7 +1385,7 @@ export default function AppSettingsScreen({
                             type="email"
                             value={authEmail}
                             onChange={(e) => setAuthEmail(e.target.value)}
-                            placeholder="sophie@example.com"
+                            placeholder="Email address"
                             className="w-full bg-brand-bg border border-brand-border py-3 pl-10 pr-4 rounded-xl text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink focus:ring-1 focus:ring-brand-pink transition-all font-medium"
                             required
                           />
