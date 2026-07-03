@@ -2,25 +2,28 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ArrowLeft, Lock, Bell, Download, Upload, Trash2, 
-  Check, Eye, EyeOff, ShieldCheck, Key, RefreshCw, FileWarning,
+  Check, ShieldCheck, RefreshCw, FileWarning,
   Plus, Tag, Smile, X, Sun, Moon, Cloud, LogOut, Database, CloudLightning,
   Fingerprint, Palette, Sliders, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { AppSettings, SecurityConfig, Mood, UserProfile } from '../types';
 import { 
-  getSecurityConfig, setPinCode, getAppSettings, saveAppSettings,
+  getSecurityConfig, getAppSettings, saveAppSettings,
   exportEncryptedBackup, importEncryptedBackup, resetDatabase,
   PREDEFINED_TAGS, PREDEFINED_MOODS, getUserProfile, saveUserProfile,
   PREDEFINED_COLORS, getEntries, getNotes, getStorageUsageDetails, StorageDetails,
-  saveSecurityConfig, getDefaultUserProfile
+  saveSecurityConfig, getDefaultUserProfile, updatePinWithCurrentPin, isValidPin,
+  bindGoogleRecoveryAccount
 } from '../utils/storage';
+import type { PinLength } from '../utils/storage';
 import { User, Mail } from 'lucide-react';
 import { auth } from '../utils/firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { syncLocalAndCloud, checkCloudDataExists, wipeCloudData, restoreFromCloud, getSyncComparison, SyncComparison } from '../utils/sync';
+import type { UserCredential } from 'firebase/auth';
+import { syncLocalAndCloud, wipeCloudData, restoreFromCloud, getSyncComparison, SyncComparison } from '../utils/sync';
 import { isNativePlatform } from '../platform';
 import { secureAuthService } from '../platform/security';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
+import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
 
 interface AppSettingsScreenProps {
   onBack: () => void;
@@ -34,6 +37,30 @@ const formatBytes = (bytes: number): string => {
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+const formatGoogleAuthError = (err: any): string => {
+  const message = err?.message || '';
+  if (message.includes('VITE_GOOGLE_WEB_CLIENT_ID')) {
+    return 'Mobile Google sign-in needs VITE_GOOGLE_WEB_CLIENT_ID in .env. Use the Google Cloud OAuth Web application client ID, then rebuild and reinstall the APK.';
+  }
+  if (err?.code === 'SIGN_IN_CANCELED' || message.includes('SIGN_IN_CANCELED')) {
+    return 'Google sign-in was cancelled before it completed.';
+  }
+  if (err?.code === 'auth/invalid-credential' || message.includes('ID token')) {
+    return 'Google sign-in returned an invalid token. Check that Google Cloud has an Android OAuth client for com.deardiary.app with this APK signing SHA-1, and that .env uses the OAuth Web client ID.';
+  }
+  if (err?.code === 'auth/unauthorized-domain') {
+    const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+    if (isNativePlatform()) {
+      return 'Mobile Google sign-in should use native auth. Rebuild and reinstall the APK so the native Google flow is included.';
+    }
+    return `Google sign-in is not enabled for ${host}. Add this domain in Firebase Console > Authentication > Settings > Authorized domains.`;
+  }
+  if (err?.code === 'auth/popup-closed-by-user') {
+    return 'Google sign-in was cancelled before it completed.';
+  }
+  return err?.message || 'Google sign-in failed.';
 };
 
 export default function AppSettingsScreen({
@@ -101,6 +128,8 @@ export default function AppSettingsScreen({
 
   // PIN change states
   const [showPinForm, setShowPinForm] = useState<boolean>(false);
+  const [currentPin, setCurrentPin] = useState<string>('');
+  const [newPinLength, setNewPinLength] = useState<PinLength>(security.pinLength || 4);
   const [newPin, setNewPin] = useState<string>('');
   const [confirmPin, setConfirmPin] = useState<string>('');
   const [pinError, setPinError] = useState<string>('');
@@ -123,14 +152,10 @@ export default function AppSettingsScreen({
 
   // Firebase auth & sync states
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncedStr, setLastSyncedStr] = useState<string>('Never');
-  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
-  const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [syncStep, setSyncStep] = useState<number>(-1);
   
   // Sync conflict options for local reset state
@@ -157,9 +182,16 @@ export default function AppSettingsScreen({
     return () => unsubscribe();
   }, []);
 
+  const boundCloudUser = React.useMemo(() => {
+    if (!currentUser || !security.linkedGoogleUid || currentUser.uid !== security.linkedGoogleUid) {
+      return null;
+    }
+    return currentUser;
+  }, [currentUser, security.linkedGoogleUid]);
+
   // Compute if local data is out of sync with cloud data
   const isOutOfSync = React.useMemo(() => {
-    if (!currentUser) return false;
+    if (!boundCloudUser) return false;
     const lastSyncTimeStr = localStorage.getItem('deardiary_last_sync');
     const lastSyncTime = lastSyncTimeStr ? Number(lastSyncTimeStr) : 0;
     if (lastSyncTime === 0) return true; // Never synced
@@ -171,7 +203,7 @@ export default function AppSettingsScreen({
     const hasNewerNote = notes.some(n => n.updatedAt > lastSyncTime);
 
     return hasNewerEntry || hasNewerNote;
-  }, [currentUser, lastSyncedStr]);
+  }, [boundCloudUser, lastSyncedStr]);
 
   // Compute storage usage details (text, photos, audio)
   const storageDetails = React.useMemo(() => {
@@ -181,6 +213,11 @@ export default function AppSettingsScreen({
   const handleSyncNow = async (uid?: string) => {
     const targetUid = uid || currentUser?.uid;
     if (!targetUid) return;
+    const currentSecurity = getSecurityConfig();
+    if (!currentSecurity.linkedGoogleUid || currentSecurity.linkedGoogleUid !== targetUid) {
+      setAuthError(`Please sign in with ${currentSecurity.linkedGoogleEmail || 'the Google account linked to this device'} before syncing.`);
+      return;
+    }
     setIsSyncing(true);
     setSyncStep(0);
     const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
@@ -305,39 +342,30 @@ export default function AppSettingsScreen({
     }
   };
 
-  const handleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError('');
-    setIsAuthLoading(true);
-    try {
-      const userCredential = await signInWithEmailAndPassword(auth, authEmail, authPassword);
-      if (onShowToast) {
-        onShowToast(`Signed in successfully as ${userCredential.user.email}!`, 'success');
-      }
-      setAuthPassword('');
-      await handleSyncNow(userCredential.user.uid);
-    } catch (err: any) {
-      console.error(err);
-      setAuthError(err.message || 'Failed to sign in. Please check your credentials.');
-    } finally {
-      setIsAuthLoading(false);
+  const completeGoogleSyncSignIn = async (userCredential: UserCredential) => {
+    const result = bindGoogleRecoveryAccount(userCredential.user);
+    if (!result.ok) {
+      await signOutGoogleAuth();
+      setSecurity(result.config);
+      setAuthError(result.error || 'Use the Google account linked to this device.');
+      return;
     }
+    setSecurity(result.config);
+    if (onShowToast) {
+      onShowToast(`Google sync connected as ${userCredential.user.email || 'your Google account'}.`, 'success');
+    }
+    await handleSyncNow(userCredential.user.uid);
   };
 
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGoogleSignIn = async () => {
     setAuthError('');
     setIsAuthLoading(true);
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
-      if (onShowToast) {
-        onShowToast(`Account created and synced successfully!`, 'success');
-      }
-      setAuthPassword('');
-      await handleSyncNow(userCredential.user.uid);
+      const userCredential = await startGoogleAuth('sync');
+      await completeGoogleSyncSignIn(userCredential);
     } catch (err: any) {
       console.error(err);
-      setAuthError(err.message || 'Failed to create account.');
+      setAuthError(formatGoogleAuthError(err));
     } finally {
       setIsAuthLoading(false);
     }
@@ -345,7 +373,7 @@ export default function AppSettingsScreen({
 
   const handleSignOutClick = async () => {
     try {
-      await signOut(auth);
+      await signOutGoogleAuth();
       if (onShowToast) {
         onShowToast('Signed out of cloud sync.', 'info');
       }
@@ -429,8 +457,13 @@ export default function AppSettingsScreen({
     setPinError('');
     setPinSuccess(false);
 
-    if (newPin.length < 4 || newPin.length > 8) {
-      setPinError('PIN must be between 4 and 8 digits.');
+    if (!isValidPin(currentPin, security.pinLength)) {
+      setPinError(`Enter your current ${security.pinLength || '4 or 8'}-digit PIN.`);
+      return;
+    }
+
+    if (!isValidPin(newPin, newPinLength)) {
+      setPinError(`New PIN must be exactly ${newPinLength} digits.`);
       return;
     }
 
@@ -439,15 +472,20 @@ export default function AppSettingsScreen({
       return;
     }
 
-    const updated = setPinCode(newPin);
-    setSecurity(updated);
-    setPinSuccess(true);
-    setNewPin('');
-    setConfirmPin('');
-    setTimeout(() => {
-      setShowPinForm(false);
-      setPinSuccess(false);
-    }, 1500);
+    try {
+      const updated = updatePinWithCurrentPin(currentPin, newPin);
+      setSecurity(updated);
+      setPinSuccess(true);
+      setCurrentPin('');
+      setNewPin('');
+      setConfirmPin('');
+      setTimeout(() => {
+        setShowPinForm(false);
+        setPinSuccess(false);
+      }, 1500);
+    } catch (err: any) {
+      setPinError(err?.message || 'Could not update PIN.');
+    }
   };
 
   const handleToggleBiometrics = async (checked: boolean) => {
@@ -955,7 +993,7 @@ export default function AppSettingsScreen({
                     </span>
                     <div>
                       <h3 className="text-sm font-bold text-brand-plum">Update App Security PIN</h3>
-                      <p className="text-[10px] text-brand-sage mt-0.5">Change your 4-8 digit passcode</p>
+                      <p className="text-[10px] text-brand-sage mt-0.5">Change your 4-digit or 8-digit passcode</p>
                     </div>
                   </div>
                   <button
@@ -968,15 +1006,53 @@ export default function AppSettingsScreen({
 
                 {showPinForm && (
                   <form onSubmit={handlePinChangeSubmit} className="mt-3 pt-3 border-t border-brand-border flex flex-col gap-3">
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">New PIN Length</span>
+                      <div className="grid grid-cols-2 gap-2 bg-brand-bg/70 border border-brand-border rounded-xl p-1">
+                        {([4, 8] as PinLength[]).map(length => (
+                          <button
+                            key={length}
+                            type="button"
+                            onClick={() => {
+                              setNewPinLength(length);
+                              setNewPin('');
+                              setConfirmPin('');
+                              setPinError('');
+                            }}
+                            className={`py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${
+                              newPinLength === length
+                                ? 'bg-brand-sage text-white shadow-sm'
+                                : 'text-brand-sage hover:text-brand-plum'
+                            }`}
+                          >
+                            {length} Digit PIN
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Current PIN</span>
+                        <input
+                          type="password"
+                          inputMode="numeric"
+                          maxLength={security.pinLength || 8}
+                          value={currentPin}
+                          onChange={(e) => setCurrentPin(e.target.value.replace(/\D/g, '').slice(0, security.pinLength || 8))}
+                          placeholder="Current"
+                          className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none"
+                        />
+                      </div>
                       <div className="flex flex-col gap-1">
                         <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">New PIN</span>
                         <input 
                           type="password" 
-                          maxLength={8}
+                          inputMode="numeric"
+                          maxLength={newPinLength}
                           value={newPin}
-                          onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
-                          placeholder="4 to 8 digits"
+                          onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, newPinLength))}
+                          placeholder={`${newPinLength} digits`}
                           className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none"
                         />
                       </div>
@@ -984,9 +1060,10 @@ export default function AppSettingsScreen({
                         <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Confirm PIN</span>
                         <input 
                           type="password" 
-                          maxLength={8}
+                          inputMode="numeric"
+                          maxLength={newPinLength}
                           value={confirmPin}
-                          onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
+                          onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, newPinLength))}
                           placeholder="Confirm digits"
                           className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none"
                         />
@@ -998,7 +1075,7 @@ export default function AppSettingsScreen({
 
                     <button
                       type="submit"
-                      disabled={newPin.length < 4}
+                      disabled={!isValidPin(currentPin, security.pinLength) || !isValidPin(newPin, newPinLength) || newPin !== confirmPin}
                       className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
                     >
                       Save Security Code
@@ -1101,7 +1178,7 @@ export default function AppSettingsScreen({
               className="flex flex-col gap-5"
             >
               {/* Firebase Cloud Sync & Backup card */}
-              {currentUser ? (
+              {boundCloudUser ? (
                 <>
                   <div className="bg-gradient-to-br from-brand-card-bg to-brand-bg/60 p-6 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-5 relative overflow-hidden group">
                     {/* Glowing background aura */}
@@ -1142,7 +1219,7 @@ export default function AppSettingsScreen({
                         <span className="text-brand-sage font-medium">Vault Account</span>
                         <span className="font-mono font-bold text-brand-plum dark:text-brand-text text-[11px] truncate max-w-[200px] flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-brand-sage animate-pulse" />
-                          {currentUser.email}
+                          {boundCloudUser.email}
                         </span>
                       </div>
 
@@ -1319,128 +1396,45 @@ export default function AppSettingsScreen({
                       <Cloud className="w-4 h-4" />
                     </span>
                     <div>
-                      <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Secure Sync & Cloud Vault</h3>
-                      <p className="text-[10px] text-brand-sage mt-0.5">Encrypt and store your secrets securely in your personal vault</p>
+                      <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Optional Google Sync</h3>
+                      <p className="text-[10px] text-brand-sage mt-0.5">Stay fully offline, or connect Google to back up this device</p>
                     </div>
                   </div>
 
-                  {/* Segmented Controller Tab */}
-                  <div className="flex bg-brand-bg/80 dark:bg-brand-bg/30 p-1 rounded-xl border border-brand-border/60 shadow-inner relative">
-                    <button
-                      type="button"
-                      onClick={() => { setAuthMode('signin'); setAuthError(''); }}
-                      className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all z-10 relative cursor-pointer select-none ${
-                        authMode === 'signin' ? 'text-white font-extrabold' : 'text-brand-sage hover:text-brand-plum'
-                      }`}
-                    >
-                      {authMode === 'signin' && (
-                        <motion.div
-                          layoutId="authTabSlider"
-                          className="absolute inset-0 bg-brand-pink rounded-lg shadow-sm"
-                          transition={{ type: "spring", stiffness: 420, damping: 30 }}
-                        />
-                      )}
-                      <span className="relative z-10">Sign In</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setAuthMode('signup'); setAuthError(''); }}
-                      className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all z-10 relative cursor-pointer select-none ${
-                        authMode === 'signup' ? 'text-white font-extrabold' : 'text-brand-sage hover:text-brand-plum'
-                      }`}
-                    >
-                      {authMode === 'signup' && (
-                        <motion.div
-                          layoutId="authTabSlider"
-                          className="absolute inset-0 bg-brand-pink rounded-lg shadow-sm"
-                          transition={{ type: "spring", stiffness: 420, damping: 30 }}
-                        />
-                      )}
-                      <span className="relative z-10">Create Vault Account</span>
-                    </button>
-                  </div>
-
-                  {/* Supportive Message depending on mode */}
                   <div className="text-[10.5px] leading-relaxed text-brand-text bg-brand-bg/30 dark:bg-white/5 p-3.5 rounded-2xl border border-brand-border/30">
-                    {authMode === 'signin' ? (
-                      <div className="flex gap-2.5 items-start">
-                        <Lock className="w-4 h-4 text-brand-pink shrink-0 mt-0.5" />
-                        <p className="text-brand-text-muted">Sign in to reconnect with your safe haven. Entering your credentials will securely restore your diaries, notes, and photos from the cloud.</p>
-                      </div>
-                    ) : (
-                      <div className="flex gap-2.5 items-start">
-                        <ShieldCheck className="w-4 h-4 text-brand-sage shrink-0 mt-0.5" />
-                        <p className="text-brand-text-muted">Create your personal, encrypted journaling vault. Your data is compiled locally before uploading, ensuring complete privacy.</p>
-                      </div>
-                    )}
+                    <div className="flex gap-2.5 items-start">
+                      <ShieldCheck className="w-4 h-4 text-brand-sage shrink-0 mt-0.5" />
+                      <p className="text-brand-text-muted">
+                        Google sign-in only enables backup and multi-device sync. Your local PIN and security question stay on this device.
+                        {security.linkedGoogleEmail ? ` This device is linked to ${security.linkedGoogleEmail}.` : ''}
+                      </p>
+                    </div>
                   </div>
 
-                  <form onSubmit={authMode === 'signin' ? handleSignIn : handleSignUp} className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3.5">
-                      <div>
-                        <label className="text-[10px] text-brand-sage font-bold uppercase tracking-wider block mb-1.5 pl-0.5">Email Address</label>
-                        <div className="relative flex items-center">
-                          <Mail className="w-4 h-4 text-brand-sage absolute left-3.5 pointer-events-none" />
-                          <input
-                            type="email"
-                            value={authEmail}
-                            onChange={(e) => setAuthEmail(e.target.value)}
-                            placeholder="Email address"
-                            className="w-full bg-brand-bg border border-brand-border py-3 pl-10 pr-4 rounded-xl text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink focus:ring-1 focus:ring-brand-pink transition-all font-medium"
-                            required
-                          />
-                        </div>
-                      </div>
+                  {authError && (
+                    <p className="text-[10px] font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 p-3 rounded-2xl border border-red-100/50 dark:border-red-900/50 leading-normal text-center">
+                      {authError}
+                    </p>
+                  )}
 
-                      <div>
-                        <label className="text-[10px] text-brand-sage font-bold uppercase tracking-wider block mb-1.5 pl-0.5">Password</label>
-                        <div className="relative flex items-center font-medium font-mono">
-                          <Lock className="w-4 h-4 text-brand-sage absolute left-3.5 pointer-events-none" />
-                          <input
-                            type={showAuthPassword ? "text" : "password"}
-                            value={authPassword}
-                            onChange={(e) => setAuthPassword(e.target.value)}
-                            placeholder={authMode === 'signin' ? "Enter password..." : "Minimum 6 characters..."}
-                            className="w-full bg-brand-bg border border-brand-border py-3 pl-10 pr-11 rounded-xl text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink focus:ring-1 focus:ring-brand-pink transition-all"
-                            required
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowAuthPassword(!showAuthPassword)}
-                            className="absolute right-3.5 text-brand-sage hover:text-brand-plum dark:hover:text-brand-text cursor-pointer select-none"
-                            title={showAuthPassword ? "Hide password" : "Show password"}
-                          >
-                            {showAuthPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {authError && (
-                      <p className="text-[10px] font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 p-3 rounded-2xl border border-red-100/50 dark:border-red-900/50 leading-normal text-center">
-                        {authError}
-                      </p>
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    disabled={isAuthLoading}
+                    className="w-full py-3.5 bg-brand-sage hover:bg-brand-sage-dark text-white font-bold text-xs rounded-xl shadow-md shadow-brand-sage/10 transition-all active:scale-[0.98] disabled:opacity-50 select-none cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {isAuthLoading ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Connecting Google...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Cloud className="w-4 h-4" />
+                        <span>{security.linkedGoogleEmail ? 'Reconnect Linked Google Account' : 'Connect Google Backup'}</span>
+                      </>
                     )}
-
-                    <button
-                      type="submit"
-                      disabled={isAuthLoading || !authEmail || authPassword.length < 6}
-                      className={`w-full py-3.5 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-[0.98] disabled:opacity-50 select-none cursor-pointer ${
-                        authMode === 'signin' 
-                          ? 'bg-brand-sage hover:bg-brand-sage-dark shadow-brand-sage/10' 
-                          : 'bg-brand-pink hover:bg-brand-pink-dark shadow-brand-pink/10'
-                      }`}
-                    >
-                      {isAuthLoading ? (
-                        <div className="flex items-center justify-center gap-1.5">
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          <span>Establishing Secure Connection...</span>
-                        </div>
-                      ) : (
-                        <span>{authMode === 'signin' ? 'Sign In & Decrypt Vault' : 'Initialize Encrypted Vault'}</span>
-                      )}
-                    </button>
-                  </form>
+                  </button>
                 </div>
               )}
 
@@ -1756,8 +1750,8 @@ export default function AppSettingsScreen({
 
       {/* LOCAL RESET & SYNC CONFLICT DIALOG */}
       {showSyncConflictModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
-          <div className="w-full max-w-lg bg-brand-card-bg rounded-3xl p-6 journal-shadow border border-brand-border flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-[200] flex items-start justify-center p-4 pb-28 bg-black/60 backdrop-blur-md overflow-y-auto">
+          <div className="w-full max-w-lg bg-brand-card-bg rounded-3xl p-6 pb-4 journal-shadow border border-brand-border flex flex-col gap-5 max-h-[calc(100dvh-8rem)] overflow-y-auto mt-8 mb-24">
             <div className="flex items-center gap-3">
               <span className="p-3 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl shrink-0">
                 <CloudLightning className="w-6 h-6 animate-pulse" />
@@ -1866,11 +1860,11 @@ export default function AppSettingsScreen({
               </button>
             </div>
 
-            <div className="flex gap-3 pt-2">
+            <div className="sticky bottom-0 flex gap-3 pt-3 pb-1 bg-brand-card-bg border-t border-brand-border/40">
               <button
                 type="button"
                 onClick={() => { setShowSyncConflictModal(false); setPendingSyncUid(null); }}
-                className="flex-1 py-2.5 rounded-full border border-brand-border text-brand-sage font-bold text-xs hover:bg-brand-bg transition-all"
+                className="flex-1 py-3 rounded-full border border-brand-border text-brand-sage font-bold text-xs hover:bg-brand-bg transition-all bg-brand-card-bg shadow-sm"
               >
                 Cancel Sync
               </button>

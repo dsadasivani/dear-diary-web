@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Home, BookOpen, ClipboardList, Search, BarChart2, Lock, X
@@ -25,10 +25,14 @@ import {
   getDiaries, getEntries, getNotes, getSecurityConfig, 
   createNote, createEntry, getAppSettings, getUserProfile
 } from './utils/storage';
+import { auth } from './utils/firebase';
+import { syncLocalAndCloud } from './utils/sync';
+import { persistNativeLocalStorageItem } from './mobile/nativeStorageBridge';
 
 export default function App() {
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const autoSyncStartedRef = useRef(false);
   
   // Navigation states
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
@@ -87,6 +91,7 @@ export default function App() {
   const handleUnlock = () => {
     reloadData();
     reloadTheme();
+    autoSyncStartedRef.current = false;
     setIsAuthenticated(true);
   };
 
@@ -177,6 +182,36 @@ export default function App() {
   }, [activeTab, currentScreen, isAuthenticated, isEditorFocusMode, selectedDiaryId, selectedPrompt]);
 
   useEffect(() => addNativeBackListener(handleBackNavigation), [handleBackNavigation]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      if (autoSyncStartedRef.current) return;
+
+      const settings = getAppSettings();
+      const security = getSecurityConfig();
+      if (!settings.autoSyncOnLaunch || !user || security.linkedGoogleUid !== user.uid) {
+        return;
+      }
+
+      autoSyncStartedRef.current = true;
+      syncLocalAndCloud(user.uid)
+        .then(() => {
+          const now = Date.now();
+          localStorage.setItem('deardiary_last_sync', String(now));
+          persistNativeLocalStorageItem('deardiary_last_sync', String(now));
+          reloadData();
+          showToast('Cloud synchronization complete.', 'success');
+        })
+        .catch((err: any) => {
+          console.error(err);
+          showToast(err?.message || 'Auto-sync encountered an issue.', 'error');
+        });
+    });
+
+    return () => unsubscribe();
+  }, [isAuthenticated]);
 
   // Convert quick note into formal diary entry helper
   const handleConvertToDiaryEntry = (noteTitle: string, noteBody: string, tags: string[]) => {

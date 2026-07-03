@@ -33,6 +33,7 @@
     "@capacitor/preferences": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
+    "@capawesome/capacitor-google-sign-in": "^0.1.2",
     "@capgo/capacitor-native-biometric": "^8.4.12",
     "@google/genai": "^2.4.0",
     "@independo/capacitor-voice-recorder": "^8.3.3",

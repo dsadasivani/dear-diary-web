@@ -2,6 +2,7 @@ import CryptoJS from 'crypto-js';
 import { Diary, Entry, Note, SecurityConfig, AppSettings, DiaryBackupData, Mood, UserProfile } from '../types';
 import { auth, db } from './firebase';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
+import type { User as FirebaseUser } from 'firebase/auth';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
 import { syncReminderNotification } from '../mobile/reminders';
 
@@ -41,6 +42,29 @@ export const PREDEFINED_COLORS = [
   { name: 'Rich Amber', hex: '#D49B4E', bgClass: 'bg-[#D49B4E]', borderClass: 'border-[#C1883F]' },
   { name: 'Slate Lavender', hex: '#6C7598', bgClass: 'bg-[#6C7598]', borderClass: 'border-[#5A6384]' }
 ];
+
+export const SECURITY_RECOVERY_QUESTIONS = [
+  { id: 'first-pet', question: 'What was the name of your first pet?' },
+  { id: 'favorite-teacher', question: 'What was the name of your favorite teacher?' },
+  { id: 'childhood-street', question: 'What street did you grow up on?' },
+  { id: 'favorite-book', question: 'What was your favorite childhood book?' },
+  { id: 'memorable-place', question: 'What place always feels like home?' }
+];
+
+const RECOVERY_ANSWER_ITERATIONS = 120000;
+
+export type PinLength = 4 | 8;
+
+export const isValidPin = (pin: string, pinLength?: PinLength): boolean => {
+  if (pinLength) return new RegExp(`^\\d{${pinLength}}$`).test(pin);
+  return /^(\d{4}|\d{8})$/.test(pin);
+};
+
+const getPinLength = (pin: string): PinLength => (pin.length === 8 ? 8 : 4);
+
+export const normalizeRecoveryAnswer = (answer: string): string => (
+  answer.trim().replace(/\s+/g, ' ').toLowerCase()
+);
 
 // Seed images
 const DotomboriImg = "https://images.unsplash.com/photo-1542051841857-5f90071e7989?w=600&auto=format&fit=crop&q=60";
@@ -236,6 +260,48 @@ export const getTodayWordCount = (entries: Entry[]): number => {
     .reduce((sum, e) => sum + (e.wordCount || 0), 0);
 };
 
+const hashPin = (pin: string, salt: string): string => CryptoJS.SHA256(pin + salt).toString();
+
+const createPinFields = (pin: string): Pick<SecurityConfig, 'pinHash' | 'pinSalt' | 'pinLength'> => {
+  const pinSalt = CryptoJS.lib.WordArray.random(16).toString();
+  return {
+    pinHash: hashPin(pin, pinSalt),
+    pinSalt,
+    pinLength: getPinLength(pin)
+  };
+};
+
+const hashRecoveryAnswer = (answer: string, salt: string, iterations: number): string => {
+  return CryptoJS.PBKDF2(normalizeRecoveryAnswer(answer), salt, {
+    keySize: 256 / 32,
+    iterations
+  }).toString();
+};
+
+const createRecoveryFields = (
+  questionId: string,
+  answer: string
+): Pick<SecurityConfig, 'recoveryQuestionId' | 'recoveryAnswerHash' | 'recoveryAnswerSalt' | 'recoveryAnswerIterations'> => {
+  const answerSalt = CryptoJS.lib.WordArray.random(16).toString();
+  return {
+    recoveryQuestionId: questionId,
+    recoveryAnswerHash: hashRecoveryAnswer(answer, answerSalt, RECOVERY_ANSWER_ITERATIONS),
+    recoveryAnswerSalt: answerSalt,
+    recoveryAnswerIterations: RECOVERY_ANSWER_ITERATIONS
+  };
+};
+
+const isValidRecoveryQuestionId = (questionId: string): boolean => (
+  SECURITY_RECOVERY_QUESTIONS.some(q => q.id === questionId)
+);
+
+export const hasRecoveryQuestion = (config: SecurityConfig = getSecurityConfig()): boolean => (
+  !!config.recoveryQuestionId &&
+  !!config.recoveryAnswerHash &&
+  !!config.recoveryAnswerSalt &&
+  !!config.recoveryAnswerIterations
+);
+
 // Security Store operations
 export const getSecurityConfig = (): SecurityConfig => {
   initializeDatabase();
@@ -255,19 +321,135 @@ export const saveSecurityConfig = (config: SecurityConfig) => {
 };
 
 export const setPinCode = (pin: string): SecurityConfig => {
-  const salt = CryptoJS.lib.WordArray.random(16).toString();
-  const pinHash = CryptoJS.SHA256(pin + salt).toString();
+  if (!isValidPin(pin)) {
+    throw new Error('PIN must be exactly 4 or 8 digits.');
+  }
+  const existing = getSecurityConfig();
   
   const config: SecurityConfig = {
+    ...existing,
     isPinCreated: true,
-    pinHash,
-    pinSalt: salt,
-    isBiometricsEnabled: false, // Default to disabled, user can enable it in Settings
+    ...createPinFields(pin),
     isLocked: false // unlock on creation
   };
   
   saveSecurityConfig(config);
   return config;
+};
+
+export const setInitialPinWithRecovery = (pin: string, questionId: string, answer: string): SecurityConfig => {
+  if (!isValidPin(pin)) {
+    throw new Error('PIN must be exactly 4 or 8 digits.');
+  }
+  if (!isValidRecoveryQuestionId(questionId)) {
+    throw new Error('Please choose a valid security question.');
+  }
+  if (!normalizeRecoveryAnswer(answer)) {
+    throw new Error('Please enter a security answer.');
+  }
+
+  const config: SecurityConfig = {
+    ...getSecurityConfig(),
+    isPinCreated: true,
+    ...createPinFields(pin),
+    ...createRecoveryFields(questionId, answer),
+    isBiometricsEnabled: false,
+    passkeyCredentialId: undefined,
+    isBiometricsSimulated: undefined,
+    isLocked: false
+  };
+
+  saveSecurityConfig(config);
+  return config;
+};
+
+export const setRecoveryQuestion = (questionId: string, answer: string): SecurityConfig => {
+  const config = getSecurityConfig();
+  if (!config.isPinCreated) {
+    throw new Error('Please create a PIN before setting a recovery question.');
+  }
+  if (!isValidRecoveryQuestionId(questionId)) {
+    throw new Error('Please choose a valid security question.');
+  }
+  if (!normalizeRecoveryAnswer(answer)) {
+    throw new Error('Please enter a security answer.');
+  }
+
+  const updated: SecurityConfig = {
+    ...config,
+    ...createRecoveryFields(questionId, answer)
+  };
+  saveSecurityConfig(updated);
+  return updated;
+};
+
+export const verifyRecoveryAnswer = (answer: string): boolean => {
+  const config = getSecurityConfig();
+  if (!hasRecoveryQuestion(config)) return false;
+  const computedHash = hashRecoveryAnswer(
+    answer,
+    config.recoveryAnswerSalt || '',
+    config.recoveryAnswerIterations || RECOVERY_ANSWER_ITERATIONS
+  );
+  return computedHash === config.recoveryAnswerHash;
+};
+
+export const updatePinWithCurrentPin = (currentPin: string, newPin: string): SecurityConfig => {
+  if (!verifyPinCode(currentPin)) {
+    throw new Error('Current PIN is incorrect.');
+  }
+  if (!isValidPin(newPin)) {
+    throw new Error('PIN must be exactly 4 or 8 digits.');
+  }
+
+  const config = getSecurityConfig();
+  const updated: SecurityConfig = {
+    ...config,
+    ...createPinFields(newPin),
+    isPinCreated: true,
+    isLocked: false
+  };
+  saveSecurityConfig(updated);
+  return updated;
+};
+
+export const resetPinAfterVerifiedRecovery = (newPin: string): SecurityConfig => {
+  if (!isValidPin(newPin)) {
+    throw new Error('PIN must be exactly 4 or 8 digits.');
+  }
+
+  const config = getSecurityConfig();
+  const updated: SecurityConfig = {
+    ...config,
+    ...createPinFields(newPin),
+    isPinCreated: true,
+    isBiometricsEnabled: false,
+    passkeyCredentialId: undefined,
+    isBiometricsSimulated: undefined,
+    isLocked: false
+  };
+  saveSecurityConfig(updated);
+  return updated;
+};
+
+export const bindGoogleRecoveryAccount = (user: FirebaseUser): { ok: boolean; config: SecurityConfig; error?: string } => {
+  const config = getSecurityConfig();
+  if (config.linkedGoogleUid && config.linkedGoogleUid !== user.uid) {
+    return {
+      ok: false,
+      config,
+      error: `This device is linked to ${config.linkedGoogleEmail || 'another Google account'}. Please sign in with that account.`
+    };
+  }
+
+  const updated: SecurityConfig = {
+    ...config,
+    linkedGoogleUid: config.linkedGoogleUid || user.uid,
+    linkedGoogleEmail: config.linkedGoogleEmail || user.email,
+    linkedGoogleBoundAt: config.linkedGoogleBoundAt || Date.now()
+  };
+  saveSecurityConfig(updated);
+  return { ok: true, config: updated };
 };
 
 export const resetPinCode = (): SecurityConfig => {
@@ -287,8 +469,9 @@ export const resetPinCode = (): SecurityConfig => {
 export const verifyPinCode = (pin: string): boolean => {
   const config = getSecurityConfig();
   if (!config.isPinCreated) return false;
+  if (config.pinLength && pin.length !== config.pinLength) return false;
   
-  const computedHash = CryptoJS.SHA256(pin + config.pinSalt).toString();
+  const computedHash = hashPin(pin, config.pinSalt);
   if (computedHash === config.pinHash) {
     config.isLocked = false;
     saveSecurityConfig(config);
@@ -340,6 +523,10 @@ export const saveAppSettings = (settings: AppSettings) => {
   }
 };
 
+const shouldSyncContentToCloud = (): boolean => {
+  return getAppSettings().syncOnEntryCreation !== false;
+};
+
 // Diary CRUD
 export const getDiaries = (): Diary[] => {
   initializeDatabase();
@@ -367,7 +554,7 @@ export const createDiary = (name: string, emoji: string, color: string, isLocked
   saveDiaries(diaries);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       setDoc(doc(db, 'users', user.uid, 'diaries', newDiary.id), newDiary).catch(e => console.warn('Cloud sync createDiary failed:', e));
     }
   } catch (err) {
@@ -384,7 +571,7 @@ export const updateDiary = (updatedDiary: Diary): Diary[] => {
     saveDiaries(diaries);
     try {
       const user = auth.currentUser;
-      if (user) {
+      if (user && shouldSyncContentToCloud()) {
         setDoc(doc(db, 'users', user.uid, 'diaries', updatedDiary.id), updatedDiary).catch(e => console.warn('Cloud sync updateDiary failed:', e));
       }
     } catch (err) {
@@ -407,7 +594,7 @@ export const deleteDiary = (diaryId: string) => {
 
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       deleteDoc(doc(db, 'users', user.uid, 'diaries', diaryId)).catch(e => console.warn('Cloud deleteDiary failed:', e));
       for (const entry of entriesToDelete) {
         deleteDoc(doc(db, 'users', user.uid, 'entries', entry.id)).catch(e => console.warn('Cloud deleteEntry failed:', e));
@@ -445,7 +632,7 @@ export const createEntry = (entryData: Omit<Entry, 'id' | 'createdAt' | 'updated
   saveEntries(entries);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       setDoc(doc(db, 'users', user.uid, 'entries', newEntry.id), newEntry).catch(e => console.warn('Cloud sync createEntry failed:', e));
     }
   } catch (err) {
@@ -469,7 +656,7 @@ export const updateEntry = (updatedEntry: Entry): Entry[] => {
     saveEntries(entries);
     try {
       const user = auth.currentUser;
-      if (user) {
+      if (user && shouldSyncContentToCloud()) {
         setDoc(doc(db, 'users', user.uid, 'entries', finalEntry.id), finalEntry).catch(e => console.warn('Cloud sync updateEntry failed:', e));
       }
     } catch (err) {
@@ -485,7 +672,7 @@ export const deleteEntry = (entryId: string) => {
   saveEntries(entries);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       deleteDoc(doc(db, 'users', user.uid, 'entries', entryId)).catch(e => console.warn('Cloud deleteEntry failed:', e));
     }
   } catch (err) {
@@ -515,7 +702,7 @@ export const createNote = (noteData: Omit<Note, 'id' | 'createdAt' | 'updatedAt'
   saveNotes(notes);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       setDoc(doc(db, 'users', user.uid, 'notes', newNote.id), newNote).catch(e => console.warn('Cloud sync createNote failed:', e));
     }
   } catch (err) {
@@ -536,7 +723,7 @@ export const updateNote = (updatedNote: Note): Note[] => {
     saveNotes(notes);
     try {
       const user = auth.currentUser;
-      if (user) {
+      if (user && shouldSyncContentToCloud()) {
         setDoc(doc(db, 'users', user.uid, 'notes', finalNote.id), finalNote).catch(e => console.warn('Cloud sync updateNote failed:', e));
       }
     } catch (err) {
@@ -552,7 +739,7 @@ export const deleteNote = (noteId: string) => {
   saveNotes(notes);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       deleteDoc(doc(db, 'users', user.uid, 'notes', noteId)).catch(e => console.warn('Cloud deleteNote failed:', e));
     }
   } catch (err) {

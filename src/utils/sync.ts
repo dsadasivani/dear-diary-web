@@ -1,13 +1,7 @@
 import { 
   collection, doc, getDocs, setDoc, deleteDoc, writeBatch, getDoc 
 } from 'firebase/firestore';
-import { 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
-  signOut, 
-  User 
-} from 'firebase/auth';
-import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { db, handleFirestoreError, OperationType } from './firebase';
 import { 
   getDiaries, saveDiaries, 
   getEntries, saveEntries, 
@@ -388,6 +382,34 @@ export interface SyncComparison {
   isMismatch: boolean;
 }
 
+const stableStringify = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
+const normalizeDiaryForComparison = (diary: Diary): Partial<Diary> => {
+  const { entryCount, lastUpdated, ...rest } = diary;
+  return rest;
+};
+
+const normalizeEntryForComparison = (entry: Entry): Partial<Entry> => {
+  const { createdAt, updatedAt, wordCount, photoCount, ...rest } = entry;
+  return rest;
+};
+
+const normalizeNoteForComparison = (note: Note): Partial<Note> => {
+  const { createdAt, updatedAt, ...rest } = note;
+  return rest;
+};
+
 // Compares local and cloud databases to identify mismatches and sync conflicts
 export async function getSyncComparison(userId: string): Promise<SyncComparison> {
   const localDiaries = getDiaries();
@@ -421,13 +443,7 @@ export async function getSyncComparison(userId: string): Promise<SyncComparison>
     const cloudDiary = cloudDiariesMap.get(localDiary.id);
     if (!cloudDiary) {
       hasLocalUpdates = true;
-    } else if (
-      localDiary.name !== cloudDiary.name || 
-      localDiary.emoji !== cloudDiary.emoji || 
-      localDiary.color !== cloudDiary.color || 
-      localDiary.isLocked !== cloudDiary.isLocked ||
-      localDiary.lastUpdated !== cloudDiary.lastUpdated
-    ) {
+    } else if (stableStringify(normalizeDiaryForComparison(localDiary)) !== stableStringify(normalizeDiaryForComparison(cloudDiary))) {
       hasLocalUpdates = true;
       hasCloudUpdates = true; // Mark as both updated for bidirectional merging
     }
@@ -447,12 +463,19 @@ export async function getSyncComparison(userId: string): Promise<SyncComparison>
     if (!cloudEntry) {
       hasLocalUpdates = true;
     } else {
-      const localTime = localEntry.updatedAt || localEntry.createdAt || 0;
-      const remoteTime = cloudEntry.updatedAt || cloudEntry.createdAt || 0;
-      if (localTime > remoteTime) {
-        hasLocalUpdates = true;
-      } else if (remoteTime > localTime) {
-        hasCloudUpdates = true;
+      const localContent = stableStringify(normalizeEntryForComparison(localEntry));
+      const cloudContent = stableStringify(normalizeEntryForComparison(cloudEntry));
+      if (localContent !== cloudContent) {
+        const localTime = localEntry.updatedAt || localEntry.createdAt || 0;
+        const remoteTime = cloudEntry.updatedAt || cloudEntry.createdAt || 0;
+        if (localTime > remoteTime) {
+          hasLocalUpdates = true;
+        } else if (remoteTime > localTime) {
+          hasCloudUpdates = true;
+        } else {
+          hasLocalUpdates = true;
+          hasCloudUpdates = true;
+        }
       }
     }
   }
@@ -471,12 +494,19 @@ export async function getSyncComparison(userId: string): Promise<SyncComparison>
     if (!cloudNote) {
       hasLocalUpdates = true;
     } else {
-      const localTime = localNote.updatedAt || localNote.createdAt || 0;
-      const remoteTime = cloudNote.updatedAt || cloudNote.createdAt || 0;
-      if (localTime > remoteTime) {
-        hasLocalUpdates = true;
-      } else if (remoteTime > localTime) {
-        hasCloudUpdates = true;
+      const localContent = stableStringify(normalizeNoteForComparison(localNote));
+      const cloudContent = stableStringify(normalizeNoteForComparison(cloudNote));
+      if (localContent !== cloudContent) {
+        const localTime = localNote.updatedAt || localNote.createdAt || 0;
+        const remoteTime = cloudNote.updatedAt || cloudNote.createdAt || 0;
+        if (localTime > remoteTime) {
+          hasLocalUpdates = true;
+        } else if (remoteTime > localTime) {
+          hasCloudUpdates = true;
+        } else {
+          hasLocalUpdates = true;
+          hasCloudUpdates = true;
+        }
       }
     }
   }
