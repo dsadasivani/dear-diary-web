@@ -4,7 +4,7 @@ import {
   ArrowLeft, Lock, Bell, Download, Upload, Trash2, 
   Check, ShieldCheck, RefreshCw, FileWarning,
   Plus, Tag, Smile, X, Sun, Moon, Cloud, LogOut, Database, CloudLightning,
-  Fingerprint, Palette, Sliders, ChevronLeft, ChevronRight
+  Fingerprint, Palette, Sliders, ChevronLeft, ChevronRight, Eye, EyeOff
 } from 'lucide-react';
 import { AppSettings, SecurityConfig, Mood, UserProfile } from '../types';
 import { 
@@ -13,7 +13,8 @@ import {
   PREDEFINED_TAGS, PREDEFINED_MOODS, getUserProfile, saveUserProfile,
   PREDEFINED_COLORS, getEntries, getNotes, getStorageUsageDetails, StorageDetails,
   saveSecurityConfig, getDefaultUserProfile, updatePinWithCurrentPin, isValidPin,
-  bindGoogleRecoveryAccount
+  bindGoogleRecoveryAccount, SECURITY_RECOVERY_QUESTIONS, setRecoveryQuestion,
+  createCustomRecoveryQuestionId, getRecoveryQuestionText
 } from '../utils/storage';
 import type { PinLength } from '../utils/storage';
 import { User, Mail } from 'lucide-react';
@@ -38,6 +39,8 @@ const formatBytes = (bytes: number): string => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
+
+const CUSTOM_QUESTION_SELECT_VALUE = 'custom';
 
 const formatGoogleAuthError = (err: any): string => {
   const message = err?.message || '';
@@ -134,6 +137,20 @@ export default function AppSettingsScreen({
   const [confirmPin, setConfirmPin] = useState<string>('');
   const [pinError, setPinError] = useState<string>('');
   const [pinSuccess, setPinSuccess] = useState<boolean>(false);
+
+  // Security question states
+  const currentQuestionIsPreset = SECURITY_RECOVERY_QUESTIONS.some(q => q.id === security.recoveryQuestionId);
+  const [showRecoveryForm, setShowRecoveryForm] = useState<boolean>(false);
+  const [recoveryQuestionId, setRecoveryQuestionId] = useState<string>(
+    currentQuestionIsPreset ? (security.recoveryQuestionId || SECURITY_RECOVERY_QUESTIONS[0]?.id || '') : CUSTOM_QUESTION_SELECT_VALUE
+  );
+  const [customRecoveryQuestion, setCustomRecoveryQuestion] = useState<string>(
+    currentQuestionIsPreset ? '' : (security.recoveryQuestionText || '')
+  );
+  const [securityAnswer, setSecurityAnswer] = useState<string>('');
+  const [showSecurityAnswer, setShowSecurityAnswer] = useState<boolean>(false);
+  const [recoveryError, setRecoveryError] = useState<string>('');
+  const [recoverySuccess, setRecoverySuccess] = useState<boolean>(false);
 
   // Reminders preference states
   const [reminderTime, setReminderTime] = useState<string>(settings.reminderTime || '21:00');
@@ -485,6 +502,58 @@ export default function AppSettingsScreen({
       }, 1500);
     } catch (err: any) {
       setPinError(err?.message || 'Could not update PIN.');
+    }
+  };
+
+  const handleToggleRecoveryForm = () => {
+    const nextVisible = !showRecoveryForm;
+    setShowRecoveryForm(nextVisible);
+    setRecoveryError('');
+    setRecoverySuccess(false);
+    setSecurityAnswer('');
+    setShowSecurityAnswer(false);
+
+    if (nextVisible) {
+      const isPreset = SECURITY_RECOVERY_QUESTIONS.some(q => q.id === security.recoveryQuestionId);
+      setRecoveryQuestionId(isPreset ? (security.recoveryQuestionId || SECURITY_RECOVERY_QUESTIONS[0]?.id || '') : CUSTOM_QUESTION_SELECT_VALUE);
+      setCustomRecoveryQuestion(isPreset ? '' : getRecoveryQuestionText(security));
+    }
+  };
+
+  const handleRecoveryQuestionSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecoveryError('');
+    setRecoverySuccess(false);
+
+    if (!security.isPinCreated) {
+      setRecoveryError('Create an App Security PIN before setting a recovery question.');
+      return;
+    }
+
+    if (recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE && !customRecoveryQuestion.trim()) {
+      setRecoveryError('Enter your custom security question.');
+      return;
+    }
+
+    if (!securityAnswer.trim()) {
+      setRecoveryError('Enter a security answer.');
+      return;
+    }
+
+    try {
+      const questionId = recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE
+        ? createCustomRecoveryQuestionId()
+        : recoveryQuestionId;
+      const questionText = recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE
+        ? customRecoveryQuestion.trim()
+        : undefined;
+      const updated = setRecoveryQuestion(questionId, securityAnswer, questionText);
+      setSecurity(updated);
+      setSecurityAnswer('');
+      setRecoverySuccess(true);
+      onShowToast?.('Security question updated successfully.', 'success');
+    } catch (err: any) {
+      setRecoveryError(err?.message || 'Could not update security question.');
     }
   };
 
@@ -1079,6 +1148,97 @@ export default function AppSettingsScreen({
                       className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
                     >
                       Save Security Code
+                    </button>
+                  </form>
+                )}
+              </div>
+
+              {/* Security question card */}
+              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
+                      <ShieldCheck className="w-4 h-4" />
+                    </span>
+                    <div>
+                      <h3 className="text-sm font-bold text-brand-plum">Security Question</h3>
+                      <p className="text-[10px] text-brand-sage mt-0.5">
+                        {security.isPinCreated ? getRecoveryQuestionText(security) : 'Create a PIN before adding recovery'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleToggleRecoveryForm}
+                    disabled={!security.isPinCreated}
+                    className="px-4 py-2 bg-brand-bg hover:bg-brand-rose-light disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold text-brand-sage-dark rounded-full border border-brand-border transition-colors"
+                  >
+                    {showRecoveryForm ? 'Close' : security.recoveryQuestionId ? 'Modify' : 'Add'}
+                  </button>
+                </div>
+
+                {showRecoveryForm && (
+                  <form onSubmit={handleRecoveryQuestionSubmit} className="mt-3 pt-3 border-t border-brand-border flex flex-col gap-3">
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Question</span>
+                      <select
+                        value={recoveryQuestionId}
+                        onChange={(e) => {
+                          setRecoveryQuestionId(e.target.value);
+                          setRecoveryError('');
+                        }}
+                        className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
+                      >
+                        {SECURITY_RECOVERY_QUESTIONS.map(q => (
+                          <option key={q.id} value={q.id}>{q.question}</option>
+                        ))}
+                        <option value={CUSTOM_QUESTION_SELECT_VALUE}>Write my own question</option>
+                      </select>
+                    </label>
+
+                    {recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE && (
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Custom Question</span>
+                        <input
+                          type="text"
+                          value={customRecoveryQuestion}
+                          onChange={(e) => setCustomRecoveryQuestion(e.target.value)}
+                          placeholder="Type your security question"
+                          className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
+                        />
+                      </label>
+                    )}
+
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Answer</span>
+                      <div className="relative">
+                        <input
+                          type={showSecurityAnswer ? 'text' : 'password'}
+                          value={securityAnswer}
+                          onChange={(e) => setSecurityAnswer(e.target.value)}
+                          placeholder="Enter a memorable answer"
+                          className="w-full bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 pr-10 rounded-xl focus:outline-none focus:border-brand-pink"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowSecurityAnswer(prev => !prev)}
+                          className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink"
+                          title={showSecurityAnswer ? 'Hide answer' : 'Show answer'}
+                        >
+                          {showSecurityAnswer ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </label>
+
+                    {recoveryError && <p className="text-[11px] font-bold text-brand-pink-dark text-center">{recoveryError}</p>}
+                    {recoverySuccess && <p className="text-[11px] font-bold text-brand-sage text-center flex items-center justify-center gap-1"><Check className="w-4 h-4" /> Security question updated successfully!</p>}
+
+                    <button
+                      type="submit"
+                      disabled={!securityAnswer.trim() || (recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE && !customRecoveryQuestion.trim())}
+                      className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
+                    >
+                      Save Security Question
                     </button>
                   </form>
                 )}

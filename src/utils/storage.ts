@@ -51,6 +51,7 @@ export const SECURITY_RECOVERY_QUESTIONS = [
   { id: 'memorable-place', question: 'What place always feels like home?' }
 ];
 
+const CUSTOM_RECOVERY_QUESTION_PREFIX = 'custom:';
 const RECOVERY_ANSWER_ITERATIONS = 120000;
 
 export type PinLength = 4 | 8;
@@ -280,19 +281,37 @@ const hashRecoveryAnswer = (answer: string, salt: string, iterations: number): s
 
 const createRecoveryFields = (
   questionId: string,
-  answer: string
-): Pick<SecurityConfig, 'recoveryQuestionId' | 'recoveryAnswerHash' | 'recoveryAnswerSalt' | 'recoveryAnswerIterations'> => {
+  answer: string,
+  questionText?: string
+): Pick<SecurityConfig, 'recoveryQuestionId' | 'recoveryQuestionText' | 'recoveryAnswerHash' | 'recoveryAnswerSalt' | 'recoveryAnswerIterations'> => {
   const answerSalt = CryptoJS.lib.WordArray.random(16).toString();
+  const presetQuestion = SECURITY_RECOVERY_QUESTIONS.find(q => q.id === questionId)?.question;
   return {
     recoveryQuestionId: questionId,
+    recoveryQuestionText: questionText?.trim() || presetQuestion,
     recoveryAnswerHash: hashRecoveryAnswer(answer, answerSalt, RECOVERY_ANSWER_ITERATIONS),
     recoveryAnswerSalt: answerSalt,
     recoveryAnswerIterations: RECOVERY_ANSWER_ITERATIONS
   };
 };
 
-const isValidRecoveryQuestionId = (questionId: string): boolean => (
-  SECURITY_RECOVERY_QUESTIONS.some(q => q.id === questionId)
+export const createCustomRecoveryQuestionId = (): string => (
+  `${CUSTOM_RECOVERY_QUESTION_PREFIX}${Date.now()}`
+);
+
+const isCustomRecoveryQuestionId = (questionId: string): boolean => (
+  questionId.startsWith(CUSTOM_RECOVERY_QUESTION_PREFIX)
+);
+
+const isValidRecoveryQuestion = (questionId: string, questionText?: string): boolean => (
+  SECURITY_RECOVERY_QUESTIONS.some(q => q.id === questionId) ||
+  (isCustomRecoveryQuestionId(questionId) && !!questionText?.trim())
+);
+
+export const getRecoveryQuestionText = (config: SecurityConfig = getSecurityConfig()): string => (
+  config.recoveryQuestionText ||
+  SECURITY_RECOVERY_QUESTIONS.find(q => q.id === config.recoveryQuestionId)?.question ||
+  'Your recovery question'
 );
 
 export const hasRecoveryQuestion = (config: SecurityConfig = getSecurityConfig()): boolean => (
@@ -337,11 +356,11 @@ export const setPinCode = (pin: string): SecurityConfig => {
   return config;
 };
 
-export const setInitialPinWithRecovery = (pin: string, questionId: string, answer: string): SecurityConfig => {
+export const setInitialPinWithRecovery = (pin: string, questionId: string, answer: string, questionText?: string): SecurityConfig => {
   if (!isValidPin(pin)) {
     throw new Error('PIN must be exactly 4 or 8 digits.');
   }
-  if (!isValidRecoveryQuestionId(questionId)) {
+  if (!isValidRecoveryQuestion(questionId, questionText)) {
     throw new Error('Please choose a valid security question.');
   }
   if (!normalizeRecoveryAnswer(answer)) {
@@ -352,7 +371,7 @@ export const setInitialPinWithRecovery = (pin: string, questionId: string, answe
     ...getSecurityConfig(),
     isPinCreated: true,
     ...createPinFields(pin),
-    ...createRecoveryFields(questionId, answer),
+    ...createRecoveryFields(questionId, answer, questionText),
     isBiometricsEnabled: false,
     passkeyCredentialId: undefined,
     isBiometricsSimulated: undefined,
@@ -363,12 +382,12 @@ export const setInitialPinWithRecovery = (pin: string, questionId: string, answe
   return config;
 };
 
-export const setRecoveryQuestion = (questionId: string, answer: string): SecurityConfig => {
+export const setRecoveryQuestion = (questionId: string, answer: string, questionText?: string): SecurityConfig => {
   const config = getSecurityConfig();
   if (!config.isPinCreated) {
     throw new Error('Please create a PIN before setting a recovery question.');
   }
-  if (!isValidRecoveryQuestionId(questionId)) {
+  if (!isValidRecoveryQuestion(questionId, questionText)) {
     throw new Error('Please choose a valid security question.');
   }
   if (!normalizeRecoveryAnswer(answer)) {
@@ -377,7 +396,7 @@ export const setRecoveryQuestion = (questionId: string, answer: string): Securit
 
   const updated: SecurityConfig = {
     ...config,
-    ...createRecoveryFields(questionId, answer)
+    ...createRecoveryFields(questionId, answer, questionText)
   };
   saveSecurityConfig(updated);
   return updated;

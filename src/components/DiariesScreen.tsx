@@ -1,14 +1,14 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  BookOpen, Plus, Lock, ArrowLeft, X, Check, Image as ImageIcon, 
-  Eye, EyeOff, BookOpenCheck, CalendarDays, FolderGit2, Fingerprint, Sparkles,
-  Grid, List, LayoutGrid, Upload, Trash2
+  BookOpen, Plus, Lock, ArrowLeft, Check, List, LayoutGrid, Upload
 } from 'lucide-react';
 import { Diary, Entry } from '../types';
 import { createDiary, PREDEFINED_COLORS } from '../utils/storage';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
 import { persistMediaDataUri } from '../mobile/mediaStorage';
+
+type DiaryViewMode = 'compact' | 'list';
 
 interface DiariesScreenProps {
   diaries: Diary[];
@@ -28,12 +28,12 @@ export default function DiariesScreen({
 }: DiariesScreenProps) {
   const [showCreateForm, setShowCreateForm] = useState<boolean>(false);
   
-  // View mode state: bento (original), compact (uniform grid), list (classic list)
-  const [viewMode, setViewMode] = useState<'bento' | 'compact' | 'list'>(() => {
-    return (localStorage.getItem('deardiary_diary_viewmode') as 'bento' | 'compact' | 'list') || 'bento';
+  // View mode state: compact (uniform grid), list (classic list)
+  const [viewMode, setViewMode] = useState<DiaryViewMode>(() => {
+    return localStorage.getItem('deardiary_diary_viewmode') === 'list' ? 'list' : 'compact';
   });
 
-  const handleViewModeChange = (mode: 'bento' | 'compact' | 'list') => {
+  const handleViewModeChange = (mode: DiaryViewMode) => {
     setViewMode(mode);
     localStorage.setItem('deardiary_diary_viewmode', mode);
     persistNativeLocalStorageItem('deardiary_diary_viewmode', mode);
@@ -51,29 +51,10 @@ export default function DiariesScreen({
   const [selectedFoilIcons, setSelectedFoilIcons] = useState<string[]>([]);
   const coverFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Biometric challenge state
-  const [verifyDiary, setVerifyDiary] = useState<Diary | null>(null);
-  const [biometricUnlockSuccess, setBiometricUnlockSuccess] = useState<boolean>(false);
-
   const totalEntries = entries.length;
 
   const handleDiaryClick = (diary: Diary) => {
-    if (diary.isLocked) {
-      setVerifyDiary(diary);
-      setBiometricUnlockSuccess(false);
-    } else {
-      onNavigate('diaries', 'diaryDetail', diary.id);
-    }
-  };
-
-  const handleBiometricSimulate = () => {
-    setBiometricUnlockSuccess(true);
-    setTimeout(() => {
-      if (verifyDiary) {
-        onNavigate('diaries', 'diaryDetail', verifyDiary.id);
-        setVerifyDiary(null);
-      }
-    }, 800);
+    onNavigate('diaries', 'diaryDetail', diary.id);
   };
 
   const handleCoverImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -126,7 +107,7 @@ export default function DiariesScreen({
     <div className="flex flex-col gap-6 font-sans relative">
       <AnimatePresence mode="wait">
         {!showCreateForm ? (
-          /* DIARIES LIST SCREEN WITH MULTIPLE VIEW OPTIONS */
+          /* DIARIES LIST SCREEN WITH TWO VIEW OPTIONS */
           <motion.div
             key="list"
             initial={{ opacity: 0, y: 10 }}
@@ -157,17 +138,6 @@ export default function DiariesScreen({
               {/* View Selector Buttons */}
               <div className="flex items-center gap-1 bg-white/90 dark:bg-brand-card-bg/90 border border-brand-border p-1 rounded-2xl shadow-sm self-start sm:self-auto">
                 <button
-                  onClick={() => handleViewModeChange('bento')}
-                  className={`p-2.5 rounded-xl transition-all ${
-                    viewMode === 'bento'
-                      ? 'bg-brand-pink text-white shadow-md'
-                      : 'text-brand-sage hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
-                  }`}
-                  title="Bento Grid View"
-                >
-                  <Grid className="w-4 h-4" />
-                </button>
-                <button
                   onClick={() => handleViewModeChange('compact')}
                   className={`p-2.5 rounded-xl transition-all ${
                     viewMode === 'compact'
@@ -194,170 +164,6 @@ export default function DiariesScreen({
 
             {/* CONDITIONAL RENDER BY VIEW MODE */}
             <AnimatePresence mode="wait">
-              {viewMode === 'bento' && (
-                /* ASYMMETRICAL BENTO GRID */
-                <motion.div
-                  key="bento"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="grid grid-cols-1 sm:grid-cols-2 gap-6 pb-24"
-                >
-                  {diaries.map((diary, index) => {
-                    const isFeatured = index === 0;
-
-                    return (
-                      <motion.div
-                        key={diary.id}
-                        whileHover={{ y: -6, scale: 1.01 }}
-                        transition={{ type: "spring", stiffness: 260, damping: 20 }}
-                        onClick={() => handleDiaryClick(diary)}
-                        className={`group relative cursor-pointer select-none ${
-                          isFeatured ? 'sm:col-span-2 aspect-[16/9.5] sm:aspect-[21/9.5]' : 'aspect-square'
-                        }`}
-                      >
-                        {/* Double-layered realistic skeuomorphic shadow (shady effect) */}
-                        <div className="absolute inset-y-1.5 left-3.5 right-1.5 bg-black/35 blur-[2.5px] rounded-r-2xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-1.5 group-hover:translate-y-1.5 group-hover:blur-[3.5px] group-hover:bg-black/40" />
-                        <div className="absolute inset-y-3.5 left-5 right-0.5 bg-black/20 blur-xl rounded-r-2xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-2.5 group-hover:translate-y-2.5 group-hover:blur-2xl group-hover:bg-black/25" />
-
-                        {/* Tactile Satin Bookmark Ribbon */}
-                        <div 
-                          className="absolute bottom-[-10px] right-8 w-3.5 h-5 rounded-b shadow-[1px_2px_4px_rgba(0,0,0,0.3)] z-0 origin-top group-hover:scale-y-115 transition-all duration-300" 
-                          style={{ backgroundColor: diary.color === '#8A3D55' ? '#DCA153' : '#8A3D55' }}
-                        />
-
-                        {/* Layered Paper Page Stack peeking out from behind cover on right/bottom */}
-                        <div className="absolute top-[4px] bottom-[4px] right-[2px] left-5 bg-gradient-to-r from-[#d0c9b1] via-[#FAF8F3] to-[#F5F2EB] rounded-r border-y border-r border-black/10 z-0" />
-                        <div 
-                          className="absolute top-[6px] bottom-[6px] right-[4px] left-5 bg-gradient-to-r from-[#c0b89b] via-[#FFFDF9] to-[#FAF6EE] rounded-r border-y border-r border-black/5 z-0"
-                          style={{
-                            backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 1.5px, rgba(0,0,0,0.03) 1.5px, rgba(0,0,0,0.03) 2.5px)'
-                          }}
-                        />
-
-                        {/* Real Front Cover */}
-                        <div 
-                          className="absolute inset-y-0 left-0 right-2 rounded-r-[22px] rounded-l-[6px] shadow-[4px_4px_15px_rgba(0,0,0,0.25)] group-hover:shadow-[8px_12px_24px_rgba(0,0,0,0.35)] border-y border-r border-white/10 flex flex-col justify-between p-6 z-10 overflow-hidden transition-all duration-300"
-                          style={{ 
-                            backgroundColor: (isFeatured && !diary.coverImage) ? undefined : (diary.coverImage ? undefined : diary.color),
-                            backgroundImage: diary.coverImage ? `url(${diary.coverImage})` : (isFeatured ? `url('https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=1200&auto=format&fit=crop&q=75')` : undefined),
-                            backgroundSize: 'cover',
-                            backgroundPosition: 'center'
-                          }}
-                        >
-                          {/* Rich physical binding lines and spine on the left with deep skeuomorphic shading */}
-                          <div className="absolute left-0 top-0 bottom-0 w-4 bg-gradient-to-r from-black/45 via-black/15 to-transparent pointer-events-none z-20" />
-                          <div className="absolute left-[13px] top-0 bottom-0 w-[1px] bg-black/25 pointer-events-none z-20" />
-                          <div className="absolute left-[14px] top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
-
-                          {/* Horizontal binding ridges on spine */}
-                          <div className="absolute left-0 top-[20%] w-4 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-                          <div className="absolute left-0 top-[40%] w-4 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-                          <div className="absolute left-0 top-[60%] w-4 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-                          <div className="absolute left-0 top-[80%] w-4 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-
-                          {/* Golden corners */}
-                          {!diary.coverImage && !isFeatured && (
-                            <>
-                              <div className="absolute top-0 right-0 w-4 h-4 border-t border-r border-yellow-500/40 rounded-tr-xl pointer-events-none z-20" />
-                              <div className="absolute bottom-0 right-0 w-4 h-4 border-b border-r border-yellow-500/40 rounded-br-xl pointer-events-none z-20" />
-                            </>
-                          )}
-
-                          {/* Gradient overlay for covers with images */}
-                          {(diary.coverImage || isFeatured) && (
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-black/10 group-hover:via-black/45 transition-colors duration-300 z-10" />
-                          )}
-                          {/* Cover Gloss/Matte highlights */}
-                          <div className="absolute inset-0 bg-gradient-to-tr from-black/25 via-white/[0.04] to-white/[0.15] pointer-events-none z-10" />
-                          
-                          {/* Hover Sheen sweep effect (high fidelity gloss shine) */}
-                          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/12 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out pointer-events-none z-10" />
-
-                          {/* Page opening edge soft shadow to convey cover thickness */}
-                          <div className="absolute right-0 top-0 bottom-0 w-3 bg-gradient-to-l from-black/20 to-transparent pointer-events-none z-20" />
-                          <div className="absolute right-1.5 top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
-
-                          {/* Cover contents */}
-                          <div className="absolute inset-0 p-5.5 flex flex-col justify-between z-20">
-                            {/* Top row */}
-                            <div className="flex justify-between items-start">
-                              <div className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 text-[11px] font-bold shadow-sm ${
-                                (isFeatured || diary.coverImage)
-                                  ? 'bg-white/15 text-white backdrop-blur-md border border-white/10' 
-                                  : 'bg-white/95 text-brand-plum border border-brand-border/20'
-                              }`}>
-                                <span>{diary.emoji}</span>
-                                <span className="truncate max-w-[100px]">{diary.name}</span>
-                              </div>
-
-                              {diary.isLocked && (
-                                <span className={`p-1.5 rounded-lg backdrop-blur-sm ${
-                                  (isFeatured || diary.coverImage) ? 'bg-white/10 text-white' : 'bg-black/10 text-white'
-                                }`}>
-                                  <Lock className="w-3.5 h-3.5" />
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Center plaque or Featured title */}
-                            <div className={(isFeatured || diary.coverImage) ? 'text-white' : 'text-brand-plum'}>
-                              {isFeatured ? (
-                                <div className="space-y-1">
-                                  <span className="text-[8px] font-extrabold uppercase tracking-[0.25em] text-brand-pink bg-brand-pink/15 px-2 py-0.5 rounded-full backdrop-blur-sm">Featured Sanctuary</span>
-                                  <h3 className="font-serif-diary font-bold text-xl leading-snug tracking-tight">
-                                    {diary.name}
-                                  </h3>
-                                  <p className="text-[10px] text-white/80 line-clamp-2 max-w-sm font-medium">
-                                    Your ultimate safe space. A cozy visual corner where you write daily logs, untangle complex emotions, and celebrate quiet milestones.
-                                  </p>
-                                </div>
-                              ) : (
-                                <div className="bg-white/95 dark:bg-brand-card-bg/95 p-3 rounded-xl shadow-md border border-brand-border/15 mb-1.5">
-                                  <h3 className="font-serif-diary font-bold text-sm leading-none text-brand-plum truncate">
-                                    {diary.name}
-                                  </h3>
-                                  <p className="text-[8.5px] font-bold text-brand-pink-dark uppercase tracking-widest mt-1.5">
-                                    {diary.emoji} JOURNAL BOOK
-                                  </p>
-                                </div>
-                              )}
-
-                              {/* Decorative Foil Icons */}
-                              {diary.foilIcons && diary.foilIcons.length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-2 bg-yellow-500/10 backdrop-blur-sm border border-yellow-500/25 px-2 py-1 rounded-lg max-w-max">
-                                  {diary.foilIcons.map((icon, idx) => (
-                                    <span 
-                                      key={idx} 
-                                      className="text-xs filter drop-shadow-[0_1.5px_1.5px_rgba(234,179,8,0.95)] animate-pulse"
-                                      title="Gold Foil Seal"
-                                    >
-                                      {icon}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-
-                              {/* Bottom row */}
-                              <div className={`flex justify-between items-center mt-3 pt-2.5 border-t border-dashed ${
-                                (isFeatured || diary.coverImage) ? 'border-white/15 text-white' : 'border-brand-plum/10 text-brand-plum'
-                              }`}>
-                                <span className="text-[9px] font-extrabold uppercase tracking-wider opacity-85">
-                                  {diary.entryCount} {diary.entryCount === 1 ? 'entry' : 'entries'} logged
-                                </span>
-                                <span className="text-[9px] font-bold opacity-75 italic">
-                                  Updated {diary.lastUpdated.toLowerCase()}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </motion.div>
-              )}
-
               {viewMode === 'compact' && (
                 /* COMPACT CARD VIEW (UNIFORM GRID) */
                 <motion.div
@@ -862,60 +668,6 @@ export default function DiariesScreen({
               </footer>
             </form>
           </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Biometric Challenge Overlay Modal */}
-      <AnimatePresence>
-        {verifyDiary && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-sm bg-brand-card-bg rounded-[32px] p-6.5 shadow-2xl border border-brand-border flex flex-col gap-4 text-center items-center relative overflow-hidden"
-            >
-              <div className="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] rounded-full bg-brand-pink/10 blur-xl pointer-events-none" />
-
-              <div className="w-13 h-13 rounded-2xl bg-brand-pink/10 flex items-center justify-center text-brand-pink animate-pulse relative z-10">
-                <Lock className="w-5 h-5" />
-              </div>
-              
-              <div className="relative z-10 space-y-1">
-                <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Journal Secured</h3>
-                <p className="text-xs text-brand-text-muted px-2">
-                  "{verifyDiary.name}" is passcode locked. Tap fingerprint or use PIN configuration.
-                </p>
-              </div>
-
-              {biometricUnlockSuccess ? (
-                <div className="py-6 flex flex-col items-center gap-2 relative z-10">
-                  <div className="w-11 h-11 rounded-full bg-brand-pink/10 flex items-center justify-center text-brand-pink">
-                    <Fingerprint className="w-6 h-6 animate-ping" />
-                  </div>
-                  <p className="text-xs font-bold text-brand-pink">Biometrics Confirmed...</p>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2.5 w-full py-2 relative z-10">
-                  <motion.button
-                    whileTap={{ scale: 0.96 }}
-                    onClick={handleBiometricSimulate}
-                    className="w-full bg-brand-pink text-white py-3.5 rounded-2xl flex items-center justify-center gap-2.5 text-xs font-bold hover:bg-brand-pink-dark transition-all shadow-md shadow-brand-pink/15"
-                  >
-                    <Fingerprint className="w-4 h-4" />
-                    <span>Unlock with Biometrics</span>
-                  </motion.button>
-                  
-                  <button
-                    onClick={() => setVerifyDiary(null)}
-                    className="w-full py-2 text-xs text-brand-text-muted hover:text-brand-plum font-bold transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
-            </motion.div>
-          </div>
         )}
       </AnimatePresence>
     </div>

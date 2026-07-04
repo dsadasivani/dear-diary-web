@@ -59,7 +59,7 @@ Then open the generated iOS project with Xcode.
 - Native reminder settings schedule or cancel a daily Local Notifications reminder when app settings are saved.
 - New diary cover images, diary settings cover updates, entry photos, and entry audio are written through Capacitor Filesystem on native and remain data URIs on web.
 - Android biometric unlock uses `@capgo/capacitor-native-biometric` and requires an enrolled strong biometric, such as fingerprint, plus an app PIN fallback.
-- Android voice notes use `@independo/capacitor-voice-recorder`; toolbar voice-to-text uses native speech recognition without starting the recorder so it does not compete for the microphone.
+- Android voice notes use `@independo/capacitor-voice-recorder`; toolbar voice-to-text uses native speech recognition without starting the recorder so it does not compete for the microphone. Android cannot reliably run `MediaRecorder` and `SpeechRecognizer` on the same microphone session, so native voice notes save audio only while the separate voice-to-text control inserts dictated text.
 
 ## Known Limitations
 

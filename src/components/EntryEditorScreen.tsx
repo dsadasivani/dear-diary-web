@@ -253,6 +253,7 @@ export default function EntryEditorScreen({
   const recognitionRef = useRef<any>(null);
   const nativeRecordingActiveRef = useRef<boolean>(false);
   const nativeSpeechActiveRef = useRef<boolean>(false);
+  const nativeSpeechRestartTimerRef = useRef<number | null>(null);
   const shouldBeRecordingRef = useRef<boolean>(false);
   const shouldRestartSpeechRef = useRef<boolean>(true);
   const [speechError, setSpeechError] = useState<string | null>(null);
@@ -284,11 +285,98 @@ export default function EntryEditorScreen({
     };
   }, []);
 
+  const clearNativeSpeechRestartTimer = () => {
+    if (nativeSpeechRestartTimerRef.current !== null) {
+      window.clearTimeout(nativeSpeechRestartTimerRef.current);
+      nativeSpeechRestartTimerRef.current = null;
+    }
+  };
+
+  const normalizeTranscriptForCompare = (text: string): string => (
+    text.toLowerCase().replace(/\s+/g, ' ').trim()
+  );
+
+  const isDuplicateTranscriptSegment = (currentText: string, nextSegment: string): boolean => {
+    const current = normalizeTranscriptForCompare(currentText);
+    const next = normalizeTranscriptForCompare(nextSegment);
+    return !!current && !!next && current.endsWith(next);
+  };
+
+  const appendNativeTranscriptSegment = (segment: string) => {
+    const text = segment.trim();
+    if (!text || isDuplicateTranscriptSegment(recordedSessionTextRef.current, text)) return;
+
+    const current = recordedSessionTextRef.current.trim();
+    recordedSessionTextRef.current = current ? `${current} ${text} ` : `${text} `;
+    setRecordedSessionText(recordedSessionTextRef.current);
+  };
+
+  const finalizeNativeSpeechInterim = () => {
+    appendNativeTranscriptSegment(interimTextRef.current);
+    interimTextRef.current = '';
+    setInterimText('');
+  };
+
+  const getNativeTranscriptSnapshot = (): string => {
+    const finalizedText = recordedSessionTextRef.current.trim();
+    const interim = interimTextRef.current.trim();
+
+    if (!interim || isDuplicateTranscriptSegment(finalizedText, interim)) {
+      return finalizedText;
+    }
+
+    return finalizedText ? `${finalizedText} ${interim}` : interim;
+  };
+
+  const normalizeNativeSpeechError = (error: unknown): string => {
+    const message = error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : '';
+    const normalized = message.toLowerCase();
+
+    if (normalized.includes('permission')) return 'not-allowed';
+    if (normalized.includes('network')) return 'network';
+    if (normalized.includes('busy')) return 'busy';
+    if (normalized.includes('not available')) return 'unsupported';
+    if (normalized.includes('no speech') || normalized.includes('no match')) return 'no-speech';
+    if (normalized.includes('audio')) return 'audio';
+    return 'unknown';
+  };
+
+  const scheduleNativeSpeechRestart = () => {
+    clearNativeSpeechRestartTimer();
+
+    if (!shouldBeRecordingRef.current || !shouldRestartSpeechRef.current || !isTranscriptionEnabledRef.current) {
+      return;
+    }
+
+    nativeSpeechRestartTimerRef.current = window.setTimeout(() => {
+      nativeSpeechRestartTimerRef.current = null;
+
+      if (shouldBeRecordingRef.current && shouldRestartSpeechRef.current && isTranscriptionEnabledRef.current) {
+        void startNativeSpeechRecognition();
+      }
+    }, 250);
+  };
+
   const stopNativeSpeechRecognition = async () => {
-    if (!nativeSpeechActiveRef.current) return;
+    clearNativeSpeechRestartTimer();
+
     try {
-      await NativeSpeechRecognition.stop();
-    } catch (e) {}
+      const listening = await NativeSpeechRecognition.isListening();
+      if (listening.listening) {
+        await NativeSpeechRecognition.stop();
+      }
+    } catch (e) {
+      if (nativeSpeechActiveRef.current) {
+        try {
+          await NativeSpeechRecognition.stop();
+        } catch (stopError) {}
+      }
+    }
+
     try {
       await NativeSpeechRecognition.removeAllListeners();
     } catch (e) {}
@@ -297,6 +385,7 @@ export default function EntryEditorScreen({
 
   const startNativeSpeechRecognition = async (): Promise<boolean> => {
     if (!isTranscriptionEnabledRef.current) return false;
+    clearNativeSpeechRestartTimer();
 
     try {
       const available = await NativeSpeechRecognition.available();
@@ -317,6 +406,18 @@ export default function EntryEditorScreen({
         interimTextRef.current = text;
         setInterimText(text);
       });
+      await NativeSpeechRecognition.addListener('listeningState', (data) => {
+        if (data.status === 'started') {
+          nativeSpeechActiveRef.current = true;
+          setIsRecording(true);
+          setSpeechError(null);
+          return;
+        }
+
+        nativeSpeechActiveRef.current = false;
+        finalizeNativeSpeechInterim();
+        scheduleNativeSpeechRestart();
+      });
 
       await NativeSpeechRecognition.start({
         language: 'en-US',
@@ -329,7 +430,14 @@ export default function EntryEditorScreen({
       return true;
     } catch (error) {
       console.error('Native speech recognition error:', error);
-      setSpeechError('unknown');
+      nativeSpeechActiveRef.current = false;
+      const normalizedError = normalizeNativeSpeechError(error);
+      if (normalizedError === 'no-speech') {
+        scheduleNativeSpeechRestart();
+      } else {
+        setSpeechError(normalizedError);
+        shouldRestartSpeechRef.current = false;
+      }
       return false;
     }
   };
@@ -341,6 +449,7 @@ export default function EntryEditorScreen({
     try {
       if (isResume && mode === 'speech-to-text') {
         shouldBeRecordingRef.current = true;
+        shouldRestartSpeechRef.current = true;
         isOverlayActiveRef.current = true;
         setIsRecording(true);
         const speechStarted = await startNativeSpeechRecognition();
@@ -357,7 +466,6 @@ export default function EntryEditorScreen({
         shouldBeRecordingRef.current = true;
         isOverlayActiveRef.current = true;
         setIsRecording(true);
-        await startNativeSpeechRecognition();
         return;
       }
 
@@ -379,6 +487,10 @@ export default function EntryEditorScreen({
         if (mode === 'speech-to-text') {
           setIsTranscriptionEnabled(true);
           isTranscriptionEnabledRef.current = true;
+        } else {
+          setIsTranscriptionEnabled(false);
+          isTranscriptionEnabledRef.current = false;
+          shouldRestartSpeechRef.current = false;
         }
       }
 
@@ -418,7 +530,6 @@ export default function EntryEditorScreen({
       await VoiceRecorder.startRecording();
       nativeRecordingActiveRef.current = true;
       setIsRecording(true);
-      await startNativeSpeechRecognition();
     } catch (error) {
       console.error('Native recording start failed:', error);
       onShowToast?.('Native voice recording could not start. Check microphone permissions.', 'error');
@@ -434,7 +545,7 @@ export default function EntryEditorScreen({
     isOverlayActiveRef.current = false;
 
     const textToInsert = !discard && isTranscriptionEnabledRef.current
-      ? interimTextRef.current.trim()
+      ? getNativeTranscriptSnapshot()
       : '';
 
     await stopNativeSpeechRecognition();
@@ -740,6 +851,9 @@ export default function EntryEditorScreen({
   const pauseRecording = async () => {
     if (isNativePlatform()) {
       shouldBeRecordingRef.current = false;
+      if (isTranscriptionEnabledRef.current) {
+        finalizeNativeSpeechInterim();
+      }
       await stopNativeSpeechRecognition();
       setIsRecording(false);
       if (nativeRecordingActiveRef.current) {
@@ -1186,6 +1300,8 @@ export default function EntryEditorScreen({
     setTimeout(updateActiveFormats, 10);
   };
 
+  const isNativeVoiceRecordingOnly = isNativePlatform() && recordingOverlayMode === 'voice-dictation';
+
   const recordingOverlayUI = (
     <AnimatePresence>
       {showRecordingOverlay && (
@@ -1218,12 +1334,14 @@ export default function EntryEditorScreen({
               </h2>
               {recordingOverlayMode === 'voice-dictation' && (
                 <p className="text-[11px] sm:text-xs text-brand-text-muted font-medium px-2">
-                  Just start speaking—we will transcribe your voice into your diary in real-time.
+                  {isNativeVoiceRecordingOnly
+                    ? 'Record an audio memory and save it with this diary moment.'
+                    : 'Just start speaking—we will transcribe your voice into your diary in real-time.'}
                 </p>
               )}
               
               {/* Transcription Toggle (Only in Voice Sanctuary mode) */}
-              {recordingOverlayMode === 'voice-dictation' && (
+              {recordingOverlayMode === 'voice-dictation' && !isNativeVoiceRecordingOnly && (
                 <div className="flex justify-center pt-3">
                   <button
                     onClick={() => {
@@ -1297,20 +1415,24 @@ export default function EntryEditorScreen({
                     <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isTranscriptionEnabled ? 'bg-brand-text-muted/40' : 'bg-emerald-500 animate-pulse'}`} />
                     <span>Raw Audio: {isTranscriptionEnabled ? 'Off' : 'Active'} 🎙️</span>
                   </span>
-                  <span className="hidden sm:inline w-px h-4 bg-brand-border" />
-                  <span className={`flex items-center gap-1.5 ${!isTranscriptionEnabled ? 'text-brand-text-muted opacity-50' : 'text-brand-plum'}`}>
-                    {speechError || !isTranscriptionEnabled ? (
-                      <>
-                        <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${!isTranscriptionEnabled ? 'bg-brand-text-muted/40' : 'bg-amber-500'}`} />
-                        <span>Dictation: {speechError ? 'Offline' : 'Off'}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                        <span>Dictation: Transcribing ✍️</span>
-                      </>
-                    )}
-                  </span>
+                  {!isNativeVoiceRecordingOnly && (
+                    <>
+                      <span className="hidden sm:inline w-px h-4 bg-brand-border" />
+                      <span className={`flex items-center gap-1.5 ${!isTranscriptionEnabled ? 'text-brand-text-muted opacity-50' : 'text-brand-plum'}`}>
+                        {speechError || !isTranscriptionEnabled ? (
+                          <>
+                            <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${!isTranscriptionEnabled ? 'bg-brand-text-muted/40' : 'bg-amber-500'}`} />
+                            <span>Dictation: {speechError ? 'Offline' : 'Off'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span>Dictation: Transcribing ✍️</span>
+                          </>
+                        )}
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 {speechError && (
@@ -2010,10 +2132,24 @@ export default function EntryEditorScreen({
                 type="button"
                 onClick={() => toggleRecording('voice-dictation')}
                 className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
-                title="Record Voice Note / Speech-to-Text"
+                title="Record Voice Note"
               >
                 <Mic className="w-3 h-3 text-brand-pink" />
-                <span>Dictation</span>
+                <span>Voice Note</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => toggleRecording('speech-to-text')}
+                className={`px-2 py-1 rounded-lg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 border border-brand-border/40 active:scale-95 ${
+                  showRecordingOverlay && recordingOverlayMode === 'speech-to-text'
+                    ? 'bg-red-100 text-red-500'
+                    : 'bg-brand-bg/40 text-brand-plum'
+                }`}
+                title="Start Voice to Text"
+              >
+                <Edit className="w-3 h-3 text-brand-pink" />
+                <span>Voice Text</span>
               </button>
 
               <button
@@ -2299,9 +2435,9 @@ export default function EntryEditorScreen({
             {/* Voice to text Button */}
             <button 
               type="button"
-              onMouseDown={(e) => { e.preventDefault(); toggleRecording(); }}
+              onMouseDown={(e) => { e.preventDefault(); toggleRecording('speech-to-text'); }}
               className={`p-2 rounded-xl transition-all relative ${
-                showRecordingOverlay 
+                showRecordingOverlay && recordingOverlayMode === 'speech-to-text'
                   ? 'bg-red-100 text-red-500 shadow-sm' 
                   : 'text-brand-sage hover:bg-brand-blush-light'
               }`}

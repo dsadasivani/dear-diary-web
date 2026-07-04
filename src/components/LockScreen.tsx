@@ -8,6 +8,8 @@ import type { UserCredential } from 'firebase/auth';
 import { SecurityConfig } from '../types';
 import {
   getAppSettings,
+  createCustomRecoveryQuestionId,
+  getRecoveryQuestionText,
   getSecurityConfig,
   hasRecoveryQuestion,
   isValidPin,
@@ -37,18 +39,7 @@ const SANCTUARY_QUOTES = [
   'Every page is a fresh start. Every word is a step home.'
 ];
 
-const KEY_LETTERS: Record<string, string> = {
-  '1': ' ',
-  '2': 'A B C',
-  '3': 'D E F',
-  '4': 'G H I',
-  '5': 'J K L',
-  '6': 'M N O',
-  '7': 'P Q R S',
-  '8': 'T U V',
-  '9': 'W X Y Z',
-  '0': '+'
-};
+const CUSTOM_QUESTION_SELECT_VALUE = 'custom';
 
 const formatGoogleAuthError = (err: any): string => {
   const message = err?.message || '';
@@ -84,7 +75,9 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
   const [pendingSetupPin, setPendingSetupPin] = useState('');
   const [setupStep, setSetupStep] = useState<SetupStep>('pin');
   const [questionId, setQuestionId] = useState(SECURITY_RECOVERY_QUESTIONS[0]?.id || '');
+  const [customRecoveryQuestion, setCustomRecoveryQuestion] = useState('');
   const [recoveryAnswer, setRecoveryAnswer] = useState('');
+  const [showRecoveryAnswer, setShowRecoveryAnswer] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [showPin, setShowPin] = useState(false);
@@ -260,9 +253,21 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     }
   };
 
+  const getRecoveryQuestionPayload = () => {
+    if (questionId === CUSTOM_QUESTION_SELECT_VALUE) {
+      return {
+        id: createCustomRecoveryQuestionId(),
+        text: customRecoveryQuestion.trim()
+      };
+    }
+
+    return { id: questionId, text: undefined };
+  };
+
   const handleSaveInitialRecovery = () => {
     try {
-      const updated = setInitialPinWithRecovery(pendingSetupPin, questionId, recoveryAnswer);
+      const question = getRecoveryQuestionPayload();
+      const updated = setInitialPinWithRecovery(pendingSetupPin, question.id, recoveryAnswer, question.text);
       setSecurity(updated);
       setSuccessMsg('Private diary PIN and recovery question configured.');
       completeUnlock(updated);
@@ -273,7 +278,8 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
 
   const handleSaveMigrationRecovery = () => {
     try {
-      const updated = setRecoveryQuestion(questionId, recoveryAnswer);
+      const question = getRecoveryQuestionPayload();
+      const updated = setRecoveryQuestion(question.id, recoveryAnswer, question.text);
       setSecurity(updated);
       setRequiresRecoverySetup(false);
       setSuccessMsg('Recovery question saved.');
@@ -382,6 +388,8 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     : 'bg-gradient-to-tr from-[#FAF6F0] via-[#FFF5F1] to-[#FAF2EA]';
 
   const showRecoveryForm = requiresRecoverySetup || setupStep === 'recovery';
+  const isCustomRecoveryQuestion = questionId === CUSTOM_QUESTION_SELECT_VALUE;
+  const canSaveRecoveryQuestion = !!recoveryAnswer.trim() && (!isCustomRecoveryQuestion || !!customRecoveryQuestion.trim());
   const visiblePinLength = security.isPinCreated ? (security.pinLength || (pin.length > 4 ? 8 : 4)) : selectedPinLength;
 
   return (
@@ -476,17 +484,29 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                   <div className="flex flex-col gap-3">
                     <label className="flex flex-col gap-1 text-left">
                       <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Security Question</span>
-                      <select value={questionId} onChange={(e) => setQuestionId(e.target.value)} className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink">
+                      <select value={questionId} onChange={(e) => { setQuestionId(e.target.value); setError(''); }} className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink">
                         {SECURITY_RECOVERY_QUESTIONS.map(q => (
                           <option key={q.id} value={q.id}>{q.question}</option>
                         ))}
+                        <option value={CUSTOM_QUESTION_SELECT_VALUE}>Write my own question</option>
                       </select>
                     </label>
+                    {isCustomRecoveryQuestion && (
+                      <label className="flex flex-col gap-1 text-left">
+                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Custom Question</span>
+                        <input type="text" value={customRecoveryQuestion} onChange={(e) => setCustomRecoveryQuestion(e.target.value)} className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" placeholder="Type your security question" />
+                      </label>
+                    )}
                     <label className="flex flex-col gap-1 text-left">
                       <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Answer</span>
-                      <input type="password" value={recoveryAnswer} onChange={(e) => setRecoveryAnswer(e.target.value)} className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" placeholder="Enter a memorable answer" />
+                      <div className="relative">
+                        <input type={showRecoveryAnswer ? 'text' : 'password'} value={recoveryAnswer} onChange={(e) => setRecoveryAnswer(e.target.value)} className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" placeholder="Enter a memorable answer" />
+                        <button type="button" onClick={() => setShowRecoveryAnswer(prev => !prev)} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink" title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}>
+                          {showRecoveryAnswer ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
                     </label>
-                    <button onClick={requiresRecoverySetup ? handleSaveMigrationRecovery : handleSaveInitialRecovery} disabled={!recoveryAnswer.trim()} className="w-full py-3 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-40 disabled:cursor-not-allowed">
+                    <button onClick={requiresRecoverySetup ? handleSaveMigrationRecovery : handleSaveInitialRecovery} disabled={!canSaveRecoveryQuestion} className="w-full py-3 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-40 disabled:cursor-not-allowed">
                       Save Recovery Question
                     </button>
                   </div>
@@ -556,16 +576,14 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                     <div className="grid grid-cols-3 gap-y-2.5 gap-x-5 mt-1 justify-items-center">
                       {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
                         <motion.button key={num} type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress(num)} className="w-12.5 h-12.5 sm:w-14 sm:h-14 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer">
-                          <span className="leading-none text-base sm:text-lg font-bold text-[#2C1D21] dark:text-[#ECE6E1] mt-0.5">{num}</span>
-                          <span className="text-[7px] font-bold tracking-wider text-brand-text-muted uppercase opacity-75 mt-0.5">{KEY_LETTERS[num]}</span>
+                          <span className="leading-none text-lg sm:text-xl font-bold text-[#2C1D21] dark:text-[#ECE6E1]">{num}</span>
                         </motion.button>
                       ))}
                       <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => { pin.length > 0 ? handleClear() : setShowPin(!showPin); }} className="w-12.5 h-12.5 sm:w-14 sm:h-14 rounded-full flex flex-col items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer">
                         {pin.length > 0 ? <span className="text-[10px] font-bold uppercase tracking-wider text-brand-pink">Clear</span> : <>{showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}<span className="text-[7px] font-bold tracking-wider uppercase text-brand-text-muted mt-1">Reveal</span></>}
                       </motion.button>
                       <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress('0')} className="w-12.5 h-12.5 sm:w-14 sm:h-14 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer">
-                        <span className="leading-none text-base sm:text-lg font-bold text-[#2C1D21] dark:text-[#ECE6E1] mt-1">0</span>
-                        <span className="text-[7px] font-bold text-brand-text-muted opacity-50 mt-0.5"> </span>
+                        <span className="leading-none text-lg sm:text-xl font-bold text-[#2C1D21] dark:text-[#ECE6E1]">0</span>
                       </motion.button>
                       <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={handleBackspace} disabled={pin.length === 0} className={`w-12.5 h-12.5 sm:w-14 sm:h-14 rounded-full flex flex-col items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}>
                         <Delete className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
@@ -625,8 +643,13 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
 
                         {recoveryMode === 'question' && (
                           <div className="flex flex-col gap-3 w-full min-w-[220px]">
-                            <p className="text-[11px] text-brand-sage font-bold">{SECURITY_RECOVERY_QUESTIONS.find(q => q.id === security.recoveryQuestionId)?.question || 'Your recovery question'}</p>
-                            <input type="password" value={recoveryAnswer} onChange={(e) => setRecoveryAnswer(e.target.value)} placeholder="Answer" className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" />
+                            <p className="text-[11px] text-brand-sage font-bold">{getRecoveryQuestionText(security)}</p>
+                            <div className="relative">
+                              <input type={showRecoveryAnswer ? 'text' : 'password'} value={recoveryAnswer} onChange={(e) => setRecoveryAnswer(e.target.value)} placeholder="Answer" className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" />
+                              <button type="button" onClick={() => setShowRecoveryAnswer(prev => !prev)} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink" title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}>
+                                {showRecoveryAnswer ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              </button>
+                            </div>
                             <button onClick={handleVerifySecurityAnswer} disabled={!recoveryAnswer.trim()} className="w-full bg-brand-pink text-white py-2.5 rounded-xl text-[10px] font-extrabold uppercase tracking-widest hover:bg-brand-pink-dark disabled:opacity-40">Verify Answer</button>
                           </div>
                         )}
