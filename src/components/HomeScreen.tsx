@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  BookOpen, Plus, Flame, Shuffle, 
-  Lock, Settings, ArrowRight, MessageSquareCode, 
-  Smile, ShieldAlert, Fingerprint, Calendar, ChevronRight, Sparkles
+  Plus, Flame, Shuffle, Lock, Settings, Calendar, ChevronRight, Sparkles
 } from 'lucide-react';
 import { Diary, Entry, Note, UserProfile } from '../types';
 import { PREDEFINED_TAGS, calculateStreak, getTodayWordCount } from '../utils/storage';
@@ -42,11 +40,6 @@ export default function HomeScreen({
   const [streak, setStreak] = useState<number>(0);
   const [activePrompt, setActivePrompt] = useState<string>(DEFAULT_PROMPTS[0]);
   const [greeting, setGreeting] = useState<string>('Good morning');
-  
-  // Passcode verification for locked diaries
-  const [verifyDiary, setVerifyDiary] = useState<Diary | null>(null);
-  const [biometricUnlockSuccess, setBiometricUnlockSuccess] = useState<boolean>(false);
-
   const todayWordCount = getTodayWordCount(entries);
 
   useEffect(() => {
@@ -68,22 +61,7 @@ export default function HomeScreen({
   };
 
   const handleDiaryClick = (diary: Diary) => {
-    if (diary.isLocked) {
-      setVerifyDiary(diary);
-      setBiometricUnlockSuccess(false);
-    } else {
-      onNavigate('diaries', 'diaryDetail', diary.id);
-    }
-  };
-
-  const handleBiometricSimulate = () => {
-    setBiometricUnlockSuccess(true);
-    setTimeout(() => {
-      if (verifyDiary) {
-        onNavigate('diaries', 'diaryDetail', verifyDiary.id);
-        setVerifyDiary(null);
-      }
-    }, 800);
+    onNavigate('diaries', 'diaryDetail', diary.id);
   };
 
   const handleQuickThoughtSubmit = (e: React.FormEvent) => {
@@ -450,61 +428,6 @@ export default function HomeScreen({
           <span>Go to App Locking & Settings</span>
         </button>
       </div>
-
-      {/* Biometric Challenge Overlay Modal */}
-      <AnimatePresence>
-        {verifyDiary && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-sm bg-brand-card-bg rounded-[32px] p-6.5 shadow-2xl border border-brand-border flex flex-col gap-4 text-center items-center relative overflow-hidden"
-            >
-              {/* Decorative radial blur inside modal */}
-              <div className="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] rounded-full bg-brand-pink/10 blur-xl pointer-events-none" />
-
-              <div className="w-13 h-13 rounded-2xl bg-brand-pink/10 flex items-center justify-center text-brand-pink animate-pulse relative z-10">
-                <Lock className="w-5 h-5" />
-              </div>
-              
-              <div className="relative z-10 space-y-1">
-                <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Journal Secured</h3>
-                <p className="text-xs text-brand-text-muted px-2">
-                  "{verifyDiary.name}" is passcode locked. Tap fingerprint or use PIN configuration.
-                </p>
-              </div>
-
-              {biometricUnlockSuccess ? (
-                <div className="py-6 flex flex-col items-center gap-2 relative z-10">
-                  <div className="w-11 h-11 rounded-full bg-brand-pink/10 flex items-center justify-center text-brand-pink">
-                    <Fingerprint className="w-6 h-6 animate-ping" />
-                  </div>
-                  <p className="text-xs font-bold text-brand-pink">Biometrics Confirmed...</p>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2.5 w-full py-2 relative z-10">
-                  <motion.button
-                    whileTap={{ scale: 0.96 }}
-                    onClick={handleBiometricSimulate}
-                    className="w-full bg-brand-pink text-white py-3.5 rounded-2xl flex items-center justify-center gap-2.5 text-xs font-bold hover:bg-brand-pink-dark transition-all shadow-md shadow-brand-pink/15"
-                  >
-                    <Fingerprint className="w-4 h-4" />
-                    <span>Unlock with Biometrics</span>
-                  </motion.button>
-                  
-                  <button
-                    onClick={() => setVerifyDiary(null)}
-                    className="w-full py-2 text-xs text-brand-text-muted hover:text-brand-plum font-bold transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

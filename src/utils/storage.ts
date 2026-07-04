@@ -2,6 +2,14 @@ import CryptoJS from 'crypto-js';
 import { Diary, Entry, Note, SecurityConfig, AppSettings, DiaryBackupData, Mood, UserProfile } from '../types';
 import { auth, db } from './firebase';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
+import type { User as FirebaseUser } from 'firebase/auth';
+import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
+import { syncReminderNotification } from '../mobile/reminders';
+
+const setStorageItem = (key: string, value: string): void => {
+  window.localStorage.setItem(key, value);
+  persistNativeLocalStorageItem(key, value);
+};
 
 // Predefined Moods and Tags
 export const PREDEFINED_MOODS = [
@@ -34,6 +42,30 @@ export const PREDEFINED_COLORS = [
   { name: 'Rich Amber', hex: '#D49B4E', bgClass: 'bg-[#D49B4E]', borderClass: 'border-[#C1883F]' },
   { name: 'Slate Lavender', hex: '#6C7598', bgClass: 'bg-[#6C7598]', borderClass: 'border-[#5A6384]' }
 ];
+
+export const SECURITY_RECOVERY_QUESTIONS = [
+  { id: 'first-pet', question: 'What was the name of your first pet?' },
+  { id: 'favorite-teacher', question: 'What was the name of your favorite teacher?' },
+  { id: 'childhood-street', question: 'What street did you grow up on?' },
+  { id: 'favorite-book', question: 'What was your favorite childhood book?' },
+  { id: 'memorable-place', question: 'What place always feels like home?' }
+];
+
+const CUSTOM_RECOVERY_QUESTION_PREFIX = 'custom:';
+const RECOVERY_ANSWER_ITERATIONS = 120000;
+
+export type PinLength = 4 | 8;
+
+export const isValidPin = (pin: string, pinLength?: PinLength): boolean => {
+  if (pinLength) return new RegExp(`^\\d{${pinLength}}$`).test(pin);
+  return /^(\d{4}|\d{8})$/.test(pin);
+};
+
+const getPinLength = (pin: string): PinLength => (pin.length === 8 ? 8 : 4);
+
+export const normalizeRecoveryAnswer = (answer: string): string => (
+  answer.trim().replace(/\s+/g, ' ').toLowerCase()
+);
 
 // Seed images
 const DotomboriImg = "https://images.unsplash.com/photo-1542051841857-5f90071e7989?w=600&auto=format&fit=crop&q=60";
@@ -77,16 +109,63 @@ const STORAGE_KEYS = {
   USER_PROFILE: 'deardiary_userprofile'
 };
 
+const DEFAULT_PROFILE_NAME = 'Writer';
+const DEFAULT_PROFILE_EMAIL = '';
+const DEFAULT_PROFILE_BIO = 'Savoring the simple, quiet moments of life.';
+
+const LEGACY_PERSONAL_DEFAULT_NAME_HASHES = new Set([
+  '5d243f6096bb88ae977f3119ac5aeee239a2caa4266095808bd0b16ca350aa17'
+]);
+
+const LEGACY_PERSONAL_DEFAULT_EMAIL_HASHES = new Set([
+  '9cd5af0e9a54cd570a134cacd3a7389fa5e8e14410bcebdd3f2054ce941800d6'
+]);
+
+const deriveNameFromEmail = (email?: string | null): string => {
+  if (!email) return '';
+  const part = email.split('@')[0];
+  return part
+    .split(/[._-]/)
+    .filter(Boolean)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
+const isLegacyPersonalDefault = (value: string | undefined, hashes: Set<string>): boolean => {
+  if (!value) return false;
+  return hashes.has(CryptoJS.SHA256(value).toString());
+};
+
+export const getDefaultUserProfile = (): UserProfile => {
+  const currentUser = auth.currentUser;
+  const userEmail = currentUser?.email || DEFAULT_PROFILE_EMAIL;
+  const defaultName = currentUser?.displayName || deriveNameFromEmail(userEmail) || DEFAULT_PROFILE_NAME;
+  const joinedDate = new Date().toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric'
+  });
+
+  return {
+    name: defaultName,
+    email: userEmail,
+    bio: DEFAULT_PROFILE_BIO,
+    avatarEmoji: '\uD83C\uDF38',
+    avatarColor: '#8A3D55', // Velvet Fig
+    writingGoal: 100,
+    joinedDate
+  };
+};
+
 // State initializers
 export const initializeDatabase = () => {
   if (!localStorage.getItem(STORAGE_KEYS.DIARIES)) {
-    localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify(INITIAL_DIARIES));
+    setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify(INITIAL_DIARIES));
   }
   if (!localStorage.getItem(STORAGE_KEYS.ENTRIES)) {
-    localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(INITIAL_ENTRIES));
+    setStorageItem(STORAGE_KEYS.ENTRIES, JSON.stringify(INITIAL_ENTRIES));
   }
   if (!localStorage.getItem(STORAGE_KEYS.NOTES)) {
-    localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(INITIAL_NOTES));
+    setStorageItem(STORAGE_KEYS.NOTES, JSON.stringify(INITIAL_NOTES));
   }
   if (!localStorage.getItem(STORAGE_KEYS.SECURITY)) {
     const defaultSecurity: SecurityConfig = {
@@ -96,7 +175,7 @@ export const initializeDatabase = () => {
       isBiometricsEnabled: false,
       isLocked: true // Start locked by default
     };
-    localStorage.setItem(STORAGE_KEYS.SECURITY, JSON.stringify(defaultSecurity));
+    setStorageItem(STORAGE_KEYS.SECURITY, JSON.stringify(defaultSecurity));
   }
   if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
     const defaultSettings: AppSettings = {
@@ -106,28 +185,10 @@ export const initializeDatabase = () => {
       autoSyncOnLaunch: true,
       syncOnEntryCreation: true
     };
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(defaultSettings));
+    setStorageItem(STORAGE_KEYS.SETTINGS, JSON.stringify(defaultSettings));
   }
   if (!localStorage.getItem(STORAGE_KEYS.USER_PROFILE)) {
-    const currentUser = auth.currentUser;
-    const userEmail = currentUser?.email || 'dili.cherry77@gmail.com';
-    let defaultName = 'Journalist';
-    if (currentUser?.displayName) {
-      defaultName = currentUser.displayName;
-    } else if (userEmail) {
-      const part = userEmail.split('@')[0];
-      defaultName = part.split(/[._-]/).map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-    }
-    const defaultProfile: UserProfile = {
-      name: defaultName,
-      email: userEmail,
-      bio: 'Savoring the simple, quiet moments of life.',
-      avatarEmoji: '🌸',
-      avatarColor: '#8A3D55', // Velvet Fig
-      writingGoal: 100,
-      joinedDate: 'June 2026'
-    };
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(defaultProfile));
+    setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(getDefaultUserProfile()));
   }
 };
 
@@ -135,7 +196,6 @@ export const initializeDatabase = () => {
 export const getUserProfile = (): UserProfile => {
   initializeDatabase();
   const profileStr = localStorage.getItem(STORAGE_KEYS.USER_PROFILE);
-  const currentUser = auth.currentUser;
   
   let profile: UserProfile | null = null;
   if (profileStr) {
@@ -146,40 +206,29 @@ export const getUserProfile = (): UserProfile => {
     }
   }
 
-  const userEmail = currentUser?.email || 'dili.cherry77@gmail.com';
-  let defaultName = 'Journalist';
-  if (currentUser?.displayName) {
-    defaultName = currentUser.displayName;
-  } else if (userEmail) {
-    const part = userEmail.split('@')[0];
-    defaultName = part.split(/[._-]/).map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-  }
+  const defaultProfile = getDefaultUserProfile();
 
   if (!profile) {
-    profile = {
-      name: defaultName,
-      email: userEmail,
-      bio: 'Savoring the simple, quiet moments of life.',
-      avatarEmoji: '🌸',
-      avatarColor: '#8A3D55',
-      writingGoal: 100,
-      joinedDate: 'June 2026'
-    };
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
+    profile = defaultProfile;
+    setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
   } else {
-    // If profile is still using 'Sophie' (the hardcoded default) and there's a logged in user with a different email,
-    // or if the name is 'Sophie' or 'Journalist' and we can derive a more specific default name, let's update it!
     let updated = false;
-    if (profile.name === 'Sophie') {
-      profile.name = defaultName;
+
+    if (!profile.name?.trim() || isLegacyPersonalDefault(profile.name, LEGACY_PERSONAL_DEFAULT_NAME_HASHES)) {
+      profile.name = defaultProfile.name;
       updated = true;
     }
-    if (profile.email === 'dili.cherry77@gmail.com' && currentUser?.email && currentUser.email !== 'dili.cherry77@gmail.com') {
-      profile.email = currentUser.email;
+
+    if (isLegacyPersonalDefault(profile.email, LEGACY_PERSONAL_DEFAULT_EMAIL_HASHES)) {
+      profile.email = defaultProfile.email;
+      updated = true;
+    } else if (!profile.email?.trim() && defaultProfile.email) {
+      profile.email = defaultProfile.email;
       updated = true;
     }
+
     if (updated) {
-      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
+      setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
     }
   }
 
@@ -187,7 +236,7 @@ export const getUserProfile = (): UserProfile => {
 };
 
 export const saveUserProfile = (profile: UserProfile) => {
-  localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
+  setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
   try {
     const user = auth.currentUser;
     if (user) {
@@ -212,6 +261,66 @@ export const getTodayWordCount = (entries: Entry[]): number => {
     .reduce((sum, e) => sum + (e.wordCount || 0), 0);
 };
 
+const hashPin = (pin: string, salt: string): string => CryptoJS.SHA256(pin + salt).toString();
+
+const createPinFields = (pin: string): Pick<SecurityConfig, 'pinHash' | 'pinSalt' | 'pinLength'> => {
+  const pinSalt = CryptoJS.lib.WordArray.random(16).toString();
+  return {
+    pinHash: hashPin(pin, pinSalt),
+    pinSalt,
+    pinLength: getPinLength(pin)
+  };
+};
+
+const hashRecoveryAnswer = (answer: string, salt: string, iterations: number): string => {
+  return CryptoJS.PBKDF2(normalizeRecoveryAnswer(answer), salt, {
+    keySize: 256 / 32,
+    iterations
+  }).toString();
+};
+
+const createRecoveryFields = (
+  questionId: string,
+  answer: string,
+  questionText?: string
+): Pick<SecurityConfig, 'recoveryQuestionId' | 'recoveryQuestionText' | 'recoveryAnswerHash' | 'recoveryAnswerSalt' | 'recoveryAnswerIterations'> => {
+  const answerSalt = CryptoJS.lib.WordArray.random(16).toString();
+  const presetQuestion = SECURITY_RECOVERY_QUESTIONS.find(q => q.id === questionId)?.question;
+  return {
+    recoveryQuestionId: questionId,
+    recoveryQuestionText: questionText?.trim() || presetQuestion,
+    recoveryAnswerHash: hashRecoveryAnswer(answer, answerSalt, RECOVERY_ANSWER_ITERATIONS),
+    recoveryAnswerSalt: answerSalt,
+    recoveryAnswerIterations: RECOVERY_ANSWER_ITERATIONS
+  };
+};
+
+export const createCustomRecoveryQuestionId = (): string => (
+  `${CUSTOM_RECOVERY_QUESTION_PREFIX}${Date.now()}`
+);
+
+const isCustomRecoveryQuestionId = (questionId: string): boolean => (
+  questionId.startsWith(CUSTOM_RECOVERY_QUESTION_PREFIX)
+);
+
+const isValidRecoveryQuestion = (questionId: string, questionText?: string): boolean => (
+  SECURITY_RECOVERY_QUESTIONS.some(q => q.id === questionId) ||
+  (isCustomRecoveryQuestionId(questionId) && !!questionText?.trim())
+);
+
+export const getRecoveryQuestionText = (config: SecurityConfig = getSecurityConfig()): string => (
+  config.recoveryQuestionText ||
+  SECURITY_RECOVERY_QUESTIONS.find(q => q.id === config.recoveryQuestionId)?.question ||
+  'Your recovery question'
+);
+
+export const hasRecoveryQuestion = (config: SecurityConfig = getSecurityConfig()): boolean => (
+  !!config.recoveryQuestionId &&
+  !!config.recoveryAnswerHash &&
+  !!config.recoveryAnswerSalt &&
+  !!config.recoveryAnswerIterations
+);
+
 // Security Store operations
 export const getSecurityConfig = (): SecurityConfig => {
   initializeDatabase();
@@ -227,23 +336,139 @@ export const getSecurityConfig = (): SecurityConfig => {
 };
 
 export const saveSecurityConfig = (config: SecurityConfig) => {
-  localStorage.setItem(STORAGE_KEYS.SECURITY, JSON.stringify(config));
+  setStorageItem(STORAGE_KEYS.SECURITY, JSON.stringify(config));
 };
 
 export const setPinCode = (pin: string): SecurityConfig => {
-  const salt = CryptoJS.lib.WordArray.random(16).toString();
-  const pinHash = CryptoJS.SHA256(pin + salt).toString();
+  if (!isValidPin(pin)) {
+    throw new Error('PIN must be exactly 4 or 8 digits.');
+  }
+  const existing = getSecurityConfig();
   
   const config: SecurityConfig = {
+    ...existing,
     isPinCreated: true,
-    pinHash,
-    pinSalt: salt,
-    isBiometricsEnabled: false, // Default to disabled, user can enable it in Settings
+    ...createPinFields(pin),
     isLocked: false // unlock on creation
   };
   
   saveSecurityConfig(config);
   return config;
+};
+
+export const setInitialPinWithRecovery = (pin: string, questionId: string, answer: string, questionText?: string): SecurityConfig => {
+  if (!isValidPin(pin)) {
+    throw new Error('PIN must be exactly 4 or 8 digits.');
+  }
+  if (!isValidRecoveryQuestion(questionId, questionText)) {
+    throw new Error('Please choose a valid security question.');
+  }
+  if (!normalizeRecoveryAnswer(answer)) {
+    throw new Error('Please enter a security answer.');
+  }
+
+  const config: SecurityConfig = {
+    ...getSecurityConfig(),
+    isPinCreated: true,
+    ...createPinFields(pin),
+    ...createRecoveryFields(questionId, answer, questionText),
+    isBiometricsEnabled: false,
+    passkeyCredentialId: undefined,
+    isBiometricsSimulated: undefined,
+    isLocked: false
+  };
+
+  saveSecurityConfig(config);
+  return config;
+};
+
+export const setRecoveryQuestion = (questionId: string, answer: string, questionText?: string): SecurityConfig => {
+  const config = getSecurityConfig();
+  if (!config.isPinCreated) {
+    throw new Error('Please create a PIN before setting a recovery question.');
+  }
+  if (!isValidRecoveryQuestion(questionId, questionText)) {
+    throw new Error('Please choose a valid security question.');
+  }
+  if (!normalizeRecoveryAnswer(answer)) {
+    throw new Error('Please enter a security answer.');
+  }
+
+  const updated: SecurityConfig = {
+    ...config,
+    ...createRecoveryFields(questionId, answer, questionText)
+  };
+  saveSecurityConfig(updated);
+  return updated;
+};
+
+export const verifyRecoveryAnswer = (answer: string): boolean => {
+  const config = getSecurityConfig();
+  if (!hasRecoveryQuestion(config)) return false;
+  const computedHash = hashRecoveryAnswer(
+    answer,
+    config.recoveryAnswerSalt || '',
+    config.recoveryAnswerIterations || RECOVERY_ANSWER_ITERATIONS
+  );
+  return computedHash === config.recoveryAnswerHash;
+};
+
+export const updatePinWithCurrentPin = (currentPin: string, newPin: string): SecurityConfig => {
+  if (!verifyPinCode(currentPin)) {
+    throw new Error('Current PIN is incorrect.');
+  }
+  if (!isValidPin(newPin)) {
+    throw new Error('PIN must be exactly 4 or 8 digits.');
+  }
+
+  const config = getSecurityConfig();
+  const updated: SecurityConfig = {
+    ...config,
+    ...createPinFields(newPin),
+    isPinCreated: true,
+    isLocked: false
+  };
+  saveSecurityConfig(updated);
+  return updated;
+};
+
+export const resetPinAfterVerifiedRecovery = (newPin: string): SecurityConfig => {
+  if (!isValidPin(newPin)) {
+    throw new Error('PIN must be exactly 4 or 8 digits.');
+  }
+
+  const config = getSecurityConfig();
+  const updated: SecurityConfig = {
+    ...config,
+    ...createPinFields(newPin),
+    isPinCreated: true,
+    isBiometricsEnabled: false,
+    passkeyCredentialId: undefined,
+    isBiometricsSimulated: undefined,
+    isLocked: false
+  };
+  saveSecurityConfig(updated);
+  return updated;
+};
+
+export const bindGoogleRecoveryAccount = (user: FirebaseUser): { ok: boolean; config: SecurityConfig; error?: string } => {
+  const config = getSecurityConfig();
+  if (config.linkedGoogleUid && config.linkedGoogleUid !== user.uid) {
+    return {
+      ok: false,
+      config,
+      error: `This device is linked to ${config.linkedGoogleEmail || 'another Google account'}. Please sign in with that account.`
+    };
+  }
+
+  const updated: SecurityConfig = {
+    ...config,
+    linkedGoogleUid: config.linkedGoogleUid || user.uid,
+    linkedGoogleEmail: config.linkedGoogleEmail || user.email,
+    linkedGoogleBoundAt: config.linkedGoogleBoundAt || Date.now()
+  };
+  saveSecurityConfig(updated);
+  return { ok: true, config: updated };
 };
 
 export const resetPinCode = (): SecurityConfig => {
@@ -263,8 +488,9 @@ export const resetPinCode = (): SecurityConfig => {
 export const verifyPinCode = (pin: string): boolean => {
   const config = getSecurityConfig();
   if (!config.isPinCreated) return false;
+  if (config.pinLength && pin.length !== config.pinLength) return false;
   
-  const computedHash = CryptoJS.SHA256(pin + config.pinSalt).toString();
+  const computedHash = hashPin(pin, config.pinSalt);
   if (computedHash === config.pinHash) {
     config.isLocked = false;
     saveSecurityConfig(config);
@@ -304,7 +530,8 @@ export const getAppSettings = (): AppSettings => {
 };
 
 export const saveAppSettings = (settings: AppSettings) => {
-  localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+  setStorageItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+  void syncReminderNotification(settings);
   try {
     const user = auth.currentUser;
     if (user) {
@@ -315,6 +542,10 @@ export const saveAppSettings = (settings: AppSettings) => {
   }
 };
 
+const shouldSyncContentToCloud = (): boolean => {
+  return getAppSettings().syncOnEntryCreation !== false;
+};
+
 // Diary CRUD
 export const getDiaries = (): Diary[] => {
   initializeDatabase();
@@ -322,7 +553,7 @@ export const getDiaries = (): Diary[] => {
 };
 
 export const saveDiaries = (diaries: Diary[]) => {
-  localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify(diaries));
+  setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify(diaries));
 };
 
 export const createDiary = (name: string, emoji: string, color: string, isLocked: boolean, coverImage?: string, foilIcons?: string[]): Diary => {
@@ -342,7 +573,7 @@ export const createDiary = (name: string, emoji: string, color: string, isLocked
   saveDiaries(diaries);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       setDoc(doc(db, 'users', user.uid, 'diaries', newDiary.id), newDiary).catch(e => console.warn('Cloud sync createDiary failed:', e));
     }
   } catch (err) {
@@ -359,7 +590,7 @@ export const updateDiary = (updatedDiary: Diary): Diary[] => {
     saveDiaries(diaries);
     try {
       const user = auth.currentUser;
-      if (user) {
+      if (user && shouldSyncContentToCloud()) {
         setDoc(doc(db, 'users', user.uid, 'diaries', updatedDiary.id), updatedDiary).catch(e => console.warn('Cloud sync updateDiary failed:', e));
       }
     } catch (err) {
@@ -382,7 +613,7 @@ export const deleteDiary = (diaryId: string) => {
 
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       deleteDoc(doc(db, 'users', user.uid, 'diaries', diaryId)).catch(e => console.warn('Cloud deleteDiary failed:', e));
       for (const entry of entriesToDelete) {
         deleteDoc(doc(db, 'users', user.uid, 'entries', entry.id)).catch(e => console.warn('Cloud deleteEntry failed:', e));
@@ -400,7 +631,7 @@ export const getEntries = (): Entry[] => {
 };
 
 export const saveEntries = (entries: Entry[]) => {
-  localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(entries));
+  setStorageItem(STORAGE_KEYS.ENTRIES, JSON.stringify(entries));
   updateDiaryEntryCounts();
 };
 
@@ -420,7 +651,7 @@ export const createEntry = (entryData: Omit<Entry, 'id' | 'createdAt' | 'updated
   saveEntries(entries);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       setDoc(doc(db, 'users', user.uid, 'entries', newEntry.id), newEntry).catch(e => console.warn('Cloud sync createEntry failed:', e));
     }
   } catch (err) {
@@ -444,7 +675,7 @@ export const updateEntry = (updatedEntry: Entry): Entry[] => {
     saveEntries(entries);
     try {
       const user = auth.currentUser;
-      if (user) {
+      if (user && shouldSyncContentToCloud()) {
         setDoc(doc(db, 'users', user.uid, 'entries', finalEntry.id), finalEntry).catch(e => console.warn('Cloud sync updateEntry failed:', e));
       }
     } catch (err) {
@@ -460,7 +691,7 @@ export const deleteEntry = (entryId: string) => {
   saveEntries(entries);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       deleteDoc(doc(db, 'users', user.uid, 'entries', entryId)).catch(e => console.warn('Cloud deleteEntry failed:', e));
     }
   } catch (err) {
@@ -475,7 +706,7 @@ export const getNotes = (): Note[] => {
 };
 
 export const saveNotes = (notes: Note[]) => {
-  localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(notes));
+  setStorageItem(STORAGE_KEYS.NOTES, JSON.stringify(notes));
 };
 
 export const createNote = (noteData: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>): Note => {
@@ -490,7 +721,7 @@ export const createNote = (noteData: Omit<Note, 'id' | 'createdAt' | 'updatedAt'
   saveNotes(notes);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       setDoc(doc(db, 'users', user.uid, 'notes', newNote.id), newNote).catch(e => console.warn('Cloud sync createNote failed:', e));
     }
   } catch (err) {
@@ -511,7 +742,7 @@ export const updateNote = (updatedNote: Note): Note[] => {
     saveNotes(notes);
     try {
       const user = auth.currentUser;
-      if (user) {
+      if (user && shouldSyncContentToCloud()) {
         setDoc(doc(db, 'users', user.uid, 'notes', finalNote.id), finalNote).catch(e => console.warn('Cloud sync updateNote failed:', e));
       }
     } catch (err) {
@@ -527,7 +758,7 @@ export const deleteNote = (noteId: string) => {
   saveNotes(notes);
   try {
     const user = auth.currentUser;
-    if (user) {
+    if (user && shouldSyncContentToCloud()) {
       deleteDoc(doc(db, 'users', user.uid, 'notes', noteId)).catch(e => console.warn('Cloud deleteNote failed:', e));
     }
   } catch (err) {
@@ -563,7 +794,7 @@ export const updateDiaryEntryCounts = () => {
     };
   });
   
-  localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify(updatedDiaries));
+  setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify(updatedDiaries));
 };
 
 // Streak Calculation Logic
@@ -608,7 +839,7 @@ export const calculateStreak = (entries: Entry[]): number => {
 
 // Reset Database Zone
 export const resetDatabase = () => {
-  localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify([
+  setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify([
     {
       id: 'diary-default',
       name: 'My Diary',
@@ -619,8 +850,8 @@ export const resetDatabase = () => {
       lastUpdated: 'No entries yet'
     }
   ]));
-  localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify([]));
-  localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify([]));
+  setStorageItem(STORAGE_KEYS.ENTRIES, JSON.stringify([]));
+  setStorageItem(STORAGE_KEYS.NOTES, JSON.stringify([]));
   // Note: Reset does not delete PIN, reminder settings or storage keys per the product boundaries!
 };
 
@@ -659,14 +890,14 @@ export const importEncryptedBackup = (encryptedData: string, password: string): 
     }
     
     // Overwrite database
-    localStorage.setItem(STORAGE_KEYS.DIARIES, JSON.stringify(parsedData.diaries));
-    localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(parsedData.entries));
-    localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(parsedData.notes || []));
+    setStorageItem(STORAGE_KEYS.DIARIES, JSON.stringify(parsedData.diaries));
+    setStorageItem(STORAGE_KEYS.ENTRIES, JSON.stringify(parsedData.entries));
+    setStorageItem(STORAGE_KEYS.NOTES, JSON.stringify(parsedData.notes || []));
     if (parsedData.settings) {
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsedData.settings));
+      setStorageItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsedData.settings));
     }
     if (parsedData.userProfile) {
-      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(parsedData.userProfile));
+      setStorageItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(parsedData.userProfile));
     }
     
     updateDiaryEntryCounts();

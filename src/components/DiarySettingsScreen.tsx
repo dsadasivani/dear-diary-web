@@ -1,6 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, Trash2, Check, Lock, ShieldAlert, Smile, Palette, Save, Upload, X, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Trash2, Check, Lock, ShieldAlert, Smile, Palette, Save, ShieldCheck } from 'lucide-react';
 import { Diary } from '../types';
 import { updateDiary, deleteDiary, PREDEFINED_COLORS } from '../utils/storage';
 
@@ -25,10 +25,8 @@ export default function DiarySettingsScreen({
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'look' | 'settings'>('look');
 
-  // Custom cover and foil icon states
-  const [coverImage, setCoverImage] = useState<string | undefined>(diary.coverImage);
+  // Cover decoration states
   const [selectedFoilIcons, setSelectedFoilIcons] = useState<string[]>(diary.foilIcons || []);
-  const coverFileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = () => {
     if (!diaryName.trim()) return;
@@ -39,7 +37,6 @@ export default function DiarySettingsScreen({
       emoji: selectedEmoji,
       color: selectedColor,
       isLocked,
-      coverImage,
       foilIcons: selectedFoilIcons
     };
 
@@ -52,18 +49,6 @@ export default function DiarySettingsScreen({
     deleteDiary(diary.id);
     onRefreshDiaries();
     onBack();
-  };
-
-  const handleCoverImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      if (event.target?.result) {
-        setCoverImage(event.target.result as string);
-      }
-    };
-    reader.readAsDataURL(file);
   };
 
   const handleFoilIconToggle = (icon: string) => {
@@ -106,20 +91,11 @@ export default function DiarySettingsScreen({
         {/* Real-time Cover Preview Card */}
         <div className="flex flex-col items-center py-4 select-none bg-brand-card-bg/40 p-4 rounded-3xl border border-brand-border/40">
           <motion.div 
-            animate={{ backgroundColor: coverImage ? undefined : selectedColor }}
+            animate={{ backgroundColor: selectedColor }}
             className="w-40 aspect-[3/4.2] rounded-3xl shadow-xl relative border border-black/10 flex flex-col justify-between p-4 overflow-hidden"
-            style={{
-              backgroundImage: coverImage ? `url(${coverImage})` : undefined,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center'
-            }}
           >
             <div className="absolute left-0 top-0 bottom-0 w-3 bg-gradient-to-r from-black/25 via-black/5 to-transparent z-10" />
             <div className="absolute left-2.5 top-0 bottom-0 w-[1px] bg-white/25 z-15" />
-            
-            {coverImage && (
-              <div className="absolute inset-0 bg-black/40 z-0" />
-            )}
 
             <div className="flex justify-between items-start relative z-10">
               <span className="w-8 h-8 rounded-xl bg-white/95 flex items-center justify-center text-base shadow-sm text-brand-plum">
@@ -233,19 +209,15 @@ export default function DiarySettingsScreen({
                       key={color.hex}
                       type="button"
                       onClick={() => setSelectedColor(color.hex)}
-                      disabled={!!coverImage}
-                      className={`aspect-square rounded-xl relative flex items-center justify-center shadow-sm transition-transform hover:scale-105 ${
-                        coverImage ? 'opacity-30 cursor-not-allowed' : ''
-                      }`}
+                      className="aspect-square rounded-xl relative flex items-center justify-center shadow-sm transition-transform hover:scale-105"
                       style={{ backgroundColor: color.hex }}
                     >
-                      {selectedColor === color.hex && !coverImage && (
+                      {selectedColor === color.hex && (
                         <Check className="w-5 h-5 text-white stroke-[3px]" />
                       )}
                     </button>
                   ))}
                 </div>
-                {coverImage && <p className="text-[10px] text-amber-600 font-semibold">Custom cover image is active, backing leather color is hidden.</p>}
               </div>
 
               {/* Emoji Selector Card */}
@@ -312,45 +284,6 @@ export default function DiarySettingsScreen({
                       </button>
                     );
                   })}
-                </div>
-              </div>
-
-              {/* Custom Cover Page Background Image Upload */}
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Custom cover image</label>
-                  {coverImage && (
-                    <button
-                      type="button"
-                      onClick={() => setCoverImage(undefined)}
-                      className="text-[10px] font-extrabold text-red-500 uppercase tracking-widest hover:underline"
-                    >
-                      Clear Image
-                    </button>
-                  )}
-                </div>
-                
-                <div className="flex items-center gap-4">
-                  <button
-                    type="button"
-                    onClick={() => coverFileInputRef.current?.click()}
-                    className="flex items-center gap-2 px-4 py-2 bg-brand-pink/10 hover:bg-brand-pink/15 text-brand-pink border border-brand-pink/20 rounded-2xl text-xs font-bold transition-all active:scale-95"
-                  >
-                    <Upload className="w-4 h-4" />
-                    <span>Upload Cover Image</span>
-                  </button>
-                  <input
-                    ref={coverFileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleCoverImageUpload}
-                    className="hidden"
-                  />
-                  {coverImage && (
-                    <div className="w-10 h-10 rounded-lg overflow-hidden border border-brand-border shadow-sm">
-                      <img src={coverImage} alt="Cover upload" className="w-full h-full object-cover" />
-                    </div>
-                  )}
                 </div>
               </div>
             </motion.div>

@@ -19,6 +19,10 @@
   --brand-card-bg: #FFFFFF; /* High-contrast pristine white cards */
   --brand-text-muted: #725D62; /* Cocoa taupe - optimized for perfect contrast readability */
   --brand-border: #EFE6DE; /* Sophisticated clean dividers */
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
 }
 
 .dark {
@@ -74,7 +78,46 @@ body {
   background-color: var(--color-brand-bg);
   color: var(--color-brand-text);
   min-height: 100vh;
+  min-height: 100dvh;
   transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.safe-area-root {
+  min-height: 100dvh;
+  padding-top: var(--safe-area-inset-top);
+  padding-left: var(--safe-area-inset-left);
+  padding-right: var(--safe-area-inset-right);
+}
+
+.app-shell {
+  padding-bottom: calc(6rem + var(--safe-area-inset-bottom));
+}
+
+.app-main {
+  padding-bottom: calc(1.5rem + var(--safe-area-inset-bottom));
+}
+
+.bottom-nav-safe {
+  bottom: calc(1rem + var(--safe-area-inset-bottom));
+  left: calc(1rem + var(--safe-area-inset-left));
+  right: calc(1rem + var(--safe-area-inset-right));
+}
+
+.toast-safe {
+  top: calc(1.5rem + var(--safe-area-inset-top));
+}
+
+.focus-mode-safe {
+  padding-top: calc(2rem + var(--safe-area-inset-top));
+  padding-bottom: calc(7rem + var(--safe-area-inset-bottom));
+  padding-left: calc(1.5rem + var(--safe-area-inset-left));
+  padding-right: calc(1.5rem + var(--safe-area-inset-right));
+}
+
+.mobile-overlay-safe {
+  padding-bottom: calc(1rem + var(--safe-area-inset-bottom));
+  padding-left: calc(1rem + var(--safe-area-inset-left));
+  padding-right: calc(1rem + var(--safe-area-inset-right));
 }
 
 .font-serif-diary {

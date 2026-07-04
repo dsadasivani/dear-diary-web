@@ -51,10 +51,19 @@ export interface SecurityConfig {
   isPinCreated: boolean;
   pinHash: string; // SHA-256 hash of PIN + salt
   pinSalt: string; // Salt used for hashing
+  pinLength?: 4 | 8; // User-selected PIN length
   isBiometricsEnabled: boolean; // Biometrics enabled status (now uses real/simulated WebAuthn)
   isLocked: boolean; // Whether the app is currently locked
   passkeyCredentialId?: string; // Standard WebAuthn registered credential ID
   isBiometricsSimulated?: boolean; // True if the biometric is simulated (due to sandbox/iframe restrictions)
+  recoveryQuestionId?: string; // Preset or custom security question ID for local PIN recovery
+  recoveryQuestionText?: string; // Custom security question text, or cached preset text
+  recoveryAnswerHash?: string; // PBKDF2 hash of normalized recovery answer
+  recoveryAnswerSalt?: string; // Salt used for recovery answer hashing
+  recoveryAnswerIterations?: number; // PBKDF2 iteration count for recovery answers
+  linkedGoogleUid?: string; // Locally bound Google account for cloud sync and PIN reset
+  linkedGoogleEmail?: string | null; // Email for the locally bound Google account
+  linkedGoogleBoundAt?: number; // Timestamp when the Google account was locally bound
 }
 
 export interface Mood {
