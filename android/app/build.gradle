@@ -1,5 +1,16 @@
 apply plugin: 'com.android.application'
 
+def releaseProperties = new Properties()
+def releasePropertiesFile = rootProject.file('keystore.properties')
+if (releasePropertiesFile.exists()) {
+    releaseProperties.load(new FileInputStream(releasePropertiesFile))
+}
+def configValue = { String name, String fallback ->
+    return releaseProperties.getProperty(name) ?: project.findProperty(name) ?: System.getenv(name) ?: fallback
+}
+def releaseSigningReady = ['DEAR_DIARY_STORE_FILE', 'DEAR_DIARY_STORE_PASSWORD', 'DEAR_DIARY_KEY_ALIAS', 'DEAR_DIARY_KEY_PASSWORD']
+    .every { configValue(it, '') }
+
 android {
     namespace = "com.deardiary.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +18,8 @@ android {
         applicationId "com.deardiary.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode configValue('DEAR_DIARY_VERSION_CODE', '1').toInteger()
+        versionName configValue('DEAR_DIARY_VERSION_NAME', '1.0.0')
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,9 +27,20 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (releaseSigningReady) {
+            release {
+                storeFile file(configValue('DEAR_DIARY_STORE_FILE', ''))
+                storePassword configValue('DEAR_DIARY_STORE_PASSWORD', '')
+                keyAlias configValue('DEAR_DIARY_KEY_ALIAS', '')
+                keyPassword configValue('DEAR_DIARY_KEY_PASSWORD', '')
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
+            if (releaseSigningReady) signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }

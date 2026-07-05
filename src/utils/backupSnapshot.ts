@@ -3,6 +3,8 @@ import {
   AppSettings,
   BackupSchedulePreference,
   BackupManifest,
+  BackupMergePreview,
+  BackupMergeResult,
   Diary,
   DriveBackupSettings,
   Entry,
@@ -13,6 +15,8 @@ import { fileStorageService } from '../platform/filesystem';
 import { persistMediaDataUri } from '../mobile/mediaStorage';
 import type { MediaKind } from '../mobile/mediaStorage';
 import { diaryRepository } from '../repositories';
+import { pruneOrphanedMedia } from '../mobile/mediaGarbageCollector';
+import type { RepositorySnapshot } from '../repositories/DiaryRepository';
 
 export const BACKUP_SCHEMA_VERSION = 2;
 const STORAGE_SCHEMA_VERSION = 1;
@@ -27,7 +31,7 @@ interface BackupMediaAsset {
   originalUri: string;
 }
 
-interface DearDiaryBackupPayload {
+export interface DearDiaryBackupPayload {
   version: '2.0.0' | '3.0.0';
   exportedAt: string;
   diaries: Diary[];
@@ -374,6 +378,7 @@ export const restoreBackupBundle = async (bytes: Uint8Array): Promise<BackupMani
     settings: sanitizeSettings(payload.settings),
     userProfile: payload.userProfile,
   }, 'replace-portable');
+  await pruneOrphanedMedia(0).catch(error => console.warn('Post-restore media cleanup will retry later:', error));
 
   const currentBackupSettings = await diaryRepository.getDriveBackupSettings();
   await diaryRepository.saveDriveBackupSettings({
@@ -383,6 +388,44 @@ export const restoreBackupBundle = async (bytes: Uint8Array): Promise<BackupMani
   });
 
   return manifest;
+};
+
+const payloadSnapshot = (payload: DearDiaryBackupPayload): RepositorySnapshot => ({
+  diaries: payload.diaries,
+  entries: payload.entries,
+  notes: payload.notes,
+  settings: sanitizeSettings(payload.settings),
+  userProfile: payload.userProfile,
+});
+
+export const previewBackupBundleMerge = async (bytes: Uint8Array): Promise<{
+  manifest: BackupManifest;
+  preview: BackupMergePreview;
+}> => {
+  const { manifest, payload } = await validateBackupBundleBytes(bytes);
+  return {
+    manifest,
+    preview: await diaryRepository.previewPortableMerge(payloadSnapshot(payload), payload.mediaAssets?.length || 0),
+  };
+};
+
+export const mergeBackupBundle = async (bytes: Uint8Array): Promise<{
+  manifest: BackupManifest;
+  result: BackupMergeResult;
+}> => {
+  const { files, manifest, payload } = await validateBackupBundleBytes(bytes);
+  await createPreRestoreSafetySnapshot();
+  const mediaFiles = Object.fromEntries(Object.entries(files).filter(([path]) => path.startsWith('media/')));
+  const restoredMedia = await restoreMediaAssets(payload, mediaFiles);
+  replaceMediaRefs(payload, restoredMedia);
+  const result = await diaryRepository.mergePortableSnapshot(payloadSnapshot(payload), payload.mediaAssets?.length || 0);
+  const currentBackupSettings = await diaryRepository.getDriveBackupSettings();
+  await diaryRepository.saveDriveBackupSettings({
+    ...currentBackupSettings,
+    schedule: payload.backupSchedule || currentBackupSettings.schedule,
+    lastRestoreAt: Date.now(),
+  });
+  return { manifest, result };
 };
 
 export const validateBackupBundleBytes = async (

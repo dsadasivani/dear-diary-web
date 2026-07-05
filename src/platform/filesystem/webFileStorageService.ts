@@ -1,4 +1,4 @@
-import type { FileStorageService, StoredFile } from './FileStorageService';
+import type { FileStorageService, StoredFile, StoredFileEntry } from './FileStorageService';
 
 export class WebFileStorageService implements FileStorageService {
   async writeBase64(_path: string, base64Data: string): Promise<StoredFile> {
@@ -12,4 +12,8 @@ export class WebFileStorageService implements FileStorageService {
   async readBase64(path: string): Promise<string | null> {
     return path.startsWith('data:') ? path : null;
   }
+
+  async list(_path: string): Promise<StoredFileEntry[]> { return []; }
+
+  async delete(_path: string): Promise<void> {}
 }

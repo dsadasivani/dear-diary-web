@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ArrowLeft, Save, Trash2, Calendar, Smile, Tag, Camera, 
-  Plus, X, HelpCircle, Bold, Italic, Underline, List, Lock, LockOpen, Info,
+  Plus, X, HelpCircle, Bold, Italic, Underline, List, Lock, LockOpen,
   Strikethrough, Maximize2, Minimize2, Type, Heading2, Quote,
   ChevronUp, ChevronDown, Mic, MicOff, Pause, Play, Square, Circle, Sparkles,
   Clock, Edit
@@ -91,14 +91,18 @@ export default function EntryEditorScreen({
     return `${String(hour12).padStart(2, '0')}:${minStr} ${ampm}`;
   };
   
-  // Point 2: AI state variables and handlers
+  // Privacy-first local reflection state. No text leaves the device.
   const [aiLoading, setAiLoading] = useState<boolean>(false);
   const [aiResult, setAiResult] = useState<{ reflection: string; tags: string[]; mood: string } | null>(null);
   const [aiError, setAiError] = useState<string>('');
 
   const handleAiEnhance = async () => {
     // Strip HTML formatting
-    const plainText = body.replace(/<[^>]*>/g, '').trim();
+    const plainText = [...blocks.map(block => block.body), body]
+      .join(' ')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!plainText || plainText.length < 10) {
       setAiError('Please write at least a few sentences (at least 10 characters) before asking for reflection.');
       return;
@@ -257,7 +261,6 @@ export default function EntryEditorScreen({
   const shouldBeRecordingRef = useRef<boolean>(false);
   const shouldRestartSpeechRef = useRef<boolean>(true);
   const [speechError, setSpeechError] = useState<string | null>(null);
-  const [billingErrorOpen, setBillingErrorOpen] = useState<boolean>(false);
 
   // Clean up speech recognition on unmount
   useEffect(() => {
@@ -420,7 +423,7 @@ export default function EntryEditorScreen({
       });
 
       await NativeSpeechRecognition.start({
-        language: 'en-US',
+        language: navigator.language || 'en-US',
         maxResults: 3,
         partialResults: true,
         popup: false,
@@ -612,7 +615,7 @@ export default function EntryEditorScreen({
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.lang = navigator.language || 'en-US';
 
     // Keep instance-specific finalized index in closure to prevent cross-session leaking
     let lastFinalizedIndex = -1;
@@ -711,6 +714,26 @@ export default function EntryEditorScreen({
       void startNativeRecording(isResume, mode);
       return;
     }
+
+    const recordingSupport = audioService.getRecordingSupport();
+    if (mode === 'speech-to-text' && !recordingSupport.speechRecognition) {
+      onShowToast?.('Dictation is not supported by this browser. Audio notes are still available.', 'warning');
+      return;
+    }
+    if (mode === 'voice-dictation' && !recordingSupport.mediaRecorder) {
+      onShowToast?.('Audio recording is not supported by this browser.', 'warning');
+      return;
+    }
+
+    if (isResume && mode === 'speech-to-text') {
+      isOverlayActiveRef.current = true;
+      shouldBeRecordingRef.current = true;
+      shouldRestartSpeechRef.current = true;
+      setIsRecording(true);
+      setSpeechError(null);
+      startSpeechRecognitionInstance(true);
+      return;
+    }
     
     if (isResume && mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
       try {
@@ -720,8 +743,6 @@ export default function EntryEditorScreen({
       }
       isOverlayActiveRef.current = true;
       shouldBeRecordingRef.current = true;
-      shouldRestartSpeechRef.current = true;
-      startSpeechRecognitionInstance(true);
       setIsRecording(true);
       setSpeechError(null);
       return;
@@ -747,6 +768,10 @@ export default function EntryEditorScreen({
       if (mode === 'speech-to-text') {
         setIsTranscriptionEnabled(true);
         isTranscriptionEnabledRef.current = true;
+      } else {
+        setIsTranscriptionEnabled(false);
+        isTranscriptionEnabledRef.current = false;
+        shouldRestartSpeechRef.current = false;
       }
     }
     
@@ -755,7 +780,10 @@ export default function EntryEditorScreen({
     shouldBeRecordingRef.current = true;
 
 
-    const recordingSupport = audioService.getRecordingSupport();
+    if (mode === 'speech-to-text') {
+      startSpeechRecognitionInstance(isResume);
+      return;
+    }
 
     if (recordingSupport.mediaRecorder) {
       navigator.mediaDevices.getUserMedia({ audio: true })
@@ -817,12 +845,7 @@ export default function EntryEditorScreen({
             stream.getTracks().forEach(track => track.stop());
           };
 
-          if (recordingSupport.speechRecognition) {
-            startSpeechRecognitionInstance(isResume);
-          } else {
-            setIsRecording(true);
-            setSpeechError('unsupported');
-          }
+          setIsRecording(true);
 
           mediaRecorder.start(250);
         })
@@ -1308,7 +1331,7 @@ export default function EntryEditorScreen({
     setTimeout(updateActiveFormats, 10);
   };
 
-  const isNativeVoiceRecordingOnly = isNativePlatform() && recordingOverlayMode === 'voice-dictation';
+  const isAudioRecordingOnly = recordingOverlayMode === 'voice-dictation';
 
   const recordingOverlayUI = (
     <AnimatePresence>
@@ -1335,39 +1358,23 @@ export default function EntryEditorScreen({
           <div className="min-h-screen flex flex-col items-center justify-start md:justify-center w-full max-w-xl mx-auto gap-4 sm:gap-6 md:gap-8 py-16 px-4 sm:px-6">
             <div className="text-center space-y-1 select-none">
               <span className="text-[9px] sm:text-[10px] font-extrabold text-brand-pink uppercase tracking-[0.25em] bg-brand-pink/10 px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full">
-                {recordingOverlayMode === 'speech-to-text' ? 'Voice to Text' : 'Voice Sanctuary'}
+                {recordingOverlayMode === 'speech-to-text' ? 'Dictate Text' : 'Audio Note'}
               </span>
               <h2 className="text-xl sm:text-2xl font-serif-diary font-bold text-brand-plum italic pt-1.5 sm:pt-2">
-                {recordingOverlayMode === 'speech-to-text' ? 'Voice Transcription' : 'Spill Your Heart Out'}
+                {recordingOverlayMode === 'speech-to-text' ? 'Speak to Write' : 'Record This Moment'}
               </h2>
               {recordingOverlayMode === 'voice-dictation' && (
                 <p className="text-[11px] sm:text-xs text-brand-text-muted font-medium px-2">
-                  {isNativeVoiceRecordingOnly
-                    ? 'Record an audio memory and save it with this diary moment.'
-                    : 'Just start speaking—we will transcribe your voice into your diary in real-time.'}
+                  Record an audio memory and save it with this diary moment.
                 </p>
               )}
               
               {/* Transcription Toggle (Only in Voice Sanctuary mode) */}
-              {recordingOverlayMode === 'voice-dictation' && !isNativeVoiceRecordingOnly && (
+              {recordingOverlayMode === 'speech-to-text' && (
                 <div className="flex justify-center pt-3">
-                  <button
-                    onClick={() => {
-                      const newValue = !isTranscriptionEnabled;
-                      setIsTranscriptionEnabled(newValue);
-                      isTranscriptionEnabledRef.current = newValue;
-                    }}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-300 ${
-                      isTranscriptionEnabled 
-                        ? 'bg-brand-pink/10 border-brand-pink/30 text-brand-pink' 
-                        : 'bg-brand-sage/10 border-brand-sage/30 text-brand-sage'
-                    }`}
-                  >
-                    <div className={`w-3 h-3 rounded-full ${isTranscriptionEnabled ? 'bg-brand-pink animate-pulse' : 'bg-brand-sage'}`} />
-                    <span className="text-[10px] font-bold uppercase tracking-wider">
-                      Transcription: {isTranscriptionEnabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </button>
+                  <p className="max-w-sm text-[10px] text-brand-text-muted font-semibold">
+                    Recognition uses your browser or Android speech service and may require a network connection.
+                  </p>
                 </div>
               )}
             </div>
@@ -1416,14 +1423,14 @@ export default function EntryEditorScreen({
             </div>
 
             {/* Status indicators and Connection notices */}
-            {recordingOverlayMode === 'voice-dictation' && (
+            {(isAudioRecordingOnly || Boolean(speechError)) && (
               <div className="flex flex-col items-center gap-2 max-w-md w-full">
                 <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 bg-white/70 dark:bg-brand-card-bg/85 px-3 py-1.5 sm:px-4 sm:py-2 rounded-2xl border border-brand-border/60 text-[10px] sm:text-xs font-semibold">
-                  <span className={`flex items-center gap-1.5 ${isTranscriptionEnabled ? 'text-brand-text-muted opacity-50' : 'text-brand-plum'}`}>
+                  {isAudioRecordingOnly && <span className="flex items-center gap-1.5 text-brand-plum">
                     <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isTranscriptionEnabled ? 'bg-brand-text-muted/40' : 'bg-emerald-500 animate-pulse'}`} />
                     <span>Raw Audio: {isTranscriptionEnabled ? 'Off' : 'Active'} 🎙️</span>
-                  </span>
-                  {!isNativeVoiceRecordingOnly && (
+                  </span>}
+                  {!isAudioRecordingOnly && (
                     <>
                       <span className="hidden sm:inline w-px h-4 bg-brand-border" />
                       <span className={`flex items-center gap-1.5 ${!isTranscriptionEnabled ? 'text-brand-text-muted opacity-50' : 'text-brand-plum'}`}>
@@ -1450,11 +1457,11 @@ export default function EntryEditorScreen({
                     className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[10px] sm:text-xs px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl text-center leading-relaxed font-semibold shadow-sm"
                   >
                     {speechError === 'network' ? (
-                      "A speech recognition connection dropout occurred, but your high-quality raw audio voice note is still recording perfectly! Keep speaking freely."
+                      "Dictation lost its network connection. Finished words are preserved; retry later or use Audio Note."
                     ) : speechError === 'unsupported' ? (
-                      "Real-time dictation is unsupported in this browser environment, but your voice note is being recorded successfully and will be transcribed by Gemini AI when you click 'Finish'!"
+                      "Dictation is unavailable here. Finished words are preserved; retry later or use Audio Note."
                     ) : (
-                      `Dictation paused (${speechError}), but your voice note is being recorded successfully and will be transcribed by Gemini AI when you click 'Finish'!`
+                      `Dictation paused (${speechError}). Finished words are preserved; retry later or use Audio Note.`
                     )}
                   </motion.div>
                 )}
@@ -1465,7 +1472,7 @@ export default function EntryEditorScreen({
             <div className="text-center w-full space-y-2 sm:space-y-4">
               <h3 className="text-[10px] sm:text-xs font-bold text-brand-pink uppercase tracking-widest">
                 {isRecording 
-                  ? (isTranscriptionEnabled ? 'Listening and translating...' : 'Voice Sanctuary Active') 
+                  ? (isTranscriptionEnabled ? 'Listening and transcribing...' : 'Audio recording active') 
                   : 'Recording is paused'}
               </h3>
               
@@ -1536,55 +1543,42 @@ export default function EntryEditorScreen({
     </AnimatePresence>
   );
 
-  const billingErrorUI = (
-    <AnimatePresence>
-      {billingErrorOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md"
+  const localReflectionUI = (
+    <section className="rounded-3xl border border-brand-border bg-brand-card-bg p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-brand-pink" />
+          <div>
+            <h3 className="text-xs font-bold text-brand-plum">Local Reflection</h3>
+            <p className="text-[9px] text-brand-sage">Private keyword analysis performed entirely on this device.</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleAiEnhance()}
+          disabled={aiLoading}
+          className="px-3 py-2 rounded-xl bg-brand-sage text-white text-[10px] font-bold disabled:opacity-50"
         >
-          <motion.div
-            initial={{ scale: 0.95, y: 15 }}
-            animate={{ scale: 1, y: 0 }}
-            exit={{ scale: 0.95, y: 15 }}
-            className="bg-white dark:bg-brand-card-bg w-full max-w-md rounded-3xl p-6 sm:p-8 shadow-2xl border border-brand-border/80 text-center"
-          >
-            <div className="mx-auto w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center text-amber-500 mb-4">
-              <Info className="w-6 h-6" />
-            </div>
-            
-            <h3 className="text-xl font-serif-diary font-bold text-brand-plum italic mb-2">
-              Gemini Credits Depleted
-            </h3>
-            
-            <p className="text-sm text-brand-text-muted mb-6 leading-relaxed">
-              Your Google AI Studio prepayment credits are depleted. Please top up your billing account or use the standard offline audio fallback! Your raw audio voice note has been safely preserved.
-            </p>
-            
-            <div className="flex flex-col gap-3">
-              <a 
-                href="https://ai.studio/projects" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="w-full bg-brand-pink hover:bg-brand-pink-dark text-white font-sans text-sm font-semibold py-3 px-4 rounded-xl shadow transition-colors flex items-center justify-center gap-2"
-              >
-                <Sparkles className="w-4 h-4" />
-                Go to AI Studio Billing
-              </a>
-              
-              <button
-                onClick={() => setBillingErrorOpen(false)}
-                className="w-full bg-brand-bg/50 hover:bg-brand-bg/80 text-brand-plum font-sans text-sm font-semibold py-3 px-4 rounded-xl border border-brand-border/40 transition-colors"
-              >
-                Continue with Saved Raw Audio
+          {aiLoading ? 'Reflecting...' : 'Reflect locally'}
+        </button>
+      </div>
+      {aiError && <p className="text-[10px] text-brand-pink-dark">{aiError}</p>}
+      {aiResult && (
+        <div className="rounded-2xl bg-brand-bg/60 border border-brand-border/40 p-3 flex flex-col gap-2">
+          <p className="text-xs text-brand-plum leading-relaxed">{aiResult.reflection}</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => applyAiMood(aiResult.mood)} className="px-2.5 py-1 rounded-full bg-brand-pink/10 text-brand-pink text-[10px] font-bold">
+              Use mood: {aiResult.mood}
+            </button>
+            {aiResult.tags.map(tag => (
+              <button key={tag} type="button" onClick={() => applyAiTag(tag)} className="px-2.5 py-1 rounded-full bg-brand-sage/10 text-brand-sage text-[10px] font-bold">
+                +#{tag}
               </button>
-            </div>
-          </motion.div>
-        </motion.div>
+            ))}
+          </div>
+        </div>
       )}
-    </AnimatePresence>
+    </section>
   );
 
   if (isFocusMode) {
@@ -1946,8 +1940,8 @@ export default function EntryEditorScreen({
           )}
 
         </div>
+        {localReflectionUI}
         {recordingOverlayUI}
-        {billingErrorUI}
       </div>
     );
   }
@@ -2562,8 +2556,8 @@ export default function EntryEditorScreen({
         </div>
       )}
 
+      {localReflectionUI}
       {recordingOverlayUI}
-      {billingErrorUI}
     </div>
   );
 }

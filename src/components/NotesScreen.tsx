@@ -8,6 +8,7 @@ import { AppSettings, Note } from '../types';
 import RichTextEditor from './RichTextEditor';
 import { diaryRepository } from '../repositories';
 import { getTagsForSettings } from '../domain/appSettings';
+import OverlayPortal from './OverlayPortal';
 
 interface NotesScreenProps {
   notes: Note[];
@@ -356,7 +357,8 @@ export default function NotesScreen({
       {/* FULL NOTE EDIT DIALOG MODAL IF ACTIVE */}
       <AnimatePresence>
         {editingNote && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+          <OverlayPortal>
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -473,7 +475,8 @@ export default function NotesScreen({
                 </button>
               </div>
             </motion.div>
-          </div>
+            </div>
+          </OverlayPortal>
         )}
       </AnimatePresence>
     </div>

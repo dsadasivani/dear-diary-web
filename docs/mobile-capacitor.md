@@ -50,11 +50,12 @@ Then open the generated iOS project with Xcode.
 
 - Dear Diary is local-first. Device storage is the source of truth; Google Drive is used only for scheduled/on-demand backup and restore, never record synchronization.
 - Drive backups use the `https://www.googleapis.com/auth/drive.appdata` scope and are stored in the hidden Google Drive `appDataFolder`.
-- Drive backups are Drive-protected, not end-to-end encrypted. Restoring on a new device requires the same Google account and app access.
+- Drive backups can optionally be end-to-end encrypted with a separate passphrase. The random master key is cached in Android secure storage for background work; the passphrase is never stored and cannot be reset. Legacy/plaintext backups remain supported.
 - The linked Google identity is persisted in Android Keystore-protected storage and SQLite. OAuth access tokens are never persisted; `AuthorizationClient` obtains fresh account-specific authorization before Drive work.
 - Automatic backup supports Off, Daily, or Weekly with a preferred local time and Wi-Fi-only or any-network policy. Android WorkManager may delay the preferred time for Doze or unmet constraints.
 - Backups are atomically staged in app-private storage before upload. The worker uses resumable Drive uploads, exponential retry, and retention of the five newest successful bundles.
 - Backup lineage records the device, portable content revision, and parent backup. After restore, the new device creates a checkpoint; an older device cannot silently replace that lineage through automatic backup.
+- Backup discovery offers Replace, Safe Merge, or Keep Local. Safe Merge never deletes local content and preserves divergent records as recovered copies; snapshot deletions are not synchronized.
 - Choosing Continue Local after discovering an existing cloud backup blocks cloud writes until the user explicitly chooses Start Fresh From This Device.
 - Existing Firestore data from older builds is left untouched, but the app no longer reads or writes Firestore.
 
@@ -83,6 +84,7 @@ Missing Drive API enablement produces a clear API-disabled backup error. Revoked
 - Restoring uses repository `replace-portable`: journal data, profile, portable appearance/catalog settings, and media are restored while the new device's PIN, recovery question, biometrics, permissions, and account link are retained. Schema-v1 bundles remain accepted with their old security/Drive metadata ignored.
 - Native reminder settings schedule or cancel a daily Local Notifications reminder when app settings are saved.
 - New diary cover images, diary settings cover updates, entry photos, and entry audio are written through Capacitor Filesystem on native and remain data URIs on web.
+- Native media garbage collection scans repository references after changes, protects unsaved drafts with a 24-hour grace period, and removes unreferenced app-owned files immediately after reset/replacement restore.
 - Android biometric unlock uses `@capgo/capacitor-native-biometric` and requires an enrolled strong biometric, such as fingerprint, plus an app PIN fallback.
 - Android voice notes use `@independo/capacitor-voice-recorder`; toolbar voice-to-text uses native speech recognition without starting the recorder so it does not compete for the microphone. Android cannot reliably run `MediaRecorder` and `SpeechRecognizer` on the same microphone session, so native voice notes save audio only while the separate voice-to-text control inserts dictated text.
 
@@ -90,9 +92,9 @@ Missing Drive API enablement produces a clear API-disabled backup error. Revoked
 
 - The legacy media migration needs physical-device QA with large photo/audio libraries and interrupted launches before the fallback can be retired.
 - Android is the complete background-backup target. iOS still uses local export/import until an equivalent native scheduler and authorization bridge are implemented.
-- Android Settings > Apps > Dear Diary > Clear storage is destructive. It deletes local diary data, encrypted SQLite, secure storage secrets, Preferences, Google backup link metadata, and the app PIN hash/salt. Restore from a Drive backup when data should be recovered.
+- Android Settings > Apps > Dear Diary > Clear storage is destructive. It deletes local diary data, encrypted SQLite, secure storage secrets, Preferences, Google backup link metadata, and the app PIN hash/salt. Android OS backup/device transfer is disabled to avoid restoring encrypted SQLite without its key; use Drive or a `.ddbackup` archive.
 - Native speech recognition depends on Android speech services and microphone permission. If unavailable, the app shows a graceful message; audio recording still works through the native recorder.
-- Default Capacitor splash/icon assets are used. Replace native assets before store release.
+- Branded adaptive launcher icons, round icons, and light/dark splash assets are generated from the gold book-and-quill artwork. Verify the rendered assets on physical target densities before store release.
 
 ## Release Checklist
 
@@ -100,4 +102,14 @@ Missing Drive API enablement produces a clear API-disabled backup error. Revoked
 - Verify backup scheduling, interrupted resumable upload, token revocation, and two-device ownership transfer with production-signed physical devices.
 - Remove legacy Capacitor Preferences fallback after one stable release with successful SQLite migration.
 - Add cloud/device recovery education for users who intentionally clear OS app storage.
-- Add production icons, splash assets, signing config, and release build documentation.
+- Verify the generated production icons/splash on target densities and configure external signing credentials from `android/keystore.properties.example`.
+
+## Release Validation Matrix
+
+- Preferences-to-SQLite and data-URI-to-file migration with a large library, interrupted launch, retry, and low storage.
+- Encrypted Drive/local archive restore with correct, wrong, changed, and lost passphrases; verify legacy plaintext and legacy `.txt` compatibility.
+- Scheduled WorkManager execution under Doze, Wi-Fi/cellular policy, battery/storage constraints, revoked consent, expired upload sessions, and transient Drive failures.
+- Two-device lineage: replacement restore, safe merge with diary/entry/note conflicts, Keep Local cloud-write block, and explicit ownership transfer.
+- Audio Note and Dictate Text with permissions denied, browser support absent, Android speech services disabled, and network loss during dictation.
+- Android Clear Storage followed by recovery from Drive and `.ddbackup`.
+- Production-signed OAuth SHA-1, release APK/AAB installation, adaptive/round launcher icons, light/dark splash rendering, and WebView debugging disabled.

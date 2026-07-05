@@ -23,7 +23,7 @@ import { secureAuthService } from '../platform/security';
 import { isNativePlatform } from '../platform';
 import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
 import { diaryRepository } from '../repositories';
-import { listDriveBackups, restoreLatestValidDriveBackup } from '../utils/driveBackup';
+import { inspectDriveBackupMerge, listDriveBackups, mergeDriveBackup, restoreLatestValidDriveBackup } from '../utils/driveBackup';
 import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
 import { populateUserProfileFromGoogle } from '../utils/googleProfile';
 
@@ -104,6 +104,7 @@ export default function LockScreen({
   const [showBackupChoice, setShowBackupChoice] = useState(false);
   const [isLinkingBackup, setIsLinkingBackup] = useState(false);
   const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+  const [isMergingBackup, setIsMergingBackup] = useState(false);
   const [pendingBackupSession, setPendingBackupSession] = useState<GoogleAccountSession | null>(null);
   const [discoveredBackup, setDiscoveredBackup] = useState<BackupFileSummary | null>(null);
 
@@ -337,13 +338,40 @@ export default function LockScreen({
     setIsRestoringBackup(true);
     setError('');
     try {
-      await restoreLatestValidDriveBackup(pendingBackupSession);
+      const encrypted = discoveredBackup.appProperties?.encrypted === 'true';
+      const passphrase = encrypted ? window.prompt('Enter the passphrase for this encrypted Drive backup.') : undefined;
+      if (encrypted && passphrase === null) return;
+      await restoreLatestValidDriveBackup(pendingBackupSession, passphrase || undefined);
       setSuccessMsg('Your diary was restored securely.');
       completeUnlock(security);
     } catch (err: any) {
       fail(err?.message || 'Could not restore this backup.');
     } finally {
       setIsRestoringBackup(false);
+    }
+  };
+
+  const handleInitialMerge = async () => {
+    if (!pendingBackupSession || !discoveredBackup) return;
+    setIsMergingBackup(true);
+    setError('');
+    try {
+      const encrypted = discoveredBackup.appProperties?.encrypted === 'true';
+      const passphrase = encrypted ? window.prompt('Enter the passphrase for this encrypted Drive backup.') : undefined;
+      if (encrypted && passphrase === null) return;
+      const preview = await inspectDriveBackupMerge(pendingBackupSession, discoveredBackup.id, passphrase || undefined);
+      const confirmed = window.confirm(
+        `Safe merge will add ${preview.add.diaries} diaries, ${preview.add.entries} entries, and ${preview.add.notes} notes. ` +
+        `${preview.conflicts.diaries + preview.conflicts.entries + preview.conflicts.notes} conflicts will be preserved as recovered copies. Continue?`,
+      );
+      if (!confirmed) return;
+      await mergeDriveBackup(pendingBackupSession, discoveredBackup.id, passphrase || undefined);
+      setSuccessMsg('Cloud and local journals were merged without overwriting local content.');
+      completeUnlock(security);
+    } catch (err: any) {
+      fail(err?.message || 'Could not merge this backup.');
+    } finally {
+      setIsMergingBackup(false);
     }
   };
 
@@ -598,6 +626,9 @@ export default function LockScreen({
                         <button onClick={handleInitialRestore} disabled={isRestoringBackup} className="w-full py-3 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-50 flex items-center justify-center gap-2">
                           <Cloud className="w-4 h-4" />
                           {isRestoringBackup ? 'Restoring...' : 'Restore Backup'}
+                        </button>
+                        <button onClick={handleInitialMerge} disabled={isMergingBackup || isRestoringBackup} className="w-full py-3 rounded-2xl bg-brand-sage text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-50 flex items-center justify-center gap-2">
+                          {isMergingBackup ? 'Merging...' : 'Safe Merge — Preserve Both'}
                         </button>
                         <button onClick={handleContinueLocalAfterDiscovery} disabled={isRestoringBackup} className="w-full py-3 rounded-2xl border border-brand-border bg-white/60 dark:bg-black/10 text-brand-plum dark:text-brand-text font-bold text-xs uppercase tracking-widest disabled:opacity-50">
                           Continue Local

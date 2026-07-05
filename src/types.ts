@@ -152,9 +152,40 @@ export interface DriveBackupState {
   parentBackupFileId?: string;
   activeDeviceId?: string;
   cloudWriteBlocked?: boolean;
+  encryption?: BackupEncryptionSettings;
 }
 
 export type DriveBackupSettings = DriveBackupState;
+
+export interface BackupEncryptionSettings {
+  enabled: boolean;
+  keyId?: string;
+  configuredAt?: number;
+  version?: 1;
+}
+
+export interface EncryptedEnvelopeHeader {
+  version: 1;
+  cipher: 'AES-256-GCM';
+  kdf: 'PBKDF2-SHA-256';
+  iterations: number;
+  salt: string;
+  wrapNonce: string;
+  wrappedKey: string;
+  dataNonce: string;
+  keyId: string;
+}
+
+export interface BackupMergePreview {
+  incoming: { diaries: number; entries: number; notes: number; media: number };
+  add: { diaries: number; entries: number; notes: number };
+  skip: { diaries: number; entries: number; notes: number };
+  conflicts: { diaries: number; entries: number; notes: number; moods: number };
+}
+
+export interface BackupMergeResult extends BackupMergePreview {
+  importedDiaryIds: string[];
+}
 
 export interface BackupManifest {
   schemaVersion: number;

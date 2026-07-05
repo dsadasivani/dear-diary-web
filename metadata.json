@@ -1,6 +1,5 @@
 {
   "name": "Dear Diary",
   "description": "A private, local-first journaling application for organizing memories, capturing thoughts, search, and statistics.",
-  "requestFramePermissions": ["microphone"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "requestFramePermissions": ["microphone"]
 }

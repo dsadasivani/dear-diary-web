@@ -1,5 +1,7 @@
 import type {
   AppSettings,
+  BackupMergePreview,
+  BackupMergeResult,
   Diary,
   DriveBackupSettings,
   Entry,
@@ -25,6 +27,7 @@ import {
   DEFAULT_SECURITY_CONFIG,
 } from './defaults';
 import { normalizeSecurityConfig } from '../domain/security';
+import { buildPortableMergePlan } from '../domain/backupMerge';
 
 const STORAGE_KEYS = {
   diaries: 'deardiary_diaries',
@@ -359,6 +362,18 @@ export class LocalDiaryRepository implements DiaryRepository {
       security,
       driveBackupSettings,
     };
+  }
+
+  async previewPortableMerge(snapshot: RepositorySnapshot, mediaCount = 0): Promise<BackupMergePreview> {
+    const current = await this.exportSnapshot();
+    return buildPortableMergePlan(current, snapshot, mediaCount, (_kind, sourceId) => `preview-${sourceId}`).preview;
+  }
+
+  async mergePortableSnapshot(snapshot: RepositorySnapshot, mediaCount = 0): Promise<BackupMergeResult> {
+    const current = await this.exportSnapshot();
+    const plan = buildPortableMergePlan(current, snapshot, mediaCount);
+    await this.importSnapshot(plan.snapshot, 'replace-portable');
+    return plan.result;
   }
 
   importSnapshot(snapshot: RepositorySnapshot, mode: RepositoryImportMode): Promise<void> {

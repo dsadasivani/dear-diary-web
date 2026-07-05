@@ -16,6 +16,7 @@ import NotesScreen from './components/NotesScreen';
 import SearchScreen from './components/SearchScreen';
 import StatsScreen from './components/StatsScreen';
 import AppSettingsScreen from './components/AppSettingsScreen';
+import OverlayPortal from './components/OverlayPortal';
 
 import { AppSettings, Diary, Entry, Note, SecurityConfig, UserProfile } from './types';
 import { addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
@@ -329,113 +330,122 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     const canSubmitPin = isValidPin(diaryUnlockPin, security.pinLength);
 
     return (
-      <div className="flex flex-col gap-6 font-sans min-h-[70vh] justify-center">
-        <div className="bg-brand-card-bg border border-brand-border rounded-[32px] p-6.5 journal-shadow flex flex-col gap-5 text-center relative overflow-hidden">
-          <div className="absolute -top-16 -left-16 w-40 h-40 rounded-full bg-brand-pink/10 blur-3xl pointer-events-none" />
-          <div className="absolute -bottom-16 -right-16 w-44 h-44 rounded-full bg-brand-sage/10 blur-3xl pointer-events-none" />
-
-          <div className="relative z-10 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => handleNavigate('diaries', 'list')}
-              className="p-2 text-brand-sage hover:text-brand-plum hover:bg-brand-blush-light rounded-full transition-all"
-              title="Back to diaries"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-            <span className="px-3 py-1 rounded-full bg-brand-pink/10 text-brand-pink text-[9px] font-black uppercase tracking-[0.2em]">
-              Locked Diary
-            </span>
-          </div>
-
-          <div className="relative z-10 flex flex-col items-center gap-3">
-            <div className="w-16 h-16 rounded-3xl bg-brand-pink/10 text-brand-pink flex items-center justify-center shadow-sm">
-              <Lock className="w-7 h-7" />
+      <OverlayPortal>
+        <motion.div
+          className="fixed inset-0 z-[80] flex items-end justify-center bg-black/55 p-4 sm:items-center"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+        >
+          <motion.div
+            className="flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-3xl border border-brand-border bg-brand-card-bg p-6 text-center shadow-2xl"
+            initial={{ y: 30 }}
+            animate={{ y: 0 }}
+            exit={{ y: 30 }}
+          >
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => handleNavigate('diaries', 'list')}
+                className="flex h-9 w-9 items-center justify-center rounded-full text-brand-sage transition-all hover:bg-brand-blush-light hover:text-brand-plum active:scale-95"
+                title="Back to diaries"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <span className="rounded-full bg-brand-pink/10 px-4 py-1.5 text-[9px] font-black uppercase tracking-[0.22em] text-brand-pink">
+                Locked Diary
+              </span>
             </div>
-            <div>
-              <h2 className="font-serif-diary text-2xl font-bold text-brand-plum">{diary.name}</h2>
-              <p className="text-xs text-brand-text-muted mt-1 leading-relaxed max-w-xs">
+
+            <div className="flex flex-col items-center gap-3">
+              <div className="flex h-16 w-16 items-center justify-center rounded-[24px] bg-brand-pink/10 text-brand-pink">
+                <Lock className="w-7 h-7" />
+              </div>
+              <h2 className="break-words font-serif-diary text-[1.6rem] font-bold leading-[1.12] text-brand-plum">
+                {diary.name}
+              </h2>
+              <p className="text-xs leading-relaxed text-brand-text-muted">
                 This journal is private. Confirm your app PIN or biometric identity to open it for this session.
               </p>
             </div>
-          </div>
 
-          {security.isBiometricsEnabled && (
-            <button
-              type="button"
-              onClick={() => handleDiaryBiometricUnlock(diary)}
-              disabled={isDiaryBiometricUnlocking}
-              className="relative z-10 w-full bg-brand-pink hover:bg-brand-pink-dark disabled:opacity-50 text-white py-3.5 rounded-2xl flex items-center justify-center gap-2.5 text-xs font-bold uppercase tracking-wider transition-all shadow-md shadow-brand-pink/15"
+            {security.isBiometricsEnabled && (
+              <button
+                type="button"
+                onClick={() => handleDiaryBiometricUnlock(diary)}
+                disabled={isDiaryBiometricUnlocking}
+                className="flex w-full items-center justify-center gap-2.5 rounded-xl border border-brand-pink/20 bg-brand-pink/10 py-3 text-xs font-bold uppercase tracking-wider text-brand-pink transition-all hover:bg-brand-pink hover:text-white disabled:opacity-50"
+              >
+                <Fingerprint className={`w-4 h-4 ${isDiaryBiometricUnlocking ? 'animate-pulse' : ''}`} />
+                <span>{isDiaryBiometricUnlocking ? 'Checking Identity' : 'Unlock with Biometrics'}</span>
+              </button>
+            )}
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleDiaryPinUnlock(diary);
+              }}
+              className="flex flex-col gap-4"
             >
-              <Fingerprint className={`w-4 h-4 ${isDiaryBiometricUnlocking ? 'animate-pulse' : ''}`} />
-              <span>{isDiaryBiometricUnlocking ? 'Checking Identity' : 'Unlock with Biometrics'}</span>
-            </button>
-          )}
+              <label className="flex flex-col gap-2 text-left">
+                <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-brand-sage">App Security PIN</span>
+                <div className="relative">
+                  <input
+                    type={showDiaryUnlockPin ? 'text' : 'password'}
+                    inputMode="numeric"
+                    maxLength={requiredLength}
+                    value={diaryUnlockPin}
+                    onChange={(e) => {
+                      setDiaryUnlockPin(e.target.value.replace(/\D/g, '').slice(0, requiredLength));
+                      setDiaryUnlockError('');
+                      setDiaryUnlockSuccess('');
+                    }}
+                    placeholder={`${requiredLength}-digit PIN`}
+                    className="w-full rounded-2xl border border-brand-border bg-brand-bg/45 p-3.5 pr-11 text-sm text-brand-plum placeholder:text-brand-text-muted/55 focus:border-brand-sage focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowDiaryUnlockPin(prev => !prev)}
+                    className="absolute inset-y-0 right-3 flex items-center text-brand-sage transition-colors hover:text-brand-pink"
+                    title={showDiaryUnlockPin ? 'Hide PIN' : 'Show PIN'}
+                  >
+                    {showDiaryUnlockPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </label>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void handleDiaryPinUnlock(diary);
-            }}
-            className="relative z-10 flex flex-col gap-3"
-          >
-            <label className="flex flex-col gap-1 text-left">
-              <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">App Security PIN</span>
-              <div className="relative">
-                <input
-                  type={showDiaryUnlockPin ? 'text' : 'password'}
-                  inputMode="numeric"
-                  maxLength={requiredLength}
-                  value={diaryUnlockPin}
-                  onChange={(e) => {
-                    setDiaryUnlockPin(e.target.value.replace(/\D/g, '').slice(0, requiredLength));
-                    setDiaryUnlockError('');
-                    setDiaryUnlockSuccess('');
-                  }}
-                  placeholder={`${requiredLength}-digit PIN`}
-                  className="w-full bg-brand-bg text-brand-plum border border-brand-border p-3 pr-10 rounded-2xl text-sm focus:outline-none focus:border-brand-pink"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowDiaryUnlockPin(prev => !prev)}
-                  className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink"
-                  title={showDiaryUnlockPin ? 'Hide PIN' : 'Show PIN'}
-                >
-                  {showDiaryUnlockPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
+              <div className="min-h-[18px] flex items-center justify-center">
+                {diaryUnlockError && (
+                  <p className="flex items-center gap-1 text-[11px] font-bold text-brand-rose">
+                    <AlertCircle className="w-3 h-3" />
+                    <span>{diaryUnlockError}</span>
+                  </p>
+                )}
+                {diaryUnlockSuccess && !diaryUnlockError && (
+                  <p className="flex items-center gap-1 text-[11px] font-bold text-brand-sage">
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{diaryUnlockSuccess}</span>
+                  </p>
+                )}
               </div>
-            </label>
 
-            <div className="min-h-[18px] flex items-center justify-center">
-              {diaryUnlockError && (
-                <p className="text-[11px] font-bold text-brand-rose flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" />
-                  <span>{diaryUnlockError}</span>
-                </p>
-              )}
-              {diaryUnlockSuccess && !diaryUnlockError && (
-                <p className="text-[11px] font-bold text-brand-sage flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" />
-                  <span>{diaryUnlockSuccess}</span>
-                </p>
-              )}
+              <button
+                type="submit"
+                disabled={!canSubmitPin}
+                className="w-full rounded-xl bg-brand-sage py-3.5 text-xs font-extrabold uppercase tracking-wider text-white shadow-sm transition-all hover:bg-brand-sage-dark disabled:cursor-not-allowed disabled:bg-brand-sage/45 disabled:text-white/90"
+              >
+                Unlock Diary
+              </button>
+            </form>
+
+            <div className="flex items-start justify-center gap-2 text-left text-[10px] font-semibold leading-relaxed text-brand-text-muted">
+              <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-sage" />
+              <span>Uses the same private app PIN configured in Security settings.</span>
             </div>
-
-            <button
-              type="submit"
-              disabled={!canSubmitPin}
-              className="w-full py-3.5 rounded-2xl bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs uppercase tracking-wider shadow-sm transition-all"
-            >
-              Unlock Diary
-            </button>
-          </form>
-
-          <div className="relative z-10 flex items-center justify-center gap-2 text-[10px] text-brand-text-muted font-semibold">
-            <ShieldCheck className="w-3.5 h-3.5 text-brand-sage" />
-            <span>Uses the same private app PIN configured in Security settings.</span>
-          </div>
-        </div>
-      </div>
+          </motion.div>
+        </motion.div>
+      </OverlayPortal>
     );
   };
 
@@ -473,7 +483,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 entries={accessibleEntries}
                 onBack={() => handleNavigate('diaries', 'list')}
                 onEditEntry={(entryId) => handleNavigate('diaries', 'entryEditor', selectedDiaryId, entryId)}
-                onNewEntry={(diaryId) => handleNavigate('diaries', 'entryEditor', diaryId)}
+                onNewEntry={(diaryId, dateStr) => handleNavigate('diaries', 'entryEditor', diaryId, '', dateStr)}
                 onOpenSettings={(diaryId) => handleNavigate('diaries', 'diarySettings', diaryId)}
                 onRefreshEntries={reloadData}
               />
@@ -549,6 +559,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             diaries={diaries}
             entries={accessibleEntries}
             notes={notes}
+            settings={settings}
             onNavigate={handleNavigate}
             onEditNote={(note) => {
               // Deep-link note editing from search results

@@ -4,5 +4,8 @@ dist/
 coverage/
 .DS_Store
 *.log
+android/keystore.properties
+*.jks
+*.keystore
 .env*
 !.env.example

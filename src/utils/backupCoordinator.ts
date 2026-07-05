@@ -7,6 +7,7 @@ import { diaryRepository } from '../repositories';
 import type { DriveBackupSettings, GoogleAccountIdentity } from '../types';
 import { BACKUP_SCHEMA_VERSION, createBackupBundle } from './backupSnapshot';
 import { bindGoogleRecoveryAccount } from '../domain/security';
+import { encryptWithStoredDriveKey } from './backupEncryption';
 
 const STAGED_BACKUP_PATH = 'backups/pending.ddb';
 const STAGE_DEBOUNCE_MS = 30_000;
@@ -124,14 +125,21 @@ class BackupCoordinator {
       parentBackupFileId: settings.parentBackupFileId || settings.lastBackupFileId,
       schedule: settings.schedule,
     });
-    await fileStorageService.writeBase64Atomic(STAGED_BACKUP_PATH, bytesToBase64(bundle.bytes));
+    const encrypted = settings.encryption?.enabled === true;
+    if (encrypted && !settings.linkedGoogleUserId) throw new Error('Encrypted Drive backup requires a linked Google account.');
+    const stagedBytes = encrypted
+      ? await encryptWithStoredDriveKey(bundle.bytes, settings.linkedGoogleUserId!)
+      : bundle.bytes;
+    await fileStorageService.writeBase64Atomic(STAGED_BACKUP_PATH, bytesToBase64(stagedBytes));
     await nativeDriveBackupBridge.stageBackup({
       path: STAGED_BACKUP_PATH,
-      sizeBytes: bundle.bytes.length,
+      sizeBytes: stagedBytes.length,
       schemaVersion: BACKUP_SCHEMA_VERSION,
       contentRevision: bundle.manifest.contentRevision || 0,
       deviceId: settings.deviceId,
       parentBackupFileId: bundle.manifest.parentBackupFileId,
+      encrypted,
+      encryptionKeyId: encrypted ? settings.encryption?.keyId : undefined,
     });
     await diaryRepository.saveDriveBackupSettings({
       ...settings,

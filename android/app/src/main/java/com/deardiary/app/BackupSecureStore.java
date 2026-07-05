@@ -27,6 +27,8 @@ final class BackupSecureStore {
     static final String STAGED_SIZE = "staged_size";
     static final String STAGED_SCHEMA = "staged_schema";
     static final String STAGED_REVISION = "staged_revision";
+    static final String STAGED_ENCRYPTED = "staged_encrypted";
+    static final String STAGED_ENCRYPTION_KEY_ID = "staged_encryption_key_id";
     static final String DEVICE_ID = "device_id";
     static final String PARENT_FILE_ID = "parent_file_id";
     static final String LAST_BACKUP_AT = "last_backup_at";
@@ -106,6 +108,8 @@ final class BackupSecureStore {
             STAGED_SIZE,
             STAGED_SCHEMA,
             STAGED_REVISION,
+            STAGED_ENCRYPTED,
+            STAGED_ENCRYPTION_KEY_ID,
             PARENT_FILE_ID,
             LAST_BACKUP_AT,
             LAST_BACKUP_FILE_ID,

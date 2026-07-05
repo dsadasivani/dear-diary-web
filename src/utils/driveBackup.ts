@@ -1,9 +1,10 @@
-import { BackupFileSummary, DriveBackupSettings, GoogleAccountSession } from '../types';
-import { createBackupBundle, restoreBackupBundle } from './backupSnapshot';
+import { BackupFileSummary, BackupMergePreview, BackupMergeResult, DriveBackupSettings, GoogleAccountSession } from '../types';
+import { mergeBackupBundle, previewBackupBundleMerge, restoreBackupBundle } from './backupSnapshot';
 import { restoreGoogleDriveSession, startGoogleAuth } from './googleAuth';
 import { diaryRepository } from '../repositories';
 import { backupCoordinator } from './backupCoordinator';
 import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
+import { decryptDriveEnvelope, inspectEncryptedEnvelope, isEncryptedBackupEnvelope } from './backupEncryption';
 
 const DRIVE_FILES_ENDPOINT = 'https://www.googleapis.com/drive/v3/files';
 const DRIVE_UPLOAD_ENDPOINT = 'https://www.googleapis.com/upload/drive/v3/files';
@@ -262,9 +263,14 @@ export const createDriveBackup = async (
 export const restoreDriveBackup = async (
   session: GoogleAccountSession,
   fileId: string,
+  passphrase?: string,
 ): Promise<DriveBackupSettings> => {
   const response = await authorizedFetch(session, `${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}?alt=media`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const downloaded = new Uint8Array(await response.arrayBuffer());
+  const encryptedHeader = isEncryptedBackupEnvelope(downloaded) ? inspectEncryptedEnvelope(downloaded) : null;
+  const bytes = encryptedHeader
+    ? await decryptDriveEnvelope(downloaded, session.userId, passphrase)
+    : downloaded;
   await restoreBackupBundle(bytes);
   const currentSettings = await diaryRepository.getDriveBackupSettings();
   const settings: DriveBackupSettings = {
@@ -275,6 +281,9 @@ export const restoreDriveBackup = async (
     lastBackupFileId: fileId,
     parentBackupFileId: fileId,
     cloudWriteBlocked: false,
+    encryption: encryptedHeader
+      ? { enabled: true, keyId: encryptedHeader.keyId, configuredAt: Date.now(), version: 1 }
+      : currentSettings.encryption,
   };
   await diaryRepository.saveDriveBackupSettings(settings);
   await nativeDriveBackupBridge.setCloudWriteBlocked({ blocked: false });
@@ -282,14 +291,64 @@ export const restoreDriveBackup = async (
   return settings;
 };
 
+const downloadPortableDriveBackup = async (
+  session: GoogleAccountSession,
+  fileId: string,
+  passphrase?: string,
+): Promise<{ bytes: Uint8Array; encryptedHeader: ReturnType<typeof inspectEncryptedEnvelope> | null }> => {
+  const response = await authorizedFetch(session, `${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}?alt=media`);
+  const downloaded = new Uint8Array(await response.arrayBuffer());
+  const encryptedHeader = isEncryptedBackupEnvelope(downloaded) ? inspectEncryptedEnvelope(downloaded) : null;
+  return {
+    bytes: encryptedHeader ? await decryptDriveEnvelope(downloaded, session.userId, passphrase) : downloaded,
+    encryptedHeader,
+  };
+};
+
+export const inspectDriveBackupMerge = async (
+  session: GoogleAccountSession,
+  fileId: string,
+  passphrase?: string,
+): Promise<BackupMergePreview> => {
+  const { bytes } = await downloadPortableDriveBackup(session, fileId, passphrase);
+  return (await previewBackupBundleMerge(bytes)).preview;
+};
+
+export const mergeDriveBackup = async (
+  session: GoogleAccountSession,
+  fileId: string,
+  passphrase?: string,
+): Promise<{ settings: DriveBackupSettings; result: BackupMergeResult }> => {
+  const { bytes, encryptedHeader } = await downloadPortableDriveBackup(session, fileId, passphrase);
+  const { result } = await mergeBackupBundle(bytes);
+  const current = await diaryRepository.getDriveBackupSettings();
+  const settings: DriveBackupSettings = {
+    ...current,
+    linkedGoogleUserId: session.userId,
+    linkedGoogleEmail: session.email,
+    lastRestoreAt: Date.now(),
+    lastBackupFileId: fileId,
+    parentBackupFileId: fileId,
+    cloudWriteBlocked: false,
+    encryption: encryptedHeader
+      ? { enabled: true, keyId: encryptedHeader.keyId, configuredAt: Date.now(), version: 1 }
+      : current.encryption,
+  };
+  await diaryRepository.saveDriveBackupSettings(settings);
+  await nativeDriveBackupBridge.setCloudWriteBlocked({ blocked: false });
+  await backupCoordinator.runNow();
+  return { settings, result };
+};
+
 export const restoreLatestValidDriveBackup = async (
   session: GoogleAccountSession,
+  passphrase?: string,
 ): Promise<DriveBackupSettings> => {
   const backups = await listDriveBackups(session);
   let lastError: unknown = null;
   for (const backup of backups.slice(0, MAX_BACKUPS_TO_KEEP)) {
     try {
-      return await restoreDriveBackup(session, backup.id);
+      return await restoreDriveBackup(session, backup.id, passphrase);
     } catch (error) {
       if (isDriveAuthorizationError(error)) throw error;
       lastError = error;

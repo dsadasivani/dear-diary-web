@@ -5,15 +5,17 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URLEncoder;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
+import java.util.TimeZone;
+import java.text.SimpleDateFormat;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -60,8 +62,8 @@ final class DriveApiClient {
     }
 
     List<BackupFile> listBackups() throws Exception {
-        String query = URLEncoder.encode("name contains '" + BACKUP_PREFIX + "' and trashed = false", StandardCharsets.UTF_8);
-        String fields = URLEncoder.encode("files(id,name,createdTime,modifiedTime,size,appProperties)", StandardCharsets.UTF_8);
+        String query = urlEncode("name contains '" + BACKUP_PREFIX + "' and trashed = false");
+        String fields = urlEncode("files(id,name,createdTime,modifiedTime,size,appProperties)");
         JSONObject response = requestJson("GET", FILES_ENDPOINT + "?spaces=appDataFolder&q=" + query + "&fields=" + fields + "&orderBy=createdTime%20desc&pageSize=100", null, null);
         JSONArray files = response.optJSONArray("files");
         List<BackupFile> result = new ArrayList<>();
@@ -71,13 +73,13 @@ final class DriveApiClient {
         return result;
     }
 
-    BackupFile upload(File file, String deviceId, long revision, String parentFileId, int schemaVersion) throws Exception {
+    BackupFile upload(File file, String deviceId, long revision, String parentFileId, int schemaVersion, boolean encrypted, String encryptionKeyId) throws Exception {
         String sessionUrl = store.getString(BackupSecureStore.UPLOAD_URL, "");
         long sessionRevision = store.getLong(BackupSecureStore.UPLOAD_REVISION, -1);
         long offset = store.getLong(BackupSecureStore.UPLOAD_OFFSET, 0);
         if (sessionUrl.isEmpty() || sessionRevision != revision) {
             store.clearUploadSession();
-            sessionUrl = initiateUpload(file, deviceId, revision, parentFileId, schemaVersion);
+            sessionUrl = initiateUpload(file, deviceId, revision, parentFileId, schemaVersion, encrypted, encryptionKeyId);
             store.putString(BackupSecureStore.UPLOAD_URL, sessionUrl);
             store.putLong(BackupSecureStore.UPLOAD_REVISION, revision);
             offset = 0;
@@ -122,7 +124,7 @@ final class DriveApiClient {
     void prune(List<BackupFile> backups, int keep) {
         for (int index = keep; index < backups.size(); index++) {
             try {
-                HttpURLConnection connection = open(FILES_ENDPOINT + "/" + URLEncoder.encode(backups.get(index).id, StandardCharsets.UTF_8), "DELETE");
+                HttpURLConnection connection = open(FILES_ENDPOINT + "/" + urlEncode(backups.get(index).id), "DELETE");
                 int status = connection.getResponseCode();
                 if (status != 204 && status != 200) throw responseException(connection, status);
                 connection.disconnect();
@@ -131,8 +133,8 @@ final class DriveApiClient {
         }
     }
 
-    private String initiateUpload(File file, String deviceId, long revision, String parentFileId, int schemaVersion) throws Exception {
-        String fields = URLEncoder.encode("id,name,createdTime,modifiedTime,size,appProperties", StandardCharsets.UTF_8);
+    private String initiateUpload(File file, String deviceId, long revision, String parentFileId, int schemaVersion, boolean encrypted, String encryptionKeyId) throws Exception {
+        String fields = urlEncode("id,name,createdTime,modifiedTime,size,appProperties");
         HttpURLConnection connection = open(UPLOAD_ENDPOINT + "?uploadType=resumable&fields=" + fields, "POST");
         connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
         connection.setRequestProperty("X-Upload-Content-Type", MIME_TYPE);
@@ -144,8 +146,13 @@ final class DriveApiClient {
             .put("deviceId", deviceId)
             .put("contentRevision", Long.toString(revision));
         if (parentFileId != null && !parentFileId.isEmpty()) properties.put("parentBackupFileId", parentFileId);
+        properties.put("encrypted", Boolean.toString(encrypted));
+        if (encrypted && encryptionKeyId != null && !encryptionKeyId.isEmpty()) {
+            properties.put("encryptionVersion", "1");
+            properties.put("encryptionKeyId", encryptionKeyId);
+        }
         JSONObject body = new JSONObject()
-            .put("name", BACKUP_PREFIX + Instant.now().toString().replace(":", "-").replace(".", "-") + ".ddb")
+            .put("name", BACKUP_PREFIX + timestampForFilename() + ".ddb")
             .put("mimeType", MIME_TYPE)
             .put("parents", new JSONArray().put("appDataFolder"))
             .put("appProperties", properties);
@@ -204,8 +211,19 @@ final class DriveApiClient {
             byte[] buffer = new byte[8192];
             int count;
             while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
-            return output.toString(StandardCharsets.UTF_8);
+            return new String(output.toByteArray(), StandardCharsets.UTF_8);
         }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String urlEncode(String value) throws Exception {
+        return URLEncoder.encode(value, "UTF-8");
+    }
+
+    private static String timestampForFilename() {
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss-SSS'Z'", Locale.US);
+        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return format.format(new Date());
     }
 
     private static DriveHttpException responseException(HttpURLConnection connection, int status) throws Exception {

@@ -1,5 +1,7 @@
 import type {
   AppSettings,
+  BackupMergePreview,
+  BackupMergeResult,
   Diary,
   DriveBackupSettings,
   Entry,
@@ -60,4 +62,6 @@ export interface DiaryRepository {
 
   exportSnapshot(): Promise<RepositorySnapshot>;
   importSnapshot(snapshot: RepositorySnapshot, mode: RepositoryImportMode): Promise<void>;
+  previewPortableMerge(snapshot: RepositorySnapshot, mediaCount?: number): Promise<BackupMergePreview>;
+  mergePortableSnapshot(snapshot: RepositorySnapshot, mediaCount?: number): Promise<BackupMergeResult>;
 }

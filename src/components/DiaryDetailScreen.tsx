@@ -9,6 +9,9 @@ import {
 import { Diary, Entry } from '../types';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import { diaryRepository } from '../repositories';
+import { exportDiaryArchive } from '../utils/diaryArchive';
+import { BACKUP_PASSPHRASE_MIN_LENGTH } from '../utils/backupEncryption';
+import OverlayPortal from './OverlayPortal';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
@@ -253,20 +256,26 @@ export default function DiaryDetailScreen({
     setShowExportModal(false);
   };
 
-  const handleExportJSON = () => {
-    const backupData = {
-      exportedAt: new Date().toISOString(),
-      diary: diary,
-      entries: diaryEntries
-    };
-    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${diary.name.toLowerCase().replace(/\s+/g, '_')}_backup.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setShowExportModal(false);
+  const handleExportJSON = async () => {
+    const passphrase = window.prompt(`Choose a password of at least ${BACKUP_PASSPHRASE_MIN_LENGTH} characters for this portable diary archive.`);
+    if (passphrase === null) return;
+    if (passphrase.length < BACKUP_PASSPHRASE_MIN_LENGTH) {
+      window.alert(`Password must contain at least ${BACKUP_PASSPHRASE_MIN_LENGTH} characters.`);
+      return;
+    }
+    try {
+      const bytes = await exportDiaryArchive(diary, diaryEntries, passphrase);
+      const blob = new Blob([bytes], { type: 'application/vnd.deardiary.diary-archive' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${diary.name.toLowerCase().replace(/\s+/g, '_')}.ddiary`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setShowExportModal(false);
+    } catch (error: any) {
+      window.alert(error?.message || 'Diary archive could not be created.');
+    }
   };
 
   const triggerPrint = () => {
@@ -822,7 +831,8 @@ export default function DiaryDetailScreen({
       {/* TABLE OF CONTENTS DRAWER POPUP */}
       <AnimatePresence>
         {showTOC && (
-          <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-sm" onClick={() => setShowTOC(false)}>
+          <OverlayPortal>
+            <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-sm" onClick={() => setShowTOC(false)}>
             <motion.div 
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
@@ -889,14 +899,16 @@ export default function DiaryDetailScreen({
                 })}
               </div>
             </motion.div>
-          </div>
+            </div>
+          </OverlayPortal>
         )}
       </AnimatePresence>
 
       {/* Point 2: REAL EXPORT OPTIONS MODAL */}
       <AnimatePresence>
         {showExportModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md" onClick={() => setShowExportModal(false)}>
+          <OverlayPortal>
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md" onClick={() => setShowExportModal(false)}>
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -935,7 +947,7 @@ export default function DiaryDetailScreen({
                       <span>Export as Elegant Plain Text</span>
                       <ArrowUpRight className="w-3.5 h-3.5 text-brand-sage" />
                     </h4>
-                    <p className="text-[10px] text-brand-sage mt-0.5">Generates a clean text file containing all dated thoughts & tags.</p>
+                    <p className="text-[10px] text-brand-sage mt-0.5">Clean text containing dated thoughts and tags; attached media is not included.</p>
                   </div>
                 </button>
 
@@ -949,10 +961,10 @@ export default function DiaryDetailScreen({
                   </span>
                   <div className="flex-1">
                     <h4 className="text-sm font-bold text-brand-plum flex items-center justify-between">
-                      <span>Download JSON Data Backup</span>
+                      <span>Download Portable Diary Archive</span>
                       <ArrowUpRight className="w-3.5 h-3.5 text-brand-sage" />
                     </h4>
-                    <p className="text-[10px] text-brand-sage mt-0.5">Secure schema file to restore on any device or software later.</p>
+                    <p className="text-[10px] text-brand-sage mt-0.5">Password-protected diary data, readable text, photos, covers, and audio.</p>
                   </div>
                 </button>
 
@@ -977,14 +989,16 @@ export default function DiaryDetailScreen({
                 </button>
               </div>
             </motion.div>
-          </div>
+            </div>
+          </OverlayPortal>
         )}
       </AnimatePresence>
 
       {/* PRINT PREVIEW COMPILATION VIEW MODAL */}
       <AnimatePresence>
         {showPrintPreview && (
-          <div className="fixed inset-0 z-50 bg-brand-bg overflow-y-auto p-4 md:p-8 flex flex-col gap-6">
+          <OverlayPortal>
+            <div className="fixed inset-0 z-50 bg-brand-bg overflow-y-auto p-4 md:p-8 flex flex-col gap-6">
             <header className="flex justify-between items-center max-w-3xl mx-auto w-full border-b border-brand-border/60 pb-3 select-none no-print">
               <button
                 onClick={() => setShowPrintPreview(false)}
@@ -1039,20 +1053,22 @@ export default function DiaryDetailScreen({
                 ))}
               </div>
             </div>
-          </div>
+            </div>
+          </OverlayPortal>
         )}
       </AnimatePresence>
 
       {/* PHOTO LIGHTBOX POPUP */}
       <AnimatePresence>
         {lightboxImg && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setLightboxImg(null)}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/95 backdrop-blur-lg"
-          >
+          <OverlayPortal>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setLightboxImg(null)}
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/95 backdrop-blur-lg"
+            >
             {/* Close Button */}
             <button 
               onClick={() => setLightboxImg(null)}
@@ -1075,7 +1091,8 @@ export default function DiaryDetailScreen({
                 referrerPolicy="no-referrer"
               />
             </motion.div>
-          </motion.div>
+            </motion.div>
+          </OverlayPortal>
         )}
       </AnimatePresence>
     </div>

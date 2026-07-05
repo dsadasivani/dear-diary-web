@@ -59,12 +59,16 @@ public final class DriveBackupWorker extends Worker {
             String deviceId = store.getString(BackupSecureStore.DEVICE_ID, "");
             String parentFileId = store.getString(BackupSecureStore.PARENT_FILE_ID, "");
             int schemaVersion = (int) store.getLong(BackupSecureStore.STAGED_SCHEMA, 2);
+            boolean encrypted = store.getBoolean(BackupSecureStore.STAGED_ENCRYPTED, false);
+            String encryptionKeyId = store.getString(BackupSecureStore.STAGED_ENCRYPTION_KEY_ID, "");
             DriveApiClient.BackupFile uploaded = drive.upload(
                 stagedFile,
                 deviceId,
                 stagedRevision,
                 parentFileId,
-                schemaVersion
+                schemaVersion,
+                encrypted,
+                encryptionKeyId
             );
 
             long now = System.currentTimeMillis();

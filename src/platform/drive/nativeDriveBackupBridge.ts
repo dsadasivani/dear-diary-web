@@ -18,6 +18,8 @@ export interface StagedBackupInput {
   contentRevision: number;
   deviceId: string;
   parentBackupFileId?: string;
+  encrypted?: boolean;
+  encryptionKeyId?: string;
 }
 
 export interface NativeDriveBackupBridge {

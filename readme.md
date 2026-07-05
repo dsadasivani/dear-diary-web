@@ -32,7 +32,7 @@ The device is always the source of truth. There is no application database serve
 - Stores an entry as ordered time-stamped blocks (called “moments” in the UI). Existing single-body entries are migrated into a first block when edited.
 - Provides formatting controls for bold, italic, underline, strike-through, heading, quotation, list, and font family.
 - Includes a distraction-reduced focus mode.
-- Provides a local “gentle reflection” tool that suggests a mood, tags, and an empathetic response using keyword heuristics. It does not currently call Gemini or another remote AI service.
+- Provides a privacy-first **Local Reflection** tool that suggests a mood, tags, and an empathetic response using on-device keyword heuristics. No journal text is sent to an AI service.
 - Supports speech-to-text and audio notes when the platform provides the required microphone and speech services.
 
 ### Reading and exporting a diary
@@ -63,7 +63,7 @@ The per-diary JSON export is a readable data extract. It is not the same format 
 ### Search
 
 - Searches diary entries and notes in real time by title or body.
-- Filters by source, built-in tags, inclusive date range, and whether an entry has photos.
+- Filters by source, built-in and custom tags, inclusive date range, and whether an entry has photos.
 - Requires all selected tags to match and sorts results newest first.
 - Excludes entries belonging to a locked diary until that diary is unlocked for the current app session.
 - Opens note results in the note editor and entry results in their containing diary.
@@ -86,7 +86,7 @@ The settings area has four tabs:
 | Profile | Link/reconnect/disconnect Google on native mobile; edit nickname, email, bio, avatar, color, and daily word target. |
 | Security | Change a 4- or 8-digit PIN, replace the recovery question, inspect Google recovery status, and enable/disable native biometrics or a web passkey. |
 | Backup | Inspect Drive backup status, run a backup, set automatic backup policy, resolve device ownership conflicts, and export/import a password-protected local backup. |
-| Customize | Switch light/dark theme and manage custom tags and moods. |
+| Customize | Configure the Android daily reminder, switch light/dark theme, and manage custom tags and moods. |
 
 ## Functional flows
 
@@ -98,7 +98,7 @@ The settings area has four tabs:
 4. The user can then:
    - stay local, or
    - link a Google account on native mobile for Drive backup and Google-based PIN recovery.
-5. If the linked account already contains a hidden backup, the user can restore it or continue with local data. Continuing locally blocks cloud writes so the existing cloud backup is not overwritten accidentally.
+5. If the linked account already contains a hidden backup, the user can replace local portable content, safely merge while preserving conflicts as recovered copies, or continue locally. Continuing locally blocks cloud writes so the existing cloud backup is not overwritten accidentally.
 6. After setup, the app reloads repository state and opens Home.
 
 Older installations that already have a PIN but no recovery question must add one after their next successful PIN verification.
@@ -143,21 +143,21 @@ The diary lock is an application access-control feature. It does not create a se
 
 | Platform/mode | Behavior |
 | --- | --- |
-| Web audio note | Uses `MediaRecorder`; the audio remains a data URI in browser storage. |
-| Web speech-to-text | Uses browser `SpeechRecognition`/`webkitSpeechRecognition` when available. |
+| Web audio note | Uses `MediaRecorder` without starting speech recognition; the audio remains a data URI in browser storage. |
+| Web speech-to-text | Uses browser `SpeechRecognition`/`webkitSpeechRecognition` without recording audio when available. Browser implementations may require network access. |
 | Android audio note | Uses the native voice-recorder plugin and writes the result to app-private files. |
 | Android speech-to-text | Uses Android speech recognition and inserts recognized text; it does not start the native audio recorder. |
 
-Android separates audio recording from speech recognition because both services cannot reliably own the microphone at the same time. Speech recognition is fixed to `en-US` in the current implementation.
+Audio Note and Dictate Text are separate on every platform so microphone services do not compete and the UI never promises an unavailable transcription fallback. Dictation uses the device/browser language with `en-US` fallback. Android requires an installed and enabled speech-recognition service.
 
 ### Full manual export/import
 
 1. Open Settings → Backup → Advanced Local Export.
-2. Enter a password to export the complete portable journal payload as an AES-encrypted text file.
-3. To restore, select that `.txt` file and enter the same password.
+2. Enter a password of at least 12 characters to export a media-complete `.ddbackup` archive protected with authenticated AES-256-GCM encryption.
+3. To restore, select that `.ddbackup` file and enter the same password. Legacy CryptoJS `.txt` backups remain importable.
 4. After successful import, the page reloads.
 
-The file contains diaries, entries, notes, app settings, and profile. It deliberately does not contain the app PIN, recovery hashes, biometric credential state, Google tokens, Drive runtime state, or the native SQLite encryption secret.
+The file contains diaries, entries, notes, media, app settings, and profile. It deliberately does not contain the app PIN, recovery hashes, biometric credential state, Google tokens, Drive runtime state, or the native SQLite encryption secret.
 
 ## Architecture
 
@@ -289,8 +289,8 @@ A fresh data store creates one unlocked diary named **My Diary** and no entries 
 - Android journal records are protected by SQLCipher and the database secret is kept in OS-backed secure storage.
 - Android media lives in app-private storage but is not separately encrypted by application code.
 - Web journal data and media are stored in browser `localStorage`; the PIN is an app-level gate and does not encrypt those records at rest.
-- Drive `appDataFolder` hides backups from the normal Drive UI and limits access to the app, but backups are Google-protected rather than end-to-end encrypted by Dear Diary.
-- The optional manual export is password-protected with CryptoJS AES and should be handled as sensitive personal data.
+- Drive `appDataFolder` hides backups from the normal Drive UI and limits access to the app. Optional end-to-end encryption adds a separate passphrase boundary; Drive timestamps, size, and lineage metadata remain visible to Google.
+- New manual exports use authenticated AES-256-GCM envelopes. Losing the passphrase makes that archive unrecoverable.
 
 Clearing browser site data or Android app storage deletes local data and security material. Android's ordinary app uninstall/clear-storage recovery therefore depends on an existing Drive or manual backup.
 
@@ -345,10 +345,16 @@ sequenceDiagram
 - WorkManager also requires battery and storage not low, retries transient errors with exponential backoff, and may run later than the requested time because of Doze or unmet constraints.
 - Boot, app update, clock, and timezone broadcasts reschedule pending automatic work.
 - Manual “Back up now” stages the latest revision and asks WorkManager to run immediately, but Android constraints still apply.
+- Optional Drive encryption uses a random master key protected by a user passphrase. The master key is cached in Android secure storage for background work; the passphrase is never stored.
 
 ### Restore and multi-device safety
 
-Restore is replacement, not record-by-record synchronization or merging:
+Drive remains snapshot backup rather than continuous synchronization. A backup can be applied in two explicit modes:
+
+- **Replace** swaps portable content after creating a safety snapshot.
+- **Safe Merge** retains local content, imports cloud-only records, and preserves divergent records as recovered copies. Snapshot deletions are never propagated.
+
+Replacement restore works as follows:
 
 1. The app lists the newest five hidden backups and tries them newest-first until a compatible bundle validates.
 2. Before replacement, it attempts to save a local `pre-restore-<timestamp>.ddb` safety snapshot.
@@ -359,6 +365,8 @@ Restore is replacement, not record-by-record synchronization or merging:
 7. The restored backup becomes the new lineage parent and the app stages a post-restore checkpoint.
 
 Each backup records `deviceId`, `contentRevision`, and `parentBackupFileId`. If a different device has advanced the latest cloud lineage, automatic upload blocks rather than overwriting it. The user must restore that backup or explicitly choose **Use this device for backup**, which confirms replacement without merging.
+
+Per-diary portability is provided through password-protected `.ddiary` archives containing a manifest, readable text, structured diary JSON, and all referenced cover/photo/audio files. Import always creates a new diary with remapped IDs.
 
 ## Local development
 
@@ -446,6 +454,25 @@ npm run mobile:sync
 
 Do not enable this in a production build.
 
+### Release assets and signing
+
+Regenerate the adaptive launcher icons and light/dark splash set from `resources/icon.png` and `resources/splash.png`:
+
+```bash
+npm run assets:generate
+```
+
+Release version/signing values can be supplied through Gradle/environment properties. Copy `android/keystore.properties.example` to the ignored `android/keystore.properties`, then replace its placeholders. Keystores and passwords must remain outside version control.
+
+```powershell
+npm run android:lint
+npm run android:test
+npm run android:release
+npm run android:bundle
+```
+
+`android:release` can validate an unsigned release build. `android:bundle` produces a signed upload bundle only when all four `DEAR_DIARY_STORE_*` values are configured. Release minification is intentionally disabled for the first public build.
+
 ### Google Cloud setup for Drive backup
 
 1. Enable **Google Drive API** in the Google Cloud project.
@@ -499,7 +526,7 @@ Copy `.env.example` to `.env` when native Google backup is required. Vite expose
 | `DISABLE_HMR` | Optional development setting | Disables Vite HMR/file watching when exactly `true`. |
 | `NODE_ENV` | Production server only | Must be `production` for `dist/server.cjs` to serve static assets instead of creating Vite middleware. |
 
-`GEMINI_API_KEY` and `APP_URL` remain in the current `.env.example` as AI Studio-era placeholders, but no current source file reads them. The reflection assistant is local and no Gemini request is made.
+The reflection assistant is local and requires no API key. AI Studio/Gemini placeholders and the unused Gemini client dependency have been removed.
 
 Never commit `.env`; the repository ignores all `.env*` files except `.env.example`.
 
@@ -523,6 +550,9 @@ The automated tests cover:
 - PIN creation/change/recovery and Google account binding;
 - rejection of incomplete, unsupported, or checksum-invalid Drive bundles;
 - compatibility validation for legacy schema-1 and current portable schema-2 bundles.
+- authenticated backup encryption, wrong-passphrase, and tamper rejection;
+- safe-merge additions, skips, diary cloning, recovered conflicts, and catalog unions;
+- reference-aware native media garbage-collection selection.
 
 There are no component/end-to-end tests or Android instrumentation tests for app behavior beyond the generated sample test stubs. Physical-device QA remains essential for permissions, biometrics, microphone behavior, Preferences/legacy-media migrations, WorkManager scheduling, authorization revocation, resumable uploads, and multi-device lineage conflicts.
 
@@ -566,14 +596,9 @@ Important entry points:
 
 - Android is the complete native target. iOS lacks the custom Drive bridge/background scheduler.
 - Web data is local to one browser profile and is not encrypted at rest by the app.
-- Drive is backup/restore, not synchronization; restoring or choosing a new active device replaces portable content and does not merge divergent journals.
-- Drive backups are not end-to-end encrypted. Use the password-protected local export when that additional boundary is required.
-- The local reflection assistant is deterministic keyword analysis despite older AI/Gemini copy and dependencies still present in the project.
-- Browser speech recognition availability and network behavior vary by browser. Android speech-to-text requires installed Android speech services.
-- The search tag picker currently lists built-in tags only, even though text search still returns entries/notes containing custom tags.
-- The diary-detail calendar currently opens the editor for an empty day but drops the selected date at the `App.tsx` callback boundary, so the editor defaults to today. The Stats calendar does forward its selected date.
-- Reminder scheduling is implemented in the repository/native layer, but the current settings JSX does not render a reminder toggle/time control. Existing persisted reminder settings are still respected whenever settings are saved.
-- Per-diary JSON and text exports omit attached media bytes; use the full manual or Drive backup for portable media restore.
-- Removing an attachment or resetting repository content does not currently include an orphan-file garbage-collection pass for native media.
-- Android **Settings → Apps → Dear Diary → Clear storage** is destructive: it removes SQLite, secure-storage keys, Preferences, app-private files, account link state, and the local PIN.
-- Before a store release, complete large-library/interrupted/low-storage migration tests, production-signed Drive and two-device tests, icon/splash replacement, signing configuration, and release build documentation. See [docs/mobile-capacitor.md](docs/mobile-capacitor.md).
+- Drive remains snapshot backup rather than live synchronization. Safe Merge preserves divergent records but cannot propagate deletions because snapshots do not contain tombstones.
+- End-to-end encryption is optional. Unencrypted legacy/current backups remain Google-protected, and encrypted-backup metadata such as size, timestamps, and lineage remains visible.
+- Browser speech-recognition availability and network behavior still vary by browser. Android Dictate Text requires installed Android speech services.
+- Media cleanup is eventual for ordinary edits: newly created unreferenced files receive a 24-hour grace period to protect unsaved drafts.
+- Android **Settings → Apps → Dear Diary → Clear storage** remains destructive. OS backup/device transfer is disabled to prevent partial encrypted-data restoration; recovery requires Drive or a `.ddbackup` archive.
+- Before a store release, complete large-library/interrupted/low-storage migration tests, production-signed Drive and two-device tests, icon/splash verification on physical devices, signing configuration, and release build documentation. See [docs/mobile-capacitor.md](docs/mobile-capacitor.md).

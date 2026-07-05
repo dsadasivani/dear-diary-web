@@ -8,11 +8,7 @@ import androidx.work.ExistingWorkPolicy;
 import androidx.work.NetworkType;
 import androidx.work.OneTimeWorkRequest;
 import androidx.work.WorkManager;
-import java.time.DayOfWeek;
-import java.time.Duration;
-import java.time.LocalTime;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeParseException;
+import java.util.Calendar;
 import java.util.concurrent.TimeUnit;
 
 final class DriveBackupScheduler {
@@ -69,23 +65,34 @@ final class DriveBackupScheduler {
     }
 
     private static long delayUntilNextRun(BackupSecureStore store) {
-        LocalTime time;
-        try {
-            time = LocalTime.parse(store.getString(BackupSecureStore.SCHEDULE_TIME, "02:00"));
-        } catch (DateTimeParseException error) {
-            time = LocalTime.of(2, 0);
-        }
+        int[] time = parseHourMinute(store.getString(BackupSecureStore.SCHEDULE_TIME, "02:00"));
 
-        ZonedDateTime now = ZonedDateTime.now();
-        ZonedDateTime next = now.withHour(time.getHour()).withMinute(time.getMinute()).withSecond(0).withNano(0);
+        Calendar now = Calendar.getInstance();
+        Calendar next = (Calendar) now.clone();
+        next.set(Calendar.HOUR_OF_DAY, time[0]);
+        next.set(Calendar.MINUTE, time[1]);
+        next.set(Calendar.SECOND, 0);
+        next.set(Calendar.MILLISECOND, 0);
         String mode = store.getString(BackupSecureStore.SCHEDULE_MODE, "daily");
         if ("weekly".equals(mode)) {
             int jsDay = (int) store.getLong(BackupSecureStore.SCHEDULE_DAY, 0);
-            DayOfWeek target = DayOfWeek.of(jsDay == 0 ? 7 : Math.max(1, Math.min(jsDay, 6)));
-            while (next.getDayOfWeek() != target || !next.isAfter(now)) next = next.plusDays(1);
-        } else if (!next.isAfter(now)) {
-            next = next.plusDays(1);
+            int target = jsDay <= 0 ? Calendar.SUNDAY : Math.min(Calendar.SATURDAY, jsDay + 1);
+            while (next.get(Calendar.DAY_OF_WEEK) != target || !next.after(now)) next.add(Calendar.DATE, 1);
+        } else if (!next.after(now)) {
+            next.add(Calendar.DATE, 1);
         }
-        return Math.max(1_000, Duration.between(now, next).toMillis());
+        return Math.max(1_000, next.getTimeInMillis() - now.getTimeInMillis());
+    }
+
+    private static int[] parseHourMinute(String value) {
+        try {
+            String[] parts = value == null ? new String[0] : value.split(":", 2);
+            int hour = Integer.parseInt(parts[0]);
+            int minute = Integer.parseInt(parts[1]);
+            if (hour < 0 || hour > 23 || minute < 0 || minute > 59) throw new IllegalArgumentException();
+            return new int[] { hour, minute };
+        } catch (Exception error) {
+            return new int[] { 2, 0 };
+        }
     }
 }

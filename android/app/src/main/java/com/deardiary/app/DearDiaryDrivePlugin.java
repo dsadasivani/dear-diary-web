@@ -136,6 +136,8 @@ public class DearDiaryDrivePlugin extends Plugin {
         store.putLong(BackupSecureStore.STAGED_SIZE, call.getLong("sizeBytes", 0L));
         store.putLong(BackupSecureStore.STAGED_SCHEMA, call.getInt("schemaVersion", 2));
         store.putLong(BackupSecureStore.STAGED_REVISION, revision);
+        store.putBoolean(BackupSecureStore.STAGED_ENCRYPTED, call.getBoolean("encrypted", false));
+        store.putString(BackupSecureStore.STAGED_ENCRYPTION_KEY_ID, call.getString("encryptionKeyId"));
         store.putString(BackupSecureStore.DEVICE_ID, deviceId);
         store.putString(BackupSecureStore.PARENT_FILE_ID, call.getString("parentBackupFileId"));
         store.putBoolean(BackupSecureStore.CLOUD_WRITE_BLOCKED, false);

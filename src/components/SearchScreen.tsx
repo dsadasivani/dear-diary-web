@@ -3,13 +3,14 @@ import { motion } from 'motion/react';
 import { 
   Search, BookOpen, FileText, Image, Calendar, Tag, ArrowRight, X, Filter 
 } from 'lucide-react';
-import { Diary, Entry, Note } from '../types';
-import { PREDEFINED_TAGS } from '../domain/journalCatalog';
+import { AppSettings, Diary, Entry, Note } from '../types';
+import { getTagsForSettings } from '../domain/appSettings';
 
 interface SearchScreenProps {
   diaries: Diary[];
   entries: Entry[];
   notes: Note[];
+  settings: AppSettings;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onEditNote: (note: Note) => void;
 }
@@ -18,9 +19,11 @@ export default function SearchScreen({
   diaries,
   entries,
   notes,
+  settings,
   onNavigate,
   onEditNote
 }: SearchScreenProps) {
+  const availableTags = getTagsForSettings(settings);
   const [query, setQuery] = useState<string>('');
   
   // Filter states
@@ -218,7 +221,7 @@ export default function SearchScreen({
           <div className="flex flex-col gap-1.5">
             <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Has Specific Tags</span>
             <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto no-scrollbar">
-              {PREDEFINED_TAGS.map(tag => {
+              {availableTags.map(tag => {
                 const isSelected = selectedTags.includes(tag);
                 return (
                   <button
