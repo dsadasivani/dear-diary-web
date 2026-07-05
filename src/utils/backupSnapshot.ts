@@ -11,14 +11,13 @@ import {
 } from '../types';
 import { fileStorageService } from '../platform/filesystem';
 import { persistMediaDataUri } from '../mobile/mediaStorage';
+import type { MediaKind } from '../mobile/mediaStorage';
 import { diaryRepository } from '../repositories';
 
 export const BACKUP_SCHEMA_VERSION = 2;
 const STORAGE_SCHEMA_VERSION = 1;
 const BACKUP_DATA_FILE = 'data.json';
 const BACKUP_MANIFEST_FILE = 'manifest.json';
-
-type MediaKind = 'cover' | 'photo' | 'audio';
 
 interface BackupMediaAsset {
   id: string;
@@ -187,6 +186,7 @@ const createPayloadAndMedia = async (context: BackupCreationContext): Promise<{
   const diaries = cloneJson(snapshot.diaries);
   const entries = cloneJson(snapshot.entries);
   const notes = cloneJson(snapshot.notes);
+  const userProfile = cloneJson(snapshot.userProfile!);
   const mediaAssets: BackupMediaAsset[] = [];
   const mediaFiles: Record<string, Uint8Array> = {};
 
@@ -206,6 +206,8 @@ const createPayloadAndMedia = async (context: BackupCreationContext): Promise<{
     }
   }
 
+  userProfile.avatarUri = await addMediaAsset(userProfile.avatarUri, 'avatar', mediaAssets, mediaFiles);
+
   return {
     payload: {
       version: '3.0.0',
@@ -214,7 +216,7 @@ const createPayloadAndMedia = async (context: BackupCreationContext): Promise<{
       entries,
       notes,
       settings: sanitizeSettings(cloneJson(snapshot.settings!)),
-      userProfile: cloneJson(snapshot.userProfile!),
+      userProfile,
       backupSchedule: context.schedule ? cloneJson(context.schedule) : undefined,
       mediaAssets,
     },
@@ -223,7 +225,7 @@ const createPayloadAndMedia = async (context: BackupCreationContext): Promise<{
 };
 
 const getAppVersion = (): string => (
-  (import.meta.env.VITE_APP_VERSION as string | undefined)?.trim() || '0.0.0'
+  (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '0.0.0'
 );
 
 const getBackupCreationContext = async (): Promise<BackupCreationContext> => {
@@ -327,6 +329,10 @@ const replaceMediaRefs = (
       }
     });
   });
+
+  if (payload.userProfile.avatarUri && mediaMap.has(payload.userProfile.avatarUri)) {
+    payload.userProfile.avatarUri = mediaMap.get(payload.userProfile.avatarUri);
+  }
 };
 
 const validateBackup = async (

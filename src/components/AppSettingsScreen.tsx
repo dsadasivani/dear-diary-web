@@ -51,6 +51,8 @@ import { exportEncryptedBackup, importEncryptedBackup } from '../utils/manualBac
 import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
 import { backupCoordinator } from '../utils/backupCoordinator';
 import { createDefaultBackupSchedule } from '../repositories/defaults';
+import { populateUserProfileFromGoogle } from '../utils/googleProfile';
+import ProfileAvatar from './ProfileAvatar';
 
 interface AppSettingsScreenProps {
   diaries: Diary[];
@@ -150,6 +152,7 @@ export default function AppSettingsScreen({
   const [profileBio, setProfileBio] = useState(profile.bio);
   const [profileEmoji, setProfileEmoji] = useState(profile.avatarEmoji);
   const [profileColor, setProfileColor] = useState(profile.avatarColor);
+  const [profileAvatarUri, setProfileAvatarUri] = useState(profile.avatarUri);
   const [profileWritingGoal, setProfileWritingGoal] = useState(profile.writingGoal || 100);
   
   // Custom Tags and Moods
@@ -236,6 +239,23 @@ export default function AppSettingsScreen({
       : 'Never'
   ), [driveBackupSettings.lastBackupAt]);
 
+  const syncProfileFromGoogle = async (session: GoogleAccountSession): Promise<void> => {
+    const currentProfile = await diaryRepository.getUserProfile();
+    const updatedProfile = await populateUserProfileFromGoogle(currentProfile, session);
+    if (JSON.stringify(updatedProfile) !== JSON.stringify(currentProfile)) {
+      await diaryRepository.saveUserProfile(updatedProfile);
+    }
+    setProfile(updatedProfile);
+    setProfileName(updatedProfile.name);
+    setProfileEmail(updatedProfile.email);
+    setProfileBio(updatedProfile.bio);
+    setProfileEmoji(updatedProfile.avatarEmoji);
+    setProfileColor(updatedProfile.avatarColor);
+    setProfileAvatarUri(updatedProfile.avatarUri);
+    setProfileWritingGoal(updatedProfile.writingGoal || 100);
+    await onDataChanged();
+  };
+
   const saveConnectedBackupSession = async (session: GoogleAccountSession): Promise<DriveBackupSettings> => {
     const accountChanged = !!driveBackupSettings.linkedGoogleUserId && driveBackupSettings.linkedGoogleUserId !== session.userId;
     const nextBackupSettings: DriveBackupSettings = {
@@ -273,7 +293,8 @@ export default function AppSettingsScreen({
     try {
       const session = await connectGoogleDrive();
       await saveConnectedBackupSession(session);
-      onShowToast?.(`Google Drive backup connected as ${session.email || 'your Google account'}.`, 'success');
+      await syncProfileFromGoogle(session);
+      onShowToast?.(`Google Drive and profile connected as ${session.email || 'your Google account'}.`, 'success');
       return session;
     } catch (err: any) {
       console.error(err);
@@ -291,6 +312,7 @@ export default function AppSettingsScreen({
       const session = await restoreGoogleDriveSession(true);
       if (!session?.accessToken) throw new Error('Google Drive authorization was not completed.');
       await saveConnectedBackupSession(session);
+      await syncProfileFromGoogle(session);
       onShowToast?.('Google Drive authorization renewed.', 'success');
       return session;
     } catch (err: any) {
@@ -680,6 +702,7 @@ export default function AppSettingsScreen({
       bio: profileBio.trim(),
       avatarEmoji: profileEmoji,
       avatarColor: profileColor,
+      avatarUri: profileAvatarUri,
       writingGoal: profileWritingGoal
     };
     await diaryRepository.saveUserProfile(updatedProfile);
@@ -984,10 +1007,16 @@ export default function AppSettingsScreen({
                   {/* Avatar Preview & Selection */}
                   <div className="flex flex-col items-center gap-3 bg-brand-bg/50 dark:bg-brand-bg/25 p-4 rounded-2xl border border-brand-border/40">
                     <div 
-                      className="w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-md border-2 border-brand-border"
+                      className="relative overflow-hidden w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-md border-2 border-brand-border"
                       style={{ backgroundColor: profileColor }}
                     >
-                      <span>{profileEmoji}</span>
+                      <ProfileAvatar profile={{
+                        ...profile,
+                        name: profileName,
+                        avatarEmoji: profileEmoji,
+                        avatarColor: profileColor,
+                        avatarUri: profileAvatarUri,
+                      }} />
                     </div>
                     
                     {/* Emojis list */}
@@ -998,7 +1027,10 @@ export default function AppSettingsScreen({
                           <button
                             key={emo}
                             type="button"
-                            onClick={() => setProfileEmoji(emo)}
+                            onClick={() => {
+                              setProfileEmoji(emo);
+                              setProfileAvatarUri(undefined);
+                            }}
                             className={`text-xl p-1.5 rounded-xl hover:scale-110 active:scale-95 transition-transform ${profileEmoji === emo ? 'bg-brand-pink/15 scale-105' : ''}`}
                           >
                             {emo}

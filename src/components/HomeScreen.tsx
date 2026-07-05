@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { Diary, Entry, Note, UserProfile } from '../types';
 import { PREDEFINED_TAGS, calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
+import ProfileAvatar from './ProfileAvatar';
 
 interface HomeScreenProps {
   diaries: Diary[];
@@ -113,11 +114,11 @@ export default function HomeScreen({
             <div className="absolute inset-0 bg-brand-pink/20 rounded-full blur-md group-hover:bg-brand-pink/30 transition-all" />
             <button 
               onClick={() => onNavigate('stats', 'appSettings')}
-              className="w-13 h-13 rounded-full bg-white dark:bg-brand-card-bg flex items-center justify-center text-2xl border-2 border-brand-border shadow-md z-10 relative hover:scale-105 transition-transform"
+              className="w-13 h-13 rounded-full bg-white dark:bg-brand-card-bg flex items-center justify-center text-2xl border-2 border-brand-border shadow-md z-10 relative overflow-hidden hover:scale-105 transition-transform"
               style={{ backgroundColor: userProfile.avatarColor }}
               title="Edit Profile"
             >
-              <span>{userProfile.avatarEmoji}</span>
+              <ProfileAvatar profile={userProfile} />
             </button>
           </div>
           <div>

@@ -40,6 +40,7 @@ const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleA
     userId: result.userId,
     email: result.email,
     displayName: result.displayName,
+    imageUrl: result.imageUrl,
     accessToken: null,
   };
 
@@ -60,6 +61,7 @@ const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleA
       userId: authorization.account.userId,
       email: authorization.account.email,
       displayName: authorization.account.displayName,
+      imageUrl: result.imageUrl,
       accessToken: authorization.accessToken,
     };
     cachedDriveSession = session;
@@ -99,6 +101,7 @@ export const restoreGoogleDriveSession = async (interactive = false): Promise<Go
     userId: authorization.account.userId,
     email: authorization.account.email,
     displayName: authorization.account.displayName,
+    imageUrl: null,
     accessToken: authorization.accessToken,
   };
   cachedDriveSession = session;

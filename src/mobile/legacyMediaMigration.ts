@@ -2,6 +2,7 @@ import { diaryRepository } from '../repositories';
 import { localDataStore } from '../platform/storage';
 import { isNativePlatform } from '../platform';
 import { persistMediaDataUri } from './mediaStorage';
+import type { MediaKind } from './mediaStorage';
 
 const MIGRATION_STATUS_KEY = 'deardiary_media_file_migration_v1';
 
@@ -42,7 +43,7 @@ export const migrateLegacyDataUriMedia = async (): Promise<LegacyMediaMigrationR
 
   const migrateUri = async (
     uri: string | undefined,
-    kind: 'audio' | 'photo' | 'cover',
+    kind: MediaKind,
     fallbackMime: string,
   ): Promise<string | undefined> => {
     if (!isDataUri(uri)) return uri;
@@ -72,6 +73,10 @@ export const migrateLegacyDataUriMedia = async (): Promise<LegacyMediaMigrationR
     for (const block of entry.blocks || []) {
       block.audioUri = await migrateUri(block.audioUri, 'audio', 'audio/webm');
     }
+  }
+
+  if (snapshot.userProfile) {
+    snapshot.userProfile.avatarUri = await migrateUri(snapshot.userProfile.avatarUri, 'avatar', 'image/jpeg');
   }
 
   if (migrated > 0) {

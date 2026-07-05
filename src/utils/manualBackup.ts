@@ -1,6 +1,28 @@
 import CryptoJS from 'crypto-js';
 import type { DiaryBackupData } from '../types';
 import { diaryRepository } from '../repositories';
+import { persistMediaDataUri, readImageAsDataUri } from '../mobile/mediaStorage';
+
+const makeProfilePortable = async (profile: DiaryBackupData['userProfile']): Promise<DiaryBackupData['userProfile']> => {
+  if (!profile?.avatarUri) return profile;
+  try {
+    const image = await readImageAsDataUri(profile.avatarUri);
+    return { ...profile, avatarUri: image?.dataUri };
+  } catch (error) {
+    console.warn('Profile avatar could not be included in the encrypted export:', error);
+    return { ...profile, avatarUri: undefined };
+  }
+};
+
+const restorePortableProfile = async (profile: DiaryBackupData['userProfile']): Promise<DiaryBackupData['userProfile']> => {
+  if (!profile?.avatarUri?.startsWith('data:')) return profile;
+  const image = await readImageAsDataUri(profile.avatarUri);
+  if (!image) return { ...profile, avatarUri: undefined };
+  return {
+    ...profile,
+    avatarUri: await persistMediaDataUri(image.dataUri, 'avatar', image.mimeType),
+  };
+};
 
 export const exportEncryptedBackup = async (password: string): Promise<string> => {
   const snapshot = await diaryRepository.exportSnapshot();
@@ -10,7 +32,7 @@ export const exportEncryptedBackup = async (password: string): Promise<string> =
     entries: snapshot.entries,
     notes: snapshot.notes,
     settings: snapshot.settings!,
-    userProfile: snapshot.userProfile,
+    userProfile: await makeProfilePortable(snapshot.userProfile),
   };
   return CryptoJS.AES.encrypt(JSON.stringify(backupData), password).toString();
 };
@@ -31,7 +53,7 @@ export const importEncryptedBackup = async (encryptedData: string, password: str
       entries: parsed.entries,
       notes: parsed.notes || [],
       settings: parsed.settings || current.settings,
-      userProfile: parsed.userProfile || current.userProfile,
+      userProfile: await restorePortableProfile(parsed.userProfile || current.userProfile),
     }, 'replace');
     return true;
   } catch (error) {

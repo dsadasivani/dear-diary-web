@@ -25,6 +25,7 @@ import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
 import { diaryRepository } from '../repositories';
 import { listDriveBackups, restoreLatestValidDriveBackup } from '../utils/driveBackup';
 import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
+import { populateUserProfileFromGoogle } from '../utils/googleProfile';
 
 interface LockScreenProps {
   initialSecurity: SecurityConfig;
@@ -310,6 +311,11 @@ export default function LockScreen({
         linkedAt: Date.now(),
         cloudWriteBlocked: false,
       });
+      const currentProfile = await diaryRepository.getUserProfile();
+      const updatedProfile = await populateUserProfileFromGoogle(currentProfile, session);
+      if (JSON.stringify(updatedProfile) !== JSON.stringify(currentProfile)) {
+        await diaryRepository.saveUserProfile(updatedProfile);
+      }
       const latest = (await listDriveBackups(session))[0] || null;
       setPendingBackupSession(session);
       setDiscoveredBackup(latest);

@@ -1,88 +1,579 @@
 # Dear Diary
 
-Dear Diary is a private, local-first journaling app built with React, TypeScript, Vite, and Capacitor. The mobile app treats device storage as the source of truth; Google Drive is used only for hidden scheduled/on-demand backup and restore.
+Dear Diary is a private, local-first journaling application for the web and Android. It supports multiple journals, rich diary entries, quick notes, photos, voice notes, search, personal analytics, app/diary locks, and portable backups.
 
-## Current Storage Architecture
+The device is always the source of truth. There is no application database server and no live cloud synchronization. On Android, Google Drive is an optional backup-and-restore destination; on the web, data remains in the current browser profile unless the user exports it.
+
+## Contents
+
+- [What the app does](#what-the-app-does)
+- [Functional flows](#functional-flows)
+- [Architecture](#architecture)
+- [Storage and data model](#storage-and-data-model)
+- [Security and privacy model](#security-and-privacy-model)
+- [Backup and restore](#backup-and-restore)
+- [Local development](#local-development)
+- [Android development](#android-development)
+- [iOS status](#ios-status)
+- [Environment variables](#environment-variables)
+- [Testing and validation](#testing-and-validation)
+- [Project structure](#project-structure)
+- [Known limitations and operational notes](#known-limitations-and-operational-notes)
+
+## What the app does
+
+### Journals and entries
+
+- Creates multiple diaries with a name, emoji, color, optional cover image, up to four decorative foil icons, and an optional diary lock.
+- Shows diaries in compact-grid or list layouts and remembers that view preference.
+- Edits diary appearance and lock state; deleting a diary also deletes all entries assigned to it.
+- Creates, edits, and deletes dated entries.
+- Supports entry title, date, time, rich text, mood, tags, multiple photos, and voice recordings.
+- Stores an entry as ordered time-stamped blocks (called “moments” in the UI). Existing single-body entries are migrated into a first block when edited.
+- Provides formatting controls for bold, italic, underline, strike-through, heading, quotation, list, and font family.
+- Includes a distraction-reduced focus mode.
+- Provides a local “gentle reflection” tool that suggests a mood, tags, and an empathetic response using keyword heuristics. It does not currently call Gemini or another remote AI service.
+- Supports speech-to-text and audio notes when the platform provides the required microphone and speech services.
+
+### Reading and exporting a diary
+
+- Displays the newest entry first and supports previous/next page navigation and left/right swipe gestures.
+- Searches within the current diary by title, body, tag, or mood.
+- Opens entries through a calendar or table of contents; selecting an empty calendar day starts the entry editor.
+- Displays photos in a lightbox and plays the entry's primary or block-level audio.
+- Exports one diary as plain text or JSON.
+- Opens a print compilation suitable for the browser/system “Save as PDF” flow.
+
+The per-diary JSON export is a readable data extract. It is not the same format as the full password-protected app backup and has no matching import screen.
+
+### Quick notes
+
+- Captures a note with one tag and derives its initial title from the first 30 characters.
+- Edits note title and rich-text body, pin state, and multiple tags.
+- Filters notes by all, pinned, tagged, or untagged; pinned notes sort first.
+- Converts a note into an entry in the first diary, using the `Reflective` mood.
+
+### Home dashboard
+
+- Shows a time-sensitive greeting, profile, date, daily word goal, and current writing streak.
+- Cycles through built-in writing prompts and opens the entry editor with the selected prompt inserted as a quotation.
+- Shows up to four recently active diaries and the most frequently used tags.
+- Saves a lightweight “Quick Jot” directly to notes.
+
+### Search
+
+- Searches diary entries and notes in real time by title or body.
+- Filters by source, built-in tags, inclusive date range, and whether an entry has photos.
+- Requires all selected tags to match and sorts results newest first.
+- Excludes entries belonging to a locked diary until that diary is unlocked for the current app session.
+- Opens note results in the note editor and entry results in their containing diary.
+
+### Reflections and statistics
+
+- Shows streak, entry count, and attached photo count.
+- Calculates mood distribution and frequent mood/tag pairings.
+- Provides year/month “year in pixels” mood calendars with links to existing memories or a new entry for an empty day.
+- Shows a 30-day writing-frequency heatmap using entries and notes.
+- Ranks the five most-used tags and shows the eight most recent photo memories.
+- Keeps locked-diary entries out of analytics until that diary is unlocked for the session.
+
+### Profile and settings
+
+The settings area has four tabs:
+
+| Tab | Capabilities |
+| --- | --- |
+| Profile | Link/reconnect/disconnect Google on native mobile; edit nickname, email, bio, avatar, color, and daily word target. |
+| Security | Change a 4- or 8-digit PIN, replace the recovery question, inspect Google recovery status, and enable/disable native biometrics or a web passkey. |
+| Backup | Inspect Drive backup status, run a backup, set automatic backup policy, resolve device ownership conflicts, and export/import a password-protected local backup. |
+| Customize | Switch light/dark theme and manage custom tags and moods. |
+
+## Functional flows
+
+### First launch
+
+1. The bootstrap layer opens local storage, initializes default records, migrates legacy native media if necessary, and starts the native backup coordinator.
+2. The lock screen asks for either a 4-digit or 8-digit PIN and confirmation.
+3. A recovery question is mandatory. The user can choose a preset question or write a custom one.
+4. The user can then:
+   - stay local, or
+   - link a Google account on native mobile for Drive backup and Google-based PIN recovery.
+5. If the linked account already contains a hidden backup, the user can restore it or continue with local data. Continuing locally blocks cloud writes so the existing cloud backup is not overwritten accidentally.
+6. After setup, the app reloads repository state and opens Home.
+
+Older installations that already have a PIN but no recovery question must add one after their next successful PIN verification.
+
+### Normal unlock and relock
+
+1. Every application mount starts at the lock screen; the persisted `isLocked` flag is not trusted as an authenticated session.
+2. The ambient lock view shows the clock and rotating text; tapping through opens the keypad.
+3. A correct PIN or enabled biometric/passkey starts an in-memory authenticated session.
+4. The navigation-bar lock button ends the session and forgets every per-diary unlock.
+5. On Android, the system Back button unwinds focus mode and nested screens, returns to Home, and exits the app only when already at Home.
+
+There is currently no inactivity timer or app-background auto-lock hook. Startup and the explicit lock action are the implemented app-lock boundaries.
+
+### Forgotten PIN
+
+1. Choose the recovery path from the lock screen.
+2. Verify either the local recovery answer or the exact Google account already bound to the device.
+3. Choose and confirm a new 4- or 8-digit PIN.
+4. Resetting the PIN disables biometrics/passkeys; they can be enrolled again in Settings.
+
+### Locked diary
+
+1. Opening a locked diary shows a diary-level challenge.
+2. The same app PIN or enabled biometric/passkey unlocks it for the current authenticated session.
+3. Until then, its entries are omitted from Home metrics, Search, and Stats.
+4. Relocking the app clears the set of unlocked diary IDs.
+
+The diary lock is an application access-control feature. It does not create a separate PIN or a separately encrypted database per diary.
+
+### Create and update an entry
+
+1. Start from a diary, an empty calendar day, a Home writing prompt, or an empty Stats calendar day.
+2. Choose the destination diary when the flow originated from a Home prompt.
+3. Enter title/date, select a mood and tags, attach photos, and write formatted content.
+4. Optionally record an audio moment or dictate text.
+5. Saving filters empty blocks, appends the current draft as a time-stamped block, sorts blocks by time, and combines their HTML into the entry's searchable/display body.
+6. The repository recalculates word/photo counts, the diary's entry count and “last updated” label, and the portable content revision.
+7. On Android, a changed content revision schedules a debounced backup-stage refresh if Drive is linked and cloud writes are allowed.
+
+### Voice and dictation behavior
+
+| Platform/mode | Behavior |
+| --- | --- |
+| Web audio note | Uses `MediaRecorder`; the audio remains a data URI in browser storage. |
+| Web speech-to-text | Uses browser `SpeechRecognition`/`webkitSpeechRecognition` when available. |
+| Android audio note | Uses the native voice-recorder plugin and writes the result to app-private files. |
+| Android speech-to-text | Uses Android speech recognition and inserts recognized text; it does not start the native audio recorder. |
+
+Android separates audio recording from speech recognition because both services cannot reliably own the microphone at the same time. Speech recognition is fixed to `en-US` in the current implementation.
+
+### Full manual export/import
+
+1. Open Settings → Backup → Advanced Local Export.
+2. Enter a password to export the complete portable journal payload as an AES-encrypted text file.
+3. To restore, select that `.txt` file and enter the same password.
+4. After successful import, the page reloads.
+
+The file contains diaries, entries, notes, app settings, and profile. It deliberately does not contain the app PIN, recovery hashes, biometric credential state, Google tokens, Drive runtime state, or the native SQLite encryption secret.
+
+## Architecture
+
+### Runtime overview
+
+```mermaid
+flowchart TD
+    UI[React screens] --> APP[App navigation and session state]
+    APP --> REPO[DiaryRepository]
+    REPO --> WEB{Runtime platform}
+    WEB -->|Web| LS[Browser localStorage]
+    WEB -->|Android/native| SQL[Encrypted SQLite / SQLCipher]
+    UI --> MEDIA[FileStorage and audio/security services]
+    MEDIA -->|Web| DATAURI[Data URIs + browser APIs]
+    MEDIA -->|Android| FILES[App-private files + native plugins]
+    REPO --> COORD[BackupCoordinator]
+    COORD -->|Android only| WM[WorkManager + Drive appDataFolder]
+```
+
+### Startup sequence
+
+```mermaid
+sequenceDiagram
+    participant Main as main.tsx
+    participant Boot as AppBootstrap
+    participant Repo as DiaryRepository
+    participant Store as Platform data store
+    participant Backup as BackupCoordinator
+    participant UI as App
+
+    Main->>Boot: render
+    Boot->>Store: hydrate native UI preference
+    Boot->>Repo: initialize defaults/migrate Preferences
+    Boot->>Repo: migrate legacy data-URI media
+    Boot->>Backup: initialize native schedule/staging
+    Boot->>Repo: load settings, security, profile
+    Boot->>UI: render locked app
+    UI->>Repo: load diaries, entries, notes
+```
+
+`AppBootstrap` caches its initialization promise so React Strict Mode does not run native initialization twice. A storage error produces a retry screen instead of rendering the journal against partial state.
+
+### Navigation model
+
+The app does not use React Router. `App.tsx` owns an in-memory navigation state:
+
+- Main tabs: `home`, `diaries`, `notes`, `search`, and `stats`.
+- Nested screens: diary detail, diary settings, entry editor, and app settings.
+- Selected diary, entry, date, note, and writing prompt IDs are passed as state.
+- Refreshing the browser restarts at the lock screen and Home after unlock; there are no URL-deep-link routes.
+
+### Repository and writes
+
+All domain writes pass through the async `DiaryRepository`. Writes are serialized with a promise tail to avoid lost updates from overlapping UI actions. A portable write also increments `contentRevision` and notifies backup listeners. Security-only and Drive-runtime writes do not increment the portable content revision.
+
+Multi-record native writes use a SQLite transaction. For example, saving an entry updates the entries collection, normalized entry/block/media tables, diary statistics, compatibility record, and Drive revision atomically.
+
+### Development server
+
+`server.ts` is intentionally small:
+
+- In development, Express mounts Vite in middleware mode on `0.0.0.0:3000`.
+- In production mode, it serves the built `dist` directory with SPA fallback.
+- `GET /api/health` returns `{ "status": "ok", "offline": true }`.
+- There are no journal CRUD, authentication, AI, or backup APIs on the server.
+
+## Storage and data model
+
+### Platform storage matrix
+
+| Concern | Web | Android/native |
+| --- | --- | --- |
+| Journal/settings/security records | Browser `localStorage` JSON | Encrypted SQLite with normalized tables and a compatibility key/value record |
+| Photos, covers, audio | Data URIs stored with the record | Files under Capacitor `Directory.Data`; database records store converted file URIs |
+| SQLite encryption secret | Not applicable | Random 32-byte value in OS-backed Capacitor Secure Storage |
+| Legacy fallback | Not applicable | Capacitor Preferences retained after verified migration |
+| Backup staging | Not available | Atomic app-private `backups/pending.ddb` file |
+| UI-only diary layout | `localStorage` | Mirrored through Preferences, then hydrated into `localStorage` for the UI |
+
+Native SQLite uses database name `dear_diary_local`, schema version `1`, and SQLCipher encryption. Its normalized tables are:
+
+- `diaries`
+- `entries`
+- `entry_blocks`
+- `notes`
+- `media_assets`
+- `app_settings`
+- `user_profile`
+- `storage_meta`
+- `kv_store` for migration/format compatibility
+
+On the first native launch after upgrading from Preferences, the app copies known legacy keys, populates normalized tables, verifies source and target collection counts, and only then records migration completion. Preferences remain available as a one-release fallback. If encrypted SQLite cannot be opened, the current implementation logs a warning and falls back to Preferences.
+
+Legacy native cover/photo/audio data URIs are migrated to app-private files on startup. Incomplete migrations are retried on the next launch.
+
+### Core entities
+
+| Entity | Important fields |
+| --- | --- |
+| `Diary` | ID, name, emoji, color, locked flag, cover URI, foil icons, derived entry count/last-updated label |
+| `Entry` | Diary ID, date/time, title, combined HTML body, mood, tags, photo URIs/count, word count, audio, ordered blocks, timestamps |
+| `EntryBlock` | ID, time, HTML body, optional audio URI |
+| `Note` | ID, title, rich-text body, pinned flag, tags, timestamps |
+| `AppSettings` | Theme, reminder preference/time, custom tags, custom moods |
+| `UserProfile` | Name, email, bio, avatar, writing target, joined date |
+| `SecurityConfig` | PIN/recovery hashes and salts, biometric/passkey flags, linked Google recovery identity |
+| `DriveBackupState` | Account identity, schedule, revisions, lineage, last result/error, and cloud-write block state |
+
+A fresh data store creates one unlocked diary named **My Diary** and no entries or notes.
+
+## Security and privacy model
+
+### PIN and recovery
+
+- PINs are restricted to exactly 4 or 8 numeric digits.
+- The PIN is stored as `SHA-256(PIN + random salt)`, not in plaintext.
+- Recovery answers are trimmed, whitespace-normalized, lowercased, salted, and hashed with PBKDF2 using 120,000 iterations.
+- The Google user ID is pinned to the first linked recovery account to prevent a different Google account from silently taking over reset access.
+- OAuth access tokens are memory-only and are reacquired before Drive operations.
+
+### Biometrics and passkeys
+
+- Android requires an enrolled strong biometric and uses the native biometric plugin. The app PIN remains the fallback.
+- Web uses WebAuthn and therefore normally requires HTTPS or localhost, a supported authenticator, and direct top-level browser access.
+- A simulated passkey is offered only as a preview fallback when a framed or restricted web environment blocks WebAuthn. It must not be treated as production security.
+
+### At-rest protection boundaries
+
+- Android journal records are protected by SQLCipher and the database secret is kept in OS-backed secure storage.
+- Android media lives in app-private storage but is not separately encrypted by application code.
+- Web journal data and media are stored in browser `localStorage`; the PIN is an app-level gate and does not encrypt those records at rest.
+- Drive `appDataFolder` hides backups from the normal Drive UI and limits access to the app, but backups are Google-protected rather than end-to-end encrypted by Dear Diary.
+- The optional manual export is password-protected with CryptoJS AES and should be handled as sensitive personal data.
+
+Clearing browser site data or Android app storage deletes local data and security material. Android's ordinary app uninstall/clear-storage recovery therefore depends on an existing Drive or manual backup.
+
+## Backup and restore
+
+### Google Drive scope and availability
+
+Google Drive integration is Android/native-only and uses:
 
 ```text
-+---------------------------+
-| Capacitor mobile app      |
-|---------------------------|
-| React UI                  |
-| Async repository          |
-| Encrypted SQLite          |
-| App-private media files   |
-+-------------+-------------+
-              |
-              | optional backup/restore
-              v
-+---------------------------+
-| Google Drive appDataFolder|
-|---------------------------|
-| Hidden backup zip bundle  |
-| manifest.json             |
-| data.json                 |
-| media/*                   |
-+---------------------------+
+https://www.googleapis.com/auth/drive.appdata
 ```
 
-The app no longer reads or writes Firestore. Existing Firebase/Firestore data from older builds is left untouched outside the app.
+Backups are ZIP bundles with MIME type `application/vnd.deardiary.backup+zip`, stored in the hidden Drive `appDataFolder`. The app retains the five newest successful backups.
 
-## Key Features
+### Bundle format
 
-- Multiple diaries, entries, rich text blocks, photos, and audio notes.
-- Notes, search, tags, moods, reminders, and profile settings.
-- Local PIN, recovery question, and optional biometric unlock on mobile.
-- Hidden Google Drive `appDataFolder` backups, with on-demand, daily, and weekly schedules.
-- Same-account restore on a new device while preserving that device's PIN and recovery question.
-- Optional password-protected local export/import for manual safekeeping.
-
-## Tech Stack
-
-- React, TypeScript, Vite
-- Tailwind CSS
-- Capacitor for Android/iOS shell
-- `@capacitor-community/sqlite` with SQLCipher for native mobile persistence
-- `@aparajita/capacitor-secure-storage` for the local SQLite encryption secret
-- Capacitor Preferences as a one-release migration fallback
-- Capacitor Filesystem for app-private media files
-- Android Credential Manager and Google `AuthorizationClient` for persistent account identity and ephemeral Drive authorization
-- Google Drive REST API with `https://www.googleapis.com/auth/drive.appdata`
-- Android WorkManager for constrained, retryable background backup
-- `fflate` for zipped backup bundles
-
-## Development
-
-Install dependencies:
-
-```bash
-npm install
+```text
+deardiary-backup-<timestamp>.ddb
+├── manifest.json   # schema/app/storage version, counts, size, SHA-256 checksum, lineage
+├── data.json       # portable diaries, entries, notes, settings, profile, media references
+└── media/
+    ├── cover-...
+    ├── photo-...
+    └── audio-...
 ```
 
-Run the web development server:
+Current bundle schema is `2`; payload version is `3.0.0`. Restore validation also accepts the legacy schema-1 / payload-2 format. The checksum covers `data.json`, media paths, and media bytes and rejects missing, unsupported, or corrupted bundles.
+
+### Automatic backup flow
+
+```mermaid
+sequenceDiagram
+    participant Repo as Repository
+    participant Coord as BackupCoordinator
+    participant File as App-private stage
+    participant Work as Android WorkManager
+    participant Drive as Drive appDataFolder
+
+    Repo-->>Coord: portable contentRevision changed
+    Coord->>Coord: debounce 30 seconds
+    Coord->>File: write pending.ddb atomically
+    Coord->>Work: register staged revision and metadata
+    Work->>Work: wait for network/battery/storage constraints
+    Work->>Drive: authorize linked account + resumable upload
+    Work->>Drive: retain newest five bundles
+    Work-->>Coord: persist result/error and lineage
+```
+
+- Schedule choices are Off, Daily, or Weekly at a preferred local time.
+- Network choices are Wi-Fi only or Wi-Fi plus cellular.
+- WorkManager also requires battery and storage not low, retries transient errors with exponential backoff, and may run later than the requested time because of Doze or unmet constraints.
+- Boot, app update, clock, and timezone broadcasts reschedule pending automatic work.
+- Manual “Back up now” stages the latest revision and asks WorkManager to run immediately, but Android constraints still apply.
+
+### Restore and multi-device safety
+
+Restore is replacement, not record-by-record synchronization or merging:
+
+1. The app lists the newest five hidden backups and tries them newest-first until a compatible bundle validates.
+2. Before replacement, it attempts to save a local `pre-restore-<timestamp>.ddb` safety snapshot.
+3. Media is recreated in the target device's app-private storage.
+4. The repository performs a portable replacement transaction.
+5. Diaries, entries, notes, profile, theme, custom tags/moods, and the portable backup schedule are restored.
+6. The target device keeps its PIN, recovery question, biometric state, reminder preference, Google account binding, permissions, SQLite secret, and device identity.
+7. The restored backup becomes the new lineage parent and the app stages a post-restore checkpoint.
+
+Each backup records `deviceId`, `contentRevision`, and `parentBackupFileId`. If a different device has advanced the latest cloud lineage, automatic upload blocks rather than overwriting it. The user must restore that backup or explicitly choose **Use this device for backup**, which confirms replacement without merging.
+
+## Local development
+
+### Prerequisites
+
+- Node.js and npm compatible with the checked-in lockfile and Vite 6.
+- A modern browser. Chromium-based browsers provide the broadest speech-recognition/WebAuthn support.
+- For microphone and WebAuthn features outside localhost, serve the app over HTTPS.
+
+### Install and run
+
+Use the lockfile for a reproducible install:
 
 ```bash
+npm ci
 npm run dev
 ```
 
-Build the app:
+Open `http://localhost:3000`.
+
+Useful commands:
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start Express with Vite middleware on port 3000. |
+| `npm run lint` | Run TypeScript type-checking (`tsc --noEmit`). |
+| `npm run test:storage` | Run repository, security, and backup validation tests. |
+| `npm run build` | Build the Vite client and bundle `server.ts` to `dist/server.cjs`. |
+| `npm run preview` | Preview the built Vite client with Vite's preview server. |
+| `npm run start` | Start `dist/server.cjs`; set `NODE_ENV=production` to serve static production assets. |
+
+Production start examples:
+
+```powershell
+$env:NODE_ENV='production'
+npm run start
+```
 
 ```bash
+NODE_ENV=production npm run start
+```
+
+## Android development
+
+### Prerequisites
+
+- Android Studio and Android SDK 36.
+- A JDK compatible with Android Gradle Plugin 8.13 / Gradle 8.14.3.
+- An emulator or physical device running Android 7.0 (API 24) or newer.
+
+The Android project already exists; do not run `cap add android` for a normal checkout.
+
+### Build and run
+
+```bash
+npm ci
+npm run mobile:sync
+npm run android:studio
+```
+
+Or run directly on a connected target:
+
+```bash
+npm run android
+```
+
+`mobile:sync` builds the web/server bundle and runs `cap sync`, copying the web assets and updating native plugins. After any web, dependency, Capacitor configuration, or environment-variable change, run it again.
+
+To create a debug APK from PowerShell:
+
+```powershell
+npm run mobile:sync
+Set-Location android
+.\gradlew.bat assembleDebug
+```
+
+The APK is written under `android/app/build/outputs/apk/debug/`.
+
+Capacitor WebView logging and inspection are disabled by default. For a local debug sync:
+
+```powershell
+$env:CAPACITOR_DEBUG='true'
+npm run mobile:sync
+```
+
+Do not enable this in a production build.
+
+### Google Cloud setup for Drive backup
+
+1. Enable **Google Drive API** in the Google Cloud project.
+2. Configure the OAuth consent screen and add development accounts as test users while the app is unpublished.
+3. Create an Android OAuth client for package `com.deardiary.app` and add the SHA-1 for every debug/release signing certificate.
+4. Create a Web application OAuth client in the same project.
+5. Put that Web client ID in `.env` as `VITE_GOOGLE_WEB_CLIENT_ID`.
+6. Rebuild, sync, and reinstall the app.
+
+Get the debug signing fingerprint with:
+
+```powershell
+Set-Location android
+.\gradlew.bat signingReport
+```
+
+The current Drive authorization path does not rely on Firestore. `firestore.rules`, `firebase-blueprint.json`, and `firebase-applet-config.json` are legacy project artifacts; the application does not import the Firebase SDK or read/write Firestore.
+
+### Android permissions
+
+| Permission | Use |
+| --- | --- |
+| Internet/network state | Google authorization and Drive backup constraints |
+| Record audio | Audio notes and speech recognition |
+| Camera / image access | Image attachment chooser/capture support |
+| Post notifications | Local journal reminder implementation |
+| Use biometric | Fingerprint/strong biometric unlock |
+| Receive boot completed | Reschedule Drive backup after reboot/update/time changes |
+
+## iOS status
+
+Capacitor iOS dependencies and npm scripts are present, but this repository does not contain an `ios/` native project. Generate it on macOS:
+
+```bash
+npm run cap:add:ios
+npm run mobile:sync
+npx cap open ios
+```
+
+The storage/media abstractions are written for Capacitor native platforms, but the custom Drive authorization and background worker are Android Java implementations. Google Drive background backup is therefore not implemented for iOS; use the password-protected manual export/import flow until an iOS bridge and scheduler are added.
+
+## Environment variables
+
+Copy `.env.example` to `.env` when native Google backup is required. Vite exposes only variables prefixed with `VITE_` to client code.
+
+| Variable | Required | Used by |
+| --- | --- | --- |
+| `VITE_GOOGLE_WEB_CLIENT_ID` | Android Drive/Google recovery only | Native Google Sign-In initialization; must be the OAuth **Web application** client ID. |
+| `VITE_APP_VERSION` | Optional | Version recorded in Drive backup manifests; defaults to `0.0.0`. |
+| `CAPACITOR_DEBUG` | Optional build-time setting | Enables native WebView logging/debug inspection when exactly `true`. |
+| `DISABLE_HMR` | Optional development setting | Disables Vite HMR/file watching when exactly `true`. |
+| `NODE_ENV` | Production server only | Must be `production` for `dist/server.cjs` to serve static assets instead of creating Vite middleware. |
+
+`GEMINI_API_KEY` and `APP_URL` remain in the current `.env.example` as AI Studio-era placeholders, but no current source file reads them. The reflection assistant is local and no Gemini request is made.
+
+Never commit `.env`; the repository ignores all `.env*` files except `.env.example`.
+
+## Testing and validation
+
+Run the normal validation suite:
+
+```bash
+npm run lint
+npm run test:storage
 npm run build
 ```
 
-Sync Capacitor assets and plugins:
+The automated tests cover:
 
-```bash
-npm run cap:sync
+- entry creation, diary-stat updates, and cascading diary deletion;
+- serialized concurrent repository writes;
+- full and portable snapshot replacement behavior;
+- preservation of local security, reminders, and device backup identity during portable restore;
+- portable content-revision notifications;
+- PIN creation/change/recovery and Google account binding;
+- rejection of incomplete, unsupported, or checksum-invalid Drive bundles;
+- compatibility validation for legacy schema-1 and current portable schema-2 bundles.
+
+There are no component/end-to-end tests or Android instrumentation tests for app behavior beyond the generated sample test stubs. Physical-device QA remains essential for permissions, biometrics, microphone behavior, Preferences/legacy-media migrations, WorkManager scheduling, authorization revocation, resumable uploads, and multi-device lineage conflicts.
+
+## Project structure
+
+```text
+.
+├── src/
+│   ├── AppBootstrap.tsx          # storage/migration/backup startup gate
+│   ├── App.tsx                   # auth session, navigation, screen composition
+│   ├── components/               # lock, home, diary, editor, notes, search, stats, settings
+│   ├── domain/                   # security, catalog, streak, settings, storage calculations
+│   ├── repositories/             # async domain repository and defaults
+│   ├── platform/
+│   │   ├── storage/              # localStorage, Preferences, encrypted SQLite
+│   │   ├── filesystem/           # web/native file storage
+│   │   ├── audio/                # recording capability abstraction
+│   │   ├── security/             # WebAuthn/native biometric abstraction
+│   │   └── drive/                # TypeScript bridge for the Android Drive plugin
+│   ├── mobile/                   # Capacitor startup, reminders, media persistence/migration
+│   └── utils/                    # backup bundles, Drive, Google auth, manual backup, WebAuthn
+├── android/                      # Android Studio project and custom Drive/WorkManager Java code
+├── docs/mobile-capacitor.md      # native implementation notes and release checklist
+├── capacitor.config.ts           # app ID, native debug policy, SQLite encryption config
+├── server.ts                     # Express/Vite development and static production server
+├── vite.config.ts                # React, Tailwind, alias, HMR configuration
+└── package.json                  # scripts and dependencies
 ```
 
-## Mobile Notes
+Important entry points:
 
-Android is the primary native target in this repo. All journal, settings, profile, security, local export, and Drive restore workflows use an async repository whose native reads come from encrypted normalized SQLite tables. Existing Capacitor Preferences values are migrated with count verification and retained as a one-release fallback.
+- `src/main.tsx` renders React and starts Capacitor bootstrap behavior.
+- `src/AppBootstrap.tsx` prevents the UI from opening before local state is usable.
+- `src/repositories/localDiaryRepository.ts` is the source of application CRUD and snapshot semantics.
+- `src/platform/storage/nativeSQLiteDataStore.ts` owns native encryption, schema, and Preferences migration.
+- `src/utils/backupSnapshot.ts` defines the portable Drive bundle and restore boundary.
+- `src/utils/backupCoordinator.ts` stages native backups after content changes.
+- `android/app/src/main/java/com/deardiary/app/DriveBackupWorker.java` enforces Android backup constraints, retries, retention, and lineage safety.
 
-The linked Google identity is persisted in Android Keystore-protected storage and SQLite, while OAuth access tokens remain memory-only. Before each Drive operation, Android silently requests fresh authorization for the linked account. WorkManager uploads an atomically staged backup with network, battery, and storage constraints and keeps the five newest successful backups hidden from the normal UI.
+## Known limitations and operational notes
 
-Legacy inline cover, photo, and audio data is migrated into app-private files on native startup. Phase 2 implementation is complete in code; physical-device upgrade, interrupted migration, and low-storage QA remain before retiring the Preferences fallback.
-
-See [docs/mobile-capacitor.md](docs/mobile-capacitor.md) for native setup and current mobile limitations.
+- Android is the complete native target. iOS lacks the custom Drive bridge/background scheduler.
+- Web data is local to one browser profile and is not encrypted at rest by the app.
+- Drive is backup/restore, not synchronization; restoring or choosing a new active device replaces portable content and does not merge divergent journals.
+- Drive backups are not end-to-end encrypted. Use the password-protected local export when that additional boundary is required.
+- The local reflection assistant is deterministic keyword analysis despite older AI/Gemini copy and dependencies still present in the project.
+- Browser speech recognition availability and network behavior vary by browser. Android speech-to-text requires installed Android speech services.
+- The search tag picker currently lists built-in tags only, even though text search still returns entries/notes containing custom tags.
+- The diary-detail calendar currently opens the editor for an empty day but drops the selected date at the `App.tsx` callback boundary, so the editor defaults to today. The Stats calendar does forward its selected date.
+- Reminder scheduling is implemented in the repository/native layer, but the current settings JSX does not render a reminder toggle/time control. Existing persisted reminder settings are still respected whenever settings are saved.
+- Per-diary JSON and text exports omit attached media bytes; use the full manual or Drive backup for portable media restore.
+- Removing an attachment or resetting repository content does not currently include an orphan-file garbage-collection pass for native media.
+- Android **Settings → Apps → Dear Diary → Clear storage** is destructive: it removes SQLite, secure-storage keys, Preferences, app-private files, account link state, and the local PIN.
+- Before a store release, complete large-library/interrupted/low-storage migration tests, production-signed Drive and two-device tests, icon/splash replacement, signing configuration, and release build documentation. See [docs/mobile-capacitor.md](docs/mobile-capacitor.md).

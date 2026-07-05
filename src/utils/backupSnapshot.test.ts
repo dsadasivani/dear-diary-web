@@ -2,7 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { zipSync } from 'fflate';
 import type { BackupManifest } from '../types';
-import { validateBackupBundleBytes } from './backupSnapshot';
+import { diaryRepository } from '../repositories';
+import { createBackupBundle, restoreBackupBundle, validateBackupBundleBytes } from './backupSnapshot';
+
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+  get length(): number { return this.values.size; }
+  clear(): void { this.values.clear(); }
+  getItem(key: string): string | null { return this.values.get(key) ?? null; }
+  key(index: number): string | null { return [...this.values.keys()][index] ?? null; }
+  removeItem(key: string): void { this.values.delete(key); }
+  setItem(key: string, value: string): void { this.values.set(key, value); }
+}
 
 const encoder = new TextEncoder();
 
@@ -109,4 +120,27 @@ test('validates portable schema v2 without device security metadata', async () =
   const validated = await validateBackupBundleBytes(bytes);
   assert.equal(validated.manifest.contentRevision, 7);
   assert.equal(validated.payload.security, undefined);
+});
+
+test('round-trips a cached profile avatar through the Drive backup bundle', async () => {
+  Object.defineProperty(globalThis, 'localStorage', { value: new MemoryStorage(), configurable: true });
+  await diaryRepository.initialize();
+  const sourceProfile = {
+    ...(await diaryRepository.getUserProfile()),
+    name: 'Backup Writer',
+    avatarUri: 'data:image/png;base64,aGVsbG8=',
+  };
+  await diaryRepository.saveUserProfile(sourceProfile);
+  const bundle = await createBackupBundle({ deviceId: 'device-test', contentRevision: 1 });
+
+  await diaryRepository.saveUserProfile({
+    ...sourceProfile,
+    name: 'Changed Writer',
+    avatarUri: undefined,
+  });
+  await restoreBackupBundle(bundle.bytes);
+
+  const restored = await diaryRepository.getUserProfile();
+  assert.equal(restored.name, 'Backup Writer');
+  assert.equal(restored.avatarUri, sourceProfile.avatarUri);
 });

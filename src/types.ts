@@ -86,6 +86,7 @@ export interface UserProfile {
   bio: string;
   avatarEmoji: string;
   avatarColor: string;
+  avatarUri?: string;
   writingGoal: number; // Daily target in words
   joinedDate: string; // Formatting MM/YYYY
 }
@@ -103,6 +104,7 @@ export interface GoogleAccountSession {
   userId: string;
   email: string | null;
   displayName: string | null;
+  imageUrl?: string | null;
   accessToken: string | null;
 }
 
