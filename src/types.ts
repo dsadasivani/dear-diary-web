@@ -106,14 +106,53 @@ export interface GoogleAccountSession {
   accessToken: string | null;
 }
 
-export interface DriveBackupSettings {
+export interface GoogleAccountIdentity {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  linkedAt: number;
+}
+
+export interface GoogleConnectionState {
+  linked: boolean;
+  authorized: boolean;
+  reauthorizationRequired: boolean;
+  account: GoogleAccountIdentity | null;
+}
+
+export type BackupScheduleMode = 'off' | 'daily' | 'weekly';
+export type BackupNetworkPolicy = 'wifi' | 'any';
+
+export interface BackupSchedulePreference {
+  mode: BackupScheduleMode;
+  localTime: string;
+  weeklyDay: number;
+  network: BackupNetworkPolicy;
+  timezone: string;
+}
+
+export interface DriveBackupState {
   linkedGoogleUserId?: string;
   linkedGoogleEmail?: string | null;
+  linkedGoogleDisplayName?: string | null;
+  linkedAt?: number;
+  schedule?: BackupSchedulePreference;
   lastBackupAt?: number;
   lastBackupFileId?: string;
   lastBackupSizeBytes?: number;
   lastRestoreAt?: number;
+  lastAttemptAt?: number;
+  lastErrorCode?: string | null;
+  deviceId?: string;
+  contentRevision?: number;
+  stagedContentRevision?: number;
+  uploadedContentRevision?: number;
+  parentBackupFileId?: string;
+  activeDeviceId?: string;
+  cloudWriteBlocked?: boolean;
 }
+
+export type DriveBackupSettings = DriveBackupState;
 
 export interface BackupManifest {
   schemaVersion: number;
@@ -129,6 +168,9 @@ export interface BackupManifest {
   mediaCount: number;
   totalBytes: number;
   checksum: string;
+  deviceId?: string;
+  contentRevision?: number;
+  parentBackupFileId?: string;
 }
 
 export interface BackupFileSummary {
@@ -137,4 +179,5 @@ export interface BackupFileSummary {
   createdTime?: string;
   modifiedTime?: string;
   size?: number;
+  appProperties?: Record<string, string>;
 }

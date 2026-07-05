@@ -48,10 +48,24 @@ Then open the generated iOS project with Xcode.
 
 ## Google Drive Backup Notes
 
-- Dear Diary is local-first. Device storage is the source of truth; Google Drive is used only for user-initiated backup and restore.
+- Dear Diary is local-first. Device storage is the source of truth; Google Drive is used only for scheduled/on-demand backup and restore, never record synchronization.
 - Drive backups use the `https://www.googleapis.com/auth/drive.appdata` scope and are stored in the hidden Google Drive `appDataFolder`.
 - Drive backups are Drive-protected, not end-to-end encrypted. Restoring on a new device requires the same Google account and app access.
+- The linked Google identity is persisted in Android Keystore-protected storage and SQLite. OAuth access tokens are never persisted; `AuthorizationClient` obtains fresh account-specific authorization before Drive work.
+- Automatic backup supports Off, Daily, or Weekly with a preferred local time and Wi-Fi-only or any-network policy. Android WorkManager may delay the preferred time for Doze or unmet constraints.
+- Backups are atomically staged in app-private storage before upload. The worker uses resumable Drive uploads, exponential retry, and retention of the five newest successful bundles.
+- Backup lineage records the device, portable content revision, and parent backup. After restore, the new device creates a checkpoint; an older device cannot silently replace that lineage through automatic backup.
+- Choosing Continue Local after discovering an existing cloud backup blocks cloud writes until the user explicitly chooses Start Fresh From This Device.
 - Existing Firestore data from older builds is left untouched, but the app no longer reads or writes Firestore.
+
+### Google Cloud Configuration
+
+1. Enable Google Drive API in the same Google Cloud project as the OAuth clients.
+2. Configure the OAuth consent screen and add development accounts as test users until the app is published/verified.
+3. Create an Android OAuth client for package `com.deardiary.app` and every signing SHA-1 used for debug or release builds.
+4. Set `VITE_GOOGLE_WEB_CLIENT_ID` to the project's Web application OAuth client ID, then rebuild and run `npm run cap:sync`.
+
+Missing Drive API enablement produces a clear API-disabled backup error. Revoked consent or a removed account moves the connection to reauthorization-required state; ordinary navigation and process restarts do not require reconnection.
 
 ## Phase 2 Progress
 
@@ -62,9 +76,11 @@ Then open the generated iOS project with Xcode.
 - All diary, entry, note, settings, profile, security, Drive metadata, manual export, and Drive restore operations use the serialized async repository.
 - SQLite maintains normalized tables for `diaries`, `entries`, `entry_blocks`, `notes`, `media_assets`, `app_settings`, `user_profile`, and `storage_meta`. Its internal `kv_store` is retained only as a migration/format compatibility record, not as a UI data source.
 - Multi-record snapshot restores use one native SQLite transaction, preventing partially restored application state.
-- PIN verification and recovery cryptography are pure in-memory operations; only completed security state is persisted. Google PIN recovery binding is explicit and separate from Drive backup connection.
+- PIN verification and recovery cryptography are pure in-memory operations; only completed security state is persisted. One linked Google account is used for both hidden Drive backup and Google PIN verification; the local recovery question remains available.
 - Legacy native cover, photo, and audio data URIs are moved to app-private files on startup. The migration records counts and retries on the next launch if any file could not be written.
-- Google Drive backup creates zipped snapshots with manifest, JSON data, and media files in Drive `appDataFolder`.
+- Google Drive backup creates portable schema-v2 zipped snapshots with manifest, JSON data, and media files in Drive `appDataFolder`. PIN hashes, recovery answers, biometric state, OAuth state, runtime metadata, and SQLite secrets are excluded.
+- The first-run security flow is PIN, mandatory local recovery question, and then Link Google Account or Stay Local. Linking checks for the latest compatible hidden backup and offers restore using only its date and size.
+- Restoring uses repository `replace-portable`: journal data, profile, portable appearance/catalog settings, and media are restored while the new device's PIN, recovery question, biometrics, permissions, and account link are retained. Schema-v1 bundles remain accepted with their old security/Drive metadata ignored.
 - Native reminder settings schedule or cancel a daily Local Notifications reminder when app settings are saved.
 - New diary cover images, diary settings cover updates, entry photos, and entry audio are written through Capacitor Filesystem on native and remain data URIs on web.
 - Android biometric unlock uses `@capgo/capacitor-native-biometric` and requires an enrolled strong biometric, such as fingerprint, plus an app PIN fallback.
@@ -73,6 +89,7 @@ Then open the generated iOS project with Xcode.
 ## Known Limitations
 
 - The legacy media migration needs physical-device QA with large photo/audio libraries and interrupted launches before the fallback can be retired.
+- Android is the complete background-backup target. iOS still uses local export/import until an equivalent native scheduler and authorization bridge are implemented.
 - Android Settings > Apps > Dear Diary > Clear storage is destructive. It deletes local diary data, encrypted SQLite, secure storage secrets, Preferences, Google backup link metadata, and the app PIN hash/salt. Restore from a Drive backup when data should be recovered.
 - Native speech recognition depends on Android speech services and microphone permission. If unavailable, the app shows a graceful message; audio recording still works through the native recorder.
 - Default Capacitor splash/icon assets are used. Replace native assets before store release.
@@ -80,6 +97,7 @@ Then open the generated iOS project with Xcode.
 ## Release Checklist
 
 - Complete physical-device upgrade QA for Preferences-to-SQLite and data-URI-to-file migrations, including interruption and low-storage cases.
+- Verify backup scheduling, interrupted resumable upload, token revocation, and two-device ownership transfer with production-signed physical devices.
 - Remove legacy Capacitor Preferences fallback after one stable release with successful SQLite migration.
 - Add cloud/device recovery education for users who intentionally clear OS app storage.
 - Add production icons, splash assets, signing config, and release build documentation.

@@ -1,6 +1,7 @@
 import { GoogleSignIn } from '@capawesome/capacitor-google-sign-in';
 import { isNativePlatform } from '../platform';
-import type { GoogleAccountSession } from '../types';
+import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
+import type { GoogleAccountIdentity, GoogleAccountSession, GoogleConnectionState } from '../types';
 
 export type GoogleAuthIntent = 'backup' | 'pin-reset';
 
@@ -21,38 +22,46 @@ const getGoogleWebClientId = (): string => {
   return clientId;
 };
 
-const getScopesForIntent = (intent: GoogleAuthIntent): string[] => (
-  intent === 'backup' ? [DRIVE_APPDATA_SCOPE] : []
-);
-
-const initializeNativeGoogleSignIn = async (intent: GoogleAuthIntent): Promise<void> => {
-  const scopes = getScopesForIntent(intent);
-  const initializationKey = `${getGoogleWebClientId()}|${scopes.join(' ')}`;
+const initializeNativeGoogleSignIn = async (): Promise<void> => {
+  const initializationKey = getGoogleWebClientId();
   if (nativeGoogleInitializationKey === initializationKey) return;
 
   await GoogleSignIn.initialize({
     clientId: getGoogleWebClientId(),
-    scopes,
   });
   nativeGoogleInitializationKey = initializationKey;
 };
 
 const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleAccountSession> => {
-  await initializeNativeGoogleSignIn(intent);
+  await initializeNativeGoogleSignIn();
 
   const result = await GoogleSignIn.signIn();
-  if (intent === 'backup' && !result.accessToken) {
-    throw new Error('Google did not return Drive access. Reconnect and approve the Google Drive app data permission.');
-  }
-
-  const session: GoogleAccountSession = {
+  let session: GoogleAccountSession = {
     userId: result.userId,
     email: result.email,
     displayName: result.displayName,
-    accessToken: result.accessToken,
+    accessToken: null,
   };
 
   if (intent === 'backup') {
+    if (!result.email) throw new Error('Google did not return an email address for the selected account.');
+    const account: GoogleAccountIdentity = {
+      userId: result.userId,
+      email: result.email,
+      displayName: result.displayName,
+      linkedAt: Date.now(),
+    };
+    await nativeDriveBackupBridge.saveLinkedAccount(account);
+    const authorization = await nativeDriveBackupBridge.authorize({ interactive: true });
+    if (!authorization.authorized || !authorization.accessToken || !authorization.account) {
+      throw new Error('Google did not grant Drive app data access.');
+    }
+    session = {
+      userId: authorization.account.userId,
+      email: authorization.account.email,
+      displayName: authorization.account.displayName,
+      accessToken: authorization.accessToken,
+    };
     cachedDriveSession = session;
   }
 
@@ -75,6 +84,27 @@ export const clearGoogleAuthIntent = (): void => {
 
 export const getCachedGoogleDriveSession = (): GoogleAccountSession | null => cachedDriveSession;
 
+export const getGoogleConnectionState = async (): Promise<GoogleConnectionState> => {
+  if (!isNativePlatform()) {
+    return { linked: false, authorized: false, reauthorizationRequired: false, account: null };
+  }
+  return nativeDriveBackupBridge.getConnectionState();
+};
+
+export const restoreGoogleDriveSession = async (interactive = false): Promise<GoogleAccountSession | null> => {
+  if (!isNativePlatform()) return null;
+  const authorization = await nativeDriveBackupBridge.authorize({ interactive });
+  if (!authorization.authorized || !authorization.accessToken || !authorization.account) return null;
+  const session: GoogleAccountSession = {
+    userId: authorization.account.userId,
+    email: authorization.account.email,
+    displayName: authorization.account.displayName,
+    accessToken: authorization.accessToken,
+  };
+  cachedDriveSession = session;
+  return session;
+};
+
 export const clearCachedGoogleDriveSession = (): void => {
   cachedDriveSession = null;
 };
@@ -86,7 +116,8 @@ export const signOutGoogleAuth = async (): Promise<void> => {
   if (!isNativePlatform()) return;
 
   try {
-    await initializeNativeGoogleSignIn('backup');
+    await nativeDriveBackupBridge.disconnect();
+    await initializeNativeGoogleSignIn();
     await GoogleSignIn.signOut();
   } catch (err) {
     console.warn('Native Google sign-out did not complete:', err);

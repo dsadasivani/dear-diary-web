@@ -1,19 +1,19 @@
 import { unzipSync, zipSync } from 'fflate';
 import {
   AppSettings,
+  BackupSchedulePreference,
   BackupManifest,
   Diary,
   DriveBackupSettings,
   Entry,
   Note,
-  SecurityConfig,
   UserProfile,
 } from '../types';
 import { fileStorageService } from '../platform/filesystem';
 import { persistMediaDataUri } from '../mobile/mediaStorage';
 import { diaryRepository } from '../repositories';
 
-const BACKUP_SCHEMA_VERSION = 1;
+export const BACKUP_SCHEMA_VERSION = 2;
 const STORAGE_SCHEMA_VERSION = 1;
 const BACKUP_DATA_FILE = 'data.json';
 const BACKUP_MANIFEST_FILE = 'manifest.json';
@@ -29,21 +29,29 @@ interface BackupMediaAsset {
 }
 
 interface DearDiaryBackupPayload {
-  version: '2.0.0';
+  version: '2.0.0' | '3.0.0';
   exportedAt: string;
   diaries: Diary[];
   entries: Entry[];
   notes: Note[];
   settings: AppSettings;
   userProfile: UserProfile;
-  security: SecurityConfig;
-  driveBackupSettings: DriveBackupSettings;
+  security?: unknown;
+  driveBackupSettings?: DriveBackupSettings;
+  backupSchedule?: BackupSchedulePreference;
   mediaAssets: BackupMediaAsset[];
 }
 
 export interface BackupBundle {
   bytes: Uint8Array;
   manifest: BackupManifest;
+}
+
+export interface BackupCreationContext {
+  deviceId: string;
+  contentRevision: number;
+  parentBackupFileId?: string;
+  schedule?: BackupSchedulePreference;
 }
 
 const textEncoder = new TextEncoder();
@@ -171,7 +179,7 @@ const calculateChecksum = async (dataJson: string, mediaFiles: Record<string, Ui
     .join('');
 };
 
-const createPayloadAndMedia = async (): Promise<{
+const createPayloadAndMedia = async (context: BackupCreationContext): Promise<{
   payload: DearDiaryBackupPayload;
   mediaFiles: Record<string, Uint8Array>;
 }> => {
@@ -200,15 +208,14 @@ const createPayloadAndMedia = async (): Promise<{
 
   return {
     payload: {
-      version: '2.0.0',
+      version: '3.0.0',
       exportedAt: new Date().toISOString(),
       diaries,
       entries,
       notes,
       settings: sanitizeSettings(cloneJson(snapshot.settings!)),
       userProfile: cloneJson(snapshot.userProfile!),
-      security: cloneJson(snapshot.security!),
-      driveBackupSettings: cloneJson(snapshot.driveBackupSettings || {}),
+      backupSchedule: context.schedule ? cloneJson(context.schedule) : undefined,
       mediaAssets,
     },
     mediaFiles,
@@ -219,8 +226,20 @@ const getAppVersion = (): string => (
   (import.meta.env.VITE_APP_VERSION as string | undefined)?.trim() || '0.0.0'
 );
 
-export const createBackupBundle = async (): Promise<BackupBundle> => {
-  const { payload, mediaFiles } = await createPayloadAndMedia();
+const getBackupCreationContext = async (): Promise<BackupCreationContext> => {
+  const settings = await diaryRepository.getDriveBackupSettings();
+  if (!settings.deviceId) throw new Error('This device does not have a backup identity.');
+  return {
+    deviceId: settings.deviceId,
+    contentRevision: settings.contentRevision || 0,
+    parentBackupFileId: settings.parentBackupFileId || settings.lastBackupFileId,
+    schedule: settings.schedule,
+  };
+};
+
+export const createBackupBundle = async (providedContext?: BackupCreationContext): Promise<BackupBundle> => {
+  const context = providedContext || await getBackupCreationContext();
+  const { payload, mediaFiles } = await createPayloadAndMedia(context);
   const dataJson = JSON.stringify(payload);
   const checksum = await calculateChecksum(dataJson, mediaFiles);
   const totalBytes = Object.values(mediaFiles).reduce((sum, bytes) => sum + bytes.length, textEncoder.encode(dataJson).length);
@@ -239,6 +258,9 @@ export const createBackupBundle = async (): Promise<BackupBundle> => {
     mediaCount: payload.mediaAssets.length,
     totalBytes,
     checksum,
+    deviceId: context.deviceId,
+    contentRevision: context.contentRevision,
+    parentBackupFileId: context.parentBackupFileId,
   };
 
   const bytes = zipSync({
@@ -313,10 +335,10 @@ const validateBackup = async (
   dataJson: string,
   mediaFiles: Record<string, Uint8Array>,
 ): Promise<void> => {
-  if (manifest.schemaVersion !== BACKUP_SCHEMA_VERSION) {
+  if (manifest.schemaVersion !== 1 && manifest.schemaVersion !== BACKUP_SCHEMA_VERSION) {
     throw new Error(`Unsupported backup schema version ${manifest.schemaVersion}.`);
   }
-  if (payload.version !== '2.0.0') {
+  if (payload.version !== '2.0.0' && payload.version !== '3.0.0') {
     throw new Error('Unsupported Dear Diary backup payload.');
   }
   if (!Array.isArray(payload.diaries) || !Array.isArray(payload.entries) || !Array.isArray(payload.notes)) {
@@ -345,12 +367,14 @@ export const restoreBackupBundle = async (bytes: Uint8Array): Promise<BackupMani
     notes: payload.notes,
     settings: sanitizeSettings(payload.settings),
     userProfile: payload.userProfile,
-    security: payload.security,
-    driveBackupSettings: {
-      ...payload.driveBackupSettings,
-      lastRestoreAt: Date.now(),
-    },
-  }, 'replace');
+  }, 'replace-portable');
+
+  const currentBackupSettings = await diaryRepository.getDriveBackupSettings();
+  await diaryRepository.saveDriveBackupSettings({
+    ...currentBackupSettings,
+    schedule: payload.backupSchedule || currentBackupSettings.schedule,
+    lastRestoreAt: Date.now(),
+  });
 
   return manifest;
 };

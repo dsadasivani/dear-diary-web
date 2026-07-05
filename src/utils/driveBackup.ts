@@ -1,13 +1,32 @@
 import { BackupFileSummary, DriveBackupSettings, GoogleAccountSession } from '../types';
 import { createBackupBundle, restoreBackupBundle } from './backupSnapshot';
-import { startGoogleAuth } from './googleAuth';
+import { restoreGoogleDriveSession, startGoogleAuth } from './googleAuth';
 import { diaryRepository } from '../repositories';
+import { backupCoordinator } from './backupCoordinator';
+import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
 
 const DRIVE_FILES_ENDPOINT = 'https://www.googleapis.com/drive/v3/files';
 const DRIVE_UPLOAD_ENDPOINT = 'https://www.googleapis.com/upload/drive/v3/files';
 const BACKUP_MIME_TYPE = 'application/vnd.deardiary.backup+zip';
 const BACKUP_NAME_PREFIX = 'deardiary-backup-';
 const MAX_BACKUPS_TO_KEEP = 5;
+
+const BACKUP_ERROR_MESSAGES: Record<string, string> = {
+  reauthorization_required: 'Google Drive authorization needs to be renewed from Profile.',
+  newer_backup_on_another_device: 'A newer backup is active on another device. Restore it before replacing cloud data.',
+  staged_file_missing: 'The staged backup file is missing. Try again.',
+  temporary_drive_error: 'Google Drive is temporarily unavailable. Android will retry the backup.',
+  refreshing_authorization: 'Google authorization expired. Android is refreshing it and will retry.',
+  restarting_upload: 'The previous upload session expired. Android is starting a fresh upload.',
+  drive_api_disabled: 'Google Drive API is not enabled for this OAuth project.',
+  drive_quota_exceeded: 'This Google Drive account does not have enough storage for the backup.',
+  drive_request_failed: 'Google Drive rejected the backup request.',
+  backup_failed: 'The backup could not be completed.',
+};
+
+export const getDriveBackupErrorMessage = (code?: string | null): string => (
+  code ? BACKUP_ERROR_MESSAGES[code] || 'The last automatic backup could not complete.' : ''
+);
 
 export class DriveAuthorizationError extends Error {
   readonly status: number;
@@ -96,9 +115,19 @@ const authorizedFetch = async (
   input: RequestInfo | URL,
   init: RequestInit = {},
 ): Promise<Response> => {
-  const headers = new Headers(init.headers);
-  headers.set('Authorization', `Bearer ${requireAccessToken(session)}`);
-  const response = await fetch(input, { ...init, headers });
+  const send = (activeSession: GoogleAccountSession) => {
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${requireAccessToken(activeSession)}`);
+    return fetch(input, { ...init, headers });
+  };
+
+  let response = await send(session);
+  if (response.status === 401) {
+    const refreshed = await restoreGoogleDriveSession(false).catch(() => null);
+    if (refreshed?.userId === session.userId && refreshed.accessToken) {
+      response = await send(refreshed);
+    }
+  }
 
   if (!response.ok) {
     await throwDriveResponseError(response);
@@ -113,6 +142,7 @@ const toBackupFileSummary = (file: any): BackupFileSummary => ({
   createdTime: file.createdTime,
   modifiedTime: file.modifiedTime,
   size: file.size ? Number(file.size) : undefined,
+  appProperties: file.appProperties || undefined,
 });
 
 export const connectGoogleDrive = async (): Promise<GoogleAccountSession> => (
@@ -121,7 +151,7 @@ export const connectGoogleDrive = async (): Promise<GoogleAccountSession> => (
 
 export const listDriveBackups = async (session: GoogleAccountSession): Promise<BackupFileSummary[]> => {
   const query = encodeURIComponent(`name contains '${BACKUP_NAME_PREFIX}' and trashed = false`);
-  const fields = encodeURIComponent('files(id,name,createdTime,modifiedTime,size)');
+  const fields = encodeURIComponent('files(id,name,createdTime,modifiedTime,size,appProperties)');
   const url = `${DRIVE_FILES_ENDPOINT}?spaces=appDataFolder&q=${query}&fields=${fields}&orderBy=createdTime desc`;
   const response = await authorizedFetch(session, url);
   const payload = await response.json();
@@ -201,25 +231,32 @@ const pruneOldBackups = async (
 };
 
 export const createDriveBackup = async (
-  session: GoogleAccountSession,
+  _session: GoogleAccountSession,
 ): Promise<{ file: BackupFileSummary; settings: DriveBackupSettings }> => {
-  const bundle = await createBackupBundle();
-  const name = `${BACKUP_NAME_PREFIX}${bundle.manifest.createdAt.replace(/[:.]/g, '-')}.ddb`;
-  const uploadUrl = await initiateResumableUpload(session, name, bundle.bytes.length);
-  const file = await uploadBackupBytes(session, uploadUrl, bundle.bytes);
-  const settings: DriveBackupSettings = {
-    linkedGoogleUserId: session.userId,
-    linkedGoogleEmail: session.email,
-    lastBackupAt: Date.now(),
-    lastBackupFileId: file.id,
-    lastBackupSizeBytes: file.size || bundle.bytes.length,
-  };
-  await diaryRepository.saveDriveBackupSettings(settings);
+  const before = await diaryRepository.getDriveBackupSettings();
+  const previousBackupAt = before.lastBackupAt || 0;
+  await backupCoordinator.runNow();
 
-  const backups = await listDriveBackups(session);
-  await pruneOldBackups(session, backups);
-
-  return { file, settings };
+  const deadline = Date.now() + 5 * 60_000;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 750));
+    const settings = await backupCoordinator.reconcileRuntimeState();
+    if ((settings.lastBackupAt || 0) > previousBackupAt && settings.lastBackupFileId) {
+      return {
+        file: {
+          id: settings.lastBackupFileId,
+          name: 'Dear Diary backup',
+          createdTime: new Date(settings.lastBackupAt!).toISOString(),
+          size: settings.lastBackupSizeBytes,
+        },
+        settings,
+      };
+    }
+    if (settings.lastErrorCode) {
+      throw new Error(getDriveBackupErrorMessage(settings.lastErrorCode));
+    }
+  }
+  throw new Error('The backup is still pending. It will continue when Android permits background work.');
 };
 
 export const restoreDriveBackup = async (
@@ -236,9 +273,30 @@ export const restoreDriveBackup = async (
     linkedGoogleEmail: session.email,
     lastRestoreAt: Date.now(),
     lastBackupFileId: fileId,
+    parentBackupFileId: fileId,
+    cloudWriteBlocked: false,
   };
   await diaryRepository.saveDriveBackupSettings(settings);
+  await nativeDriveBackupBridge.setCloudWriteBlocked({ blocked: false });
+  await backupCoordinator.runNow();
   return settings;
+};
+
+export const restoreLatestValidDriveBackup = async (
+  session: GoogleAccountSession,
+): Promise<DriveBackupSettings> => {
+  const backups = await listDriveBackups(session);
+  let lastError: unknown = null;
+  for (const backup of backups.slice(0, MAX_BACKUPS_TO_KEEP)) {
+    try {
+      return await restoreDriveBackup(session, backup.id);
+    } catch (error) {
+      if (isDriveAuthorizationError(error)) throw error;
+      lastError = error;
+    }
+  }
+  if (lastError instanceof Error) throw lastError;
+  throw new Error('No compatible Google Drive backup was found.');
 };
 
 export const deleteDriveBackup = async (

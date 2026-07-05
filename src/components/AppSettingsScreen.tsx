@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import {
   AppSettings,
-  BackupFileSummary,
+  BackupSchedulePreference,
   Diary,
   DriveBackupSettings,
   Entry,
@@ -32,19 +32,25 @@ import type { PinLength } from '../domain/security';
 import { User, Mail } from 'lucide-react';
 import { isNativePlatform } from '../platform';
 import { secureAuthService } from '../platform/security';
-import { getCachedGoogleDriveSession, signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
+import {
+  getCachedGoogleDriveSession,
+  restoreGoogleDriveSession,
+  signOutGoogleAuth,
+  startGoogleAuth,
+} from '../utils/googleAuth';
 import {
   connectGoogleDrive,
   createDriveBackup,
-  deleteDriveBackup,
+  getDriveBackupErrorMessage,
   isDriveAuthorizationError,
-  listDriveBackups,
-  restoreDriveBackup
+  listDriveBackups
 } from '../utils/driveBackup';
 import { diaryRepository } from '../repositories';
 import { createDefaultUserProfile } from '../repositories/defaults';
-import { calculateStorageUsage, type StorageDetails } from '../domain/storageUsage';
 import { exportEncryptedBackup, importEncryptedBackup } from '../utils/manualBackup';
+import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
+import { backupCoordinator } from '../utils/backupCoordinator';
+import { createDefaultBackupSchedule } from '../repositories/defaults';
 
 interface AppSettingsScreenProps {
   diaries: Diary[];
@@ -175,7 +181,6 @@ export default function AppSettingsScreen({
   const [showSecurityAnswer, setShowSecurityAnswer] = useState<boolean>(false);
   const [recoveryError, setRecoveryError] = useState<string>('');
   const [recoverySuccess, setRecoverySuccess] = useState<boolean>(false);
-  const [isRecoveryAccountLoading, setIsRecoveryAccountLoading] = useState(false);
   const [recoveryAccountError, setRecoveryAccountError] = useState('');
 
   // Reminders preference states
@@ -199,10 +204,9 @@ export default function AppSettingsScreen({
   const [authError, setAuthError] = useState('');
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
-  const [isRestoring, setIsRestoring] = useState(false);
-  const [isLoadingBackups, setIsLoadingBackups] = useState(false);
   const [backupStep, setBackupStep] = useState<number>(-1);
-  const [driveBackups, setDriveBackups] = useState<BackupFileSummary[]>([]);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleDraft, setScheduleDraft] = useState<BackupSchedulePreference>(() => createDefaultBackupSchedule());
 
   // WebAuthn Passkey States
   const [isWebAuthnLoading, setIsWebAuthnLoading] = useState<boolean>(false);
@@ -210,10 +214,20 @@ export default function AppSettingsScreen({
   const [webAuthnSuccess, setWebAuthnSuccess] = useState<string>('');
   const [showSimulateFallback, setShowSimulateFallback] = useState<boolean>(false);
 
-  const backupAccountEmail = backupSession?.email || driveBackupSettings.linkedGoogleEmail || 'Not connected';
+  const isBackupLinked = !!(driveBackupSettings.linkedGoogleUserId && driveBackupSettings.linkedGoogleEmail);
 
   useEffect(() => {
-    void diaryRepository.getDriveBackupSettings().then(setDriveBackupSettings);
+    void (async () => {
+      const stored = await diaryRepository.getDriveBackupSettings();
+      const runtime = await backupCoordinator.reconcileRuntimeState();
+      const next = { ...stored, ...runtime, schedule: runtime.schedule || stored.schedule };
+      setDriveBackupSettings(next);
+      setScheduleDraft(next.schedule || createDefaultBackupSchedule());
+      if (next.linkedGoogleUserId) {
+        const session = await restoreGoogleDriveSession(false).catch(() => null);
+        if (session) setBackupSession(session);
+      }
+    })();
   }, []);
 
   const lastBackupStr = React.useMemo(() => (
@@ -222,63 +236,64 @@ export default function AppSettingsScreen({
       : 'Never'
   ), [driveBackupSettings.lastBackupAt]);
 
-  const isBackupStale = React.useMemo(() => {
-    const lastBackupAt = driveBackupSettings.lastBackupAt || 0;
-    if (!lastBackupAt) return true;
-    return entries.some(entry => entry.updatedAt > lastBackupAt) ||
-      notes.some(note => note.updatedAt > lastBackupAt);
-  }, [driveBackupSettings.lastBackupAt, entries, notes]);
-
-  // Compute storage usage details (text, photos, audio)
-  const storageDetails = React.useMemo(() => {
-    return calculateStorageUsage(diaries, entries, notes, settings, profile, security);
-  }, [diaries, entries, notes, settings, profile, security]);
-
   const saveConnectedBackupSession = async (session: GoogleAccountSession): Promise<DriveBackupSettings> => {
+    const accountChanged = !!driveBackupSettings.linkedGoogleUserId && driveBackupSettings.linkedGoogleUserId !== session.userId;
     const nextBackupSettings: DriveBackupSettings = {
       ...driveBackupSettings,
+      ...(accountChanged ? {
+        lastBackupAt: undefined,
+        lastBackupFileId: undefined,
+        lastBackupSizeBytes: undefined,
+        lastRestoreAt: undefined,
+        lastAttemptAt: undefined,
+        lastErrorCode: null,
+        stagedContentRevision: 0,
+        uploadedContentRevision: 0,
+        parentBackupFileId: undefined,
+        activeDeviceId: undefined,
+      } : {}),
       linkedGoogleUserId: session.userId,
       linkedGoogleEmail: session.email,
+      linkedGoogleDisplayName: session.displayName,
+      linkedAt: driveBackupSettings.linkedAt || Date.now(),
+      cloudWriteBlocked: false,
     };
     await diaryRepository.saveDriveBackupSettings(nextBackupSettings);
+    const binding = bindGoogleRecoveryAccount(security, session);
+    if (!binding.ok) throw new Error(binding.error);
+    await persistSecurity(binding.config);
     setDriveBackupSettings(nextBackupSettings);
     setBackupSession(session);
     return nextBackupSettings;
   };
 
-  const refreshDriveBackups = async (session: GoogleAccountSession | null = backupSession || getCachedGoogleDriveSession()): Promise<void> => {
-    if (!session) return;
-    setIsLoadingBackups(true);
-    setAuthError('');
-    try {
-      setBackupSession(session);
-      setDriveBackups(await listDriveBackups(session));
-    } catch (err: any) {
-      console.error(err);
-      if (isDriveAuthorizationError(err) && err.requiresReconnect) {
-        setBackupSession(null);
-      }
-      setAuthError(formatGoogleAuthError(err));
-    } finally {
-      setIsLoadingBackups(false);
-    }
-  };
-
-  const handleGoogleSignIn = async (
-    options: { refreshAfterSignIn?: boolean } = {},
-  ): Promise<GoogleAccountSession | null> => {
+  const handleGoogleSignIn = async (): Promise<GoogleAccountSession | null> => {
     setAuthError('');
     setIsAuthLoading(true);
     try {
       const session = await connectGoogleDrive();
       await saveConnectedBackupSession(session);
       onShowToast?.(`Google Drive backup connected as ${session.email || 'your Google account'}.`, 'success');
-      if (options.refreshAfterSignIn !== false) {
-        await refreshDriveBackups(session);
-      }
       return session;
     } catch (err: any) {
       console.error(err);
+      setAuthError(formatGoogleAuthError(err));
+      return null;
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const reconnectLinkedGoogleAccount = async (): Promise<GoogleAccountSession | null> => {
+    setAuthError('');
+    setIsAuthLoading(true);
+    try {
+      const session = await restoreGoogleDriveSession(true);
+      if (!session?.accessToken) throw new Error('Google Drive authorization was not completed.');
+      await saveConnectedBackupSession(session);
+      onShowToast?.('Google Drive authorization renewed.', 'success');
+      return session;
+    } catch (err: any) {
       setAuthError(formatGoogleAuthError(err));
       return null;
     } finally {
@@ -292,7 +307,12 @@ export default function AppSettingsScreen({
       setBackupSession(session);
       return session;
     }
-    return handleGoogleSignIn({ refreshAfterSignIn: false });
+    const restored = await restoreGoogleDriveSession(false).catch(() => null);
+    if (restored?.accessToken) {
+      setBackupSession(restored);
+      return restored;
+    }
+    return isBackupLinked ? reconnectLinkedGoogleAccount() : handleGoogleSignIn();
   };
 
   const runDriveOperation = async <T,>(
@@ -309,7 +329,9 @@ export default function AppSettingsScreen({
       if (isDriveAuthorizationError(err) && err.requiresReconnect) {
         setBackupSession(null);
         onShowToast?.('Google Drive needs fresh authorization. Please approve access again.', 'info');
-        const freshSession = await handleGoogleSignIn({ refreshAfterSignIn: false });
+        const freshSession = isBackupLinked
+          ? await reconnectLinkedGoogleAccount()
+          : await handleGoogleSignIn();
         if (!freshSession) {
           throw err;
         }
@@ -320,14 +342,17 @@ export default function AppSettingsScreen({
   };
 
   const handleCreateDriveBackup = async () => {
+    if (isNativePlatform() && (driveBackupSettings.schedule?.network || 'wifi') === 'wifi') {
+      const network = await nativeDriveBackupBridge.getNetworkState().catch(() => ({ connected: true, metered: false }));
+      if (network.metered && !window.confirm('Wi-Fi-only is selected for automatic backup. Use cellular data for this backup now?')) return;
+    }
     setIsBackingUp(true);
     setBackupStep(0);
     try {
       setBackupStep(1);
-      const { result, session } = await runDriveOperation(createDriveBackup);
+      const { result } = await runDriveOperation(createDriveBackup);
       setBackupStep(2);
       setDriveBackupSettings(result.settings);
-      await refreshDriveBackups(session);
       setBackupStep(3);
       onShowToast?.('Google Drive backup created successfully.', 'success');
     } catch (err: any) {
@@ -340,56 +365,85 @@ export default function AppSettingsScreen({
     }
   };
 
-  const handleRestoreDriveBackup = async (fileId: string) => {
-    const confirmed = window.confirm('Restore this Drive backup? Your current local journal will be replaced after a safety snapshot is created.');
-    if (!confirmed) return;
-
-    setIsRestoring(true);
-    setBackupStep(0);
-    try {
-      setBackupStep(1);
-      const { result: nextSettings } = await runDriveOperation(session => restoreDriveBackup(session, fileId));
-      setBackupStep(2);
-      setDriveBackupSettings(nextSettings);
-      onShowToast?.('Backup restored. The application will refresh.', 'success');
-      setTimeout(() => window.location.reload(), 1200);
-    } catch (err: any) {
-      console.error(err);
-      setAuthError(formatGoogleAuthError(err));
-      onShowToast?.(err?.message || 'Could not restore Google Drive backup.', 'error');
-    } finally {
-      setIsRestoring(false);
-      setBackupStep(-1);
-    }
-  };
-
-  const handleDeleteDriveBackup = async (fileId: string) => {
-    const confirmed = window.confirm('Delete this backup from Google Drive app data?');
-    if (!confirmed) return;
-
-    try {
-      const { session } = await runDriveOperation(async activeSession => {
-        await deleteDriveBackup(activeSession, fileId);
-        return true;
-      });
-      await refreshDriveBackups(session);
-      onShowToast?.('Drive backup deleted.', 'info');
-    } catch (err: any) {
-      console.error(err);
-      setAuthError(formatGoogleAuthError(err));
-    }
-  };
-
   const handleSignOutClick = async () => {
     try {
       await signOutGoogleAuth();
       setBackupSession(null);
-      setDriveBackups([]);
+      const nextSecurity: SecurityConfig = {
+        ...security,
+        linkedGoogleUserId: undefined,
+        linkedGoogleUid: undefined,
+        linkedGoogleEmail: null,
+        linkedGoogleBoundAt: undefined,
+      };
+      await persistSecurity(nextSecurity);
+      const current = await diaryRepository.getDriveBackupSettings();
+      const nextSettings: DriveBackupSettings = {
+        ...current,
+        linkedGoogleUserId: undefined,
+        linkedGoogleEmail: null,
+        linkedGoogleDisplayName: null,
+        linkedAt: undefined,
+        lastBackupAt: undefined,
+        lastBackupFileId: undefined,
+        lastBackupSizeBytes: undefined,
+        lastRestoreAt: undefined,
+        lastAttemptAt: undefined,
+        lastErrorCode: null,
+        stagedContentRevision: 0,
+        uploadedContentRevision: 0,
+        parentBackupFileId: undefined,
+        activeDeviceId: undefined,
+        cloudWriteBlocked: false,
+      };
+      await diaryRepository.saveDriveBackupSettings(nextSettings);
+      setDriveBackupSettings(nextSettings);
       onShowToast?.('Signed out of Google Drive backup.', 'info');
     } catch (err) {
       console.error(err);
     }
   };
+
+  const handleSaveBackupSchedule = async () => {
+    const normalized: BackupSchedulePreference = {
+      ...scheduleDraft,
+      weeklyDay: Math.max(0, Math.min(6, scheduleDraft.weeklyDay)),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    };
+    await nativeDriveBackupBridge.configureSchedule(normalized);
+    const next = { ...driveBackupSettings, schedule: normalized };
+    await diaryRepository.saveDriveBackupSettings(next);
+    setDriveBackupSettings(next);
+    setScheduleDraft(normalized);
+    setShowScheduleModal(false);
+    onShowToast?.('Automatic backup schedule updated.', 'success');
+  };
+
+  const handleUseThisDeviceForBackup = async () => {
+    if (!window.confirm('Replace the existing cloud backup with data from this device? This does not merge data from another device.')) return;
+    const session = await ensureDriveSession();
+    if (!session) return;
+    const latest = (await listDriveBackups(session))[0];
+    const next: DriveBackupSettings = {
+      ...driveBackupSettings,
+      parentBackupFileId: latest?.id,
+      cloudWriteBlocked: false,
+      lastErrorCode: null,
+    };
+    await diaryRepository.saveDriveBackupSettings(next);
+    await nativeDriveBackupBridge.setCloudWriteBlocked({ blocked: false });
+    setDriveBackupSettings(next);
+    onShowToast?.('This device can now create the next backup.', 'info');
+  };
+
+  const scheduleSummary = React.useMemo(() => {
+    const schedule = driveBackupSettings.schedule || createDefaultBackupSchedule();
+    if (schedule.mode === 'off') return 'Automatic backup off';
+    const day = schedule.mode === 'weekly'
+      ? `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][schedule.weeklyDay]} at `
+      : '';
+    return `${schedule.mode === 'daily' ? 'Daily at ' : `Weekly ${day}`}${schedule.localTime} - ${schedule.network === 'wifi' ? 'Wi-Fi' : 'Wi-Fi + cellular'}`;
+  }, [driveBackupSettings.schedule]);
 
   const persistSettings = async (updatedSettings: AppSettings): Promise<void> => {
     await diaryRepository.saveSettings(updatedSettings);
@@ -644,30 +698,6 @@ export default function AppSettingsScreen({
     await persistSettings(updated);
   };
 
-  const handleLinkRecoveryAccount = async () => {
-    if (!security.isPinCreated) {
-      setRecoveryAccountError('Create an App Security PIN before linking a recovery account.');
-      return;
-    }
-
-    setIsRecoveryAccountLoading(true);
-    setRecoveryAccountError('');
-    try {
-      const session = await startGoogleAuth('pin-reset');
-      const result = bindGoogleRecoveryAccount(security, session);
-      if (!result.ok) {
-        setRecoveryAccountError(result.error || 'This Google account cannot be linked.');
-        return;
-      }
-      await persistSecurity(result.config);
-      onShowToast?.(`PIN recovery linked to ${session.email || 'your Google account'}.`, 'success');
-    } catch (err: any) {
-      setRecoveryAccountError(formatGoogleAuthError(err));
-    } finally {
-      setIsRecoveryAccountLoading(false);
-    }
-  };
-
   const handleReminderTimeChange = async (timeStr: string) => {
     setReminderTime(timeStr);
     const updated: AppSettings = {
@@ -904,6 +934,39 @@ export default function AppSettingsScreen({
               transition={{ duration: 0.15 }}
               className="flex flex-col gap-5"
             >
+              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex items-center gap-3">
+                  <span className="p-2.5 bg-brand-sage/10 text-brand-sage rounded-2xl">
+                    <Cloud className="w-4 h-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Google Account</h3>
+                    <p className="text-[10px] text-brand-sage truncate">
+                      {isBackupLinked ? driveBackupSettings.linkedGoogleEmail : 'Not linked'}
+                    </p>
+                  </div>
+                  </div>
+                  {isBackupLinked ? (
+                    <div className="flex shrink-0 items-center gap-2">
+                      {!backupSession && (
+                        <button type="button" onClick={reconnectLinkedGoogleAccount} disabled={isAuthLoading} className="px-3 py-2 rounded-xl bg-brand-sage text-white text-[10px] font-bold disabled:opacity-50">
+                          {isAuthLoading ? 'Connecting...' : 'Reconnect'}
+                        </button>
+                      )}
+                      <button type="button" onClick={handleSignOutClick} className="w-9 h-9 rounded-xl border border-brand-border text-brand-text-muted hover:text-brand-pink flex items-center justify-center" title="Disconnect Google account">
+                        <LogOut className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button type="button" onClick={handleGoogleSignIn} disabled={isAuthLoading} className="px-3 py-2 shrink-0 rounded-xl bg-brand-sage text-white text-[10px] font-bold disabled:opacity-50">
+                      {isAuthLoading ? 'Linking...' : 'Link'}
+                    </button>
+                  )}
+                </div>
+                {authError && <p className="text-[10px] font-bold text-red-600 dark:text-red-400">{authError}</p>}
+              </div>
+
               {/* User Profile Customizer Card */}
               <div className="bg-brand-card-bg p-6 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-5">
                 <div className="flex items-center gap-3">
@@ -1261,15 +1324,15 @@ export default function AppSettingsScreen({
                   </div>
                   <button
                     type="button"
-                    onClick={handleLinkRecoveryAccount}
-                    disabled={!security.isPinCreated || isRecoveryAccountLoading}
+                    onClick={() => setActiveTab('profile')}
+                    disabled={!security.isPinCreated}
                     className="shrink-0 px-4 py-2 bg-brand-bg hover:bg-brand-rose-light disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold text-brand-sage-dark rounded-full border border-brand-border transition-colors"
                   >
-                    {isRecoveryAccountLoading ? 'Linking...' : security.linkedGoogleUserId ? 'Verify' : 'Link'}
+                    Manage
                   </button>
                 </div>
                 <p className="text-[10px] text-brand-text-muted leading-relaxed">
-                  This account can verify a forgotten PIN. It is stored locally and remains separate from Google Drive backup.
+                  The Google account managed in Profile is used for both hidden Drive backup and forgotten-PIN verification.
                 </p>
                 {recoveryAccountError && (
                   <p className="text-[11px] font-bold text-brand-pink-dark">{recoveryAccountError}</p>
@@ -1362,346 +1425,77 @@ export default function AppSettingsScreen({
 
           {activeTab === 'backup' && (
             <motion.div
-              key="backup"
+              key="backup-simple"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.15 }}
               className="flex flex-col gap-5"
             >
-              {/* Google Drive Backup card */}
-              {backupSession ? (
-                <>
-                  <div className="bg-gradient-to-br from-brand-card-bg to-brand-bg/60 p-6 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-5 relative overflow-hidden group">
-                    {/* Glowing background aura */}
-                    <div className={`absolute -right-16 -top-16 w-36 h-36 rounded-full blur-3xl opacity-20 dark:opacity-30 transition-colors duration-700 ${isBackupStale ? 'bg-amber-500' : 'bg-brand-sage'}`} />
-
-                    <div className="flex items-center justify-between relative z-10">
-                      <div className="flex items-center gap-3">
-                        <span className={`p-3 rounded-2xl flex items-center justify-center transition-all duration-300 ${
-                          isBackupStale
-                            ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 animate-pulse' 
-                            : 'bg-brand-sage/10 text-brand-sage'
-                        }`}>
-                          <Cloud className="w-5 h-5" />
-                        </span>
-                        <div>
-                          <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Google Drive Backup</h3>
-                          <p className="text-[10px] text-brand-sage mt-0.5">Hidden appDataFolder backup for this device</p>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col items-end">
-                        {isBackupStale ? (
-                          <div className="px-3 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-bold rounded-full flex items-center gap-1.5 border border-amber-500/20 shadow-sm animate-pulse">
-                            <span className="w-1.5 h-1.5 bg-amber-500 rounded-full" />
-                            Backup Pending
-                          </div>
-                        ) : (
-                          <div className="px-3 py-1 bg-brand-sage/10 text-brand-sage text-[10px] font-bold rounded-full flex items-center gap-1.5 border border-brand-sage/20 shadow-sm">
-                            <span className="w-1.5 h-1.5 bg-brand-sage rounded-full" />
-                            Backed Up
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-3.5 bg-brand-bg/55 dark:bg-brand-bg/15 p-4 rounded-2xl border border-brand-border/40 relative z-10 text-xs">
-                      <div className="flex justify-between items-center">
-                        <span className="text-brand-sage font-medium">Vault Account</span>
-                        <span className="font-mono font-bold text-brand-plum dark:text-brand-text text-[11px] truncate max-w-[200px] flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-brand-sage animate-pulse" />
-                          {backupAccountEmail}
-                        </span>
-                      </div>
-
-                      <div className="flex justify-between items-center border-t border-brand-border/25 pt-3">
-                        <span className="text-brand-sage font-medium">Last Backup</span>
-                        <span className="font-mono text-brand-sage font-bold text-[11px] flex items-center gap-1">
-                          <RefreshCw className="w-3 h-3 text-brand-sage/60 animate-spin" style={{ animationDuration: '6s' }} />
-                          {lastBackupStr}
-                        </span>
-                      </div>
-
-                      {isBackupStale && (
-                        <div className="text-[10px] text-amber-700 dark:text-amber-400 bg-amber-500/5 border border-amber-500/10 p-3 rounded-xl flex items-start gap-2.5 leading-normal mt-1 animate-fade-in">
-                          <FileWarning className="w-4 h-4 shrink-0 mt-0.5" />
-                          <p>
-                            Your device has entries or notes created after the last Drive backup.
-                            Press <strong>Back Up Now</strong> to secure them.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Cloud Storage Usage Breakdown */}
-                    <div className="border-t border-brand-border/30 pt-5 flex flex-col gap-3 relative z-10">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-brand-plum dark:text-brand-text font-bold">Estimated Backup Payload</span>
-                        <span className="font-mono text-[11px] font-bold text-brand-pink">
-                          {((storageDetails.totalBytes / (1024 * 1024 * 1024)) * 100).toFixed(1)}%
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-brand-sage text-right font-mono -mt-1 mb-1">
-                         {formatBytes(storageDetails.totalBytes)}
-                      </div>
-
-                      {/* Progress bar representing actual space taken against 1GB */}
-                      <div className="w-full h-3 bg-brand-bg dark:bg-brand-bg/50 rounded-full overflow-hidden border border-brand-border/30 flex shadow-inner">
-                        {storageDetails.totalBytes > 0 ? (
-                          <>
-                            {/* Text & Metadata segment */}
-                            <div 
-                              style={{ width: `${Math.max(1.5, (storageDetails.textBytes / (1024 * 1024 * 1024)) * 100)}%` }} 
-                              className="h-full bg-brand-sage transition-all duration-500 rounded-l-full"
-                              title={`Text: ${formatBytes(storageDetails.textBytes)}`}
-                            />
-                            {/* Photos segment */}
-                            {storageDetails.photoBytes > 0 && (
-                              <div 
-                                style={{ width: `${(storageDetails.photoBytes / (1024 * 1024 * 1024)) * 100}%` }} 
-                                className="h-full bg-brand-pink border-l border-brand-card-bg/20 transition-all duration-500"
-                                title={`Photos: ${formatBytes(storageDetails.photoBytes)}`}
-                              />
-                            )}
-                            {/* Audio segment */}
-                            {storageDetails.audioBytes > 0 && (
-                              <div 
-                                style={{ width: `${(storageDetails.audioBytes / (1024 * 1024 * 1024)) * 100}%` }} 
-                                className="h-full bg-amber-500 border-l border-brand-card-bg/20 transition-all duration-500 rounded-r-full"
-                                title={`Audio: ${formatBytes(storageDetails.audioBytes)}`}
-                              />
-                            )}
-                          </>
-                        ) : (
-                          <div className="h-full bg-brand-border/30 w-full rounded-full" />
-                        )}
-                      </div>
-
-                      {/* Legend Cards */}
-                      <div className="grid grid-cols-3 gap-2 text-[9px] text-brand-sage leading-tight mt-0.5">
-                        <div className="flex flex-col bg-brand-bg/40 dark:bg-brand-bg/15 p-2 rounded-xl border border-brand-border/20 shadow-sm">
-                          <span className="flex items-center gap-1.5 font-bold text-brand-plum dark:text-brand-text mb-0.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-brand-sage shrink-0" />
-                            Text & Logs
-                          </span>
-                          <span className="font-mono text-brand-text-muted/95 pl-3">{formatBytes(storageDetails.textBytes)}</span>
-                        </div>
-
-                        <div className="flex flex-col bg-brand-bg/40 dark:bg-brand-bg/15 p-2 rounded-xl border border-brand-border/20 shadow-sm">
-                          <span className="flex items-center gap-1.5 font-bold text-brand-plum dark:text-brand-text mb-0.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-brand-pink shrink-0" />
-                            Photos
-                          </span>
-                          <span className="font-mono text-brand-text-muted/95 pl-3">{formatBytes(storageDetails.photoBytes)}</span>
-                        </div>
-
-                        <div className="flex flex-col bg-brand-bg/40 dark:bg-brand-bg/15 p-2 rounded-xl border border-brand-border/20 shadow-sm">
-                          <span className="flex items-center gap-1.5 font-bold text-brand-plum dark:text-brand-text mb-0.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                            Audio Notes
-                          </span>
-                          <span className="font-mono text-brand-text-muted/95 pl-3">{formatBytes(storageDetails.audioBytes)}</span>
-                        </div>
-                      </div>
-
-                      <p className="text-[8px] text-brand-sage italic text-center mt-1 leading-relaxed">
-                        Drive backup stores a zipped snapshot in the hidden Google Drive app data folder.
-                      </p>
-                    </div>
-
-                    {/* Primary control buttons */}
-                    <div className="grid grid-cols-2 gap-3 pt-3">
-                      <button
-                        type="button"
-                        onClick={handleCreateDriveBackup}
-                        disabled={isBackingUp || isRestoring}
-                        className="py-3 bg-brand-pink hover:bg-brand-pink-dark text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-brand-pink/15 active:scale-[0.98] disabled:opacity-50 select-none cursor-pointer"
-                      >
-                        <Upload className={`w-3.5 h-3.5 ${isBackingUp ? 'animate-pulse' : ''}`} />
-                        {isBackingUp ? 'Backing Up...' : 'Back Up Now'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleSignOutClick}
-                        className="py-3 border border-brand-border hover:bg-brand-rose-light/10 text-brand-text-muted hover:text-brand-pink-dark font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all select-none cursor-pointer"
-                      >
-                        <LogOut className="w-3.5 h-3.5" />
-                        Sign Out
-                      </button>
-                    </div>
+              <div className="bg-brand-card-bg p-6 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-5">
+                <div className="flex items-center gap-3">
+                  <span className="p-3 rounded-2xl bg-brand-sage/10 text-brand-sage"><Cloud className="w-5 h-5" /></span>
+                  <div>
+                    <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Google Drive Backup</h3>
+                    <p className="text-[10px] text-brand-sage">Private backup in hidden app storage</p>
                   </div>
-                </>
-              ) : (
-                <div className="bg-brand-card-bg p-6 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-5">
-                  <div className="flex items-center gap-3">
-                    <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
-                      <Cloud className="w-4 h-4" />
-                    </span>
-                    <div>
-                      <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Optional Google Drive Backup</h3>
-                      <p className="text-[10px] text-brand-sage mt-0.5">Stay fully offline, or connect Google to back up this device</p>
-                    </div>
-                  </div>
-
-                  <div className="text-[10.5px] leading-relaxed text-brand-text bg-brand-bg/30 dark:bg-white/5 p-3.5 rounded-2xl border border-brand-border/30">
-                    <div className="flex gap-2.5 items-start">
-                      <ShieldCheck className="w-4 h-4 text-brand-sage shrink-0 mt-0.5" />
-                      <p className="text-brand-text-muted">
-                        Google sign-in only enables hidden Drive backups. Your local PIN and security question stay on this device.
-                        {driveBackupSettings.linkedGoogleEmail ? ` Last backup account: ${driveBackupSettings.linkedGoogleEmail}.` : ''}
-                      </p>
-                    </div>
-                  </div>
-
-                  {authError && (
-                    <p className="text-[10px] font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 p-3 rounded-2xl border border-red-100/50 dark:border-red-900/50 leading-normal text-center">
-                      {authError}
-                    </p>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={handleGoogleSignIn}
-                    disabled={isAuthLoading}
-                    className="w-full py-3.5 bg-brand-sage hover:bg-brand-sage-dark text-white font-bold text-xs rounded-xl shadow-md shadow-brand-sage/10 transition-all active:scale-[0.98] disabled:opacity-50 select-none cursor-pointer flex items-center justify-center gap-2"
-                  >
-                    {isAuthLoading ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Connecting Google...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Cloud className="w-4 h-4" />
-                        <span>{driveBackupSettings.linkedGoogleEmail ? 'Reconnect Google Drive Backup' : 'Connect Google Drive Backup'}</span>
-                      </>
-                    )}
-                  </button>
                 </div>
-              )}
 
-              {backupSession && (
-                <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-xs font-bold text-brand-sage uppercase tracking-wider">Drive Backups</h3>
-                    <button
-                      type="button"
-                      onClick={() => refreshDriveBackups()}
-                      disabled={isLoadingBackups}
-                      className="px-3 py-1.5 rounded-full border border-brand-border text-brand-sage text-[10px] font-bold flex items-center gap-1.5 disabled:opacity-50"
-                    >
-                      <RefreshCw className={`w-3 h-3 ${isLoadingBackups ? 'animate-spin' : ''}`} />
-                      Refresh
+                {isBackupLinked ? (
+                  <>
+                    {authError && <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-center text-[10px] font-bold text-red-600 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-400">{authError}</p>}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-2xl border border-brand-border/40 bg-brand-bg/45 p-4">
+                        <p className="text-[9px] font-bold uppercase tracking-wider text-brand-sage">Last backup</p>
+                        <p className="mt-1.5 text-xs font-bold text-brand-plum dark:text-brand-text">{lastBackupStr}</p>
+                      </div>
+                      <div className="rounded-2xl border border-brand-border/40 bg-brand-bg/45 p-4">
+                        <p className="text-[9px] font-bold uppercase tracking-wider text-brand-sage">Backup size</p>
+                        <p className="mt-1.5 text-xs font-bold text-brand-plum dark:text-brand-text">
+                          {driveBackupSettings.lastBackupSizeBytes ? formatBytes(driveBackupSettings.lastBackupSizeBytes) : 'Not available'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button type="button" onClick={() => { setScheduleDraft(driveBackupSettings.schedule || createDefaultBackupSchedule()); setShowScheduleModal(true); }} className="w-full flex items-center justify-between gap-3 rounded-2xl border border-brand-border/50 bg-brand-bg/35 px-4 py-3 text-left">
+                      <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Schedule</span>
+                      <span className="text-[10px] font-bold text-brand-plum dark:text-brand-text text-right">{scheduleSummary}</span>
+                    </button>
+
+                    {driveBackupSettings.lastErrorCode && (
+                      <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-center text-[10px] font-bold text-red-600 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-400">
+                        {getDriveBackupErrorMessage(driveBackupSettings.lastErrorCode)}
+                      </p>
+                    )}
+
+                    {driveBackupSettings.cloudWriteBlocked && (
+                      <button type="button" onClick={handleUseThisDeviceForBackup} className="w-full py-3 rounded-xl border border-amber-300 bg-amber-50 text-amber-700 text-xs font-bold dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
+                        Start Fresh From This Device
+                      </button>
+                    )}
+
+                    <button type="button" onClick={handleCreateDriveBackup} disabled={isBackingUp || driveBackupSettings.cloudWriteBlocked} className="w-full py-3.5 bg-brand-pink hover:bg-brand-pink-dark text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-md disabled:opacity-50">
+                      <Upload className={`w-4 h-4 ${isBackingUp ? 'animate-pulse' : ''}`} />
+                      {isBackingUp ? 'Backing Up...' : 'Back Up Now'}
+                    </button>
+                  </>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    <p className="text-[10px] text-brand-text-muted leading-relaxed">Link Google from Profile to enable hidden scheduled backups and recovery on another device.</p>
+                    <button type="button" onClick={() => setActiveTab('profile')} className="w-full py-3.5 bg-brand-sage text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2">
+                      <User className="w-4 h-4" /> Open Profile
                     </button>
                   </div>
-
-                  {driveBackups.length === 0 ? (
-                    <p className="text-[10px] text-brand-text-muted bg-brand-bg/40 dark:bg-brand-bg/15 p-3 rounded-2xl border border-brand-border/30">
-                      No Drive backups found yet. Create one from this device when you are ready.
-                    </p>
-                  ) : (
-                    <div className="flex flex-col gap-2">
-                      {driveBackups.map(backup => (
-                        <div key={backup.id} className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-brand-bg/40 dark:bg-brand-bg/15 border border-brand-border/30">
-                          <div className="min-w-0">
-                            <p className="text-xs font-bold text-brand-plum dark:text-brand-text truncate">{backup.name}</p>
-                            <p className="text-[10px] text-brand-sage">
-                              {backup.createdTime ? new Date(backup.createdTime).toLocaleString() : 'Unknown date'}
-                              {backup.size ? ` - ${formatBytes(backup.size)}` : ''}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => handleRestoreDriveBackup(backup.id)}
-                              disabled={isRestoring || isBackingUp}
-                              className="p-2 rounded-xl bg-brand-sage/10 text-brand-sage hover:bg-brand-sage hover:text-white transition-colors disabled:opacity-50"
-                              title="Restore backup"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteDriveBackup(backup.id)}
-                              disabled={isRestoring || isBackingUp}
-                              className="p-2 rounded-xl bg-red-50 text-red-600 hover:bg-red-600 hover:text-white transition-colors disabled:opacity-50"
-                              title="Delete backup"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Encrypted local backups section */}
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                <h3 className="text-xs font-bold text-brand-sage uppercase tracking-wider mb-1">Advanced Local Export</h3>
-                <p className="text-[10px] text-brand-text-muted leading-relaxed">
-                  Optional password-protected file export for manual safekeeping outside Google Drive.
-                </p>
-                
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => { setShowBackupModal(true); setBackupMsg(''); }}
-                    className="py-3 bg-brand-sage-light/20 hover:bg-brand-sage-light/40 border border-brand-sage-light text-brand-sage-dark text-xs font-bold rounded-2xl flex flex-col items-center gap-1.5 transition-all shadow-sm"
-                  >
-                    <Download className="w-4 h-4" />
-                    Export File
-                  </button>
-                  <button
-                    onClick={() => { setShowImportModal(true); setImportError(''); }}
-                    className="py-3 bg-brand-blush-light hover:bg-brand-blush-dark border border-brand-rose-light text-brand-pink-dark text-xs font-bold rounded-2xl flex flex-col items-center gap-1.5 transition-all shadow-sm"
-                  >
-                    <Upload className="w-4 h-4" />
-                    Import File
-                  </button>
-                </div>
+                )}
               </div>
 
-              {/* Danger Reset database button */}
-              <div className="bg-red-50/50 p-5 rounded-3xl border border-red-100 flex flex-col gap-3 mt-4">
-                <div className="flex items-center gap-2 text-red-700">
-                  <FileWarning className="w-4 h-4" />
-                  <h3 className="text-xs font-bold uppercase tracking-wider">Wipe Journal Data</h3>
+              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
+                <h3 className="text-xs font-bold text-brand-sage uppercase tracking-wider">Advanced Local Export</h3>
+                <p className="text-[10px] text-brand-text-muted">Optional password-protected export kept outside Google Drive.</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={() => { setShowBackupModal(true); setBackupMsg(''); }} className="py-3 bg-brand-sage-light/20 border border-brand-sage-light text-brand-sage-dark text-xs font-bold rounded-2xl flex items-center justify-center gap-2"><Download className="w-4 h-4" /> Export</button>
+                  <button onClick={() => { setShowImportModal(true); setImportError(''); }} className="py-3 bg-brand-blush-light border border-brand-rose-light text-brand-pink-dark text-xs font-bold rounded-2xl flex items-center justify-center gap-2"><Upload className="w-4 h-4" /> Import</button>
                 </div>
-                <p className="text-[11px] text-red-600/90 leading-relaxed">
-                  Resetting clears all entries, notes, and photo references. Your security PIN, Google backup link, and reminder preferences will remain untouched.
-                </p>
-
-                {!showConfirmReset ? (
-                  <button
-                    onClick={() => setShowConfirmReset(true)}
-                    className="py-2.5 bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Reset All Journal Content
-                  </button>
-                ) : (
-                  <div className="flex flex-col gap-2 bg-brand-card-bg p-3.5 rounded-2xl border border-brand-border shadow-sm">
-                    <p className="text-[11px] font-bold text-red-700 text-center">Are you completely sure? This cannot be undone.</p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirmReset(false)}
-                        className="flex-1 py-1.5 border border-red-200 text-red-700 rounded-lg text-[10px] font-bold"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleResetDatabase}
-                        className="flex-1 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[10px] font-bold transition-colors"
-                      >
-                        Confirm Reset
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
             </motion.div>
           )}
@@ -1952,6 +1746,56 @@ export default function AppSettingsScreen({
       )}
 
       {/* DRIVE BACKUP PROGRESS MODAL */}
+      <AnimatePresence>
+        {showScheduleModal && (
+          <motion.div className="fixed inset-0 z-[70] bg-black/45 flex items-end sm:items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowScheduleModal(false)}>
+            <motion.div className="w-full max-w-sm rounded-3xl bg-brand-card-bg border border-brand-border p-5 flex flex-col gap-4 shadow-xl" initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 40, opacity: 0 }} onClick={event => event.stopPropagation()}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Automatic Backup</h3>
+                  <p className="text-[10px] text-brand-sage">Android may delay the preferred time for battery or connectivity.</p>
+                </div>
+                <button type="button" onClick={() => setShowScheduleModal(false)} className="w-8 h-8 rounded-full flex items-center justify-center text-brand-sage" title="Close schedule"><X className="w-4 h-4" /></button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1 rounded-xl bg-brand-bg p-1">
+                {(['off', 'daily', 'weekly'] as const).map(mode => (
+                  <button key={mode} type="button" onClick={() => setScheduleDraft(current => ({ ...current, mode }))} className={`py-2 rounded-lg text-[10px] font-bold uppercase ${scheduleDraft.mode === mode ? 'bg-brand-pink text-white' : 'text-brand-sage'}`}>
+                    {mode}
+                  </button>
+                ))}
+              </div>
+
+              {scheduleDraft.mode !== 'off' && (
+                <div className="flex flex-col gap-3">
+                  {scheduleDraft.mode === 'weekly' && (
+                    <label className="flex items-center justify-between gap-3 text-[10px] font-bold text-brand-sage uppercase tracking-wider">
+                      Day
+                      <select value={scheduleDraft.weeklyDay} onChange={event => setScheduleDraft(current => ({ ...current, weeklyDay: Number(event.target.value) }))} className="rounded-xl border border-brand-border bg-brand-bg px-3 py-2 text-xs text-brand-plum">
+                        {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => <option key={day} value={index}>{day}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <label className="flex items-center justify-between gap-3 text-[10px] font-bold text-brand-sage uppercase tracking-wider">
+                    Preferred time
+                    <input type="time" value={scheduleDraft.localTime} onChange={event => setScheduleDraft(current => ({ ...current, localTime: event.target.value }))} className="rounded-xl border border-brand-border bg-brand-bg px-3 py-2 text-xs text-brand-plum" />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 text-[10px] font-bold text-brand-sage uppercase tracking-wider">
+                    Network
+                    <select value={scheduleDraft.network} onChange={event => setScheduleDraft(current => ({ ...current, network: event.target.value as 'wifi' | 'any' }))} className="rounded-xl border border-brand-border bg-brand-bg px-3 py-2 text-xs text-brand-plum">
+                      <option value="wifi">Wi-Fi only</option>
+                      <option value="any">Wi-Fi + cellular</option>
+                    </select>
+                  </label>
+                </div>
+              )}
+
+              <button type="button" onClick={handleSaveBackupSchedule} className="w-full py-3 rounded-xl bg-brand-pink text-white text-xs font-bold">Save Schedule</button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {backupStep >= 0 && activeTab === 'backup' && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
           <motion.div 

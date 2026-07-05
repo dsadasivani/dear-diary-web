@@ -6,6 +6,11 @@ import { validateBackupBundleBytes } from './backupSnapshot';
 
 const encoder = new TextEncoder();
 
+const checksum = async (value: string): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(value));
+  return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+};
+
 const payload = {
   version: '2.0.0',
   exportedAt: '2026-07-04T00:00:00.000Z',
@@ -64,4 +69,44 @@ test('rejects backup data with a checksum mismatch', async () => {
     'data.json': encoder.encode(JSON.stringify(payload)),
   });
   await assert.rejects(validateBackupBundleBytes(bytes), /checksum did not match/i);
+});
+
+test('continues to validate legacy schema v1 backups', async () => {
+  const dataJson = JSON.stringify(payload);
+  const bytes = zipSync({
+    'manifest.json': encoder.encode(JSON.stringify(manifest({ checksum: await checksum(dataJson) }))),
+    'data.json': encoder.encode(dataJson),
+  });
+  const validated = await validateBackupBundleBytes(bytes);
+  assert.equal(validated.manifest.schemaVersion, 1);
+  assert.equal(validated.payload.version, '2.0.0');
+});
+
+test('validates portable schema v2 without device security metadata', async () => {
+  const portablePayload = {
+    ...payload,
+    version: '3.0.0',
+    security: undefined,
+    driveBackupSettings: undefined,
+    backupSchedule: {
+      mode: 'weekly',
+      localTime: '03:15',
+      weeklyDay: 1,
+      network: 'wifi',
+      timezone: 'Asia/Calcutta',
+    },
+  };
+  const dataJson = JSON.stringify(portablePayload);
+  const bytes = zipSync({
+    'manifest.json': encoder.encode(JSON.stringify(manifest({
+      schemaVersion: 2,
+      checksum: await checksum(dataJson),
+      deviceId: 'device-a',
+      contentRevision: 7,
+    }))),
+    'data.json': encoder.encode(dataJson),
+  });
+  const validated = await validateBackupBundleBytes(bytes);
+  assert.equal(validated.manifest.contentRevision, 7);
+  assert.equal(validated.payload.security, undefined);
 });

@@ -4,6 +4,7 @@ import type { AppSettings, SecurityConfig, UserProfile } from './types';
 import { diaryRepository } from './repositories';
 import { hydrateNativeUiPreferences } from './mobile/nativeStorageBridge';
 import { migrateLegacyDataUriMedia } from './mobile/legacyMediaMigration';
+import { backupCoordinator } from './utils/backupCoordinator';
 import App from './App';
 
 interface BootstrapData {
@@ -22,6 +23,7 @@ const loadBootstrapData = (): Promise<BootstrapData> => {
       await migrateLegacyDataUriMedia().catch(error => {
         console.warn('Legacy media migration will be retried on the next launch:', error);
       });
+      await backupCoordinator.initialize();
       const [settings, security, userProfile] = await Promise.all([
         diaryRepository.getSettings(),
         diaryRepository.getSecurityConfig(),

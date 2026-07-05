@@ -6,6 +6,8 @@ export type {
   NewDiary,
   NewEntry,
   NewNote,
+  RepositoryChangeListener,
+  RepositoryImportMode,
   RepositorySnapshot,
 } from './DiaryRepository';
 

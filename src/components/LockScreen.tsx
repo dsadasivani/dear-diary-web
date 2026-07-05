@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle, ArrowLeft, BookOpen, CalendarDays, Check, Delete,
-  Eye, EyeOff, Fingerprint, Lock, Moon, ShieldCheck, Sparkles, Sun
+  Cloud, Eye, EyeOff, Fingerprint, HardDrive, Lock, Moon, ShieldCheck, Sparkles, Sun
 } from 'lucide-react';
-import { AppSettings, GoogleAccountSession, SecurityConfig } from '../types';
+import { AppSettings, BackupFileSummary, GoogleAccountSession, SecurityConfig } from '../types';
 import {
   createCustomRecoveryQuestionId,
   createInitialPinWithRecovery,
+  bindGoogleRecoveryAccount,
   getRecoveryQuestionText,
   hasRecoveryQuestion,
   isValidPin,
@@ -22,6 +23,8 @@ import { secureAuthService } from '../platform/security';
 import { isNativePlatform } from '../platform';
 import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
 import { diaryRepository } from '../repositories';
+import { listDriveBackups, restoreLatestValidDriveBackup } from '../utils/driveBackup';
+import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
 
 interface LockScreenProps {
   initialSecurity: SecurityConfig;
@@ -97,6 +100,11 @@ export default function LockScreen({
   const [date, setDate] = useState('');
   const [quoteIndex, setQuoteIndex] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => initialSettings.theme || 'light');
+  const [showBackupChoice, setShowBackupChoice] = useState(false);
+  const [isLinkingBackup, setIsLinkingBackup] = useState(false);
+  const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+  const [pendingBackupSession, setPendingBackupSession] = useState<GoogleAccountSession | null>(null);
+  const [discoveredBackup, setDiscoveredBackup] = useState<BackupFileSummary | null>(null);
 
   useEffect(() => {
     const updateTime = () => {
@@ -275,10 +283,75 @@ export default function LockScreen({
       setSecurity(updated);
       onSecurityChange(updated);
       setSuccessMsg('Private diary PIN and recovery question configured.');
-      completeUnlock(updated);
+      setShowBackupChoice(true);
     } catch (err: any) {
       fail(err?.message || 'Could not save recovery question.');
     }
+  };
+
+  const handleInitialGoogleLink = async () => {
+    setIsLinkingBackup(true);
+    setError('');
+    setSuccessMsg('Opening Google account...');
+    try {
+      const session = await startGoogleAuth('backup');
+      const binding = bindGoogleRecoveryAccount(security, session);
+      if (!binding.ok) throw new Error(binding.error);
+      await diaryRepository.saveSecurityConfig(binding.config);
+      setSecurity(binding.config);
+      onSecurityChange(binding.config);
+
+      const backupSettings = await diaryRepository.getDriveBackupSettings();
+      await diaryRepository.saveDriveBackupSettings({
+        ...backupSettings,
+        linkedGoogleUserId: session.userId,
+        linkedGoogleEmail: session.email,
+        linkedGoogleDisplayName: session.displayName,
+        linkedAt: Date.now(),
+        cloudWriteBlocked: false,
+      });
+      const latest = (await listDriveBackups(session))[0] || null;
+      setPendingBackupSession(session);
+      setDiscoveredBackup(latest);
+      if (!latest) {
+        setSuccessMsg('Google backup connected.');
+        completeUnlock(binding.config);
+      } else {
+        setSuccessMsg('A backup was found for this account.');
+      }
+    } catch (err: any) {
+      fail(formatGoogleAuthError(err));
+    } finally {
+      setIsLinkingBackup(false);
+    }
+  };
+
+  const handleInitialRestore = async () => {
+    if (!pendingBackupSession || !discoveredBackup) return;
+    setIsRestoringBackup(true);
+    setError('');
+    try {
+      await restoreLatestValidDriveBackup(pendingBackupSession);
+      setSuccessMsg('Your diary was restored securely.');
+      completeUnlock(security);
+    } catch (err: any) {
+      fail(err?.message || 'Could not restore this backup.');
+    } finally {
+      setIsRestoringBackup(false);
+    }
+  };
+
+  const handleContinueLocalAfterDiscovery = async () => {
+    const settings = await diaryRepository.getDriveBackupSettings();
+    await diaryRepository.saveDriveBackupSettings({ ...settings, cloudWriteBlocked: true });
+    await nativeDriveBackupBridge.setCloudWriteBlocked({ blocked: true });
+    setSuccessMsg('Cloud backup is paused so the existing backup stays safe.');
+    completeUnlock(security);
+  };
+
+  const handleStayLocal = () => {
+    setSuccessMsg('Your diary will stay only on this device.');
+    completeUnlock(security);
   };
 
   const handleSaveMigrationRecovery = async () => {
@@ -375,7 +448,9 @@ export default function LockScreen({
     triggerHaptic(15);
   };
 
-  const setupTitle = requiresRecoverySetup
+  const setupTitle = showBackupChoice
+    ? discoveredBackup ? 'Restore Your Diary' : 'Protect Your Diary'
+    : requiresRecoverySetup
     ? 'Add Recovery Question'
     : setupStep === 'recovery'
       ? 'Add Recovery Question'
@@ -385,7 +460,11 @@ export default function LockScreen({
           ? 'Enter Security PIN'
           : 'Setup Security PIN';
 
-  const setupCopy = requiresRecoverySetup
+  const setupCopy = showBackupChoice
+    ? discoveredBackup
+      ? 'A hidden Google Drive backup is available for this account.'
+      : 'Link Google for automatic backup and PIN recovery, or stay fully local.'
+    : requiresRecoverySetup
     ? 'Your PIN is verified. Add a security question before continuing.'
     : setupStep === 'recovery'
       ? 'This lets you reset your PIN while staying completely offline.'
@@ -399,7 +478,7 @@ export default function LockScreen({
     ? 'bg-gradient-to-tr from-[#131012] via-[#241B1E] to-[#131012]'
     : 'bg-gradient-to-tr from-[#FAF6F0] via-[#FFF5F1] to-[#FAF2EA]';
 
-  const showRecoveryForm = requiresRecoverySetup || setupStep === 'recovery';
+  const showRecoveryForm = !showBackupChoice && (requiresRecoverySetup || setupStep === 'recovery');
   const isCustomRecoveryQuestion = questionId === CUSTOM_QUESTION_SELECT_VALUE;
   const canSaveRecoveryQuestion = !!recoveryAnswer.trim() && (!isCustomRecoveryQuestion || !!customRecoveryQuestion.trim());
   const visiblePinLength = security.isPinCreated ? (security.pinLength || (pin.length > 4 ? 8 : 4)) : selectedPinLength;
@@ -492,7 +571,45 @@ export default function LockScreen({
                   <p className="text-[10px] sm:text-[11px] text-brand-text-muted mt-1 leading-relaxed max-w-[260px] mx-auto">{setupCopy}</p>
                 </div>
 
-                {showRecoveryForm ? (
+                {showBackupChoice ? (
+                  <div className="flex flex-col gap-3">
+                    {discoveredBackup ? (
+                      <div className="flex flex-col gap-3">
+                        <div className="grid grid-cols-2 gap-2 rounded-2xl border border-brand-border bg-white/60 dark:bg-black/10 p-3 text-center">
+                          <div>
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-brand-sage">Backup date</p>
+                            <p className="mt-1 text-[11px] font-bold text-brand-plum dark:text-brand-text">
+                              {discoveredBackup.createdTime ? new Date(discoveredBackup.createdTime).toLocaleString() : 'Unknown'}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-brand-sage">Backup size</p>
+                            <p className="mt-1 text-[11px] font-bold text-brand-plum dark:text-brand-text">
+                              {discoveredBackup.size ? `${(discoveredBackup.size / 1024 / 1024).toFixed(1)} MB` : 'Unknown'}
+                            </p>
+                          </div>
+                        </div>
+                        <button onClick={handleInitialRestore} disabled={isRestoringBackup} className="w-full py-3 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-50 flex items-center justify-center gap-2">
+                          <Cloud className="w-4 h-4" />
+                          {isRestoringBackup ? 'Restoring...' : 'Restore Backup'}
+                        </button>
+                        <button onClick={handleContinueLocalAfterDiscovery} disabled={isRestoringBackup} className="w-full py-3 rounded-2xl border border-brand-border bg-white/60 dark:bg-black/10 text-brand-plum dark:text-brand-text font-bold text-xs uppercase tracking-widest disabled:opacity-50">
+                          Continue Local
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        <button onClick={handleInitialGoogleLink} disabled={isLinkingBackup} className="w-full py-3.5 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-50 flex items-center justify-center gap-2">
+                          <Cloud className="w-4 h-4" />
+                          {isLinkingBackup ? 'Connecting...' : 'Link Google Account'}
+                        </button>
+                        <button onClick={handleStayLocal} disabled={isLinkingBackup} className="w-full py-3.5 rounded-2xl border border-brand-border bg-white/60 dark:bg-black/10 text-brand-plum dark:text-brand-text font-bold text-xs uppercase tracking-widest disabled:opacity-50 flex items-center justify-center gap-2">
+                          <HardDrive className="w-4 h-4" /> Stay Local
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : showRecoveryForm ? (
                   <div className="flex flex-col gap-3">
                     <label className="flex flex-col gap-1 text-left">
                       <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Security Question</span>

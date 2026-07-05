@@ -74,7 +74,7 @@ test('serializes concurrent writes without losing notes', async () => {
   assert.equal((await repository.listNotes()).length, 20);
 });
 
-test('exports and replaces a complete application snapshot', async () => {
+test('exports and replaces application content while retaining target device lineage', async () => {
   const source = await createRepository();
   const settings: AppSettings = { remindersEnabled: true, reminderTime: '08:00 PM', theme: 'dark' };
   const profile: UserProfile = {
@@ -103,7 +103,15 @@ test('exports and replaces a complete application snapshot', async () => {
   const target = await createRepository();
   await target.importSnapshot(snapshot, 'replace');
 
-  assert.deepEqual(await target.exportSnapshot(), snapshot);
+  const restored = await target.exportSnapshot();
+  assert.deepEqual(restored.diaries, snapshot.diaries);
+  assert.deepEqual(restored.entries, snapshot.entries);
+  assert.deepEqual(restored.notes, snapshot.notes);
+  assert.deepEqual(restored.settings, snapshot.settings);
+  assert.deepEqual(restored.userProfile, snapshot.userProfile);
+  assert.deepEqual(restored.security, snapshot.security);
+  assert.notEqual(restored.driveBackupSettings?.deviceId, snapshot.driveBackupSettings?.deviceId);
+  assert.equal(restored.driveBackupSettings?.contentRevision, 1);
 });
 
 test('initializes settings, profile, security, and Drive metadata through the repository', async () => {
@@ -112,5 +120,59 @@ test('initializes settings, profile, security, and Drive metadata through the re
   assert.equal((await repository.getSettings()).theme, 'light');
   assert.equal((await repository.getUserProfile()).name, 'Writer');
   assert.equal((await repository.getSecurityConfig()).isPinCreated, false);
-  assert.deepEqual(await repository.getDriveBackupSettings(), {});
+  const backup = await repository.getDriveBackupSettings();
+  assert.ok(backup.deviceId);
+  assert.equal(backup.schedule?.mode, 'daily');
+  assert.equal(backup.schedule?.network, 'wifi');
+  assert.equal(backup.contentRevision, 0);
+});
+
+test('portable restore preserves local security, reminders, and backup identity', async () => {
+  const source = await createRepository();
+  await source.createNote({ title: 'Cloud note', body: 'Restored', isPinned: false, tags: [] });
+  await source.saveSettings({
+    remindersEnabled: false,
+    reminderTime: '18:00',
+    theme: 'dark',
+    customTags: ['cloud'],
+  });
+
+  const target = await createRepository();
+  const targetSecurity: SecurityConfig = {
+    isPinCreated: true,
+    pinHash: 'new-device-pin',
+    pinSalt: 'new-device-salt',
+    isBiometricsEnabled: true,
+    isLocked: false,
+  };
+  await target.saveSecurityConfig(targetSecurity);
+  await target.saveSettings({ remindersEnabled: true, reminderTime: '07:15', theme: 'light' });
+  const before = await target.getDriveBackupSettings();
+
+  await target.importSnapshot(await source.exportSnapshot(), 'replace-portable');
+
+  assert.equal((await target.listNotes())[0]?.title, 'Cloud note');
+  assert.deepEqual(await target.getSecurityConfig(), targetSecurity);
+  const settings = await target.getSettings();
+  assert.equal(settings.remindersEnabled, true);
+  assert.equal(settings.reminderTime, '07:15');
+  assert.equal(settings.theme, 'dark');
+  assert.deepEqual(settings.customTags, ['cloud']);
+  const after = await target.getDriveBackupSettings();
+  assert.equal(after.deviceId, before.deviceId);
+  assert.equal(after.contentRevision, (before.contentRevision || 0) + 1);
+});
+
+test('increments and publishes a content revision after portable writes only', async () => {
+  const repository = await createRepository();
+  const revisions: number[] = [];
+  const unsubscribe = repository.subscribeChanges(revision => revisions.push(revision));
+
+  await repository.createNote({ title: 'One', body: '', isPinned: false, tags: [] });
+  await repository.saveSecurityConfig({ ...(await repository.getSecurityConfig()), isLocked: false });
+  await repository.saveUserProfile({ ...(await repository.getUserProfile()), name: 'Updated' });
+  unsubscribe();
+
+  assert.deepEqual(revisions, [1, 2]);
+  assert.equal((await repository.getDriveBackupSettings()).contentRevision, 2);
 });

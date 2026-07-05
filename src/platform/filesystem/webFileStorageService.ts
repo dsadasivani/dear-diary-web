@@ -5,6 +5,10 @@ export class WebFileStorageService implements FileStorageService {
     return { uri: base64Data, webPath: base64Data };
   }
 
+  async writeBase64Atomic(path: string, base64Data: string): Promise<StoredFile> {
+    return this.writeBase64(path, base64Data);
+  }
+
   async readBase64(path: string): Promise<string | null> {
     return path.startsWith('data:') ? path : null;
   }

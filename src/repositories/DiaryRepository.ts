@@ -22,8 +22,12 @@ export interface RepositorySnapshot {
   driveBackupSettings?: DriveBackupSettings;
 }
 
+export type RepositoryImportMode = 'replace' | 'replace-portable';
+export type RepositoryChangeListener = (contentRevision: number) => void;
+
 export interface DiaryRepository {
   initialize(): Promise<void>;
+  subscribeChanges(listener: RepositoryChangeListener): () => void;
 
   listDiaries(): Promise<Diary[]>;
   getDiary(id: string): Promise<Diary | null>;
@@ -55,5 +59,5 @@ export interface DiaryRepository {
   resetContent(): Promise<void>;
 
   exportSnapshot(): Promise<RepositorySnapshot>;
-  importSnapshot(snapshot: RepositorySnapshot, mode: 'replace'): Promise<void>;
+  importSnapshot(snapshot: RepositorySnapshot, mode: RepositoryImportMode): Promise<void>;
 }

@@ -13,10 +13,17 @@ import type {
   NewDiary,
   NewEntry,
   NewNote,
+  RepositoryChangeListener,
+  RepositoryImportMode,
   RepositorySnapshot,
 } from './DiaryRepository';
 import { syncReminderNotification } from '../mobile/reminders';
-import { createDefaultUserProfile, DEFAULT_APP_SETTINGS, DEFAULT_SECURITY_CONFIG } from './defaults';
+import {
+  createDefaultDriveBackupSettings,
+  createDefaultUserProfile,
+  DEFAULT_APP_SETTINGS,
+  DEFAULT_SECURITY_CONFIG,
+} from './defaults';
 import { normalizeSecurityConfig } from '../domain/security';
 
 const STORAGE_KEYS = {
@@ -72,8 +79,14 @@ const getLastUpdatedLabel = (entries: Entry[]): string => {
 
 export class LocalDiaryRepository implements DiaryRepository {
   private writeTail: Promise<void> = Promise.resolve();
+  private changeListeners = new Set<RepositoryChangeListener>();
 
   constructor(private readonly store: LocalDataStore) {}
+
+  subscribeChanges(listener: RepositoryChangeListener): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
 
   async initialize(): Promise<void> {
     await this.enqueueWrite(async () => {
@@ -93,7 +106,17 @@ export class LocalDiaryRepository implements DiaryRepository {
       if (notes === null) missingItems[STORAGE_KEYS.notes] = [];
       if (settings === null) missingItems[STORAGE_KEYS.settings] = DEFAULT_APP_SETTINGS;
       if (security === null) missingItems[STORAGE_KEYS.security] = DEFAULT_SECURITY_CONFIG;
-      if (driveBackup === null) missingItems[STORAGE_KEYS.driveBackup] = {};
+      const backupDefaults = createDefaultDriveBackupSettings();
+      const storedBackup = parseJson<DriveBackupSettings>(driveBackup, {});
+      const normalizedBackup: DriveBackupSettings = {
+        ...backupDefaults,
+        ...storedBackup,
+        schedule: { ...backupDefaults.schedule!, ...storedBackup.schedule },
+        deviceId: storedBackup.deviceId || backupDefaults.deviceId,
+      };
+      if (driveBackup === null || JSON.stringify(storedBackup) !== JSON.stringify(normalizedBackup)) {
+        missingItems[STORAGE_KEYS.driveBackup] = normalizedBackup;
+      }
       if (profile === null) {
         const backupSettings = parseJson<DriveBackupSettings>(driveBackup, {});
         missingItems[STORAGE_KEYS.userProfile] = createDefaultUserProfile(backupSettings.linkedGoogleEmail);
@@ -121,7 +144,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         lastUpdated: 'No entries yet',
       };
       diaries.push(diary);
-      await this.writeJson(STORAGE_KEYS.diaries, diaries);
+      await this.writePortableItems({ [STORAGE_KEYS.diaries]: diaries });
       return clone(diary);
     });
   }
@@ -132,7 +155,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       const index = diaries.findIndex(diary => diary.id === updatedDiary.id);
       if (index < 0) return null;
       diaries[index] = clone(updatedDiary);
-      await this.writeJson(STORAGE_KEYS.diaries, diaries);
+      await this.writePortableItems({ [STORAGE_KEYS.diaries]: diaries });
       return clone(diaries[index]);
     });
   }
@@ -144,7 +167,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       const nextDiaries = diaries.filter(diary => diary.id !== id);
       if (nextDiaries.length === diaries.length) return false;
 
-      await this.writeManyJson({
+      await this.writePortableItems({
         [STORAGE_KEYS.entries]: entries.filter(entry => entry.diaryId !== id),
         [STORAGE_KEYS.diaries]: nextDiaries,
       });
@@ -222,7 +245,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       const timestamp = Date.now();
       const note: Note = { ...clone(input), id: createId('note'), createdAt: timestamp, updatedAt: timestamp };
       notes.push(note);
-      await this.writeJson(STORAGE_KEYS.notes, notes);
+      await this.writePortableItems({ [STORAGE_KEYS.notes]: notes });
       return clone(note);
     });
   }
@@ -233,7 +256,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       const index = notes.findIndex(note => note.id === updatedNote.id);
       if (index < 0) return null;
       notes[index] = { ...clone(updatedNote), updatedAt: Date.now() };
-      await this.writeJson(STORAGE_KEYS.notes, notes);
+      await this.writePortableItems({ [STORAGE_KEYS.notes]: notes });
       return clone(notes[index]);
     });
   }
@@ -243,7 +266,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       const notes = await this.readJson<Note[]>(STORAGE_KEYS.notes, []);
       const nextNotes = notes.filter(note => note.id !== id);
       if (nextNotes.length === notes.length) return false;
-      await this.writeJson(STORAGE_KEYS.notes, nextNotes);
+      await this.writePortableItems({ [STORAGE_KEYS.notes]: nextNotes });
       return true;
     });
   }
@@ -255,7 +278,7 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   saveSettings(settings: AppSettings): Promise<void> {
     return this.enqueueWrite(async () => {
-      await this.writeJson(STORAGE_KEYS.settings, settings);
+      await this.writePortableItems({ [STORAGE_KEYS.settings]: settings });
       await syncReminderNotification(settings);
     });
   }
@@ -267,7 +290,9 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   saveUserProfile(profile: UserProfile): Promise<void> {
-    return this.enqueueWrite(() => this.writeJson(STORAGE_KEYS.userProfile, profile));
+    return this.enqueueWrite(async () => {
+      await this.writePortableItems({ [STORAGE_KEYS.userProfile]: profile });
+    });
   }
 
   async getSecurityConfig(): Promise<SecurityConfig> {
@@ -281,19 +306,37 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   async getDriveBackupSettings(): Promise<DriveBackupSettings> {
     await this.waitForWrites();
-    return this.readJson(STORAGE_KEYS.driveBackup, {});
+    const defaults = createDefaultDriveBackupSettings();
+    const stored = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, defaults);
+    return {
+      ...defaults,
+      ...stored,
+      schedule: { ...defaults.schedule!, ...stored.schedule },
+      deviceId: stored.deviceId || defaults.deviceId,
+    };
   }
 
   saveDriveBackupSettings(settings: DriveBackupSettings): Promise<void> {
-    return this.enqueueWrite(() => this.writeJson(STORAGE_KEYS.driveBackup, settings));
+    return this.enqueueWrite(async () => {
+      const current = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, createDefaultDriveBackupSettings());
+      await this.writeJson(STORAGE_KEYS.driveBackup, {
+        ...current,
+        ...settings,
+        schedule: settings.schedule ? { ...current.schedule!, ...settings.schedule } : current.schedule,
+        deviceId: current.deviceId || settings.deviceId,
+        contentRevision: Math.max(current.contentRevision || 0, settings.contentRevision || 0),
+      });
+    });
   }
 
   resetContent(): Promise<void> {
-    return this.enqueueWrite(() => this.writeManyJson({
-      [STORAGE_KEYS.diaries]: clone(INITIAL_DIARIES),
-      [STORAGE_KEYS.entries]: [],
-      [STORAGE_KEYS.notes]: [],
-    }));
+    return this.enqueueWrite(async () => {
+      await this.writePortableItems({
+        [STORAGE_KEYS.diaries]: clone(INITIAL_DIARIES),
+        [STORAGE_KEYS.entries]: [],
+        [STORAGE_KEYS.notes]: [],
+      });
+    });
   }
 
   async exportSnapshot(): Promise<RepositorySnapshot> {
@@ -318,8 +361,7 @@ export class LocalDiaryRepository implements DiaryRepository {
     };
   }
 
-  importSnapshot(snapshot: RepositorySnapshot, mode: 'replace'): Promise<void> {
-    if (mode !== 'replace') throw new Error(`Unsupported import mode: ${mode}`);
+  importSnapshot(snapshot: RepositorySnapshot, mode: RepositoryImportMode): Promise<void> {
     if (!Array.isArray(snapshot.diaries) || !Array.isArray(snapshot.entries) || !Array.isArray(snapshot.notes)) {
       throw new Error('The repository snapshot is incomplete.');
     }
@@ -330,18 +372,30 @@ export class LocalDiaryRepository implements DiaryRepository {
         [STORAGE_KEYS.diaries]: this.withDiaryStats(clone(snapshot.diaries), snapshot.entries),
         [STORAGE_KEYS.notes]: clone(snapshot.notes),
       };
-      if (snapshot.settings) items[STORAGE_KEYS.settings] = snapshot.settings;
+      if (snapshot.settings) {
+        if (mode === 'replace-portable') {
+          const currentSettings = await this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS));
+          items[STORAGE_KEYS.settings] = {
+            ...currentSettings,
+            customTags: snapshot.settings.customTags,
+            customMoods: snapshot.settings.customMoods,
+            theme: snapshot.settings.theme,
+          };
+        } else {
+          items[STORAGE_KEYS.settings] = snapshot.settings;
+        }
+      }
       if (snapshot.userProfile) items[STORAGE_KEYS.userProfile] = snapshot.userProfile;
-      if (snapshot.security) items[STORAGE_KEYS.security] = snapshot.security;
-      if (snapshot.driveBackupSettings) items[STORAGE_KEYS.driveBackup] = snapshot.driveBackupSettings;
-      await this.writeManyJson(items);
-      if (snapshot.settings) await syncReminderNotification(snapshot.settings);
+      if (mode === 'replace' && snapshot.security) items[STORAGE_KEYS.security] = snapshot.security;
+      if (mode === 'replace' && snapshot.driveBackupSettings) items[STORAGE_KEYS.driveBackup] = snapshot.driveBackupSettings;
+      await this.writePortableItems(items);
+      if (mode === 'replace' && snapshot.settings) await syncReminderNotification(snapshot.settings);
     });
   }
 
   private async writeEntriesAndDiaryStats(entries: Entry[]): Promise<void> {
     const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
-    await this.writeManyJson({
+    await this.writePortableItems({
       [STORAGE_KEYS.entries]: entries,
       [STORAGE_KEYS.diaries]: this.withDiaryStats(diaries, entries),
     });
@@ -376,6 +430,20 @@ export class LocalDiaryRepository implements DiaryRepository {
       Object.entries(items).map(([key, value]) => [key, JSON.stringify(value)]),
     );
     await this.store.setItems(serializedItems);
+  }
+
+  private async writePortableItems(items: Record<string, unknown>): Promise<number> {
+    const backup = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, createDefaultDriveBackupSettings());
+    const contentRevision = (backup.contentRevision || 0) + 1;
+    await this.writeManyJson({
+      ...items,
+      [STORAGE_KEYS.driveBackup]: {
+        ...backup,
+        contentRevision,
+      },
+    });
+    this.changeListeners.forEach(listener => listener(contentRevision));
+    return contentRevision;
   }
 
   private async waitForWrites(): Promise<void> {

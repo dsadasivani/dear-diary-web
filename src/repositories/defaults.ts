@@ -1,4 +1,10 @@
-import type { AppSettings, SecurityConfig, UserProfile } from '../types';
+import type {
+  AppSettings,
+  BackupSchedulePreference,
+  DriveBackupSettings,
+  SecurityConfig,
+  UserProfile,
+} from '../types';
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   remindersEnabled: false,
@@ -13,6 +19,31 @@ export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
   isBiometricsEnabled: false,
   isLocked: true,
 };
+
+const currentTimezone = (): string => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+};
+
+export const createDefaultBackupSchedule = (): BackupSchedulePreference => ({
+  mode: 'daily',
+  localTime: '02:00',
+  weeklyDay: new Date().getDay(),
+  network: 'wifi',
+  timezone: currentTimezone(),
+});
+
+export const createDefaultDriveBackupSettings = (): DriveBackupSettings => ({
+  schedule: createDefaultBackupSchedule(),
+  deviceId: globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  contentRevision: 0,
+  stagedContentRevision: 0,
+  uploadedContentRevision: 0,
+  cloudWriteBlocked: false,
+});
 
 const nameFromEmail = (email?: string | null): string => (
   (email || '')
