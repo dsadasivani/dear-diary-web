@@ -7,11 +7,7 @@ import {
   ChevronUp, ChevronDown, Mic, MicOff, Pause, Play, Square, Circle, Sparkles,
   Clock, Edit
 } from 'lucide-react';
-import { Diary, Entry, EntryBlock } from '../types';
-import { 
-  getDiaries, createEntry, updateEntry, deleteEntry, 
-  getMoods, getTags
-} from '../utils/storage';
+import { AppSettings, Diary, Entry, EntryBlock } from '../types';
 import RichTextEditor from './RichTextEditor';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import { audioService } from '../platform/audio';
@@ -19,12 +15,16 @@ import { persistMediaDataUri } from '../mobile/mediaStorage';
 import { isNativePlatform } from '../platform';
 import { VoiceRecorder } from '@independo/capacitor-voice-recorder';
 import { SpeechRecognition as NativeSpeechRecognition } from '@capacitor-community/speech-recognition';
+import { diaryRepository } from '../repositories';
+import { getMoodsForSettings, getTagsForSettings } from '../domain/appSettings';
 
 interface EntryEditorScreenProps {
+  diaries: Diary[];
+  settings: AppSettings;
   diaryId?: string; // Optional default diary ID
   entryId?: string; // Optional entry ID if editing
   onBack: () => void;
-  onRefreshEntries: () => void;
+  onRefreshEntries: () => void | Promise<void>;
   onFocusModeChange?: (active: boolean) => void;
   initialFocusMode?: boolean;
   initialDate?: string;
@@ -34,6 +34,8 @@ interface EntryEditorScreenProps {
 }
 
 export default function EntryEditorScreen({
+  diaries,
+  settings,
   diaryId: initialDiaryId,
   entryId,
   onBack,
@@ -45,8 +47,6 @@ export default function EntryEditorScreen({
   onShowToast,
   showDiarySelector = false
 }: EntryEditorScreenProps) {
-  const diaries = getDiaries();
-  
   // Find current entry if editing
   const isEditing = !!entryId;
   
@@ -67,8 +67,8 @@ export default function EntryEditorScreen({
     return now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
   });
   
-  const availableMoods = getMoods();
-  const availableTags = getTags();
+  const availableMoods = getMoodsForSettings(settings);
+  const availableTags = getTagsForSettings(settings);
 
   const [mood, setMood] = useState(availableMoods[0] || { name: 'Joyful', emoji: '😊' });
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -1033,12 +1033,15 @@ export default function EntryEditorScreen({
 
   // Load entry details if editing or deep-linking
   useEffect(() => {
-    if (isEditing) {
-      const allEntries = JSON.parse(localStorage.getItem('deardiary_entries') || '[]');
-      const entryObj = allEntries.find((e: Entry) => e.id === entryId);
-      if (entryObj) {
-        setDiaryId(entryObj.diaryId);
-        setDate(entryObj.date);
+    let cancelled = false;
+
+    const loadEntry = async () => {
+      if (isEditing && entryId) {
+        const entryObj = await diaryRepository.getEntry(entryId);
+        if (cancelled) return;
+        if (entryObj) {
+          setDiaryId(entryObj.diaryId);
+          setDate(entryObj.date);
         
         // Load time if present, otherwise extract from createdAt
         const entryTime = entryObj.time || new Date(entryObj.createdAt).toTimeString().split(' ')[0].substring(0, 5);
@@ -1047,7 +1050,7 @@ export default function EntryEditorScreen({
 
         setTitle(entryObj.title === 'Untitled entry' ? '' : entryObj.title);
         
-        const entryBlocks = entryObj.blocks || [];
+        const entryBlocks = [...(entryObj.blocks || [])];
         // If it's an existing standard entry with no blocks, wrap the body in an initial block
         let migratedAudio = false;
         if (entryBlocks.length === 0 && (entryObj.body || entryObj.audioUri)) {
@@ -1080,21 +1083,27 @@ export default function EntryEditorScreen({
         } else {
           setAudioUri(undefined);
         }
+        }
+      } else {
+        const now = new Date();
+        setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
+
+        if (initialDate) {
+          setDate(initialDate);
+        }
+        if (initialPrompt) {
+          setBody(`<blockquote>${initialPrompt}</blockquote><br/>`);
+        }
+        if (availableTags.includes('happy')) {
+          setSelectedTags(['happy']);
+        }
       }
-    } else {
-      const now = new Date();
-      setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
-      
-      if (initialDate) {
-        setDate(initialDate);
-      }
-      if (initialPrompt) {
-        setBody(`<blockquote>${initialPrompt}</blockquote><br/>`);
-      }
-      if (availableTags.includes('happy')) {
-        setSelectedTags(['happy']);
-      }
-    }
+    };
+
+    void loadEntry();
+    return () => {
+      cancelled = true;
+    };
   }, [entryId, isEditing, initialDate, initialPrompt]);
 
   const liveWordCount = useMemo(() => {
@@ -1144,7 +1153,7 @@ export default function EntryEditorScreen({
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const finalTitle = title.trim() || 'Untitled entry';
     
     let finalBlocks = [...blocks].filter(b => {
@@ -1177,8 +1186,7 @@ export default function EntryEditorScreen({
     const finalBody = finalBlocks.map(b => b.body).filter(Boolean).join('<br/><br/>');
 
     if (isEditing && entryId) {
-      const allEntries = JSON.parse(localStorage.getItem('deardiary_entries') || '[]');
-      const entryObj = allEntries.find((e: Entry) => e.id === entryId);
+      const entryObj = await diaryRepository.getEntry(entryId);
       if (entryObj) {
         const updated: Entry = {
           ...entryObj,
@@ -1197,10 +1205,10 @@ export default function EntryEditorScreen({
           updatedAt: Date.now(),
           blocks: finalBlocks
         };
-        updateEntry(updated);
+        await diaryRepository.updateEntry(updated);
       }
     } else {
-      createEntry({
+      await diaryRepository.createEntry({
         diaryId,
         date,
         time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
@@ -1212,17 +1220,17 @@ export default function EntryEditorScreen({
         photoUris,
         audioUri: undefined, // Always clear top-level, recordings live in blocks
         blocks: finalBlocks
-      } as any);
+      });
     }
 
-    onRefreshEntries();
+    await onRefreshEntries();
     onBack();
   };
 
-  const handleDeleteEntry = () => {
+  const handleDeleteEntry = async () => {
     if (entryId) {
-      deleteEntry(entryId);
-      onRefreshEntries();
+      await diaryRepository.deleteEntry(entryId);
+      await onRefreshEntries();
       onBack();
     }
   };

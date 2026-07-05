@@ -4,30 +4,31 @@ import {
   AlertCircle, ArrowLeft, BookOpen, CalendarDays, Check, Delete,
   Eye, EyeOff, Fingerprint, Lock, Moon, ShieldCheck, Sparkles, Sun
 } from 'lucide-react';
-import type { UserCredential } from 'firebase/auth';
-import { SecurityConfig } from '../types';
+import { AppSettings, GoogleAccountSession, SecurityConfig } from '../types';
 import {
-  getAppSettings,
   createCustomRecoveryQuestionId,
+  createInitialPinWithRecovery,
   getRecoveryQuestionText,
-  getSecurityConfig,
   hasRecoveryQuestion,
   isValidPin,
   resetPinAfterVerifiedRecovery,
   SECURITY_RECOVERY_QUESTIONS,
-  setInitialPinWithRecovery,
-  setRecoveryQuestion,
-  verifyPinCode,
+  unlockWithPin,
+  withRecoveryQuestion,
   verifyRecoveryAnswer,
-  saveAppSettings
-} from '../utils/storage';
-import type { PinLength } from '../utils/storage';
+} from '../domain/security';
+import type { PinLength } from '../domain/security';
 import { secureAuthService } from '../platform/security';
 import { isNativePlatform } from '../platform';
 import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
+import { diaryRepository } from '../repositories';
 
 interface LockScreenProps {
-  onUnlock: () => void;
+  initialSecurity: SecurityConfig;
+  initialSettings: AppSettings;
+  onSecurityChange: (security: SecurityConfig) => void;
+  onSettingsChange: (settings: AppSettings) => void;
+  onUnlock: () => void | Promise<void>;
 }
 
 const SANCTUARY_QUOTES = [
@@ -49,18 +50,11 @@ const formatGoogleAuthError = (err: any): string => {
   if (err?.code === 'SIGN_IN_CANCELED' || message.includes('SIGN_IN_CANCELED')) {
     return 'Google sign-in was cancelled before it completed.';
   }
-  if (err?.code === 'auth/invalid-credential' || message.includes('ID token')) {
-    return 'Google sign-in returned an invalid token. Check that Google Cloud has an Android OAuth client for com.deardiary.app with this APK signing SHA-1, and that .env uses the OAuth Web client ID.';
+  if (message.includes('Drive access')) {
+    return 'Google did not grant the requested account access. Please reconnect and approve the permission prompt.';
   }
-  if (err?.code === 'auth/unauthorized-domain') {
-    const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
-    if (isNativePlatform()) {
-      return 'Mobile Google sign-in should use native auth. Rebuild and reinstall the APK so the native Google flow is included.';
-    }
-    return `Google sign-in is not enabled for ${host}. Add this domain in Firebase Console > Authentication > Settings > Authorized domains.`;
-  }
-  if (err?.code === 'auth/popup-closed-by-user') {
-    return 'Google sign-in was cancelled before it completed.';
+  if (message.includes('native mobile app')) {
+    return message;
   }
   return err?.message || 'Google verification failed.';
 };
@@ -68,8 +62,14 @@ const formatGoogleAuthError = (err: any): string => {
 type SetupStep = 'pin' | 'confirm' | 'recovery';
 type RecoveryMode = 'choosing' | 'question' | 'newPin' | null;
 
-export default function LockScreen({ onUnlock }: LockScreenProps) {
-  const [security, setSecurity] = useState<SecurityConfig>(getSecurityConfig());
+export default function LockScreen({
+  initialSecurity,
+  initialSettings,
+  onSecurityChange,
+  onSettingsChange,
+  onUnlock,
+}: LockScreenProps) {
+  const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
   const [pin, setPin] = useState('');
   const [selectedPinLength, setSelectedPinLength] = useState<PinLength>(security.pinLength || 4);
   const [pendingSetupPin, setPendingSetupPin] = useState('');
@@ -91,12 +91,12 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
   const [resetConfirmPin, setResetConfirmPin] = useState('');
   const [recoveryVerifiedBy, setRecoveryVerifiedBy] = useState<'question' | 'google' | null>(null);
   const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() => (
-    getSecurityConfig().isPinCreated ? 'ambient' : 'keypad'
+    initialSecurity.isPinCreated ? 'ambient' : 'keypad'
   ));
   const [time, setTime] = useState('');
   const [date, setDate] = useState('');
   const [quoteIndex, setQuoteIndex] = useState(0);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => getAppSettings().theme || 'light');
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => initialSettings.theme || 'light');
 
   useEffect(() => {
     const updateTime = () => {
@@ -147,7 +147,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     setTimeout(() => setShakeTrigger(false), 500);
   };
 
-  const completeUnlock = (config: SecurityConfig = getSecurityConfig()) => {
+  const completeUnlock = (config: SecurityConfig = security) => {
     if (config.isPinCreated && !hasRecoveryQuestion(config)) {
       setSecurity(config);
       setRequiresRecoverySetup(true);
@@ -160,7 +160,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
 
     setSuccessMsg('Access Granted');
     triggerHaptic([40, 40]);
-    setTimeout(() => onUnlock(), 450);
+    setTimeout(() => void onUnlock(), 450);
   };
 
   const handleKeyPress = (num: string) => {
@@ -192,7 +192,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
       setSuccessMsg('Verifying fingerprint...');
       setTimeout(() => {
         setIsBiometricActive(false);
-        completeUnlock(getSecurityConfig());
+        completeUnlock(security);
       }, 900);
       return;
     }
@@ -201,7 +201,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     try {
       const success = await secureAuthService.authenticate(security.passkeyCredentialId);
       if (success) {
-        completeUnlock(getSecurityConfig());
+        completeUnlock(security);
       } else {
         fail('Authentication did not return validation.');
       }
@@ -213,7 +213,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const requiredLength = security.isPinCreated ? security.pinLength : selectedPinLength;
     if (!isValidPin(pin, requiredLength)) {
       fail(`PIN must be exactly ${requiredLength || '4 or 8'} digits.`);
@@ -243,9 +243,12 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
         return;
       }
     } else {
-      const isCorrect = verifyPinCode(pin);
-      if (isCorrect) {
-        completeUnlock(getSecurityConfig());
+      const unlockedSecurity = unlockWithPin(security, pin);
+      if (unlockedSecurity) {
+        await diaryRepository.saveSecurityConfig(unlockedSecurity);
+        setSecurity(unlockedSecurity);
+        onSecurityChange(unlockedSecurity);
+        completeUnlock(unlockedSecurity);
       } else {
         setPin('');
         fail('Incorrect security PIN.');
@@ -264,11 +267,13 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     return { id: questionId, text: undefined };
   };
 
-  const handleSaveInitialRecovery = () => {
+  const handleSaveInitialRecovery = async () => {
     try {
       const question = getRecoveryQuestionPayload();
-      const updated = setInitialPinWithRecovery(pendingSetupPin, question.id, recoveryAnswer, question.text);
+      const updated = createInitialPinWithRecovery(security, pendingSetupPin, question.id, recoveryAnswer, question.text);
+      await diaryRepository.saveSecurityConfig(updated);
       setSecurity(updated);
+      onSecurityChange(updated);
       setSuccessMsg('Private diary PIN and recovery question configured.');
       completeUnlock(updated);
     } catch (err: any) {
@@ -276,11 +281,13 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     }
   };
 
-  const handleSaveMigrationRecovery = () => {
+  const handleSaveMigrationRecovery = async () => {
     try {
       const question = getRecoveryQuestionPayload();
-      const updated = setRecoveryQuestion(question.id, recoveryAnswer, question.text);
+      const updated = withRecoveryQuestion(security, question.id, recoveryAnswer, question.text);
+      await diaryRepository.saveSecurityConfig(updated);
       setSecurity(updated);
+      onSecurityChange(updated);
       setRequiresRecoverySetup(false);
       setSuccessMsg('Recovery question saved.');
       completeUnlock(updated);
@@ -290,7 +297,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
   };
 
   const handleVerifySecurityAnswer = () => {
-    if (verifyRecoveryAnswer(recoveryAnswer)) {
+    if (verifyRecoveryAnswer(security, recoveryAnswer)) {
       setRecoveryVerifiedBy('question');
       setRecoveryMode('newPin');
       setRecoveryAnswer('');
@@ -301,8 +308,9 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     }
   };
 
-  const completeGoogleResetVerification = async (credential: UserCredential) => {
-    if (credential.user.uid !== security.linkedGoogleUid) {
+  const completeGoogleResetVerification = async (credential: GoogleAccountSession) => {
+    const linkedGoogleUserId = security.linkedGoogleUserId || security.linkedGoogleUid;
+    if (credential.userId !== linkedGoogleUserId) {
       await signOutGoogleAuth();
       fail(`Use ${security.linkedGoogleEmail || 'the linked Google account'} to reset this PIN.`);
       return;
@@ -313,7 +321,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
   };
 
   const handleVerifyGoogleReset = async () => {
-    if (!security.linkedGoogleUid) return;
+    if (!security.linkedGoogleUserId && !security.linkedGoogleUid) return;
     setIsResetting(true);
     setError('');
     setSuccessMsg('Opening Google verification...');
@@ -328,7 +336,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     }
   };
 
-  const handleResetPin = () => {
+  const handleResetPin = async () => {
     if (!recoveryVerifiedBy) {
       fail('Verify a recovery method first.');
       return;
@@ -343,8 +351,10 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     }
 
     try {
-      const updated = resetPinAfterVerifiedRecovery(resetNewPin);
+      const updated = resetPinAfterVerifiedRecovery(security, resetNewPin);
+      await diaryRepository.saveSecurityConfig(updated);
       setSecurity(updated);
+      onSecurityChange(updated);
       setRecoveryMode(null);
       setRecoveryVerifiedBy(null);
       setResetNewPin('');
@@ -356,9 +366,11 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     }
   };
 
-  const toggleTheme = () => {
-    const nextTheme = theme === 'light' ? 'dark' : 'light';
-    saveAppSettings({ ...getAppSettings(), theme: nextTheme });
+  const toggleTheme = async () => {
+    const nextTheme: 'light' | 'dark' = theme === 'light' ? 'dark' : 'light';
+    const updatedSettings = { ...initialSettings, theme: nextTheme };
+    await diaryRepository.saveSettings(updatedSettings);
+    onSettingsChange(updatedSettings);
     setTheme(nextTheme);
     triggerHaptic(15);
   };
@@ -633,7 +645,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                             <button onClick={() => { setRecoveryMode('question'); setRecoveryAnswer(''); }} className="w-full bg-brand-pink text-white py-2.5 rounded-xl text-[10px] font-extrabold uppercase tracking-widest hover:bg-brand-pink-dark transition-colors shadow-md shadow-brand-pink/10">
                               Answer Security Question
                             </button>
-                            {security.linkedGoogleUid && (
+                            {(security.linkedGoogleUserId || security.linkedGoogleUid) && (
                               <button onClick={handleVerifyGoogleReset} disabled={isResetting} className="w-full bg-brand-sage text-white py-2.5 rounded-xl text-[10px] font-extrabold uppercase tracking-widest hover:bg-brand-sage-dark transition-colors shadow-md shadow-brand-sage/10 disabled:opacity-50">
                                 Verify Linked Google Account
                               </button>
@@ -703,7 +715,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
           <span>Offline-First Private Access</span>
         </div>
         <p className="text-[8px] sm:text-[9px] text-brand-text-muted max-w-[260px] leading-normal font-medium">
-          Your PIN and recovery answer stay on this device. Google is used only if you choose cloud sync.
+          Your PIN and recovery answer stay on this device. Google is used only if you choose Drive backup or account recovery.
         </p>
       </footer>
     </div>

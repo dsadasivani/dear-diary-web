@@ -4,7 +4,7 @@ import {
   Plus, Flame, Shuffle, Lock, Settings, Calendar, ChevronRight, Sparkles
 } from 'lucide-react';
 import { Diary, Entry, Note, UserProfile } from '../types';
-import { PREDEFINED_TAGS, calculateStreak, getTodayWordCount } from '../utils/storage';
+import { PREDEFINED_TAGS, calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
 
 interface HomeScreenProps {
   diaries: Diary[];

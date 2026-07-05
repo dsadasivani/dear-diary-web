@@ -61,9 +61,10 @@ export interface SecurityConfig {
   recoveryAnswerHash?: string; // PBKDF2 hash of normalized recovery answer
   recoveryAnswerSalt?: string; // Salt used for recovery answer hashing
   recoveryAnswerIterations?: number; // PBKDF2 iteration count for recovery answers
-  linkedGoogleUid?: string; // Locally bound Google account for cloud sync and PIN reset
+  linkedGoogleUserId?: string; // Locally bound Google account for backup and PIN reset
   linkedGoogleEmail?: string | null; // Email for the locally bound Google account
   linkedGoogleBoundAt?: number; // Timestamp when the Google account was locally bound
+  linkedGoogleUid?: string; // Legacy Firebase UID field, migrated to linkedGoogleUserId
 }
 
 export interface Mood {
@@ -77,8 +78,6 @@ export interface AppSettings {
   customTags?: string[];
   customMoods?: Mood[];
   theme?: 'light' | 'dark';
-  autoSyncOnLaunch?: boolean;
-  syncOnEntryCreation?: boolean;
 }
 
 export interface UserProfile {
@@ -98,4 +97,44 @@ export interface DiaryBackupData {
   notes: Note[];
   settings: AppSettings;
   userProfile?: UserProfile;
+}
+
+export interface GoogleAccountSession {
+  userId: string;
+  email: string | null;
+  displayName: string | null;
+  accessToken: string | null;
+}
+
+export interface DriveBackupSettings {
+  linkedGoogleUserId?: string;
+  linkedGoogleEmail?: string | null;
+  lastBackupAt?: number;
+  lastBackupFileId?: string;
+  lastBackupSizeBytes?: number;
+  lastRestoreAt?: number;
+}
+
+export interface BackupManifest {
+  schemaVersion: number;
+  createdAt: string;
+  appVersion: string;
+  storageSchemaVersion: number;
+  counts: {
+    diaries: number;
+    entries: number;
+    notes: number;
+    media: number;
+  };
+  mediaCount: number;
+  totalBytes: number;
+  checksum: string;
+}
+
+export interface BackupFileSummary {
+  id: string;
+  name: string;
+  createdTime?: string;
+  modifiedTime?: string;
+  size?: number;
 }

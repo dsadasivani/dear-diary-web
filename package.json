@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
+    "test:storage": "tsx --test src/repositories/*.test.ts src/domain/*.test.ts src/utils/*.test.ts",
     "cap:add:android": "cap add android",
     "cap:add:ios": "cap add ios",
     "cap:sync": "cap sync",
@@ -20,7 +21,9 @@
     "mobile:sync": "npm run mobile:build && cap sync"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.0",
     "@capacitor-community/speech-recognition": "^7.0.1",
+    "@capacitor-community/sqlite": "^8.1.0",
     "@capacitor/android": "^8.4.1",
     "@capacitor/app": "^8.1.0",
     "@capacitor/camera": "^8.2.0",
@@ -42,7 +45,7 @@
     "crypto-js": "^4.2.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "firebase": "^12.15.0",
+    "fflate": "^0.8.3",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",

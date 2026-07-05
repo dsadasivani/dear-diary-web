@@ -4,9 +4,10 @@ import {
   BookOpen, Plus, Lock, ArrowLeft, Check, List, LayoutGrid, Upload
 } from 'lucide-react';
 import { Diary, Entry } from '../types';
-import { createDiary, PREDEFINED_COLORS } from '../utils/storage';
+import { PREDEFINED_COLORS } from '../domain/journalCatalog';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
 import { persistMediaDataUri } from '../mobile/mediaStorage';
+import { diaryRepository } from '../repositories';
 
 type DiaryViewMode = 'compact' | 'list';
 
@@ -14,7 +15,7 @@ interface DiariesScreenProps {
   diaries: Diary[];
   entries: Entry[];
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
-  onRefreshDiaries: () => void;
+  onRefreshDiaries: () => void | Promise<void>;
 }
 
 const EMOJI_OPTIONS = ['📔', '✈️', '🌙', '🌿', '🎨', '💼', '☕', '🏠', '🔑', '📝', '🌸', '✨'];
@@ -85,12 +86,19 @@ export default function DiariesScreen({
     }
   };
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!diaryName.trim()) return;
 
-    createDiary(diaryName, selectedEmoji, selectedColor, isLocked, coverImage, selectedFoilIcons);
-    onRefreshDiaries();
+    await diaryRepository.createDiary({
+      name: diaryName,
+      emoji: selectedEmoji,
+      color: selectedColor,
+      isLocked,
+      coverImage,
+      foilIcons: selectedFoilIcons,
+    });
+    await onRefreshDiaries();
     
     // Reset form
     setDiaryName('');

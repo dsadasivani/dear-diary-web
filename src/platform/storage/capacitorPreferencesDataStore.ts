@@ -11,6 +11,10 @@ export class CapacitorPreferencesDataStore implements LocalDataStore {
     await Preferences.set({ key, value });
   }
 
+  async setItems(items: Record<string, string>): Promise<void> {
+    await Promise.all(Object.entries(items).map(([key, value]) => Preferences.set({ key, value })));
+  }
+
   async removeItem(key: string): Promise<void> {
     await Preferences.remove({ key });
   }

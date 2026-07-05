@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, Trash2, Check, Lock, ShieldAlert, Smile, Palette, Save, ShieldCheck } from 'lucide-react';
 import { Diary } from '../types';
-import { updateDiary, deleteDiary, PREDEFINED_COLORS } from '../utils/storage';
+import { PREDEFINED_COLORS } from '../domain/journalCatalog';
+import { diaryRepository } from '../repositories';
 
 interface DiarySettingsScreenProps {
   diary: Diary;
   onBack: () => void;
-  onRefreshDiaries: () => void;
+  onRefreshDiaries: () => void | Promise<void>;
 }
 
 const EMOJI_OPTIONS = ['📔', '✈️', '💼', '🌙', '🎨', '🌿', '☕', '🏠', '🔑', '📝', '🌸', '✨'];
@@ -28,7 +29,7 @@ export default function DiarySettingsScreen({
   // Cover decoration states
   const [selectedFoilIcons, setSelectedFoilIcons] = useState<string[]>(diary.foilIcons || []);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!diaryName.trim()) return;
 
     const updated: Diary = {
@@ -40,14 +41,14 @@ export default function DiarySettingsScreen({
       foilIcons: selectedFoilIcons
     };
 
-    updateDiary(updated);
-    onRefreshDiaries();
+    await diaryRepository.updateDiary(updated);
+    await onRefreshDiaries();
     onBack();
   };
 
-  const handleDelete = () => {
-    deleteDiary(diary.id);
-    onRefreshDiaries();
+  const handleDelete = async () => {
+    await diaryRepository.deleteDiary(diary.id);
+    await onRefreshDiaries();
     onBack();
   };
 

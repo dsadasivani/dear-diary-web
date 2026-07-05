@@ -4,7 +4,7 @@ import {
   Search, BookOpen, FileText, Image, Calendar, Tag, ArrowRight, X, Filter 
 } from 'lucide-react';
 import { Diary, Entry, Note } from '../types';
-import { PREDEFINED_TAGS } from '../utils/storage';
+import { PREDEFINED_TAGS } from '../domain/journalCatalog';
 
 interface SearchScreenProps {
   diaries: Diary[];

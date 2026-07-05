@@ -46,16 +46,25 @@ npm run cap:sync
 
 Then open the generated iOS project with Xcode.
 
-## Firebase Security Notes
+## Google Drive Backup Notes
 
-- Keep Firebase configuration aligned with the current web app branch. If you move Firebase client config to environment variables later, do not commit real values in local `.env` files.
-- Firestore Security Rules must restrict users to their own data, for example `users/{uid}/...`.
-- App Check is not configured in this phase because provider keys are not available. Add App Check before a public mobile release.
+- Dear Diary is local-first. Device storage is the source of truth; Google Drive is used only for user-initiated backup and restore.
+- Drive backups use the `https://www.googleapis.com/auth/drive.appdata` scope and are stored in the hidden Google Drive `appDataFolder`.
+- Drive backups are Drive-protected, not end-to-end encrypted. Restoring on a new device requires the same Google account and app access.
+- Existing Firestore data from older builds is left untouched, but the app no longer reads or writes Firestore.
 
 ## Phase 2 Progress
 
-- Native builds hydrate Dear Diary's existing localStorage keys from Capacitor Preferences on app startup.
-- Existing storage writes now mirror diary data, entries, notes, settings, profile, security, last sync, and diary view mode into Capacitor Preferences on native.
+- Native builds load all journal, settings, profile, security, and backup metadata through the async repository. Diary data is no longer hydrated into `localStorage`; only the non-sensitive diary view preference is mirrored for the UI.
+- Native storage is now backed by encrypted SQLite through `@capacitor-community/sqlite` with SQLCipher enabled in Capacitor config.
+- The SQLite encryption secret is generated on device and stored through `@aparajita/capacitor-secure-storage`; the SQLite plugin also receives the secret for encrypted database access.
+- On first migrated native launch, existing Capacitor Preferences values are copied into SQLite, collection counts are verified, and only then is migration marked complete. Preferences are retained as a one-release fallback.
+- All diary, entry, note, settings, profile, security, Drive metadata, manual export, and Drive restore operations use the serialized async repository.
+- SQLite maintains normalized tables for `diaries`, `entries`, `entry_blocks`, `notes`, `media_assets`, `app_settings`, `user_profile`, and `storage_meta`. Its internal `kv_store` is retained only as a migration/format compatibility record, not as a UI data source.
+- Multi-record snapshot restores use one native SQLite transaction, preventing partially restored application state.
+- PIN verification and recovery cryptography are pure in-memory operations; only completed security state is persisted. Google PIN recovery binding is explicit and separate from Drive backup connection.
+- Legacy native cover, photo, and audio data URIs are moved to app-private files on startup. The migration records counts and retries on the next launch if any file could not be written.
+- Google Drive backup creates zipped snapshots with manifest, JSON data, and media files in Drive `appDataFolder`.
 - Native reminder settings schedule or cancel a daily Local Notifications reminder when app settings are saved.
 - New diary cover images, diary settings cover updates, entry photos, and entry audio are written through Capacitor Filesystem on native and remain data URIs on web.
 - Android biometric unlock uses `@capgo/capacitor-native-biometric` and requires an enrolled strong biometric, such as fingerprint, plus an app PIN fallback.
@@ -63,15 +72,14 @@ Then open the generated iOS project with Xcode.
 
 ## Known Limitations
 
-- The app still exposes synchronous storage APIs to screens; Capacitor Preferences is currently a native mirror/hydration layer rather than a full async rewrite.
-- Existing legacy media already stored as data URIs is not migrated automatically; only newly added media uses native file storage.
-- Android Settings > Apps > Dear Diary > Clear storage is destructive. It deletes local diary data, Preferences, Firebase auth state, and the app PIN hash/salt. Use in-app reset, encrypted backup, or cloud sync when data should be preserved.
+- The legacy media migration needs physical-device QA with large photo/audio libraries and interrupted launches before the fallback can be retired.
+- Android Settings > Apps > Dear Diary > Clear storage is destructive. It deletes local diary data, encrypted SQLite, secure storage secrets, Preferences, Google backup link metadata, and the app PIN hash/salt. Restore from a Drive backup when data should be recovered.
 - Native speech recognition depends on Android speech services and microphone permission. If unavailable, the app shows a graceful message; audio recording still works through the native recorder.
 - Default Capacitor splash/icon assets are used. Replace native assets before store release.
 
-## Phase 2 Checklist
+## Release Checklist
 
-- Complete the async storage rewrite screen by screen, replacing the current native Preferences mirror.
-- Add an explicit migration for existing data URI media if needed for long-time users.
-- Add cloud/device recovery options for users who intentionally clear OS app storage.
+- Complete physical-device upgrade QA for Preferences-to-SQLite and data-URI-to-file migrations, including interruption and low-storage cases.
+- Remove legacy Capacitor Preferences fallback after one stable release with successful SQLite migration.
+- Add cloud/device recovery education for users who intentionally clear OS app storage.
 - Add production icons, splash assets, signing config, and release build documentation.

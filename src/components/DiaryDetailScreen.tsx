@@ -7,8 +7,8 @@ import {
   MoreVertical
 } from 'lucide-react';
 import { Diary, Entry } from '../types';
-import { updateEntry } from '../utils/storage';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
+import { diaryRepository } from '../repositories';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
@@ -17,7 +17,7 @@ interface DiaryDetailScreenProps {
   onEditEntry: (entryId: string) => void;
   onNewEntry: (diaryId: string, dateStr?: string) => void;
   onOpenSettings: (diaryId: string) => void;
-  onRefreshEntries?: () => void;
+  onRefreshEntries?: () => void | Promise<void>;
 }
 
 export default function DiaryDetailScreen({
@@ -645,7 +645,7 @@ export default function DiaryDetailScreen({
               </span>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   const nextState = !activeEntry.isTimelineBifurcated;
                   const updatedEntry: Entry = {
                     ...activeEntry,
@@ -655,8 +655,8 @@ export default function DiaryDetailScreen({
                       ? [{ id: `block-${Date.now()}`, time: activeEntry.time || new Date().toTimeString().split(' ')[0].substring(0, 5), body: activeEntry.body || '' }]
                       : activeEntry.blocks
                   };
-                  updateEntry(updatedEntry);
-                  onRefreshEntries?.();
+                  await diaryRepository.updateEntry(updatedEntry);
+                  await onRefreshEntries?.();
                 }}
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
                   activeEntry.isTimelineBifurcated ? 'bg-brand-pink' : 'bg-brand-sage-light'

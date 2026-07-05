@@ -4,29 +4,29 @@ import {
   Pin, Edit, Trash2, Tag, Calendar, Plus, BookOpen, 
   X, Check, HelpCircle, FileText, Share2, ClipboardList, Bold, Italic, Underline
 } from 'lucide-react';
-import { Note } from '../types';
-import { 
-  getNotes, createNote, updateNote, deleteNote, 
-  getTags 
-} from '../utils/storage';
+import { AppSettings, Note } from '../types';
 import RichTextEditor from './RichTextEditor';
+import { diaryRepository } from '../repositories';
+import { getTagsForSettings } from '../domain/appSettings';
 
 interface NotesScreenProps {
   notes: Note[];
-  onRefreshNotes: () => void;
-  onConvertToDiaryEntry: (noteTitle: string, noteBody: string, tags: string[]) => void;
+  settings: AppSettings;
+  onRefreshNotes: () => void | Promise<void>;
+  onConvertToDiaryEntry: (noteTitle: string, noteBody: string, tags: string[]) => void | Promise<void>;
   initialNoteId?: string;
   onClearInitialNoteId?: () => void;
 }
 
 export default function NotesScreen({
   notes,
+  settings,
   onRefreshNotes,
   onConvertToDiaryEntry,
   initialNoteId,
   onClearInitialNoteId
 }: NotesScreenProps) {
-  const availableTags = getTags();
+  const availableTags = getTagsForSettings(settings);
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'pinned' | 'tagged' | 'untagged'>('all');
   
@@ -61,13 +61,13 @@ export default function NotesScreen({
     }
   }, [initialNoteId, notes]);
 
-  const handleSaveQuickNote = () => {
+  const handleSaveQuickNote = async () => {
     // A quick note might have html from quickThought if it were a rich text, but it's plain text here
     const plainTextBody = quickThought.replace(/<[^>]*>?/gm, '').trim();
     if (!plainTextBody) return;
     
     // Create new quick note
-    createNote({
+    await diaryRepository.createNote({
       title: plainTextBody.split('\n')[0].substring(0, 30) || 'Untitled note',
       body: quickThought,
       isPinned: false,
@@ -75,7 +75,7 @@ export default function NotesScreen({
     });
     
     setQuickThought('');
-    onRefreshNotes();
+    await onRefreshNotes();
   };
 
   const handleStartEdit = (note: Note) => {
@@ -86,7 +86,7 @@ export default function NotesScreen({
     setEditingTags(note.tags);
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editingNote) return;
 
     const finalTitle = editTitle.trim() || 'Untitled note';
@@ -98,26 +98,26 @@ export default function NotesScreen({
       tags: editTags
     };
 
-    updateNote(updated);
+    await diaryRepository.updateNote(updated);
     setEditingNote(null);
-    onRefreshNotes();
+    await onRefreshNotes();
   };
 
-  const handleDeleteNote = (id: string) => {
-    deleteNote(id);
+  const handleDeleteNote = async (id: string) => {
+    await diaryRepository.deleteNote(id);
     setShowConfirmDeleteId(null);
     if (editingNote && editingNote.id === id) {
       setEditingNote(null);
     }
-    onRefreshNotes();
+    await onRefreshNotes();
   };
 
-  const handleTogglePin = (note: Note) => {
-    updateNote({
+  const handleTogglePin = async (note: Note) => {
+    await diaryRepository.updateNote({
       ...note,
       isPinned: !note.isPinned
     });
-    onRefreshNotes();
+    await onRefreshNotes();
   };
 
   const handleEditTagToggle = (tag: string) => {

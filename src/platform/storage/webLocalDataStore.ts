@@ -9,6 +9,10 @@ export class WebLocalDataStore implements LocalDataStore {
     localStorage.setItem(key, value);
   }
 
+  async setItems(items: Record<string, string>): Promise<void> {
+    Object.entries(items).forEach(([key, value]) => localStorage.setItem(key, value));
+  }
+
   async removeItem(key: string): Promise<void> {
     localStorage.removeItem(key);
   }

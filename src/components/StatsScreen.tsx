@@ -6,7 +6,7 @@ import {
   Sparkles, X, Calendar, Grid, ChevronDown
 } from 'lucide-react';
 import { Diary, Entry, Note, UserProfile } from '../types';
-import { calculateStreak } from '../utils/storage';
+import { calculateStreak } from '../domain/journalCatalog';
 
 interface StatsScreenProps {
   diaries: Diary[];

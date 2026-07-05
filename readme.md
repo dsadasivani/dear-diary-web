@@ -1,94 +1,84 @@
-# 📔 Dear Diary — Private, Secure, Local-First Journaling Sanctuary
+# Dear Diary
 
-**Dear Diary** is an elegant, secure journaling application designed to capture personal memories, organize thoughts, and reflect deeply on growth. Built with React and TypeScript, the app combines a warm, highly polished tactile design with secure cloud synchronization via Firebase and privacy features like WebAuthn.
+Dear Diary is a private, local-first journaling app built with React, TypeScript, Vite, and Capacitor. The mobile app treats device storage as the source of truth; Google Drive is used only for manual backup and restore.
 
----
+## Current Storage Architecture
 
-## 🗺️ Architectural & Functional Roadmap
-
-```
-                                  +-----------------------+
-                                  |     Browser Client     |
-                                  |-----------------------|
-                                  | - React UI Components |
-                                  | - Firestore Syncing   |
-                                  | - WebAuthn Security   |
-                                  | - MediaRecorder audio |
-                                  +-----------+-----------+
-                                              |
-                                     (Firebase Firestore)
-                                              |
-                                              v
-                                  +-----------+-----------+
-                                  |   Firebase Backend    |
-                                  |-----------------------|
-                                  | - Real-time Database  |
-                                  | - Secure Auth         |
-                                  +-----------------------+
-```
-
----
-
-## 🌟 Key Features
-
-- **Personal Journaling**: Create and manage multiple diaries and entries.
-- **Rich Media**: Integrated audio recording and playback for voice notes.
-- **Secure Access**: WebAuthn support for secure authentication.
-- **Insights & Stats**: Track your journaling habits and emotional journey.
-- **Searchable Notes**: Easily find past entries and notes.
-- **Privacy First**: Designed for private, personal reflection.
-
----
-
-## 💻 Tech Stack & Environment Setup
-
-### Tech Stack
-- **Frontend Framework**: React 18+ (Functional Components, Hooks)
-- **Styling Utility**: Tailwind CSS
-- **Bundler & Tooling**: Vite + TypeScript
-- **Icons**: Lucide React
-- **Animations**: `motion` (AnimatePresence transitions)
-- **Backend Server**: Node.js + Express (serving static files)
-- **Database**: Firebase Firestore
-
-### Environment Setup
-The application uses Firebase for storage and authentication. Ensure your environment is configured according to the Firebase setup instructions.
-
----
-
-## 📂 Codebase File Directory Overview
-
-```
-├── .env.example                # Example environment settings
-├── .gitignore                  # Exclusion file
-├── index.html                  # Core single-page canvas entry
-├── metadata.json               # App identity
-├── package.json                # Dependencies and run scripts
-├── server.ts                   # Express server
-├── tsconfig.json               # TypeScript configuration
-├── vite.config.ts              # Vite configuration
-├── src/
-│   ├── main.tsx                # Client launcher
-│   ├── index.css               # Global CSS
-│   ├── types.ts                # Type declarations
-│   ├── components/             # Reusable UI Screen Modules
-│   ├── utils/
-│       └── firebase.ts         # Firebase initialization
-│       └── storage.ts          # Storage utilities
-│       └── sync.ts             # Syncing logic
-│       └── webauthn.ts         # WebAuthn logic
+```text
++---------------------------+
+| Capacitor mobile app      |
+|---------------------------|
+| React UI                  |
+| Async repository          |
+| Encrypted SQLite          |
+| App-private media files   |
++-------------+-------------+
+              |
+              | optional manual backup/restore
+              v
++---------------------------+
+| Google Drive appDataFolder|
+|---------------------------|
+| Hidden backup zip bundle  |
+| manifest.json             |
+| data.json                 |
+| media/*                   |
++---------------------------+
 ```
 
----
+The app no longer reads or writes Firestore. Existing Firebase/Firestore data from older builds is left untouched outside the app.
 
-## 🚀 Quick Start & Development
+## Key Features
 
-### Local Installation
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-2. Run the development server:
-   ```bash
-   npm run dev
-   ```
+- Multiple diaries, entries, rich text blocks, photos, and audio notes.
+- Notes, search, tags, moods, reminders, and profile settings.
+- Local PIN, recovery question, and optional biometric unlock on mobile.
+- Hidden Google Drive `appDataFolder` backups with no separate backup password.
+- Optional password-protected local export/import for manual safekeeping.
+
+## Tech Stack
+
+- React, TypeScript, Vite
+- Tailwind CSS
+- Capacitor for Android/iOS shell
+- `@capacitor-community/sqlite` with SQLCipher for native mobile persistence
+- `@aparajita/capacitor-secure-storage` for the local SQLite encryption secret
+- Capacitor Preferences as a one-release migration fallback
+- Capacitor Filesystem for app-private media files
+- `@capawesome/capacitor-google-sign-in` for Drive backup access
+- Google Drive REST API with `https://www.googleapis.com/auth/drive.appdata`
+- `fflate` for zipped backup bundles
+
+## Development
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run the web development server:
+
+```bash
+npm run dev
+```
+
+Build the app:
+
+```bash
+npm run build
+```
+
+Sync Capacitor assets and plugins:
+
+```bash
+npm run cap:sync
+```
+
+## Mobile Notes
+
+Android is the primary native target in this repo. All journal, settings, profile, security, manual backup, and Drive restore workflows use an async repository whose native reads come from encrypted normalized SQLite tables. Existing Capacitor Preferences values are migrated with count verification and retained as a one-release fallback.
+
+Legacy inline cover, photo, and audio data is migrated into app-private files on native startup. Phase 2 implementation is complete in code; physical-device upgrade, interrupted migration, and low-storage QA remain before retiring the Preferences fallback.
+
+See [docs/mobile-capacitor.md](docs/mobile-capacitor.md) for native setup and current mobile limitations.

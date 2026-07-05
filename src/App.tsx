@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AlertCircle, ArrowLeft, BarChart2, BookOpen, Check, ClipboardList, Eye, EyeOff,
@@ -17,24 +17,23 @@ import SearchScreen from './components/SearchScreen';
 import StatsScreen from './components/StatsScreen';
 import AppSettingsScreen from './components/AppSettingsScreen';
 
-import { Diary, Entry, Note, UserProfile } from './types';
+import { AppSettings, Diary, Entry, Note, SecurityConfig, UserProfile } from './types';
 import { addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
 import { isAndroid } from './platform';
 
-// Import our local storage utilities
-import { 
-  getDiaries, getEntries, getNotes, getSecurityConfig, 
-  createNote, createEntry, getAppSettings, getUserProfile, isValidPin, verifyPinCode
-} from './utils/storage';
-import { auth } from './utils/firebase';
-import { syncLocalAndCloud } from './utils/sync';
-import { persistNativeLocalStorageItem } from './mobile/nativeStorageBridge';
 import { secureAuthService } from './platform/security';
+import { diaryRepository } from './repositories';
+import { isValidPin, unlockWithPin } from './domain/security';
 
-export default function App() {
+interface AppProps {
+  initialSettings: AppSettings;
+  initialSecurity: SecurityConfig;
+  initialUserProfile: UserProfile;
+}
+
+export default function App({ initialSettings, initialSecurity, initialUserProfile }: AppProps) {
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const autoSyncStartedRef = useRef(false);
   
   // Navigation states
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
@@ -75,8 +74,10 @@ export default function App() {
   const [diaries, setDiaries] = useState<Diary[]>([]);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => getUserProfile());
+  const [settings, setSettings] = useState<AppSettings>(initialSettings);
+  const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
+  const [theme, setTheme] = useState<'light' | 'dark'>(initialSettings.theme || 'light');
+  const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
 
   const accessibleEntries = React.useMemo(() => {
     const lockedDiaryIds = new Set(
@@ -87,17 +88,23 @@ export default function App() {
     return entries.filter(entry => !lockedDiaryIds.has(entry.diaryId));
   }, [diaries, entries, unlockedDiaryIds]);
 
-  // Reload data from local storage helper
-  const reloadData = () => {
-    setDiaries(getDiaries());
-    setEntries(getEntries());
-    setNotes(getNotes());
-    setUserProfile(getUserProfile());
-  };
-
-  const reloadTheme = () => {
-    const settings = getAppSettings();
-    const currentTheme = settings.theme || 'light';
+  // Reload data from the async repository. SQLite is authoritative on native.
+  const reloadData = async () => {
+    const [storedDiaries, storedEntries, storedNotes, storedProfile, storedSettings, storedSecurity] = await Promise.all([
+      diaryRepository.listDiaries(),
+      diaryRepository.listEntries(),
+      diaryRepository.listNotes(),
+      diaryRepository.getUserProfile(),
+      diaryRepository.getSettings(),
+      diaryRepository.getSecurityConfig(),
+    ]);
+    setDiaries(storedDiaries);
+    setEntries(storedEntries);
+    setNotes(storedNotes);
+    setUserProfile(storedProfile);
+    setSettings(storedSettings);
+    setSecurity(storedSecurity);
+    const currentTheme = storedSettings.theme || 'light';
     setTheme(currentTheme);
     if (currentTheme === 'dark') {
       document.documentElement.classList.add('dark');
@@ -107,28 +114,16 @@ export default function App() {
     void syncNativeStatusBar(currentTheme);
   };
 
-  const handleUnlock = () => {
-    reloadData();
-    reloadTheme();
-    autoSyncStartedRef.current = false;
+  const handleUnlock = async () => {
+    await reloadData();
     setUnlockedDiaryIds(new Set());
     setIsAuthenticated(true);
   };
 
   // On mount: load initial state
   useEffect(() => {
-    reloadData();
-    reloadTheme();
-    
-    // Check if security PIN is enabled. If not created, let's show register PIN.
-    const config = getSecurityConfig();
-    if (!config.isPinCreated) {
-      // If no PIN is configured, force registration
-      setIsAuthenticated(false);
-    } else {
-      // If PIN exists, force authentication on launch
-      setIsAuthenticated(false);
-    }
+    void reloadData();
+    setIsAuthenticated(false);
   }, []);
 
   const [selectedPrompt, setSelectedPrompt] = useState<string>('');
@@ -151,8 +146,7 @@ export default function App() {
     setSelectedNoteId(noteId);
     setSelectedPrompt(promptText);
     setIsEditorFocusMode(false);
-    reloadData();
-    reloadTheme();
+    void reloadData();
   };
 
   useEffect(() => {
@@ -171,8 +165,7 @@ export default function App() {
     });
   };
 
-  const handleDiaryPinUnlock = (diary: Diary) => {
-    const security = getSecurityConfig();
+  const handleDiaryPinUnlock = async (diary: Diary) => {
     const requiredLength = security.pinLength || 4;
     if (!isValidPin(diaryUnlockPin, security.pinLength)) {
       setDiaryUnlockError(`Enter your ${requiredLength}-digit app PIN.`);
@@ -180,7 +173,10 @@ export default function App() {
       return;
     }
 
-    if (verifyPinCode(diaryUnlockPin)) {
+    const unlockedSecurity = unlockWithPin(security, diaryUnlockPin);
+    if (unlockedSecurity) {
+      await diaryRepository.saveSecurityConfig(unlockedSecurity);
+      setSecurity(unlockedSecurity);
       markDiaryUnlocked(diary.id);
       setDiaryUnlockPin('');
       setDiaryUnlockError('');
@@ -195,7 +191,6 @@ export default function App() {
   };
 
   const handleDiaryBiometricUnlock = async (diary: Diary) => {
-    const security = getSecurityConfig();
     if (!security.isBiometricsEnabled) {
       setDiaryUnlockError('Biometric unlock is not enabled. Use your app PIN.');
       setDiaryUnlockSuccess('');
@@ -288,43 +283,13 @@ export default function App() {
 
   useEffect(() => addNativeBackListener(handleBackNavigation), [handleBackNavigation]);
 
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    const unsubscribe = auth.onAuthStateChanged((user) => {
-      if (autoSyncStartedRef.current) return;
-
-      const settings = getAppSettings();
-      const security = getSecurityConfig();
-      if (!settings.autoSyncOnLaunch || !user || security.linkedGoogleUid !== user.uid) {
-        return;
-      }
-
-      autoSyncStartedRef.current = true;
-      syncLocalAndCloud(user.uid)
-        .then(() => {
-          const now = Date.now();
-          localStorage.setItem('deardiary_last_sync', String(now));
-          persistNativeLocalStorageItem('deardiary_last_sync', String(now));
-          reloadData();
-          showToast('Cloud synchronization complete.', 'success');
-        })
-        .catch((err: any) => {
-          console.error(err);
-          showToast(err?.message || 'Auto-sync encountered an issue.', 'error');
-        });
-    });
-
-    return () => unsubscribe();
-  }, [isAuthenticated]);
-
   // Convert quick note into formal diary entry helper
-  const handleConvertToDiaryEntry = (noteTitle: string, noteBody: string, tags: string[]) => {
+  const handleConvertToDiaryEntry = async (noteTitle: string, noteBody: string, tags: string[]) => {
     // Determine target diary (default to first diary)
     const targetDiary = diaries[0];
     if (!targetDiary) return;
 
-    createEntry({
+    await diaryRepository.createEntry({
       diaryId: targetDiary.id,
       date: new Date().toISOString().split('T')[0],
       title: noteTitle,
@@ -340,8 +305,8 @@ export default function App() {
   };
 
   // Quick Capturing note helpers
-  const handleOpenQuickNote = (noteText: string) => {
-    createNote({
+  const handleOpenQuickNote = async (noteText: string) => {
+    await diaryRepository.createNote({
       title: noteText.substring(0, 24) || 'Untitled quick thought',
       body: noteText,
       isPinned: false,
@@ -360,7 +325,6 @@ export default function App() {
   };
 
   const renderDiaryUnlockPrompt = (diary: Diary) => {
-    const security = getSecurityConfig();
     const requiredLength = security.pinLength || 4;
     const canSubmitPin = isValidPin(diaryUnlockPin, security.pinLength);
 
@@ -411,7 +375,7 @@ export default function App() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              handleDiaryPinUnlock(diary);
+              void handleDiaryPinUnlock(diary);
             }}
             className="relative z-10 flex flex-col gap-3"
           >
@@ -533,6 +497,8 @@ export default function App() {
         if (currentScreen === 'entryEditor') {
           return (
             <EntryEditorScreen 
+              diaries={diaries}
+              settings={settings}
               diaryId={selectedDiaryId}
               entryId={selectedEntryId}
               initialDate={selectedDate}
@@ -569,6 +535,7 @@ export default function App() {
         return (
           <NotesScreen 
             notes={notes}
+            settings={settings}
             onRefreshNotes={reloadData}
             onConvertToDiaryEntry={handleConvertToDiaryEntry}
             initialNoteId={selectedNoteId}
@@ -594,11 +561,18 @@ export default function App() {
         if (currentScreen === 'appSettings') {
           return (
             <AppSettingsScreen 
+              diaries={diaries}
+              entries={entries}
+              notes={notes}
+              initialSettings={settings}
+              initialSecurity={security}
+              initialProfile={userProfile}
               onBack={() => handleNavigate('stats', 'list')}
               onResetSuccess={() => {
-                reloadData();
+                void reloadData();
                 handleNavigate('home');
               }}
+              onDataChanged={reloadData}
               onShowToast={showToast}
             />
           );
@@ -621,7 +595,15 @@ export default function App() {
 
   // If locked, return LockScreen view
   if (!isAuthenticated) {
-    return <LockScreen onUnlock={handleUnlock} />;
+    return (
+      <LockScreen
+        initialSecurity={security}
+        initialSettings={settings}
+        onSecurityChange={setSecurity}
+        onSettingsChange={setSettings}
+        onUnlock={handleUnlock}
+      />
+    );
   }
 
   // If in editor focus mode, render only the editor at root level (bypasses transformed motion.div containers and options dock)
