@@ -8,8 +8,6 @@ import { PREDEFINED_COLORS } from '../domain/journalCatalog';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
 import { persistMediaDataUri } from '../mobile/mediaStorage';
 import { diaryRepository } from '../repositories';
-import { importDiaryArchive } from '../utils/diaryArchive';
-import { BACKUP_PASSPHRASE_MIN_LENGTH } from '../utils/backupEncryption';
 
 type DiaryViewMode = 'compact' | 'list';
 
@@ -53,7 +51,6 @@ export default function DiariesScreen({
   const [coverImage, setCoverImage] = useState<string | undefined>(undefined);
   const [selectedFoilIcons, setSelectedFoilIcons] = useState<string[]>([]);
   const coverFileInputRef = useRef<HTMLInputElement>(null);
-  const archiveFileInputRef = useRef<HTMLInputElement>(null);
 
   const totalEntries = entries.length;
 
@@ -114,21 +111,6 @@ export default function DiariesScreen({
     setShowCreateForm(false);
   };
 
-  const handleArchiveImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    const passphrase = window.prompt(`Enter the archive password (${BACKUP_PASSPHRASE_MIN_LENGTH}+ characters).`);
-    if (passphrase === null) return;
-    try {
-      const imported = await importDiaryArchive(new Uint8Array(await file.arrayBuffer()), passphrase);
-      await onRefreshDiaries();
-      onNavigate('diaries', 'diaryDetail', imported.id);
-    } catch (error: any) {
-      window.alert(error?.message || 'The diary archive could not be imported.');
-    }
-  };
-
   return (
     <div className="flex flex-col gap-6 font-sans relative">
       <AnimatePresence mode="wait">
@@ -164,14 +146,6 @@ export default function DiariesScreen({
               {/* View Selector Buttons */}
               <div className="flex items-center gap-1 bg-white/90 dark:bg-brand-card-bg/90 border border-brand-border p-1 rounded-2xl shadow-sm self-start sm:self-auto">
                 <button
-                  type="button"
-                  onClick={() => archiveFileInputRef.current?.click()}
-                  className="p-2.5 rounded-xl text-brand-sage hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10"
-                  title="Import portable diary archive"
-                >
-                  <Upload className="w-4 h-4" />
-                </button>
-                <button
                   onClick={() => handleViewModeChange('compact')}
                   className={`p-2.5 rounded-xl transition-all ${
                     viewMode === 'compact'
@@ -194,13 +168,6 @@ export default function DiariesScreen({
                   <List className="w-4 h-4" />
                 </button>
               </div>
-              <input
-                ref={archiveFileInputRef}
-                type="file"
-                accept=".ddiary"
-                onChange={event => void handleArchiveImport(event)}
-                className="hidden"
-              />
             </div>
 
             {/* CONDITIONAL RENDER BY VIEW MODE */}

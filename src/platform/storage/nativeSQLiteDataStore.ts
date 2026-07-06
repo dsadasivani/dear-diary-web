@@ -6,6 +6,7 @@ import type { LocalDataStore } from './LocalDataStore';
 
 const DATABASE_NAME = 'dear_diary_local';
 const DATABASE_VERSION = 1;
+const STORAGE_SCHEMA_VERSION = 3;
 const SECURE_STORAGE_PREFIX = 'deardiary_';
 const SQLITE_SECRET_KEY = 'sqlite_encryption_secret_v1';
 const MIGRATION_META_KEY = 'legacy_preferences_migrated_at';
@@ -124,7 +125,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         DELETE FROM storage_meta;
       `);
       await this.fallback.clear();
-      await this.setMeta(db, 'storage_schema_version', String(DATABASE_VERSION));
+      await this.setMeta(db, 'storage_schema_version', String(STORAGE_SCHEMA_VERSION));
       await this.setMeta(db, 'storage_backend', 'encrypted_sqlite');
       await this.setMeta(db, MIGRATION_META_KEY, String(now()));
       await this.setMeta(db, 'legacy_preferences_retained', 'false');
@@ -245,13 +246,14 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       CREATE INDEX IF NOT EXISTS idx_entries_updated_at ON entries(updated_at);
 
       CREATE TABLE IF NOT EXISTS entry_blocks (
-        id TEXT PRIMARY KEY NOT NULL,
+        id TEXT NOT NULL,
         entry_id TEXT NOT NULL,
         position INTEGER NOT NULL,
         time TEXT,
         body TEXT,
         audio_uri TEXT,
-        raw_json TEXT NOT NULL
+        raw_json TEXT NOT NULL,
+        PRIMARY KEY (entry_id, position)
       );
 
       CREATE INDEX IF NOT EXISTS idx_entry_blocks_entry ON entry_blocks(entry_id, position);
@@ -297,8 +299,40 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       );
     `);
 
-    await this.setMeta(db, 'storage_schema_version', String(DATABASE_VERSION));
+    await this.migrateEntryBlocksPrimaryKey(db);
+    await this.setMeta(db, 'storage_schema_version', String(STORAGE_SCHEMA_VERSION));
     await this.setMeta(db, 'storage_backend', 'encrypted_sqlite');
+  }
+
+  private async migrateEntryBlocksPrimaryKey(db: SQLiteDBConnection): Promise<void> {
+    const tableInfo = await db.query('PRAGMA table_info(entry_blocks);');
+    const primaryKeyColumns = (tableInfo.values || [])
+      .filter(column => Number(column.pk) > 0)
+      .sort((left, right) => Number(left.pk) - Number(right.pk))
+      .map(column => String(column.name));
+    if (primaryKeyColumns.join(',') === 'entry_id,position') return;
+
+    await db.beginTransaction();
+    try {
+      await db.execute(`
+        DROP TABLE IF EXISTS entry_blocks;
+        CREATE TABLE entry_blocks (
+          id TEXT NOT NULL,
+          entry_id TEXT NOT NULL,
+          position INTEGER NOT NULL,
+          time TEXT,
+          body TEXT,
+          audio_uri TEXT,
+          raw_json TEXT NOT NULL,
+          PRIMARY KEY (entry_id, position)
+        );
+        CREATE INDEX idx_entry_blocks_entry ON entry_blocks(entry_id, position);
+      `, false);
+      await db.commitTransaction();
+    } catch (error) {
+      await db.rollbackTransaction().catch(() => undefined);
+      throw error;
+    }
   }
 
   private async migrateLegacyPreferences(db: SQLiteDBConnection): Promise<void> {
@@ -448,7 +482,9 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         await db.execute("DELETE FROM diaries; DELETE FROM media_assets WHERE owner_type = 'diary';");
         break;
       case 'deardiary_entries':
-        await db.execute("DELETE FROM entries; DELETE FROM entry_blocks; DELETE FROM media_assets WHERE owner_type = 'entry';");
+        await db.run('DELETE FROM entries;');
+        await db.run('DELETE FROM entry_blocks;');
+        await db.run("DELETE FROM media_assets WHERE owner_type = 'entry';");
         break;
       case 'deardiary_notes':
         await db.execute('DELETE FROM notes;');
@@ -550,13 +586,12 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     const entries = safeJsonParse<Entry[]>(value);
     if (!Array.isArray(entries)) return;
 
-    await db.execute(
-      "DELETE FROM entries; DELETE FROM entry_blocks; DELETE FROM media_assets WHERE owner_type = 'entry';",
-      transaction,
-    );
+    await db.run('DELETE FROM entries;', [], transaction);
+    await db.run('DELETE FROM entry_blocks;', [], transaction);
+    await db.run("DELETE FROM media_assets WHERE owner_type = 'entry';", [], transaction);
     for (const entry of entries) {
       await db.run(
-        `INSERT INTO entries (
+        `INSERT OR REPLACE INTO entries (
           id, diary_id, date, time, title, body, mood_name, mood_emoji, tags_json,
           photo_uris_json, photo_count, word_count, audio_uri, created_at, updated_at,
           is_timeline_bifurcated, raw_json
@@ -592,7 +627,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
 
       for (const [index, block] of (entry.blocks || []).entries()) {
         await db.run(
-          `INSERT INTO entry_blocks (id, entry_id, position, time, body, audio_uri, raw_json)
+          `INSERT OR REPLACE INTO entry_blocks (id, entry_id, position, time, body, audio_uri, raw_json)
            VALUES (?, ?, ?, ?, ?, ?, ?);`,
           [
             block.id,
@@ -656,7 +691,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     const id = `${ownerType}:${ownerId}:${field}:${position}`;
     const mimeType = uri.startsWith('data:') ? uri.slice(5, uri.indexOf(';')) : null;
     await db.run(
-      `INSERT INTO media_assets (
+      `INSERT OR REPLACE INTO media_assets (
         id, owner_type, owner_id, field, position, uri, mime_type, byte_size, created_at, raw_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [

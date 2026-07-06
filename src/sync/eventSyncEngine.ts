@@ -16,7 +16,14 @@ import { restoreGoogleDriveSession, startGoogleAuth } from '../utils/googleAuth'
 import { isNativePlatform } from '../platform';
 import { getConfiguredSupabaseAnonKey, getConfiguredSupabaseUrl } from './config';
 import { createSyncDomainEvent, encodeSyncDomainEvent } from './domainEvents';
-import { uploadDriveSyncObject, type UploadDriveSyncObjectInput } from './driveSyncObjects';
+import {
+  getDriveStorageQuota,
+  listDriveSyncObjects,
+  uploadDriveSyncObject,
+  type DriveStorageQuota,
+  type DriveSyncObjectSummary,
+  type UploadDriveSyncObjectInput,
+} from './driveSyncObjects';
 import { decryptSyncPayload, encryptSyncPayload } from './encryptedSyncObject';
 import { replaySyncObjects } from './eventReplay';
 import { decodeCompanionKeyPackage, unwrapRootKeyForCompanion } from './companionKeyPackage';
@@ -32,7 +39,11 @@ import {
   type SyncSecrets,
 } from './syncSecrets';
 import { exportRepositorySnapshotPayload } from './syncSnapshot';
-import { partitionKeyForRecordPayload } from './syncPartitioning';
+import {
+  listPartitionKeysInSnapshot,
+  partitionKeyForRecordPayload,
+  recentPartitionKeys,
+} from './syncPartitioning';
 import { hydrateArchivePartition as hydrateArchivePartitionFromCloud } from './partitionedRestore';
 import {
   cacheSyncMedia,
@@ -53,6 +64,7 @@ import {
   type ArchiveHydrationDecision,
   type ArchiveHydrationPolicyInput,
 } from './partitionHydrationPolicy';
+import { emitSyncTelemetry } from './syncTelemetry';
 
 type SyncPayload = NonNullable<SyncDomainEvent['payload']>;
 
@@ -60,6 +72,7 @@ interface PreparedMediaUpload {
   mediaId: string;
   localUri: string;
   driveFileId: string;
+  mediaKind: 'image' | 'audio' | 'file';
   sha256: string;
   sizeBytes: number;
   reference: string;
@@ -93,9 +106,62 @@ export interface EventSyncEngineDependencies {
 
 export const DEFAULT_SNAPSHOT_INTERVAL_EVENTS = 100;
 
+const timestampForDriveFile = (file: DriveSyncObjectSummary): number => {
+  const timestamp = file.modifiedTime || file.createdTime;
+  return timestamp ? Date.parse(timestamp) || 0 : 0;
+};
+
+const mediaKindFromMimeType = (mimeType: string): PreparedMediaUpload['mediaKind'] => {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  return 'file';
+};
+
+const buildStorageBreakdown = (files: DriveSyncObjectSummary[]): DriveSyncStorageBreakdown => {
+  const legacyImageSourceIds = new Set(
+    files
+      .filter(file => file.appProperties?.objectKind === 'thumbnail')
+      .map(file => file.appProperties?.sourceDriveFileId)
+      .filter((fileId): fileId is string => Boolean(fileId)),
+  );
+  let imageBytes = 0;
+  let audioBytes = 0;
+  let journalDataBytes = 0;
+  files.forEach(file => {
+    const size = file.size || 0;
+    const kind = file.appProperties?.mediaKind;
+    const objectKind = file.appProperties?.objectKind;
+    if (kind === 'image' || objectKind === 'thumbnail' || legacyImageSourceIds.has(file.id)) {
+      imageBytes += size;
+    } else if (kind === 'audio' || objectKind === 'media') {
+      audioBytes += size;
+    } else {
+      journalDataBytes += size;
+    }
+  });
+  return { journalDataBytes, imageBytes, audioBytes };
+};
+
 export interface BackgroundArchiveHydrationResult {
   decision: ArchiveHydrationDecision;
   hydratedPartitionKeys: string[];
+}
+
+export interface DriveSyncStorageBreakdown {
+  journalDataBytes: number;
+  imageBytes: number;
+  audioBytes: number;
+}
+
+export interface DriveSyncStatus {
+  accountEmail: string;
+  appStorageBytes: number;
+  storageQuota: DriveStorageQuota | null;
+  storageBreakdown: DriveSyncStorageBreakdown;
+  lastUploadAt: string | null;
+  recoveryKeyDriveFileId: string;
+  latestSnapshotDriveFileId: string;
+  latestManifestDriveFileId?: string;
 }
 
 const defaultArchiveHydrationPolicyInput = async (
@@ -208,6 +274,29 @@ export class EventSyncEngine {
     });
   }
 
+  getDriveSyncStatus(): Promise<DriveSyncStatus> {
+    return this.enqueue(async () => {
+      this.requireOnline();
+      const runtime = await this.openRuntime();
+      const [files, storageQuota] = await Promise.all([
+        listDriveSyncObjects(runtime.googleSession),
+        getDriveStorageQuota(runtime.googleSession).catch(() => null),
+      ]);
+      const latestFile = [...files].sort((left, right) => timestampForDriveFile(right) - timestampForDriveFile(left))[0];
+
+      return {
+        accountEmail: runtime.state.googleEmail,
+        appStorageBytes: files.reduce((sum, file) => sum + (file.size || 0), 0),
+        storageQuota,
+        storageBreakdown: buildStorageBreakdown(files),
+        lastUploadAt: latestFile?.modifiedTime || latestFile?.createdTime || null,
+        recoveryKeyDriveFileId: runtime.state.recoveryKeyDriveFileId,
+        latestSnapshotDriveFileId: runtime.state.latestSnapshotDriveFileId,
+        latestManifestDriveFileId: runtime.state.latestManifestDriveFileId,
+      };
+    });
+  }
+
   ensurePartitionedSync(): Promise<boolean> {
     return this.enqueue(async () => {
       this.requireOnline();
@@ -254,12 +343,23 @@ export class EventSyncEngine {
 
   hydrateBackgroundArchiveOnce(): Promise<BackgroundArchiveHydrationResult> {
     return this.enqueue(async () => {
-      const decision = shouldBackgroundHydrateArchive(await this.getArchiveHydrationPolicyInput());
+      const policyInput = await this.getArchiveHydrationPolicyInput();
+      const decision = shouldBackgroundHydrateArchive(policyInput);
+      emitSyncTelemetry('sync.archive.background.policy', {
+        allowed: decision.allowed,
+        reason: decision.reason,
+        isWifi: policyInput.isWifi,
+        isCharging: policyInput.isCharging,
+        storagePressure: policyInput.storagePressure || 'normal',
+      });
       if (!decision.allowed) return { decision, hydratedPartitionKeys: [] };
       this.requireOnline();
 
       const state = await this.repository.getLocalSyncAccountState();
-      if (!state?.partitionedSyncEnabled) return { decision, hydratedPartitionKeys: [] };
+      if (!state?.partitionedSyncEnabled) {
+        emitSyncTelemetry('sync.archive.background.skipped', { reason: 'partitioned_sync_disabled' });
+        return { decision, hydratedPartitionKeys: [] };
+      }
 
       const now = this.now();
       const candidates = (await this.repository.listAvailableArchiveMonths())
@@ -268,7 +368,10 @@ export class EventSyncEngine {
           (partition.status === 'failed' && (partition.nextRetryAt || 0) <= now)
         ))
         .slice(0, this.backgroundArchiveBatchSize);
-      if (candidates.length === 0) return { decision, hydratedPartitionKeys: [] };
+      if (candidates.length === 0) {
+        emitSyncTelemetry('sync.archive.background.skipped', { reason: 'no_retryable_partitions' });
+        return { decision, hydratedPartitionKeys: [] };
+      }
 
       const runtime = await this.openRuntime();
       await this.assertActiveDevice(runtime.controlPlane, runtime.state.deviceId);
@@ -279,13 +382,18 @@ export class EventSyncEngine {
           await this.hydrateArchivePartitionWithRuntime(runtime, candidate.partitionKey);
           hydratedPartitionKeys.push(candidate.partitionKey);
         } catch (error: any) {
-          await this.repository.markPartitionHydrationFailed(
-            candidate.partitionKey,
-            error?.message || 'Archive hydration failed.',
-          );
+          emitSyncTelemetry('sync.archive.background.stopped_after_failure', {
+            partitionKey: candidate.partitionKey,
+            error: error?.message || 'Archive hydration failed.',
+          }, 'warn');
           break;
         }
       }
+      emitSyncTelemetry('sync.archive.background.complete', {
+        attemptedCount: candidates.length,
+        hydratedCount: hydratedPartitionKeys.length,
+        hydratedPartitionKeys,
+      });
       return { decision, hydratedPartitionKeys };
     });
   }
@@ -550,6 +658,15 @@ export class EventSyncEngine {
         throw new Error('Committed affected-record versions do not match the encrypted event.');
       }
       await this.repository.applySyncEvent(event, committed.sequence);
+      if (state.partitionedSyncEnabled) {
+        await this.repository.markPartitionHydrated(partitionKey, committed.sequence);
+        await runtime.controlPlane.updatePartitionCursor({
+          deviceId: state.deviceId,
+          partitionKey,
+          lastAppliedSequence: committed.sequence,
+          hydratedAt: new Date(this.now()).toISOString(),
+        });
+      }
       await runtime.controlPlane.updateDeviceCursor({
         deviceId: state.deviceId,
         lastAppliedSequence: committed.sequence,
@@ -605,7 +722,7 @@ export class EventSyncEngine {
       return {
         ...diary,
         coverImage: diary.coverImage
-          ? await this.prepareMediaUri(runtime, diary.coverImage, preparedMedia)
+          ? await this.prepareMediaUri(runtime, diary.coverImage, preparedMedia, 'image')
           : undefined,
       };
     }
@@ -614,7 +731,7 @@ export class EventSyncEngine {
       return {
         ...profile,
         avatarUri: profile.avatarUri
-          ? await this.prepareMediaUri(runtime, profile.avatarUri, preparedMedia)
+          ? await this.prepareMediaUri(runtime, profile.avatarUri, preparedMedia, 'image')
           : undefined,
       };
     }
@@ -623,19 +740,19 @@ export class EventSyncEngine {
     const entry = payload as Entry;
     const photoUris: string[] = [];
     for (const uri of entry.photoUris) {
-      photoUris.push(await this.prepareMediaUri(runtime, uri, preparedMedia));
+      photoUris.push(await this.prepareMediaUri(runtime, uri, preparedMedia, 'image'));
     }
     const blocks = [];
     for (const block of entry.blocks || []) {
       blocks.push({
         ...block,
-        audioUri: block.audioUri ? await this.prepareMediaUri(runtime, block.audioUri, preparedMedia) : undefined,
+        audioUri: block.audioUri ? await this.prepareMediaUri(runtime, block.audioUri, preparedMedia, 'audio') : undefined,
       });
     }
     return {
       ...entry,
       photoUris,
-      audioUri: entry.audioUri ? await this.prepareMediaUri(runtime, entry.audioUri, preparedMedia) : undefined,
+      audioUri: entry.audioUri ? await this.prepareMediaUri(runtime, entry.audioUri, preparedMedia, 'audio') : undefined,
       blocks: entry.blocks ? blocks : undefined,
     };
   }
@@ -644,6 +761,7 @@ export class EventSyncEngine {
     runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
     uri: string,
     preparedMedia: PreparedMediaUpload[],
+    mediaKind?: PreparedMediaUpload['mediaKind'],
   ): Promise<string> {
     if (parseSyncMediaReference(uri)) return uri;
     const knownReference = this.localMediaReferences.get(uri);
@@ -651,6 +769,7 @@ export class EventSyncEngine {
 
     const mediaId = crypto.randomUUID();
     const media = await readMediaUri(uri);
+    const resolvedMediaKind = mediaKind || mediaKindFromMimeType(media.mimeType);
     const payload = encodeSyncMediaPayload(mediaId, media.mimeType, media.bytes);
     const state = await this.repository.getLocalSyncAccountState();
     if (!state) throw new Error('Encrypted account metadata is unavailable.');
@@ -662,7 +781,7 @@ export class EventSyncEngine {
       name: `/media/${mediaId}.ddmedia`,
       objectKind: 'media',
       bytes: encrypted.bytes,
-      appProperties: { accountId: state.accountId, mediaId },
+      appProperties: { accountId: state.accountId, mediaId, mediaKind: resolvedMediaKind, mimeType: media.mimeType },
     });
     const thumbnail = await this.createThumbnail(media).catch(() => null);
     let encryptedThumbnail: { driveFileId: string; sha256: string; sizeBytes: number } | undefined;
@@ -674,7 +793,7 @@ export class EventSyncEngine {
         name: `/thumbnails/${mediaId}.ddthumb`,
         objectKind: 'thumbnail',
         bytes: thumbnailEncrypted.bytes,
-        appProperties: { accountId: state.accountId, mediaId, sourceDriveFileId: file.id },
+        appProperties: { accountId: state.accountId, mediaId, mediaKind: 'image', mimeType: thumbnail.mimeType, sourceDriveFileId: file.id },
       });
       encryptedThumbnail = {
         driveFileId: thumbnailFile.id,
@@ -687,6 +806,7 @@ export class EventSyncEngine {
       mediaId,
       localUri: uri,
       driveFileId: file.id,
+      mediaKind: resolvedMediaKind,
       sha256: encrypted.sha256,
       sizeBytes: encrypted.bytes.byteLength,
       reference,
@@ -833,12 +953,28 @@ export class EventSyncEngine {
     if (!state || state.deviceRole !== 'primary_mobile') return;
     const now = this.now();
     if (!force && now - this.lastMaintenanceAt < this.maintenanceIntervalMs) return;
-    await this.maintenance({
-      controlPlane: runtime.controlPlane,
-      primaryDeviceId: state.deviceId,
-      googleSession: runtime.googleSession,
-      now,
-    });
+    const startedAt = this.now();
+    try {
+      const plan = await this.maintenance({
+        controlPlane: runtime.controlPlane,
+        primaryDeviceId: state.deviceId,
+        googleSession: runtime.googleSession,
+        now,
+      });
+      emitSyncTelemetry('sync.maintenance.complete', {
+        durationMs: this.now() - startedAt,
+        objectsToRetire: plan.objectsToRetire.length,
+        snapshotsToRetire: plan.snapshotsToRetire.length,
+        eventsToRetire: plan.eventsToRetire.length,
+        driveFilesToDelete: plan.driveFilesToDelete.length,
+      });
+    } catch (error: any) {
+      emitSyncTelemetry('sync.maintenance.failed', {
+        durationMs: this.now() - startedAt,
+        error: error?.message || 'Encrypted sync maintenance failed.',
+      }, 'warn');
+      throw error;
+    }
     this.lastMaintenanceAt = now;
   }
 
@@ -846,6 +982,8 @@ export class EventSyncEngine {
     runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
     partitionKey: string,
   ): Promise<void> {
+    const startedAt = this.now();
+    emitSyncTelemetry('sync.archive.partition.start', { partitionKey });
     await this.repository.markPartitionHydrating(partitionKey);
     try {
       const result = await hydrateArchivePartitionFromCloud({
@@ -876,8 +1014,21 @@ export class EventSyncEngine {
           lastAppliedSequence: Math.max(currentState.currentSyncSequence, result.currentSyncSequence),
         });
       }
+      emitSyncTelemetry('sync.archive.partition.complete', {
+        partitionKey,
+        durationMs: this.now() - startedAt,
+        currentSyncSequence: result.currentSyncSequence,
+      });
     } catch (error: any) {
       await this.repository.markPartitionHydrationFailed(partitionKey, error?.message || 'Archive hydration failed.');
+      const failedState = await this.repository.getPartitionHydrationState(partitionKey);
+      emitSyncTelemetry('sync.archive.partition.failed', {
+        partitionKey,
+        durationMs: this.now() - startedAt,
+        error: error?.message || 'Archive hydration failed.',
+        failureCount: failedState.failureCount || 1,
+        nextRetryAt: failedState.nextRetryAt,
+      }, 'warn');
       throw error;
     }
   }
@@ -914,6 +1065,7 @@ export class EventSyncEngine {
     let state = (await this.repository.getLocalSyncAccountState()) || runtime.state;
     await this.pullGlobalKeyPackagesForPartitionedRuntime(runtime, state);
     state = (await this.repository.getLocalSyncAccountState()) || state;
+    await this.registerRecentEventOnlyPartitions(runtime, state);
     const [coreState, archiveMonths] = await Promise.all([
       this.repository.getPartitionHydrationState('core'),
       this.repository.listAvailableArchiveMonths(),
@@ -973,6 +1125,39 @@ export class EventSyncEngine {
     });
   }
 
+  private async registerRecentEventOnlyPartitions(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+    state: LocalSyncAccountState,
+  ): Promise<void> {
+    if (typeof runtime.controlPlane.listPartitionHeads !== 'function') return;
+
+    const heads = await runtime.controlPlane.listPartitionHeads(state.deviceId);
+    const recentKeys = new Set<string>(recentPartitionKeys(new Date(this.now())));
+    const candidates = heads.filter(head => (
+      recentKeys.has(head.partitionKey) &&
+      head.latestEventSequence > 0 &&
+      head.latestSnapshotSequence === 0
+    ));
+    if (candidates.length === 0) return;
+
+    const localKeys = new Set<string>(listPartitionKeysInSnapshot(await this.repository.exportSnapshot()));
+    for (const head of candidates) {
+      const hydration = await this.repository.getPartitionHydrationState(head.partitionKey);
+      if (hydration.status !== 'not_available') continue;
+
+      // Older builds committed new-month events without recording the partition cursor.
+      // Existing local records are already represented through the device's global cursor.
+      const lastAppliedSequence = localKeys.has(head.partitionKey) ? state.currentSyncSequence : 0;
+      await this.repository.markPartitionHydrated(head.partitionKey, lastAppliedSequence);
+      await runtime.controlPlane.updatePartitionCursor({
+        deviceId: state.deviceId,
+        partitionKey: head.partitionKey,
+        lastAppliedSequence,
+        hydratedAt: new Date(this.now()).toISOString(),
+      });
+    }
+  }
+
   private async processKeyPackagesWithRuntime(
     runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
     objects: SyncObjectMetadata[],
@@ -996,16 +1181,29 @@ export class EventSyncEngine {
         const bytes = await downloadVerifiedSyncObject(runtime.googleSession, object, this.download);
         decoded = decodeCompanionKeyPackage(bytes);
       } catch (error) {
+        emitSyncTelemetry('sync.key_package.read_failed', {
+          sequence: object.sequence,
+          keyEpoch: object.keyEpoch || 1,
+        }, 'warn');
         console.warn('Encrypted key package could not be read and will be retried later:', error);
         continue;
       }
 
       const packageEpoch = decoded.keyEpoch || objectEpoch;
       if (packageEpoch !== objectEpoch) {
+        emitSyncTelemetry('sync.key_package.epoch_mismatch', {
+          sequence: object.sequence,
+          objectEpoch,
+          packageEpoch,
+        }, 'warn');
         console.warn('Encrypted key package epoch did not match control-plane metadata.');
         continue;
       }
       if (decoded.accountId !== runtime.state.accountId) {
+        emitSyncTelemetry('sync.key_package.account_mismatch', {
+          sequence: object.sequence,
+          keyEpoch: packageEpoch,
+        }, 'warn');
         console.warn('Encrypted key package belongs to another account.');
         continue;
       }
@@ -1020,6 +1218,11 @@ export class EventSyncEngine {
         );
       } catch (error: any) {
         if (String(error?.message || '').includes('targets another device')) continue;
+        emitSyncTelemetry('sync.key_package.open_failed', {
+          sequence: object.sequence,
+          keyEpoch: packageEpoch,
+          error: error?.message || 'Encrypted key package could not be opened.',
+        }, 'warn');
         console.warn('Encrypted key package could not be opened and will be retried later:', error);
         continue;
       }
@@ -1043,6 +1246,10 @@ export class EventSyncEngine {
       };
       await this.repository.saveLocalSyncAccountState(updatedState);
       runtime.state = updatedState;
+      emitSyncTelemetry('sync.key_package.applied', {
+        sequence: object.sequence,
+        keyEpoch: packageEpoch,
+      });
     }
     return maxProcessedSequence;
   }

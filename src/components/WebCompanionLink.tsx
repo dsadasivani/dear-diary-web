@@ -34,14 +34,31 @@ let pairingCompletionPromise: ReturnType<typeof completeCompanionPairing> | null
 const initializePairing = (): Promise<PendingWebCompanion | null> => {
   if (!pairingInitializationPromise) {
     pairingInitializationPromise = (async () => {
-      const stored = await loadPendingPairingSecret<PendingWebCompanion>();
-      if (stored) return stored;
       const auth = await restoreWebGoogleSyncSession();
       if (!auth) return null;
       const controlPlane = createConfiguredSupabaseControlPlaneClient(auth.supabaseSession.accessToken);
       if (!await controlPlane.lookupCurrentGoogleAccount()) {
         await signOutWebGoogleSync();
         throw new Error('No Dear Diary account exists for this Google account. Create it on mobile first.');
+      }
+      const stored = await loadPendingPairingSecret<PendingWebCompanion>();
+      if (stored) {
+        try {
+          const details = await controlPlane.getPairingSession(stored.pairing.session.id);
+          const expiresAt = new Date(details.session.expiresAt).getTime();
+          if (!details.session.approvedAt && expiresAt > Date.now()) {
+            return {
+              pairing: {
+                ...stored.pairing,
+                session: details.session,
+              },
+              auth,
+            };
+          }
+        } catch {
+          // Stale local pairing state is replaced below with a fresh request.
+        }
+        await clearPendingPairingSecret();
       }
       const pairing = await createCompanionPairingRequest({
         controlPlane,

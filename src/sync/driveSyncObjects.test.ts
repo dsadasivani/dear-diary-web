@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  getDriveStorageQuota,
   RESUMABLE_UPLOAD_THRESHOLD_BYTES,
   uploadDriveSyncObject,
 } from './driveSyncObjects';
@@ -59,6 +60,35 @@ test('uses resumable upload for large encrypted sync objects', async () => {
     assert.equal(new Headers(calls[0].init.headers).get('X-Upload-Content-Length'), String(RESUMABLE_UPLOAD_THRESHOLD_BYTES + 1));
     assert.equal(calls[1].url, 'https://upload.example/session-1');
     assert.equal(calls[1].init.method, 'PUT');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('reads Google Drive storage quota values', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    storageQuota: {
+      limit: '16106127360',
+      usage: '5368709120',
+      usageInDrive: '1073741824',
+      usageInDriveTrash: '1048576',
+    },
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })) as typeof fetch;
+  try {
+    const quota = await getDriveStorageQuota({
+      userId: 'google-1',
+      email: null,
+      displayName: null,
+      accessToken: 'token',
+    });
+    assert.equal(quota.limit, 16_106_127_360);
+    assert.equal(quota.usage, 5_368_709_120);
+    assert.equal(quota.usageInDrive, 1_073_741_824);
+    assert.equal(quota.usageInDriveTrash, 1_048_576);
   } finally {
     globalThis.fetch = originalFetch;
   }

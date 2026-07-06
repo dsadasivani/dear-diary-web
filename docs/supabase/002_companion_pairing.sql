@@ -122,6 +122,8 @@ end;
 $$;
 
 drop function if exists public.approve_pairing_session(uuid, uuid);
+drop function if exists public.approve_pairing_session(uuid, uuid, text, bigint, text, text, bigint);
+drop function if exists public.approve_pairing_session(uuid, uuid, text, bigint, text, text, bigint, integer);
 create or replace function public.approve_pairing_session(
   p_session_id uuid,
   p_primary_device_id uuid,
@@ -129,12 +131,13 @@ create or replace function public.approve_pairing_session(
   p_after_sequence bigint,
   p_drive_file_id text,
   p_sha256 text,
-  p_size_bytes bigint
+  p_size_bytes bigint,
+  p_key_epoch integer default 1
 )
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = extensions, public
 as $$
 declare
   v_primary public.devices%rowtype := public.assert_active_primary_device(p_primary_device_id);
@@ -150,7 +153,7 @@ begin
   if not found then raise exception 'pairing_session_not_found'; end if;
   if v_session.approved_at is not null then raise exception 'pairing_session_already_approved'; end if;
   if v_session.expires_at <= now() then raise exception 'pairing_session_expired'; end if;
-  if encode(digest(p_pairing_code, 'sha256'), 'hex') <> v_session.pairing_code_hash then
+  if encode(digest(convert_to(p_pairing_code, 'UTF8'), 'sha256'::text), 'hex') <> v_session.pairing_code_hash then
     raise exception 'pairing_code_invalid';
   end if;
 
@@ -169,15 +172,13 @@ begin
   ) returning * into v_device;
 
   v_key_object := public.commit_sync_object(
-    v_primary.id,
-    p_after_sequence,
-    p_drive_file_id,
-    'key_package',
-    p_sha256,
-    p_size_bytes,
-    null,
-    null,
-    null
+    p_device_id := v_primary.id,
+    p_after_sequence := p_after_sequence,
+    p_drive_file_id := p_drive_file_id,
+    p_object_kind := 'key_package',
+    p_sha256 := p_sha256,
+    p_size_bytes := p_size_bytes,
+    p_key_epoch := p_key_epoch
   );
 
   update public.pairing_sessions

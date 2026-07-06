@@ -259,10 +259,10 @@ test('maps approved pairing details and sends atomic provisioning metadata', asy
         requested_display_name: 'Chrome', requested_platform: 'web', pairing_code_hash: 'a'.repeat(64),
         expires_at: '2026-07-05T00:10:00.000Z', approved_by_primary_device_id: 'primary-1',
         approved_at: '2026-07-05T00:01:00.000Z', approved_device_id: 'device-2',
-        key_package_drive_file_id: 'drive-key-1', key_package_sha256: 'b'.repeat(64),
-        key_package_size_bytes: 321,
-      },
-      device: {
+      key_package_drive_file_id: 'drive-key-1', key_package_sha256: 'b'.repeat(64),
+      key_package_size_bytes: 321,
+    },
+    device: {
         id: 'device-2', account_id: 'account-1', role: 'web_companion', public_key: '{}',
         display_name: 'Chrome', platform: 'web', created_at: '', last_seen_at: '', revoked_at: null,
         replaced_by_device_id: null,
@@ -270,7 +270,7 @@ test('maps approved pairing details and sends atomic provisioning metadata', asy
       key_object: {
         id: 'object-2', account_id: 'account-1', sequence: 9, drive_file_id: 'drive-key-1',
         object_kind: 'key_package', sha256: 'b'.repeat(64), size_bytes: 321,
-        created_by_device_id: 'primary-1', created_at: '',
+        created_by_device_id: 'primary-1', created_at: '', key_epoch: 4,
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
@@ -280,11 +280,12 @@ test('maps approved pairing details and sends atomic provisioning metadata', asy
 
   const details = await client.approvePairingSession({
     sessionId: 'pair-1', primaryDeviceId: 'primary-1', pairingCode: '12345678',
-    afterSequence: 8, driveFileId: 'drive-key-1', sha256: 'b'.repeat(64), sizeBytes: 321,
+    afterSequence: 8, driveFileId: 'drive-key-1', sha256: 'b'.repeat(64), sizeBytes: 321, keyEpoch: 4,
   });
 
   assert.equal(details.device?.role, 'web_companion');
   assert.equal(details.keyObject?.sequence, 9);
+  assert.equal(details.keyObject?.keyEpoch, 4);
   assert.equal(details.session.keyPackageSizeBytes, 321);
   assert.equal(requestBody, JSON.stringify({
     p_session_id: 'pair-1',
@@ -294,5 +295,6 @@ test('maps approved pairing details and sends atomic provisioning metadata', asy
     p_drive_file_id: 'drive-key-1',
     p_sha256: 'b'.repeat(64),
     p_size_bytes: 321,
+    p_key_epoch: 4,
   }));
 });

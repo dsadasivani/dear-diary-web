@@ -3,14 +3,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   ArrowLeft, Edit, Download, Settings, ChevronLeft, ChevronRight, 
   Smile, Tag, Camera, Plus, Trash2, Calendar, X, Maximize2,
-  Search, List, Printer, FileText, ArrowUpRight, Clock, HelpCircle,
+  Search, List, Clock, HelpCircle,
   MoreVertical, RefreshCw
 } from 'lucide-react';
 import { Diary, Entry, PartitionHydrationState } from '../types';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import { diaryRepository } from '../repositories';
-import { exportDiaryArchive } from '../utils/diaryArchive';
-import { BACKUP_PASSPHRASE_MIN_LENGTH } from '../utils/backupEncryption';
 import OverlayPortal from './OverlayPortal';
 
 interface DiaryDetailScreenProps {
@@ -24,6 +22,14 @@ interface DiaryDetailScreenProps {
   archiveMonths?: PartitionHydrationState[];
   onHydrateArchiveMonth?: (partitionKey: string) => void | Promise<void>;
 }
+
+const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): string => {
+  if (!archiveState || archiveState.status !== 'failed') return '';
+  if (archiveState.nextRetryAt && archiveState.nextRetryAt > Date.now()) {
+    return `Background restore will retry after ${new Date(archiveState.nextRetryAt).toLocaleString()}. You can retry manually now.`;
+  }
+  return 'The previous restore attempt failed. You can retry manually now.';
+};
 
 export default function DiaryDetailScreen({
   diary,
@@ -46,8 +52,6 @@ export default function DiaryDetailScreen({
   // Traversal & Search State
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showTOC, setShowTOC] = useState<boolean>(false);
-  const [showExportModal, setShowExportModal] = useState<boolean>(false);
-  const [showPrintPreview, setShowPrintPreview] = useState<boolean>(false);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   const [slideDirection, setSlideDirection] = useState<'left' | 'right'>('right');
@@ -198,6 +202,7 @@ export default function DiaryDetailScreen({
     && visibleArchiveState.status !== 'hydrated'
     && visibleArchiveState.status !== 'not_available'
   );
+  const visibleArchiveRetryStatus = formatArchiveRetryStatus(visibleArchiveState);
 
   // Calculate days for the calendar grid
   const calendarDays = useMemo(() => {
@@ -270,54 +275,6 @@ export default function DiaryDetailScreen({
       onNewEntry(diary.id, dateStr);
       setShowCalendar(false);
     }
-  };
-
-  // Point 2: Actual export functions
-  const handleExportText = () => {
-    const header = `=========================================\n${diary.name.toUpperCase()} JOURNAL EXPORT\n=========================================\nGenerated on: ${new Date().toLocaleDateString()}\nTotal entries exported: ${diaryEntries.length}\n\n`;
-    const content = diaryEntries.map((e, idx) => {
-      const cleanBody = e.body.replace(/<[^>]*>/g, ''); // strip HTML tags
-      const formattedTime = e.time ? ` @ ${formatTime12(e.time)}` : '';
-      return `Page ${idx + 1} | ${formatFullDate(e.date)}${formattedTime}\nMood: ${e.moodEmoji} ${e.moodName}\nTags: ${e.tags.map(t => `#${t}`).join(', ') || 'None'}\nTitle: ${e.title}\n-----------------------------------------\n${cleanBody}\n\n\n`;
-    }).join('\n');
-
-    const blob = new Blob([header + content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${diary.name.toLowerCase().replace(/\s+/g, '_')}_export.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setShowExportModal(false);
-  };
-
-  const handleExportJSON = async () => {
-    const passphrase = window.prompt(`Choose a password of at least ${BACKUP_PASSPHRASE_MIN_LENGTH} characters for this portable diary archive.`);
-    if (passphrase === null) return;
-    if (passphrase.length < BACKUP_PASSPHRASE_MIN_LENGTH) {
-      window.alert(`Password must contain at least ${BACKUP_PASSPHRASE_MIN_LENGTH} characters.`);
-      return;
-    }
-    try {
-      const bytes = await exportDiaryArchive(diary, diaryEntries, passphrase);
-      const blob = new Blob([bytes], { type: 'application/vnd.deardiary.diary-archive' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${diary.name.toLowerCase().replace(/\s+/g, '_')}.ddiary`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setShowExportModal(false);
-    } catch (error: any) {
-      window.alert(error?.message || 'Diary archive could not be created.');
-    }
-  };
-
-  const triggerPrint = () => {
-    setShowPrintPreview(false);
-    setTimeout(() => {
-      window.print();
-    }, 300);
   };
 
   // 3D paper fold and curling variants (Point 4)
@@ -410,17 +367,6 @@ export default function DiaryDetailScreen({
                 >
                   <Settings className="w-4 h-4 text-brand-pink" />
                   <span>Diary Cover Settings</span>
-                </button>
-                
-                <button
-                  onClick={() => {
-                    setShowMoreMenu(false);
-                    setShowExportModal(true);
-                  }}
-                  className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-xl transition-all text-left w-full"
-                >
-                  <Download className="w-4 h-4 text-brand-pink" />
-                  <span>Export / Backup Options</span>
                 </button>
               </div>
             </>
@@ -528,11 +474,20 @@ export default function DiaryDetailScreen({
                     <Download className="mt-0.5 h-4 w-4 shrink-0 text-brand-pink" />
                     <div className="min-w-0 flex-1">
                       <p className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-brand-pink">
-                        Archive month not on this device
+                        {visibleArchiveState?.status === 'failed'
+                          ? 'Archive restore needs retry'
+                          : 'Archive month not on this device'}
                       </p>
                       <p className="mt-1 text-[11px] font-medium leading-relaxed text-brand-text-muted">
-                        This month exists in your encrypted archive. Restore it before opening or creating entries here.
+                        {visibleArchiveState?.status === 'failed'
+                          ? (visibleArchiveState.error || 'This encrypted archive month could not be restored last time.')
+                          : 'This month exists in your encrypted archive. Restore it before opening or creating entries here.'}
                       </p>
+                      {visibleArchiveRetryStatus && (
+                        <p className="mt-1 text-[11px] font-semibold leading-relaxed text-brand-text-muted">
+                          {visibleArchiveRetryStatus}
+                        </p>
+                      )}
                       {archiveHydrationError && (
                         <p className="mt-1 text-[11px] font-bold text-red-500">{archiveHydrationError}</p>
                       )}
@@ -560,7 +515,9 @@ export default function DiaryDetailScreen({
                     ) : (
                       <Download className="h-3 w-3" />
                     )}
-                    {hydratingArchiveKey === visibleCalendarPartitionKey ? 'Restoring' : 'Restore month'}
+                    {hydratingArchiveKey === visibleCalendarPartitionKey
+                      ? 'Restoring'
+                      : visibleArchiveState?.status === 'failed' ? 'Retry restore' : 'Restore month'}
                   </button>
                 </div>
               )}
@@ -977,160 +934,6 @@ export default function DiaryDetailScreen({
                 })}
               </div>
             </motion.div>
-            </div>
-          </OverlayPortal>
-        )}
-      </AnimatePresence>
-
-      {/* Point 2: REAL EXPORT OPTIONS MODAL */}
-      <AnimatePresence>
-        {showExportModal && (
-          <OverlayPortal>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md" onClick={() => setShowExportModal(false)}>
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-md bg-white dark:bg-brand-card-bg rounded-[32px] p-6.5 shadow-2xl border border-brand-border flex flex-col gap-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex justify-between items-center border-b border-brand-border pb-3.5">
-                <div className="flex items-center gap-2">
-                  <Download className="w-5 h-5 text-brand-pink animate-bounce" />
-                  <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Export Sanctuary</h3>
-                </div>
-                <button 
-                  onClick={() => setShowExportModal(false)}
-                  className="p-1.5 hover:bg-brand-blush-light rounded-full text-brand-sage"
-                >
-                  <X className="w-5.5 h-5.5" />
-                </button>
-              </div>
-
-              <p className="text-xs text-brand-text-muted mt-1 leading-relaxed">
-                Unlock, compile and back up your written logs from "{diary.name}". Select your preferred formatting design:
-              </p>
-
-              <div className="flex flex-col gap-3.5 py-2">
-                {/* Text Export Option */}
-                <button
-                  onClick={handleExportText}
-                  className="flex items-center gap-4 p-4 rounded-2xl bg-brand-blush-light/30 hover:bg-brand-blush-light/50 dark:hover:bg-brand-blush-light/10 border border-brand-pink/15 text-left transition-all active:scale-98 group"
-                >
-                  <span className="p-3 bg-brand-pink/10 text-brand-pink rounded-xl group-hover:bg-brand-pink group-hover:text-white transition-all">
-                    <FileText className="w-4.5 h-4.5" />
-                  </span>
-                  <div className="flex-1">
-                    <h4 className="text-sm font-bold text-brand-plum flex items-center justify-between">
-                      <span>Export as Elegant Plain Text</span>
-                      <ArrowUpRight className="w-3.5 h-3.5 text-brand-sage" />
-                    </h4>
-                    <p className="text-[10px] text-brand-sage mt-0.5">Clean text containing dated thoughts and tags; attached media is not included.</p>
-                  </div>
-                </button>
-
-                {/* JSON Backup Option */}
-                <button
-                  onClick={handleExportJSON}
-                  className="flex items-center gap-4 p-4 rounded-2xl bg-brand-blush-light/30 hover:bg-brand-blush-light/50 dark:hover:bg-brand-blush-light/10 border border-brand-pink/15 text-left transition-all active:scale-98 group"
-                >
-                  <span className="p-3 bg-brand-pink/10 text-brand-pink rounded-xl group-hover:bg-brand-pink group-hover:text-white transition-all">
-                    <Download className="w-4.5 h-4.5" />
-                  </span>
-                  <div className="flex-1">
-                    <h4 className="text-sm font-bold text-brand-plum flex items-center justify-between">
-                      <span>Download Portable Diary Archive</span>
-                      <ArrowUpRight className="w-3.5 h-3.5 text-brand-sage" />
-                    </h4>
-                    <p className="text-[10px] text-brand-sage mt-0.5">Password-protected diary data, readable text, photos, covers, and audio.</p>
-                  </div>
-                </button>
-
-                {/* Print/PDF layout option */}
-                <button
-                  onClick={() => {
-                    setShowExportModal(false);
-                    setShowPrintPreview(true);
-                  }}
-                  className="flex items-center gap-4 p-4 rounded-2xl bg-brand-blush-light/30 hover:bg-brand-blush-light/50 dark:hover:bg-brand-blush-light/10 border border-brand-pink/15 text-left transition-all active:scale-98 group"
-                >
-                  <span className="p-3 bg-brand-pink/10 text-brand-pink rounded-xl group-hover:bg-brand-pink group-hover:text-white transition-all">
-                    <Printer className="w-4.5 h-4.5" />
-                  </span>
-                  <div className="flex-1">
-                    <h4 className="text-sm font-bold text-brand-plum flex items-center justify-between">
-                      <span>Preview for Print / PDF</span>
-                      <ArrowUpRight className="w-3.5 h-3.5 text-brand-sage" />
-                    </h4>
-                    <p className="text-[10px] text-brand-sage mt-0.5">Compiles all pages into a gorgeous vertical layout ready to print.</p>
-                  </div>
-                </button>
-              </div>
-            </motion.div>
-            </div>
-          </OverlayPortal>
-        )}
-      </AnimatePresence>
-
-      {/* PRINT PREVIEW COMPILATION VIEW MODAL */}
-      <AnimatePresence>
-        {showPrintPreview && (
-          <OverlayPortal>
-            <div className="fixed inset-0 z-50 bg-brand-bg overflow-y-auto p-4 md:p-8 flex flex-col gap-6">
-            <header className="flex justify-between items-center max-w-3xl mx-auto w-full border-b border-brand-border/60 pb-3 select-none no-print">
-              <button
-                onClick={() => setShowPrintPreview(false)}
-                className="flex items-center gap-1.5 text-xs font-bold text-brand-sage hover:text-brand-plum transition-colors"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                Close Preview
-              </button>
-              <h2 className="font-serif-diary text-lg font-bold text-brand-plum italic">Print Compilation Preview</h2>
-              <button
-                onClick={triggerPrint}
-                className="bg-brand-pink hover:bg-brand-pink-dark text-white px-5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-md shadow-brand-pink/10"
-              >
-                <Printer className="w-4 h-4" />
-                Print Now
-              </button>
-            </header>
-
-            <div className="max-w-3xl mx-auto w-full bg-white text-brand-plum p-8 md:p-12 rounded-[36px] shadow-lg border border-brand-border/40 select-text flex flex-col gap-8 print:shadow-none print:border-none print:p-0">
-              <div className="text-center space-y-2 border-b-2 border-brand-pink/10 pb-6">
-                <span className="text-4xl">{diary.emoji}</span>
-                <h1 className="font-serif-diary text-3xl font-bold">{diary.name}</h1>
-                <p className="text-xs uppercase tracking-widest text-brand-sage font-semibold">
-                  A personal memory sanctuary compiled on {new Date().toLocaleDateString()}
-                </p>
-                <p className="text-[10px] text-brand-text-muted italic">Contains {diaryEntries.length} chronological journal chapters</p>
-              </div>
-
-              <div className="flex flex-col gap-10">
-                {diaryEntries.map((e, index) => (
-                  <article key={e.id} className="space-y-4 pb-8 border-b border-brand-border/40 last:border-0 page-break">
-                    <div className="flex justify-between items-baseline text-brand-sage border-b border-dashed border-brand-border pb-1.5">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider">Chapter {diaryEntries.length - index}</span>
-                      <span className="text-xs font-bold font-serif-diary">{formatFullDate(e.date)} {e.time ? `@ ${formatTime12(e.time)}` : ''}</span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">{e.moodEmoji}</span>
-                      <span className="text-xs font-bold text-brand-pink-dark uppercase tracking-wide bg-brand-pink/5 px-2.5 py-0.5 rounded-full border border-brand-pink/10">Mood: {e.moodName}</span>
-                      {e.tags.map(t => (
-                        <span key={t} className="text-[10px] font-bold text-brand-sage font-mono">#{t}</span>
-                      ))}
-                    </div>
-
-                    <h3 className="text-lg md:text-xl font-bold font-serif-diary">{e.title === 'Untitled entry' ? '' : e.title}</h3>
-                    
-                    <div 
-                      dangerouslySetInnerHTML={{ __html: e.body }}
-                      className="font-serif-diary text-sm md:text-base leading-relaxed text-brand-plum/90 pl-4 border-l border-brand-pink/20"
-                    />
-                  </article>
-                ))}
-              </div>
-            </div>
             </div>
           </OverlayPortal>
         )}

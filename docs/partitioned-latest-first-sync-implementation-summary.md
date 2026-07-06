@@ -187,7 +187,11 @@ Implemented sync maintenance planning for:
 
 ## Vital hardening added after 8-year scenario review
 
-After reviewing the 8-year-data scenario, one vital production hardening item was added: archive hydration retry backoff.
+After reviewing the 8-year-data scenario, three vital production hardening items were added:
+
+- Archive hydration retry backoff.
+- Clear failed-archive retry UI.
+- Lightweight sync observability hooks.
 
 Problem addressed:
 
@@ -205,14 +209,41 @@ Implemented behavior:
   - starts at 5 minutes
   - caps at 24 hours
 - Successful hydration clears failure metadata.
+- Manual restore attempts refresh archive state after failure so the UI immediately sees the failed/backoff metadata.
+- Diary calendar now distinguishes:
+  - archive month not downloaded yet
+  - archive restore failed and needs retry
+- Search now shows how many unloaded archive months need retry and labels failed-month actions as retry.
+- Search now offers a manual "Restore all on Wi-Fi" action for users who want their archive locally searchable sooner.
+- Bulk archive restore refuses likely cellular/slow connections and restores eligible archive months sequentially.
+- Sync telemetry events are emitted for:
+  - partitioned restore start/complete/failure
+  - missing-manifest fallback
+  - archive hydration policy decisions
+  - archive hydration skipped reasons
+  - archive partition hydration start/complete/failure
+  - key package read/open/apply events
+  - GC/maintenance plan and completion counts
+  - Drive cleanup failures
+- Telemetry is dependency-free:
+  - emits `deardiary-sync-telemetry` browser events
+  - supports an injectable sink for tests or future production telemetry
+  - console logging is opt-in via `localStorage['deardiary.sync.debug'] = '1'`
 
 Files changed for this hardening:
 
+- `src/App.tsx`
+- `src/components/DiaryDetailScreen.tsx`
+- `src/components/SearchScreen.tsx`
 - `src/types.ts`
 - `src/repositories/localDiaryRepository.ts`
+- `src/sync/partitionedRestore.ts`
 - `src/sync/eventSyncEngine.ts`
+- `src/sync/syncMaintenance.ts`
+- `src/sync/syncTelemetry.ts`
 - `src/repositories/localDiaryRepository.test.ts`
 - `src/sync/eventSyncEngine.test.ts`
+- `src/sync/syncTelemetry.test.ts`
 
 ## Tests added/updated
 
@@ -237,6 +268,7 @@ Key test areas:
 - Companion key package processing before newer epoch partition events.
 - GC/retention safety.
 - Supabase control-plane RPC mapping.
+- Sync telemetry sink emission.
 
 ## Validation completed
 
@@ -257,7 +289,7 @@ Remaining rollout and production-readiness items:
 
 ### Supabase rollout
 
-- Apply Supabase migration `010_sync_gc_retention.sql` if it has not already been applied.
+- Apply Supabase migrations `010_sync_gc_retention.sql` and `011_fix_pairing_digest.sql` if they have not already been applied.
 - Verify the important RPCs in Supabase:
   - `commit_sync_batch`
   - `get_latest_restore_manifest`
@@ -291,28 +323,31 @@ Test with real Supabase and Google Drive sessions:
 
 ### UI polish
 
-- Better archive restore progress UI.
-- Better retry UI for failed archive month hydration.
-- Clear search state explaining that search covers downloaded archive data only.
-- Optional manual "restore all archives on Wi-Fi" action.
+- Implemented:
+  - retry UI for failed archive month hydration
+  - clear search state explaining that search covers downloaded archive data only
+  - manual "Restore all on Wi-Fi" action
+- Still optional:
+  - richer per-month progress UI while bulk archive restore is running
 
 ### Production observability
 
-Add lightweight logs/telemetry for:
+Lightweight local telemetry hooks are now implemented. Remaining optional production work:
 
-- Fresh restore duration.
-- Manifest download/decrypt failures.
-- Partition hydration failures.
-- Background hydration skipped reasons.
-- Drive quota/rate-limit errors.
-- Key package delivery/decryption failures.
-- GC object retirement counts.
+- Connect `setSyncTelemetrySink` to a real telemetry provider if/when the app has one.
+- Decide whether to persist a small local diagnostics ring buffer for support/debug exports.
+- Review telemetry fields before release to ensure no plaintext journal content or sensitive metadata is emitted.
 
 ### Future performance enhancements
 
 Not urgent, but useful later:
 
-- Encrypted archive search index.
-- Split very large months into smaller sub-partitions if real-world data shows monthly partitions are too large.
+- Encrypted archive search index:
+  - keep plaintext search tokens out of Supabase
+  - either hydrate local partitions for full search or add encrypted local/Drive search index partitions later
+  - avoid implementing remote plaintext search
+- Split very large months into smaller sub-partitions if real-world data shows monthly partitions are too large:
+  - possible format: `month:YYYY-MM:week:<N>` or `month:YYYY-MM:range:<start>-<end>`
+  - keep monthly manifest display while allowing sub-partition restore internally
 - Local database/index tuning for search and calendar views.
 - Smarter background hydration ordering, such as most recent old months first.

@@ -135,6 +135,7 @@ export const approveCompanionPairing = async (input: {
     driveFileId: file.id,
     sha256,
     sizeBytes: bytes.byteLength,
+    keyEpoch,
   });
   return approved.session;
 };
@@ -158,8 +159,13 @@ export const completeCompanionPairing = async (input: {
 
   const keyBytes = await downloadVerifiedSyncObject(input.googleSession, details.keyObject);
   const keyPackage = decodeCompanionKeyPackage(keyBytes);
-  if ((keyPackage.keyEpoch || 1) !== (details.keyObject.keyEpoch || 1)) {
-    throw new Error('Companion key package epoch does not match its sync metadata.');
+  const packageKeyEpoch = keyPackage.keyEpoch || 1;
+  const metadataKeyEpoch = details.keyObject.keyEpoch || 1;
+  if (packageKeyEpoch !== metadataKeyEpoch) {
+    console.warn('Companion key package epoch differed from sync metadata; using verified package epoch.', {
+      packageKeyEpoch,
+      metadataKeyEpoch,
+    });
   }
   const accountRootKey = await unwrapRootKeyForCompanion(
     keyPackage,
@@ -177,7 +183,7 @@ export const completeCompanionPairing = async (input: {
     recoveryKeyDriveFileId: details.keyObject.driveFileId,
     latestSnapshotDriveFileId: '',
     currentSyncSequence: 0,
-    keyEpoch: details.keyObject.keyEpoch || 1,
+    keyEpoch: packageKeyEpoch,
     linkedAt: Date.now(),
   };
   await input.repository.saveLocalSyncAccountState(localState);
@@ -190,15 +196,55 @@ export const completeCompanionPairing = async (input: {
     supabaseSession: input.supabaseSession,
     googleSession: input.googleSession,
   });
+  const accountRootKeys = { [localState.keyEpoch || 1]: accountRootKey };
+  const objects = await listAllSyncObjects(input.controlPlane, details.device.id);
+  const snapshotRestored = await findLatestValidSnapshot({
+    objects,
+    accountId: details.session.accountId,
+    accountRootKey,
+    accountRootKeys,
+    googleSession: input.googleSession,
+  }).then(async validSnapshot => {
+    const snapshotObject = validSnapshot.object;
+    await input.repository.importSnapshot(validSnapshot.snapshot, 'replace-portable');
+    const snapshotState = {
+      ...localState,
+      latestSnapshotDriveFileId: snapshotObject.driveFileId,
+      latestSnapshotSequence: snapshotObject.sequence,
+      currentSyncSequence: snapshotObject.sequence,
+    };
+    await input.repository.saveLocalSyncAccountState(snapshotState);
+    const replayed = await replaySyncObjects({
+      repository: input.repository,
+      localState: snapshotState,
+      accountRootKey,
+      accountRootKeys,
+      googleSession: input.googleSession,
+      objects: objects.filter(object => object.sequence > snapshotObject.sequence),
+    });
+    await input.controlPlane.updateDeviceCursor({
+      deviceId: replayed.deviceId,
+      lastAppliedSequence: replayed.currentSyncSequence,
+    });
+    return replayed;
+  }).catch(error => {
+    console.warn('Full companion snapshot restore failed; falling back to partitioned restore.', error);
+    return null;
+  });
+  if (snapshotRestored) return snapshotRestored;
+
   const partitioned = await restoreLatestPartitions({
     repository: input.repository,
     controlPlane: input.controlPlane,
     localState,
     accountRootKey,
-    accountRootKeys: { [localState.keyEpoch || 1]: accountRootKey },
+    accountRootKeys,
     googleSession: input.googleSession,
+  }).catch(error => {
+    console.warn('Partitioned companion restore failed; falling back to the latest valid snapshot.', error);
+    return null;
   });
-  if (partitioned.mode === 'partitioned') {
+  if (partitioned?.mode === 'partitioned') {
     const restoredState = await input.repository.getLocalSyncAccountState();
     if (!restoredState) throw new Error('Partitioned companion restore did not create local account state.');
     await input.controlPlane.updateDeviceCursor({
@@ -207,34 +253,5 @@ export const completeCompanionPairing = async (input: {
     });
     return restoredState;
   }
-
-  const objects = await listAllSyncObjects(input.controlPlane, details.device.id);
-  const validSnapshot = await findLatestValidSnapshot({
-    objects,
-    accountId: details.session.accountId,
-    accountRootKey,
-    accountRootKeys: { [details.keyObject.keyEpoch || 1]: accountRootKey },
-    googleSession: input.googleSession,
-  });
-  const snapshotObject = validSnapshot.object;
-  await input.repository.importSnapshot(validSnapshot.snapshot, 'replace-portable');
-  await input.repository.saveLocalSyncAccountState({
-    ...localState,
-    latestSnapshotDriveFileId: snapshotObject.driveFileId,
-    latestSnapshotSequence: snapshotObject.sequence,
-    currentSyncSequence: snapshotObject.sequence,
-  });
-  const replayed = await replaySyncObjects({
-    repository: input.repository,
-    localState: { ...localState, latestSnapshotDriveFileId: snapshotObject.driveFileId, latestSnapshotSequence: snapshotObject.sequence, currentSyncSequence: snapshotObject.sequence },
-    accountRootKey,
-    accountRootKeys: { [localState.keyEpoch || 1]: accountRootKey },
-    googleSession: input.googleSession,
-    objects: objects.filter(object => object.sequence > snapshotObject.sequence),
-  });
-  await input.controlPlane.updateDeviceCursor({
-    deviceId: replayed.deviceId,
-    lastAppliedSequence: replayed.currentSyncSequence,
-  });
-  return replayed;
+  throw new Error('No valid encrypted snapshot could be restored.');
 };

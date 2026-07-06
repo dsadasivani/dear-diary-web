@@ -2,6 +2,7 @@ import type { GoogleAccountSession, SyncObjectKind } from '../types';
 
 const DRIVE_FILES_ENDPOINT = 'https://www.googleapis.com/drive/v3/files';
 const DRIVE_UPLOAD_ENDPOINT = 'https://www.googleapis.com/upload/drive/v3/files';
+const DRIVE_ABOUT_ENDPOINT = 'https://www.googleapis.com/drive/v3/about';
 export const RESUMABLE_UPLOAD_THRESHOLD_BYTES = 5 * 1024 * 1024;
 
 const SYNC_MIME_TYPES: Record<SyncObjectKind, string> = {
@@ -21,6 +22,13 @@ export interface DriveSyncObjectSummary {
   modifiedTime?: string;
   size?: number;
   appProperties?: Record<string, string>;
+}
+
+export interface DriveStorageQuota {
+  limit?: number;
+  usage?: number;
+  usageInDrive?: number;
+  usageInDriveTrash?: number;
 }
 
 export interface UploadDriveSyncObjectInput {
@@ -213,4 +221,28 @@ export const listDriveSyncObjects = async (
     pageToken = payload.nextPageToken || undefined;
   } while (pageToken);
   return files;
+};
+
+const parseQuotaNumber = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+export const getDriveStorageQuota = async (
+  session: GoogleAccountSession,
+): Promise<DriveStorageQuota> => {
+  const params = new URLSearchParams({
+    fields: 'storageQuota(limit,usage,usageInDrive,usageInDriveTrash)',
+  });
+  const response = await fetch(`${DRIVE_ABOUT_ENDPOINT}?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${requireDriveAccessToken(session)}` },
+  });
+  if (!response.ok) await throwDriveError(response);
+  const quota = (await response.json())?.storageQuota || {};
+  return {
+    limit: parseQuotaNumber(quota.limit),
+    usage: parseQuotaNumber(quota.usage),
+    usageInDrive: parseQuotaNumber(quota.usageInDrive),
+    usageInDriveTrash: parseQuotaNumber(quota.usageInDriveTrash),
+  };
 };

@@ -45,6 +45,7 @@ export interface BootstrapNewMobileAccountInput {
   controlPlane: SupabaseControlPlaneClient;
   displayName?: string;
   platform?: PairingPlatform | string;
+  onProgress?: (message: string) => void;
 }
 
 export interface BootstrapNewMobileAccountResult {
@@ -195,8 +196,11 @@ const recoverExistingMobileAccount = async ({
   displayName,
   platform,
   existingAccount,
+  onProgress,
 }: BootstrapNewMobileAccountInput & { existingAccount: SyncAccount }): Promise<BootstrapNewMobileAccountResult> => {
+  onProgress?.('Finding your recovery key...');
   const recoveryObjects = await controlPlane.listAccountRecoveryObjects();
+  onProgress?.('Unlocking your encrypted account...');
   const recoveredKey = await recoverAccountRootKey({
     objects: recoveryObjects,
     accountId: existingAccount.id,
@@ -206,6 +210,7 @@ const recoverExistingMobileAccount = async ({
   const latestKeyPackage = recoveredKey.object;
   const accountRootKey = recoveredKey.accountRootKey;
 
+  onProgress?.('Registering this device...');
   const deviceKeys = await generateDeviceKeyPair();
   const transferred = await controlPlane.transferPrimaryMobile({
     googleUserId: googleSession.userId,
@@ -217,6 +222,7 @@ const recoverExistingMobileAccount = async ({
     previousPrimaryDeviceId: existingAccount.activePrimaryDeviceId,
   });
 
+  onProgress?.('Restoring diary data...');
   let localState = await saveRecoveredEmptyLocalState(repository, {
     googleSession,
     account: transferred.account,
@@ -247,6 +253,7 @@ const recoverExistingMobileAccount = async ({
     googleSession,
   });
   if (partitioned.mode === 'partitioned') {
+    onProgress?.('Finishing account recovery...');
     localState = (await repository.getLocalSyncAccountState()) || localState;
     await controlPlane.updateDeviceCursor({
       deviceId: transferred.device.id,
@@ -268,6 +275,7 @@ const recoverExistingMobileAccount = async ({
     googleSession,
   });
   const latestSnapshot = validSnapshot.object;
+  onProgress?.('Applying synced diary updates...');
   const objects = await listAllSyncObjects(controlPlane, transferred.device.id);
   localState = await saveRecoveredLocalState(repository, {
     googleSession,
@@ -295,6 +303,7 @@ const recoverExistingMobileAccount = async ({
     lastAppliedSequence: replayedState.currentSyncSequence,
   });
 
+  onProgress?.('Finishing account recovery...');
   return {
     localState: replayedState,
     supabaseAccountId: transferred.account.id,
@@ -313,11 +322,13 @@ export const bootstrapNewMobileAccount = async ({
   controlPlane,
   displayName,
   platform = getPlatformName(),
+  onProgress,
 }: BootstrapNewMobileAccountInput): Promise<BootstrapNewMobileAccountResult> => {
   if (!googleSession.email) throw new Error('Google must return an email address to create a Dear Diary account.');
   if (!googleSession.accessToken) throw new Error('Google Drive appDataFolder access is required for account setup.');
   if (!supabaseSession.accessToken) throw new Error('Supabase sign-in is required before creating account metadata.');
 
+  onProgress?.('Checking account status...');
   const existingAccount = await controlPlane.lookupCurrentGoogleAccount();
   if (existingAccount) {
     return recoverExistingMobileAccount({
@@ -331,12 +342,15 @@ export const bootstrapNewMobileAccount = async ({
       displayName,
       platform,
       existingAccount,
+      onProgress,
     });
   }
 
+  onProgress?.('Creating encryption keys...');
   const accountRootKey = generateAccountRootKey();
   const deviceKeys = await generateDeviceKeyPair();
   const publicKeyFingerprint = await fingerprintDevicePublicKey(deviceKeys.publicKey);
+  onProgress?.('Creating account metadata...');
   const created = await controlPlane.createPrimaryMobileAccount({
     googleUserId: googleSession.userId,
     googleEmail: googleSession.email,
@@ -346,11 +360,13 @@ export const bootstrapNewMobileAccount = async ({
     recoveryConfigured: true,
   });
 
+  onProgress?.('Encrypting recovery key...');
   const recoveryKeyPackage = await wrapAccountRootKeyForRecovery(accountRootKey, recoveryPassphrase, {
     accountId: created.account.id,
     keyVersion: 1,
   });
   const recoveryKeyBytes = encodeRecoveryKeyPackage(recoveryKeyPackage);
+  onProgress?.('Saving recovery key to Drive...');
   const recoveryKeyFile = await uploadDriveSyncObject({
     session: googleSession,
     name: '/key-packages/root-key-v1.ddkey',
@@ -376,9 +392,11 @@ export const bootstrapNewMobileAccount = async ({
     keyEpoch: created.account.currentKeyEpoch || 1,
   });
 
+  onProgress?.('Encrypting diary snapshot...');
   const localSnapshot = await repository.exportSnapshot();
   const snapshotPayload = encodeRepositorySnapshotPayload(localSnapshot, created.account.id, keyObject.sequence);
   const snapshot = await encryptSyncPayload(accountRootKey, 'snapshot', snapshotPayload, { keyEpoch: created.account.currentKeyEpoch || 1 });
+  onProgress?.('Saving diary snapshot to Drive...');
   const snapshotFile = await uploadDriveSyncObject({
     session: googleSession,
     name: `/snapshots/${keyObject.sequence + 1}.ddsnapshot`,
@@ -399,6 +417,7 @@ export const bootstrapNewMobileAccount = async ({
     keyEpoch: created.account.currentKeyEpoch || 1,
   });
 
+  onProgress?.('Saving account on this device...');
   const security = createInitialPinWithRecovery(
     await repository.getSecurityConfig(),
     localPin,
@@ -439,6 +458,7 @@ export const bootstrapNewMobileAccount = async ({
     linkedAt: Date.now(),
   };
   await repository.saveLocalSyncAccountState(localState);
+  onProgress?.('Securing account keys...');
   await saveSyncSecrets({
     version: 1,
     accountId: created.account.id,
@@ -448,6 +468,7 @@ export const bootstrapNewMobileAccount = async ({
     supabaseSession,
     googleSession,
   });
+  onProgress?.('Preparing first sync...');
   await migrateLocalAccountToPartitionedSync({
     repository,
     controlPlane,

@@ -144,6 +144,7 @@ test('approves companions with an epoch-aware key package', async () => {
 
   assert.equal(approvedInput.afterSequence, 8);
   assert.equal(approvedInput.driveFileId, 'drive-key-epoch');
+  assert.equal(approvedInput.keyEpoch, 4);
   assert.match(uploadedBody, /"keyEpoch":4/);
   assert.match(uploadedBody, /"keyEpoch":"4"/);
 });

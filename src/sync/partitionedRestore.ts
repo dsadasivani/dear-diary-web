@@ -15,6 +15,7 @@ import {
   parsePartitionSnapshotPayload,
   recentPartitionKeys,
 } from './syncPartitioning';
+import { emitSyncTelemetry } from './syncTelemetry';
 
 export interface PartitionedRestoreInput {
   repository: DiaryRepository;
@@ -67,68 +68,93 @@ const restorePartitionSnapshot = async (
 export const restoreLatestPartitions = async (
   input: PartitionedRestoreInput,
 ): Promise<PartitionedRestoreResult> => {
-  const manifestMetadata = await input.controlPlane.getLatestRestoreManifest(input.localState.deviceId);
-  if (!manifestMetadata.manifestObject) {
+  const startedAt = Date.now();
+  emitSyncTelemetry('sync.restore.partitioned.start', {
+    requestedPartitionKeys: input.partitionKeys || null,
+  });
+  try {
+    const manifestMetadata = await input.controlPlane.getLatestRestoreManifest(input.localState.deviceId);
+    if (!manifestMetadata.manifestObject) {
+      emitSyncTelemetry('sync.restore.partitioned.legacy_missing_manifest', {
+        durationMs: Date.now() - startedAt,
+      }, 'warn');
+      return {
+        mode: 'legacy_missing_manifest',
+        manifest: null,
+        hydratedPartitionKeys: [],
+        currentSyncSequence: input.localState.currentSyncSequence,
+      };
+    }
+
+    const manifest = await decryptManifest(
+      input.googleSession,
+      manifestMetadata.manifestObject,
+      input.accountRootKey,
+      input.accountRootKeys,
+      input.localState.accountId,
+      input.download,
+    );
+    const available = new Set(manifest.partitions.map(partition => partition.partitionKey));
+    const requested = (input.partitionKeys || recentPartitionKeys(input.now))
+      .filter((partitionKey, index, keys) => keys.indexOf(partitionKey) === index)
+      .filter(partitionKey => partitionKey === CORE_PARTITION_KEY || available.has(partitionKey));
+
+    await Promise.all(manifest.partitions.map(partition => (
+      input.repository.markPartitionAvailable(partition.partitionKey, partition.headSequence)
+    )));
+
+    const bundles = await input.controlPlane.getPartitionRestoreBundle(input.localState.deviceId, requested);
+    const tailObjects = new Map<number, SyncObjectMetadata>();
+    const hydratedPartitionKeys: string[] = [];
+    for (const bundle of bundles) {
+      if (!bundle.snapshotObject) continue;
+      await restorePartitionSnapshot(input, bundle.snapshotObject, bundle.partitionKey);
+      hydratedPartitionKeys.push(bundle.partitionKey);
+      bundle.tailObjects.forEach(object => tailObjects.set(object.sequence, object));
+    }
+
+    const replayed = await replaySyncObjects({
+      repository: input.repository,
+      localState: input.localState,
+      accountRootKey: input.accountRootKey,
+      accountRootKeys: input.accountRootKeys,
+      googleSession: input.googleSession,
+      objects: [...tailObjects.values()].sort((left, right) => left.sequence - right.sequence),
+      download: input.download,
+      allowHistorical: true,
+    });
+    const currentSyncSequence = Math.max(replayed.currentSyncSequence, manifestMetadata.currentSyncSequence);
+    await input.repository.saveLocalSyncAccountState({
+      ...replayed,
+      partitionedSyncEnabled: true,
+      keyEpoch: manifest.keyEpoch,
+      latestManifestDriveFileId: manifestMetadata.manifestObject.driveFileId,
+      latestManifestSequence: manifestMetadata.manifestObject.sequence,
+      currentSyncSequence,
+    });
+
+    emitSyncTelemetry('sync.restore.partitioned.complete', {
+      durationMs: Date.now() - startedAt,
+      manifestPartitions: manifest.partitions.length,
+      requestedPartitionKeys: requested,
+      hydratedPartitionKeys,
+      tailObjectCount: tailObjects.size,
+      currentSyncSequence,
+    });
     return {
-      mode: 'legacy_missing_manifest',
-      manifest: null,
-      hydratedPartitionKeys: [],
-      currentSyncSequence: input.localState.currentSyncSequence,
+      mode: 'partitioned',
+      manifest,
+      hydratedPartitionKeys,
+      currentSyncSequence,
     };
+  } catch (error: any) {
+    emitSyncTelemetry('sync.restore.partitioned.failed', {
+      durationMs: Date.now() - startedAt,
+      requestedPartitionKeys: input.partitionKeys || null,
+      error: error?.message || 'Partitioned restore failed.',
+    }, 'error');
+    throw error;
   }
-
-  const manifest = await decryptManifest(
-    input.googleSession,
-    manifestMetadata.manifestObject,
-    input.accountRootKey,
-    input.accountRootKeys,
-    input.localState.accountId,
-    input.download,
-  );
-  const available = new Set(manifest.partitions.map(partition => partition.partitionKey));
-  const requested = (input.partitionKeys || recentPartitionKeys(input.now))
-    .filter((partitionKey, index, keys) => keys.indexOf(partitionKey) === index)
-    .filter(partitionKey => partitionKey === CORE_PARTITION_KEY || available.has(partitionKey));
-
-  await Promise.all(manifest.partitions.map(partition => (
-    input.repository.markPartitionAvailable(partition.partitionKey, partition.headSequence)
-  )));
-
-  const bundles = await input.controlPlane.getPartitionRestoreBundle(input.localState.deviceId, requested);
-  const tailObjects = new Map<number, SyncObjectMetadata>();
-  const hydratedPartitionKeys: string[] = [];
-  for (const bundle of bundles) {
-    if (!bundle.snapshotObject) continue;
-    await restorePartitionSnapshot(input, bundle.snapshotObject, bundle.partitionKey);
-    hydratedPartitionKeys.push(bundle.partitionKey);
-    bundle.tailObjects.forEach(object => tailObjects.set(object.sequence, object));
-  }
-
-  const replayed = await replaySyncObjects({
-    repository: input.repository,
-    localState: input.localState,
-    accountRootKey: input.accountRootKey,
-    accountRootKeys: input.accountRootKeys,
-    googleSession: input.googleSession,
-    objects: [...tailObjects.values()].sort((left, right) => left.sequence - right.sequence),
-    download: input.download,
-    allowHistorical: true,
-  });
-  await input.repository.saveLocalSyncAccountState({
-    ...replayed,
-    partitionedSyncEnabled: true,
-    keyEpoch: manifest.keyEpoch,
-    latestManifestDriveFileId: manifestMetadata.manifestObject.driveFileId,
-    latestManifestSequence: manifestMetadata.manifestObject.sequence,
-    currentSyncSequence: Math.max(replayed.currentSyncSequence, manifestMetadata.currentSyncSequence),
-  });
-
-  return {
-    mode: 'partitioned',
-    manifest,
-    hydratedPartitionKeys,
-    currentSyncSequence: Math.max(replayed.currentSyncSequence, manifestMetadata.currentSyncSequence),
-  };
 };
 
 export const hydrateArchivePartition = async (

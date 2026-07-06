@@ -8,6 +8,8 @@ export type GoogleAuthIntent = 'backup' | 'pin-reset' | 'sync';
 
 const GOOGLE_AUTH_INTENT_KEY = 'deardiary_google_auth_intent';
 const DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+const DRIVE_AUTH_TIMEOUT_MS = 60_000;
+const GOOGLE_SIGN_IN_TIMEOUT_MS = 90_000;
 let nativeGoogleInitializationKey = '';
 let cachedDriveSession: GoogleAccountSession | null = null;
 
@@ -23,20 +25,48 @@ const getGoogleWebClientId = (): string => {
   return clientId;
 };
 
-const initializeNativeGoogleSignIn = async (): Promise<void> => {
-  const initializationKey = getGoogleWebClientId();
+const initializeNativeGoogleSignIn = async (includeDriveScope = false): Promise<void> => {
+  const clientId = getGoogleWebClientId();
+  const scopes = includeDriveScope ? [DRIVE_APPDATA_SCOPE] : undefined;
+  const initializationKey = JSON.stringify({ clientId, scopes: scopes || [] });
   if (nativeGoogleInitializationKey === initializationKey) return;
 
   await GoogleSignIn.initialize({
-    clientId: getGoogleWebClientId(),
+    clientId,
+    scopes,
   });
   nativeGoogleInitializationKey = initializationKey;
 };
 
-const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleAccountSession> => {
-  await initializeNativeGoogleSignIn();
+const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+};
 
-  const result: SignInResult = await GoogleSignIn.signIn();
+const authorizeDrive = async (interactive: boolean) => withTimeout(
+  nativeDriveBackupBridge.authorize({ interactive }),
+  DRIVE_AUTH_TIMEOUT_MS,
+  'Google Drive authorization did not finish. Open the emulator, confirm any Google permission prompt, then try again.',
+);
+
+const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleAccountSession> => {
+  const needsDriveAccess = intent === 'backup' || intent === 'sync';
+  await initializeNativeGoogleSignIn(false);
+
+  const result: SignInResult = await withTimeout(
+    GoogleSignIn.signIn(),
+    GOOGLE_SIGN_IN_TIMEOUT_MS,
+    'Google sign-in did not finish. Select an account and approve any Google permission prompt, then try again.',
+  );
   let session: GoogleAccountSession = {
     userId: result.userId,
     email: result.email,
@@ -46,7 +76,7 @@ const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleA
     idToken: result.idToken,
   };
 
-  if (intent === 'backup' || intent === 'sync') {
+  if (needsDriveAccess) {
     if (!result.email) throw new Error('Google did not return an email address for the selected account.');
     const account: GoogleAccountIdentity = {
       userId: result.userId,
@@ -55,7 +85,7 @@ const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleA
       linkedAt: Date.now(),
     };
     await nativeDriveBackupBridge.saveLinkedAccount(account);
-    const authorization = await nativeDriveBackupBridge.authorize({ interactive: true });
+    const authorization = await authorizeDrive(true);
     if (!authorization.authorized || !authorization.accessToken || !authorization.account) {
       throw new Error('Google did not grant Drive app data access.');
     }
@@ -98,7 +128,7 @@ export const getGoogleConnectionState = async (): Promise<GoogleConnectionState>
 
 export const restoreGoogleDriveSession = async (interactive = false): Promise<GoogleAccountSession | null> => {
   if (!isNativePlatform()) return null;
-  const authorization = await nativeDriveBackupBridge.authorize({ interactive });
+  const authorization = await authorizeDrive(interactive);
   if (!authorization.authorized || !authorization.accessToken || !authorization.account) return null;
   const session: GoogleAccountSession = {
     userId: authorization.account.userId,

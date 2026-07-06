@@ -32,6 +32,15 @@ interface AppProps {
   initialUserProfile: UserProfile;
 }
 
+const isLikelyCellularConnection = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  const nav = navigator as any;
+  const connection = nav.connection || nav.mozConnection || nav.webkitConnection;
+  const connectionType = String(connection?.type || '').toLowerCase();
+  const effectiveType = String(connection?.effectiveType || '').toLowerCase();
+  return connectionType === 'cellular' || ['slow-2g', '2g', '3g'].includes(effectiveType);
+};
+
 export default function App({ initialSettings, initialSecurity, initialUserProfile }: AppProps) {
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -166,9 +175,45 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       showToast('Archive month restored.', 'success');
     } catch (archiveError: any) {
       const message = archiveError?.message || 'Could not restore that archive month yet.';
+      await reloadData();
       showToast(message, 'error');
       throw archiveError;
     }
+  };
+
+  const handleHydrateAllArchiveMonths = async () => {
+    const candidates = (await diaryRepository.listAvailableArchiveMonths())
+      .filter(month => month.status !== 'hydrated' && month.status !== 'not_available' && month.status !== 'hydrating');
+    if (candidates.length === 0) {
+      showToast('All available archive months are already restored.', 'info');
+      return;
+    }
+    if (isLikelyCellularConnection()) {
+      const message = 'Connect to Wi-Fi before restoring the full encrypted archive.';
+      showToast(message, 'warning');
+      throw new Error(message);
+    }
+
+    let restoredCount = 0;
+    let failedCount = 0;
+    showToast(`Restoring ${candidates.length} archive month${candidates.length === 1 ? '' : 's'} on Wi-Fi…`, 'info');
+    for (const candidate of candidates) {
+      try {
+        await eventSyncEngine.hydrateArchivePartition(String(candidate.partitionKey));
+        restoredCount += 1;
+        await reloadData();
+      } catch {
+        failedCount += 1;
+      }
+    }
+    await reloadData();
+    if (failedCount > 0) {
+      const message = `Restored ${restoredCount} archive month${restoredCount === 1 ? '' : 's'}. ${failedCount} need retry later.`;
+      showToast(message, restoredCount > 0 ? 'warning' : 'error');
+      if (restoredCount === 0) throw new Error(message);
+      return;
+    }
+    showToast(`Restored ${restoredCount} archive month${restoredCount === 1 ? '' : 's'}.`, 'success');
   };
 
   useEffect(() => {
@@ -644,6 +689,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             settings={settings}
             archiveMonths={archiveMonths}
             onHydrateArchiveMonth={handleHydrateArchiveMonth}
+            onHydrateAllArchiveMonths={handleHydrateAllArchiveMonths}
             onNavigate={handleNavigate}
             onEditNote={(note) => {
               // Deep-link note editing from search results

@@ -340,8 +340,10 @@ export default function LockScreen({
       if (recoveryPassphrase !== confirmRecoveryPassphrase) {
         throw new Error('Recovery passphrases do not match.');
       }
+      setSuccessMsg('Opening Google account...');
       const session = await startGoogleAuth('sync');
       if (!session.idToken) throw new Error('Google did not return an ID token for Supabase sign-in.');
+      setSuccessMsg('Signing in to sync service...');
       const supabaseSession = await exchangeGoogleIdTokenForSupabaseSession({
         supabaseUrl: getConfiguredSupabaseUrl(),
         anonKey: getConfiguredSupabaseAnonKey(),
@@ -349,6 +351,7 @@ export default function LockScreen({
       });
       const controlPlane = createConfiguredSupabaseControlPlaneClient(supabaseSession.accessToken);
       const question = getRecoveryQuestionPayload();
+      setSuccessMsg('Preparing encrypted account...');
       const result = await bootstrapNewMobileAccount({
         googleSession: session,
         supabaseSession,
@@ -361,6 +364,7 @@ export default function LockScreen({
         },
         repository: diaryRepository,
         controlPlane,
+        onProgress: setSuccessMsg,
       });
       const updatedSecurity = await diaryRepository.getSecurityConfig();
       setSecurity(updatedSecurity);
@@ -369,7 +373,12 @@ export default function LockScreen({
       setTimeout(() => void onUnlock(), 450);
     } catch (err: any) {
       const message = err?.message || '';
-      if (message.includes('Supabase Auth') || message.includes('Missing VITE_SUPABASE')) {
+      if (
+        message.includes('Supabase Auth') ||
+        message.includes('Supabase sign-in') ||
+        message.includes('Supabase control-plane') ||
+        message.includes('Missing VITE_SUPABASE')
+      ) {
         fail(message);
       } else {
         fail(formatGoogleAuthError(err));
@@ -632,6 +641,18 @@ export default function LockScreen({
                       <Cloud className="w-4 h-4" />
                       {isLinkingBackup ? 'Creating Account...' : 'Create Encrypted Account'}
                     </button>
+                    {error && (
+                      <p className="text-[11px] font-bold text-brand-rose flex justify-center items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        <span>{error}</span>
+                      </p>
+                    )}
+                    {successMsg && !error && (
+                      <p className="text-[11px] font-bold text-brand-sage flex justify-center items-center gap-1">
+                        <Check className="w-3 h-3" />
+                        <span>{successMsg}</span>
+                      </p>
+                    )}
                   </div>
                 ) : showRecoveryForm ? (
                   <div className="flex flex-col gap-3">

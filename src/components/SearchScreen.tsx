@@ -13,9 +13,18 @@ interface SearchScreenProps {
   settings: AppSettings;
   archiveMonths?: PartitionHydrationState[];
   onHydrateArchiveMonth?: (partitionKey: string) => void | Promise<void>;
+  onHydrateAllArchiveMonths?: () => void | Promise<void>;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onEditNote: (note: Note) => void;
 }
+
+const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): string => {
+  if (!archiveState || archiveState.status !== 'failed') return '';
+  if (archiveState.nextRetryAt && archiveState.nextRetryAt > Date.now()) {
+    return `Background restore will retry after ${new Date(archiveState.nextRetryAt).toLocaleString()}. Manual retry is available now.`;
+  }
+  return 'The previous archive restore failed. Manual retry is available now.';
+};
 
 export default function SearchScreen({
   diaries,
@@ -24,6 +33,7 @@ export default function SearchScreen({
   settings,
   archiveMonths = [],
   onHydrateArchiveMonth,
+  onHydrateAllArchiveMonths,
   onNavigate,
   onEditNote
 }: SearchScreenProps) {
@@ -38,9 +48,13 @@ export default function SearchScreen({
   const [toDate, setToDate] = useState<string>('');
   const [showFilters, setShowFilters] = useState<boolean>(false);
   const [restoringArchiveKey, setRestoringArchiveKey] = useState<string>('');
+  const [restoringAllArchives, setRestoringAllArchives] = useState<boolean>(false);
   const [archiveRestoreError, setArchiveRestoreError] = useState<string>('');
   const unloadedArchiveMonths = archiveMonths.filter(month => month.status !== 'hydrated');
+  const failedArchiveMonths = unloadedArchiveMonths.filter(month => month.status === 'failed');
   const nextRestorableArchiveMonth = unloadedArchiveMonths.find(month => month.status !== 'hydrating');
+  const nextRestorableArchiveStatus = formatArchiveRetryStatus(nextRestorableArchiveMonth);
+  const restorableArchiveMonths = unloadedArchiveMonths.filter(month => month.status !== 'hydrating');
 
   const [results, setResults] = useState<{
     type: 'entry' | 'note';
@@ -309,35 +323,70 @@ export default function SearchScreen({
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p>
               Searching downloaded memories first. {unloadedArchiveMonths.length} older archive month{unloadedArchiveMonths.length === 1 ? '' : 's'} will appear after restore or when opened.
+              {failedArchiveMonths.length > 0 && (
+                <> {failedArchiveMonths.length} month{failedArchiveMonths.length === 1 ? '' : 's'} need retry.</>
+              )}
             </p>
-            {onHydrateArchiveMonth && nextRestorableArchiveMonth && (
-              <button
-                type="button"
-                disabled={restoringArchiveKey === nextRestorableArchiveMonth.partitionKey}
-                onClick={async () => {
-                  setRestoringArchiveKey(String(nextRestorableArchiveMonth.partitionKey));
-                  setArchiveRestoreError('');
-                  try {
-                    await onHydrateArchiveMonth(String(nextRestorableArchiveMonth.partitionKey));
-                  } catch (error: any) {
-                    setArchiveRestoreError(error?.message || 'Could not restore this archive month.');
-                  } finally {
-                    setRestoringArchiveKey('');
-                  }
-                }}
-                className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-brand-sage px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-white transition-all hover:bg-brand-sage-dark disabled:cursor-wait disabled:bg-brand-sage/60"
-              >
-                {restoringArchiveKey === nextRestorableArchiveMonth.partitionKey ? (
-                  <RefreshCw className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Download className="h-3 w-3" />
-                )}
-                {restoringArchiveKey === nextRestorableArchiveMonth.partitionKey
-                  ? 'Restoring'
-                  : `Restore ${String(nextRestorableArchiveMonth.partitionKey).replace('month:', '')}`}
-              </button>
-            )}
+            <div className="flex shrink-0 flex-wrap gap-2">
+              {onHydrateArchiveMonth && nextRestorableArchiveMonth && (
+                <button
+                  type="button"
+                  disabled={restoringAllArchives || restoringArchiveKey === nextRestorableArchiveMonth.partitionKey}
+                  onClick={async () => {
+                    setRestoringArchiveKey(String(nextRestorableArchiveMonth.partitionKey));
+                    setArchiveRestoreError('');
+                    try {
+                      await onHydrateArchiveMonth(String(nextRestorableArchiveMonth.partitionKey));
+                    } catch (error: any) {
+                      setArchiveRestoreError(error?.message || 'Could not restore this archive month.');
+                    } finally {
+                      setRestoringArchiveKey('');
+                    }
+                  }}
+                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-brand-sage px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-white transition-all hover:bg-brand-sage-dark disabled:cursor-wait disabled:bg-brand-sage/60"
+                >
+                  {restoringArchiveKey === nextRestorableArchiveMonth.partitionKey ? (
+                    <RefreshCw className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Download className="h-3 w-3" />
+                  )}
+                  {restoringArchiveKey === nextRestorableArchiveMonth.partitionKey
+                    ? 'Restoring'
+                    : `${nextRestorableArchiveMonth.status === 'failed' ? 'Retry' : 'Restore'} ${String(nextRestorableArchiveMonth.partitionKey).replace('month:', '')}`}
+                </button>
+              )}
+              {onHydrateAllArchiveMonths && restorableArchiveMonths.length > 1 && (
+                <button
+                  type="button"
+                  disabled={restoringAllArchives || Boolean(restoringArchiveKey)}
+                  onClick={async () => {
+                    setRestoringAllArchives(true);
+                    setArchiveRestoreError('');
+                    try {
+                      await onHydrateAllArchiveMonths();
+                    } catch (error: any) {
+                      setArchiveRestoreError(error?.message || 'Could not restore all archive months.');
+                    } finally {
+                      setRestoringAllArchives(false);
+                    }
+                  }}
+                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-brand-sage/40 bg-white/70 px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-brand-sage-dark transition-all hover:bg-brand-sage-light/40 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {restoringAllArchives ? (
+                    <RefreshCw className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Download className="h-3 w-3" />
+                  )}
+                  {restoringAllArchives ? 'Restoring archive' : 'Restore all on Wi-Fi'}
+                </button>
+              )}
+            </div>
           </div>
+          {nextRestorableArchiveStatus && (
+            <p className="mt-2 text-[11px] font-semibold text-brand-sage-dark">
+              {nextRestorableArchiveStatus}
+            </p>
+          )}
           {archiveRestoreError && <p className="mt-2 text-[11px] font-bold text-red-600">{archiveRestoreError}</p>}
         </div>
       )}

@@ -26,8 +26,8 @@ export default function CompanionApprovalPanel() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  const refresh = async () => {
-    setLoading(true);
+  const refresh = async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     setError('');
     try {
       const state = await diaryRepository.getLocalSyncAccountState();
@@ -46,15 +46,21 @@ export default function CompanionApprovalPanel() {
         controlPlane.listAccountDevices(state.deviceId),
       ]);
       setSessions(pendingSessions);
-      setDevices(accountDevices.filter(device => device.role !== 'primary_mobile'));
+      setDevices(accountDevices.filter(device => device.role !== 'primary_mobile' && !device.revokedAt));
     } catch (refreshError: any) {
       setError(refreshError?.message || 'Could not load companion requests.');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(() => {
+      void refresh(false);
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   if (isPrimary !== true) return null;
 
@@ -73,6 +79,8 @@ export default function CompanionApprovalPanel() {
       const googleSession = await restoreGoogleDriveSession(false) || await restoreGoogleDriveSession(true);
       if (!googleSession) throw new Error('Google Drive authorization is required to approve this companion.');
       const controlPlane = createConfiguredSupabaseControlPlaneClient(secrets.supabaseSession.accessToken);
+      setMessage('Preparing an encrypted restore point for this companion...');
+      await eventSyncEngine.createSnapshot();
       await approveCompanionPairing({
         sessionId: session.id,
         pairingCode,
@@ -221,20 +229,18 @@ export default function CompanionApprovalPanel() {
                 <Monitor className="h-4 w-4 shrink-0 text-brand-sage" />
                 <div className="min-w-0">
                   <p className="truncate text-xs font-semibold text-brand-plum dark:text-brand-text">{device.displayName}</p>
-                  <p className="text-[9px] uppercase text-brand-text-muted">{device.revokedAt ? 'Revoked' : device.platform}</p>
+                  <p className="text-[9px] uppercase text-brand-text-muted">{device.platform}</p>
                 </div>
               </div>
-              {!device.revokedAt && (
-                <button
-                  type="button"
-                  onClick={() => void revoke(device)}
-                  disabled={approvingId === device.id}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 text-red-600 disabled:opacity-40"
-                  title="Revoke companion"
-                >
-                  {approvingId === device.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => void revoke(device)}
+                disabled={approvingId === device.id}
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 text-red-600 disabled:opacity-40"
+                title="Revoke companion"
+              >
+                {approvingId === device.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              </button>
             </div>
           ))}
         </div>

@@ -20,6 +20,7 @@ export interface SupabaseControlPlaneConfig {
   anonKey: string;
   accessToken?: string | (() => Promise<string | null> | string | null);
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 }
 
 export interface CreatePrimaryMobileInput {
@@ -89,6 +90,7 @@ export interface ApprovePairingSessionInput {
   driveFileId: string;
   sha256: string;
   sizeBytes: number;
+  keyEpoch?: number;
 }
 
 export interface UpdateCursorInput {
@@ -228,6 +230,33 @@ const firstRow = <T>(payload: T | T[] | null): T | null => {
   return payload;
 };
 
+const DEFAULT_RPC_TIMEOUT_MS = 45_000;
+
+const defaultFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
+
+const createTimeoutSignal = (timeoutMs: number): { signal: AbortSignal; cancel: () => void } => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    cancel: () => clearTimeout(timeoutId),
+  };
+};
+
+const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+};
+
 export class SupabaseControlPlaneError extends Error {
   readonly status: number;
   readonly detail: unknown;
@@ -246,7 +275,7 @@ export class SupabaseControlPlaneClient {
 
   constructor(private readonly config: SupabaseControlPlaneConfig) {
     this.baseUrl = config.url.replace(/\/+$/, '');
-    this.fetchImpl = config.fetchImpl || fetch;
+    this.fetchImpl = config.fetchImpl || defaultFetch;
   }
 
   async lookupCurrentGoogleAccount(): Promise<SyncAccount | null> {
@@ -464,6 +493,7 @@ export class SupabaseControlPlaneClient {
       p_drive_file_id: input.driveFileId,
       p_sha256: input.sha256,
       p_size_bytes: input.sizeBytes,
+      p_key_epoch: input.keyEpoch || 1,
     });
     return camelPairingDetails(row);
   }
@@ -525,15 +555,32 @@ export class SupabaseControlPlaneClient {
     const accessToken = typeof this.config.accessToken === 'function'
       ? await this.config.accessToken()
       : this.config.accessToken;
-    const response = await this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/${functionName}`, {
-      method: 'POST',
-      headers: {
-        apikey: this.config.anonKey,
-        Authorization: `Bearer ${accessToken || this.config.anonKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
+    const timeoutMs = this.config.timeoutMs || DEFAULT_RPC_TIMEOUT_MS;
+    const timeout = createTimeoutSignal(timeoutMs);
+    let response: Response;
+    try {
+      response = await withTimeout(
+        this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/${functionName}`, {
+          method: 'POST',
+          headers: {
+            apikey: this.config.anonKey,
+            Authorization: `Bearer ${accessToken || this.config.anonKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+          signal: timeout.signal,
+        }),
+        timeoutMs,
+        `Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`,
+      );
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        throw new Error(`Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`);
+      }
+      throw error;
+    } finally {
+      timeout.cancel();
+    }
 
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
