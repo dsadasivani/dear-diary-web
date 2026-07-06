@@ -15,6 +15,7 @@ import {
   DriveBackupSettings,
   Entry,
   GoogleAccountSession,
+  LocalSyncAccountState,
   SecurityConfig,
   Mood,
   Note,
@@ -48,11 +49,10 @@ import {
   listDriveBackups
 } from '../utils/driveBackup';
 import { inspectDriveBackupMerge, mergeDriveBackup, restoreDriveBackup } from '../utils/driveBackup';
-import { diaryRepository } from '../repositories';
+import { diaryRepository, eventSyncEngine } from '../repositories';
 import { createDefaultUserProfile } from '../repositories/defaults';
 import { exportEncryptedBackup, importEncryptedBackup } from '../utils/manualBackup';
 import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
-import { backupCoordinator } from '../utils/backupCoordinator';
 import { createDefaultBackupSchedule } from '../repositories/defaults';
 import { pruneOrphanedMedia } from '../mobile/mediaGarbageCollector';
 import {
@@ -69,7 +69,10 @@ import {
 } from '../mobile/reminders';
 import { populateUserProfileFromGoogle } from '../utils/googleProfile';
 import ProfileAvatar from './ProfileAvatar';
+import CompanionApprovalPanel from './CompanionApprovalPanel';
 import OverlayPortal from './OverlayPortal';
+import { RECOVERY_PASSPHRASE_MIN_LENGTH } from '../sync/e2eeKeyPackage';
+import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
 
 interface AppSettingsScreenProps {
   diaries: Diary[];
@@ -202,6 +205,12 @@ export default function AppSettingsScreen({
   const [recoveryError, setRecoveryError] = useState<string>('');
   const [recoverySuccess, setRecoverySuccess] = useState<boolean>(false);
   const [recoveryAccountError, setRecoveryAccountError] = useState('');
+  const [syncAccountState, setSyncAccountState] = useState<LocalSyncAccountState | null>(null);
+  const [showSyncRecoveryForm, setShowSyncRecoveryForm] = useState(false);
+  const [newRecoveryPassphrase, setNewRecoveryPassphrase] = useState('');
+  const [confirmNewRecoveryPassphrase, setConfirmNewRecoveryPassphrase] = useState('');
+  const [syncRecoveryError, setSyncRecoveryError] = useState('');
+  const [isRotatingRecoveryPassphrase, setIsRotatingRecoveryPassphrase] = useState(false);
 
   // Reminders preference states
   const [reminderTime, setReminderTime] = useState<string>(() => normalizeReminderTime(settings.reminderTime || '20:00'));
@@ -247,21 +256,11 @@ export default function AppSettingsScreen({
   const isBackupLinked = !!(driveBackupSettings.linkedGoogleUserId && driveBackupSettings.linkedGoogleEmail);
 
   useEffect(() => {
-    void (async () => {
-      const stored = await diaryRepository.getDriveBackupSettings();
-      const runtime = await backupCoordinator.reconcileRuntimeState();
-      const next = { ...stored, ...runtime, schedule: runtime.schedule || stored.schedule };
-      setDriveBackupSettings(next);
-      setScheduleDraft(next.schedule || createDefaultBackupSchedule());
-      if (next.linkedGoogleUserId) {
-        const session = await restoreGoogleDriveSession(false).catch(() => null);
-        if (session) setBackupSession(session);
-      }
-    })();
+    void getReminderCapability().then(setReminderCapability);
   }, []);
 
   useEffect(() => {
-    void getReminderCapability().then(setReminderCapability);
+    void diaryRepository.getLocalSyncAccountState().then(setSyncAccountState);
   }, []);
 
   const lastBackupStr = React.useMemo(() => (
@@ -349,6 +348,20 @@ export default function AppSettingsScreen({
     } catch (err: any) {
       setAuthError(formatGoogleAuthError(err));
       return null;
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const reconnectSyncAccount = async (): Promise<void> => {
+    setAuthError('');
+    setIsAuthLoading(true);
+    try {
+      await eventSyncEngine.reauthorize();
+      await eventSyncEngine.pullPending();
+      onShowToast?.('Encrypted sync authorization renewed.', 'success');
+    } catch (error: any) {
+      setAuthError(error?.message || 'Encrypted sync authorization could not be renewed.');
     } finally {
       setIsAuthLoading(false);
     }
@@ -622,6 +635,32 @@ export default function AppSettingsScreen({
     await diaryRepository.saveSecurityConfig(updatedSecurity);
     setSecurity(updatedSecurity);
     await onDataChanged();
+  };
+
+  const handleRotateRecoveryPassphrase = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault();
+    setSyncRecoveryError('');
+    if (newRecoveryPassphrase !== confirmNewRecoveryPassphrase) {
+      setSyncRecoveryError('Recovery passphrases do not match.');
+      return;
+    }
+    setIsRotatingRecoveryPassphrase(true);
+    try {
+      await rotateRecoveryPassphrase({
+        newPassphrase: newRecoveryPassphrase,
+        repository: diaryRepository,
+        syncEngine: eventSyncEngine,
+      });
+      setNewRecoveryPassphrase('');
+      setConfirmNewRecoveryPassphrase('');
+      setShowSyncRecoveryForm(false);
+      setSyncAccountState(await diaryRepository.getLocalSyncAccountState());
+      onShowToast?.('Account recovery passphrase changed.', 'success');
+    } catch (error: any) {
+      setSyncRecoveryError(error?.message || 'Recovery passphrase could not be changed.');
+    } finally {
+      setIsRotatingRecoveryPassphrase(false);
+    }
   };
 
   const handleThemeChange = async (newTheme: 'light' | 'dark') => {
@@ -1054,14 +1093,6 @@ export default function AppSettingsScreen({
               colorClass: 'text-brand-sage' 
             },
             { 
-              id: 'backup' as const,
-              label: 'Backup',
-              icon: CloudLightning, 
-              activeBg: 'bg-brand-rose', 
-              activeShadow: 'shadow-[0_4px_12px_rgba(195,96,76,0.25)]', 
-              colorClass: 'text-brand-rose' 
-            },
-            { 
               id: 'customize' as const, 
               label: 'Customize', 
               icon: Palette, 
@@ -1129,29 +1160,25 @@ export default function AppSettingsScreen({
                   <div className="min-w-0">
                     <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Google Account</h3>
                     <p className="text-[10px] text-brand-sage truncate">
-                      {isBackupLinked ? driveBackupSettings.linkedGoogleEmail : 'Not linked'}
+                      {syncAccountState?.googleEmail || 'Loading account...'}
                     </p>
                   </div>
                   </div>
-                  {isBackupLinked ? (
-                    <div className="flex shrink-0 items-center gap-2">
-                      {!backupSession && (
-                        <button type="button" onClick={reconnectLinkedGoogleAccount} disabled={isAuthLoading} className="px-3 py-2 rounded-xl bg-brand-sage text-white text-[10px] font-bold disabled:opacity-50">
-                          {isAuthLoading ? 'Connecting...' : 'Reconnect'}
-                        </button>
-                      )}
-                      <button type="button" onClick={handleSignOutClick} className="w-9 h-9 rounded-xl border border-brand-border text-brand-text-muted hover:text-brand-pink flex items-center justify-center" title="Disconnect Google account">
-                        <LogOut className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button type="button" onClick={handleGoogleSignIn} disabled={isAuthLoading} className="px-3 py-2 shrink-0 rounded-xl bg-brand-sage text-white text-[10px] font-bold disabled:opacity-50">
-                      {isAuthLoading ? 'Linking...' : 'Link'}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => void reconnectSyncAccount()}
+                    disabled={isAuthLoading || !syncAccountState}
+                    className="w-9 h-9 shrink-0 rounded-xl border border-brand-border text-brand-text-muted hover:text-brand-sage flex items-center justify-center disabled:opacity-40"
+                    title="Reconnect encrypted sync"
+                    aria-label="Reconnect encrypted sync"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isAuthLoading ? 'animate-spin' : ''}`} />
+                  </button>
                 </div>
                 {authError && <p className="text-[10px] font-bold text-red-600 dark:text-red-400">{authError}</p>}
               </div>
+
+              <CompanionApprovalPanel />
 
               {/* User Profile Customizer Card */}
               <div className="bg-brand-card-bg p-6 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-5">
@@ -1511,9 +1538,9 @@ export default function AppSettingsScreen({
                       <Cloud className="w-4 h-4" />
                     </span>
                     <div className="min-w-0">
-                      <h3 className="text-sm font-bold text-brand-plum">Google PIN Recovery</h3>
+                      <h3 className="text-sm font-bold text-brand-plum">Google Account Recovery</h3>
                       <p className="text-[10px] text-brand-sage mt-0.5 break-words">
-                        {security.linkedGoogleEmail || 'No recovery account linked'}
+                        {syncAccountState?.googleEmail || security.linkedGoogleEmail || 'Account unavailable'}
                       </p>
                     </div>
                   </div>
@@ -1527,12 +1554,77 @@ export default function AppSettingsScreen({
                   </button>
                 </div>
                 <p className="text-[10px] text-brand-text-muted leading-relaxed">
-                  The Google account managed in Profile is used for both hidden Drive backup and forgotten-PIN verification.
+                  This account verifies sync access and forgotten-PIN recovery on this device.
                 </p>
                 {recoveryAccountError && (
                   <p className="text-[11px] font-bold text-brand-pink-dark">{recoveryAccountError}</p>
                 )}
               </div>
+
+              {syncAccountState?.deviceRole === 'primary_mobile' && (
+                <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="p-2.5 bg-brand-sage/10 text-brand-sage rounded-2xl">
+                        <RefreshCw className="w-4 h-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-bold text-brand-plum">Account Recovery Passphrase</h3>
+                        <p className="text-[10px] text-brand-sage mt-0.5 truncate">{syncAccountState.googleEmail}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSyncRecoveryForm(value => !value);
+                        setSyncRecoveryError('');
+                      }}
+                      className="shrink-0 px-4 py-2 bg-brand-bg hover:bg-brand-rose-light text-xs font-bold text-brand-sage-dark rounded-full border border-brand-border transition-colors"
+                    >
+                      {showSyncRecoveryForm ? 'Close' : 'Change'}
+                    </button>
+                  </div>
+
+                  {showSyncRecoveryForm && (
+                    <form onSubmit={handleRotateRecoveryPassphrase} className="mt-2 pt-3 border-t border-brand-border flex flex-col gap-3">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">New Passphrase</span>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={newRecoveryPassphrase}
+                          onChange={event => setNewRecoveryPassphrase(event.target.value)}
+                          className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Confirm Passphrase</span>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={confirmNewRecoveryPassphrase}
+                          onChange={event => setConfirmNewRecoveryPassphrase(event.target.value)}
+                          className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
+                        />
+                      </label>
+                      {syncRecoveryError && (
+                        <p className="text-[11px] font-bold text-brand-pink-dark">{syncRecoveryError}</p>
+                      )}
+                      <button
+                        type="submit"
+                        disabled={
+                          isRotatingRecoveryPassphrase ||
+                          newRecoveryPassphrase.length < RECOVERY_PASSPHRASE_MIN_LENGTH ||
+                          newRecoveryPassphrase !== confirmNewRecoveryPassphrase
+                        }
+                        className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
+                      >
+                        {isRotatingRecoveryPassphrase ? 'Changing...' : 'Change Recovery Passphrase'}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              )}
 
               {/* Passkey & Biometric settings card */}
               <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">

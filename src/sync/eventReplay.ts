@@ -1,0 +1,87 @@
+import type { DiaryRepository } from '../repositories';
+import type { GoogleAccountSession, LocalSyncAccountState, SyncObjectMetadata } from '../types';
+import { decodeSyncDomainEvent } from './domainEvents';
+import { downloadDriveSyncObject } from './driveSyncObjects';
+import { decryptSyncPayload } from './encryptedSyncObject';
+
+export type SyncObjectDownloader = (
+  session: GoogleAccountSession,
+  fileId: string,
+) => Promise<Uint8Array>;
+
+const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+};
+
+export const downloadVerifiedSyncObject = async (
+  session: GoogleAccountSession,
+  object: SyncObjectMetadata,
+  download: SyncObjectDownloader = downloadDriveSyncObject,
+): Promise<Uint8Array> => {
+  const bytes = await download(session, object.driveFileId);
+  if (await sha256Hex(bytes) !== object.sha256) {
+    throw new Error(`Synced ${object.objectKind.replace('_', ' ')} failed integrity verification.`);
+  }
+  return bytes;
+};
+
+export interface ReplaySyncObjectsInput {
+  repository: DiaryRepository;
+  localState: LocalSyncAccountState;
+  accountRootKey: Uint8Array;
+  googleSession: GoogleAccountSession;
+  objects: SyncObjectMetadata[];
+  download?: SyncObjectDownloader;
+}
+
+export const replaySyncObjects = async ({
+  repository,
+  localState,
+  accountRootKey,
+  googleSession,
+  objects,
+  download,
+}: ReplaySyncObjectsInput): Promise<LocalSyncAccountState> => {
+  let state = localState;
+  const ordered = [...objects].sort((left, right) => left.sequence - right.sequence);
+  for (const object of ordered) {
+    if (object.sequence <= state.currentSyncSequence) continue;
+    if (object.accountId !== state.accountId) throw new Error('Sync metadata belongs to another account.');
+
+    if (object.objectKind === 'event') {
+      const encrypted = await downloadVerifiedSyncObject(googleSession, object, download);
+      const decrypted = await decryptSyncPayload(accountRootKey, encrypted);
+      if (decrypted.objectKind !== 'event') throw new Error('Sync object metadata does not match its encrypted payload.');
+      const event = decodeSyncDomainEvent(decrypted.payload);
+      if (
+        event.accountId !== state.accountId ||
+        event.recordType !== object.recordType ||
+        event.recordId !== object.recordId ||
+        event.baseRecordVersion !== object.baseRecordVersion ||
+        event.recordVersion !== object.recordVersion
+      ) {
+        throw new Error('Encrypted sync event does not match its control-plane metadata.');
+      }
+      if (JSON.stringify(event.affectedRecords || []) !== JSON.stringify(object.affectedRecords || [])) {
+        throw new Error('Encrypted sync event affected records do not match control-plane metadata.');
+      }
+      await repository.applySyncEvent(event, object.sequence);
+    } else {
+      if (object.objectKind === 'media') {
+        await repository.saveSyncMediaPointer({
+          mediaId: '',
+          sequence: object.sequence,
+          driveFileId: object.driveFileId,
+          sha256: object.sha256,
+          sizeBytes: object.sizeBytes,
+          createdByDeviceId: object.createdByDeviceId,
+          createdAt: object.createdAt,
+        });
+      }
+      await repository.saveLocalSyncAccountState({ ...state, currentSyncSequence: object.sequence });
+    }
+    state = { ...state, currentSyncSequence: object.sequence };
+  }
+  return state;
+};

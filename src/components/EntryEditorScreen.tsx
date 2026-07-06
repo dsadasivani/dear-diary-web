@@ -12,6 +12,7 @@ import RichTextEditor from './RichTextEditor';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import { audioService } from '../platform/audio';
 import { persistMediaDataUri } from '../mobile/mediaStorage';
+import { SyncConflictError } from '../sync/eventSyncEngine';
 import { isNativePlatform } from '../platform';
 import { VoiceRecorder } from '@independo/capacitor-voice-recorder';
 import { SpeechRecognition as NativeSpeechRecognition } from '@capacitor-community/speech-recognition';
@@ -1208,11 +1209,31 @@ export default function EntryEditorScreen({
     // Save all block texts combined as the overall entry body so standard view displays them
     const finalBody = finalBlocks.map(b => b.body).filter(Boolean).join('<br/><br/>');
 
-    if (isEditing && entryId) {
-      const entryObj = await diaryRepository.getEntry(entryId);
-      if (entryObj) {
-        const updated: Entry = {
-          ...entryObj,
+    try {
+      if (isEditing && entryId) {
+        const entryObj = await diaryRepository.getEntry(entryId);
+        if (entryObj) {
+          const updated: Entry = {
+            ...entryObj,
+            diaryId,
+            date,
+            time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
+            title: finalTitle,
+            body: finalBody,
+            moodName: mood.name,
+            moodEmoji: mood.emoji,
+            tags: selectedTags,
+            photoUris,
+            photoCount: photoUris.length,
+            wordCount: liveWordCount,
+            audioUri: undefined,
+            updatedAt: Date.now(),
+            blocks: finalBlocks,
+          };
+          await diaryRepository.updateEntry(updated);
+        }
+      } else {
+        await diaryRepository.createEntry({
           diaryId,
           date,
           time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
@@ -1222,32 +1243,20 @@ export default function EntryEditorScreen({
           moodEmoji: mood.emoji,
           tags: selectedTags,
           photoUris,
-          photoCount: photoUris.length,
-          wordCount: liveWordCount,
-          audioUri: undefined, // Always clear top-level, recordings live in blocks
-          updatedAt: Date.now(),
-          blocks: finalBlocks
-        };
-        await diaryRepository.updateEntry(updated);
+          audioUri: undefined,
+          blocks: finalBlocks,
+        });
       }
-    } else {
-      await diaryRepository.createEntry({
-        diaryId,
-        date,
-        time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
-        title: finalTitle,
-        body: finalBody,
-        moodName: mood.name,
-        moodEmoji: mood.emoji,
-        tags: selectedTags,
-        photoUris,
-        audioUri: undefined, // Always clear top-level, recordings live in blocks
-        blocks: finalBlocks
-      });
-    }
 
-    await onRefreshEntries();
-    onBack();
+      await onRefreshEntries();
+      onBack();
+    } catch (saveError: any) {
+      onShowToast(saveError?.message || 'Entry could not be saved.', saveError instanceof SyncConflictError ? 'warning' : 'error');
+      if (saveError instanceof SyncConflictError) {
+        await onRefreshEntries();
+        onBack();
+      }
+    }
   };
 
   const handleDeleteEntry = async () => {

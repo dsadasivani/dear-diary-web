@@ -1,0 +1,388 @@
+import type {
+  DeviceRevocation,
+  PairingPlatform,
+  PairingSession,
+  PairingSessionDetails,
+  SyncAccount,
+  SyncDevice,
+  SyncDeviceCursor,
+  SyncDeviceRole,
+  SyncObjectKind,
+  SyncObjectMetadata,
+  SyncRecordType,
+  SyncAffectedRecordVersion,
+} from '../types';
+
+export interface SupabaseControlPlaneConfig {
+  url: string;
+  anonKey: string;
+  accessToken?: string | (() => Promise<string | null> | string | null);
+  fetchImpl?: typeof fetch;
+}
+
+export interface CreatePrimaryMobileInput {
+  googleUserId: string;
+  googleEmail: string;
+  displayName: string;
+  platform: PairingPlatform | string;
+  publicKey: string;
+  recoveryConfigured: boolean;
+}
+
+export interface RegisterPrimaryTransferInput extends CreatePrimaryMobileInput {
+  previousPrimaryDeviceId?: string | null;
+}
+
+export interface CommitSyncObjectInput {
+  deviceId: string;
+  afterSequence: number;
+  driveFileId: string;
+  objectKind: SyncObjectKind;
+  sha256: string;
+  sizeBytes: number;
+  recordType?: SyncRecordType;
+  recordId?: string;
+  baseRecordVersion?: number;
+  affectedRecords?: SyncAffectedRecordVersion[];
+}
+
+export interface CreatePairingSessionInput {
+  requestedDevicePublicKey: string;
+  requestedDisplayName: string;
+  requestedPlatform: PairingPlatform | string;
+  pairingCodeHash: string;
+  expiresAt: string;
+}
+
+export interface ApprovePairingSessionInput {
+  sessionId: string;
+  primaryDeviceId: string;
+  pairingCode: string;
+  afterSequence: number;
+  driveFileId: string;
+  sha256: string;
+  sizeBytes: number;
+}
+
+export interface UpdateCursorInput {
+  deviceId: string;
+  lastAppliedSequence: number;
+}
+
+export interface RevokeDeviceInput {
+  primaryDeviceId: string;
+  deviceId: string;
+  reason: string;
+}
+
+const camelAccount = (row: any): SyncAccount => ({
+  id: row.id,
+  googleUserId: row.google_user_id,
+  googleEmail: row.google_email,
+  createdAt: row.created_at,
+  activePrimaryDeviceId: row.active_primary_device_id,
+  currentSyncSequence: Number(row.current_sync_sequence || 0),
+  currentSnapshotSequence: Number(row.current_snapshot_sequence || 0),
+  recoveryConfigured: Boolean(row.recovery_configured),
+});
+
+const camelDevice = (row: any): SyncDevice => ({
+  id: row.id,
+  accountId: row.account_id,
+  role: row.role,
+  publicKey: row.public_key,
+  displayName: row.display_name,
+  platform: row.platform,
+  createdAt: row.created_at,
+  lastSeenAt: row.last_seen_at,
+  revokedAt: row.revoked_at,
+  replacedByDeviceId: row.replaced_by_device_id,
+});
+
+const camelSyncObject = (row: any): SyncObjectMetadata => ({
+  id: row.id,
+  accountId: row.account_id,
+  sequence: Number(row.sequence),
+  driveFileId: row.drive_file_id,
+  objectKind: row.object_kind,
+  sha256: row.sha256,
+  sizeBytes: Number(row.size_bytes),
+  createdByDeviceId: row.created_by_device_id,
+  createdAt: row.created_at,
+  recordType: row.record_type || null,
+  recordId: row.record_id || null,
+  baseRecordVersion: row.base_record_version === null || row.base_record_version === undefined
+    ? null
+    : Number(row.base_record_version),
+  recordVersion: row.record_version === null || row.record_version === undefined
+    ? null
+    : Number(row.record_version),
+  affectedRecords: Array.isArray(row.affected_records)
+    ? row.affected_records.map((record: any) => ({
+        recordType: record.record_type,
+        recordId: record.record_id,
+        baseRecordVersion: Number(record.base_record_version),
+        recordVersion: Number(record.record_version),
+      }))
+    : [],
+  retiredAt: row.retired_at || null,
+});
+
+const camelCursor = (row: any): SyncDeviceCursor => ({
+  accountId: row.account_id,
+  deviceId: row.device_id,
+  lastAppliedSequence: Number(row.last_applied_sequence || 0),
+  updatedAt: row.updated_at,
+});
+
+const camelPairingSession = (row: any): PairingSession => ({
+  id: row.id,
+  accountId: row.account_id,
+  requestedDevicePublicKey: row.requested_device_public_key,
+  requestedDisplayName: row.requested_display_name,
+  requestedPlatform: row.requested_platform,
+  pairingCodeHash: row.pairing_code_hash,
+  expiresAt: row.expires_at,
+  approvedByPrimaryDeviceId: row.approved_by_primary_device_id,
+  approvedAt: row.approved_at,
+  approvedDeviceId: row.approved_device_id,
+  keyPackageDriveFileId: row.key_package_drive_file_id,
+  keyPackageSha256: row.key_package_sha256,
+  keyPackageSizeBytes: row.key_package_size_bytes === null || row.key_package_size_bytes === undefined
+    ? null
+    : Number(row.key_package_size_bytes),
+});
+
+const camelPairingDetails = (row: any): PairingSessionDetails => ({
+  session: camelPairingSession(row.session),
+  device: row.device ? camelDevice(row.device) : null,
+  keyObject: row.key_object ? camelSyncObject(row.key_object) : null,
+});
+
+const camelRevocation = (row: any): DeviceRevocation => ({
+  accountId: row.account_id,
+  deviceId: row.device_id,
+  reason: row.reason,
+  createdAt: row.created_at,
+});
+
+const firstRow = <T>(payload: T | T[] | null): T | null => {
+  if (Array.isArray(payload)) return payload[0] || null;
+  return payload;
+};
+
+export class SupabaseControlPlaneError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.name = 'SupabaseControlPlaneError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+export class SupabaseControlPlaneClient {
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(private readonly config: SupabaseControlPlaneConfig) {
+    this.baseUrl = config.url.replace(/\/+$/, '');
+    this.fetchImpl = config.fetchImpl || fetch;
+  }
+
+  async lookupCurrentGoogleAccount(): Promise<SyncAccount | null> {
+    const row = firstRow(await this.rpc<any>('lookup_google_account', {}));
+    return row ? camelAccount(row) : null;
+  }
+
+  async createPrimaryMobileAccount(input: CreatePrimaryMobileInput): Promise<{ account: SyncAccount; device: SyncDevice }> {
+    const row = await this.rpc<any>('create_primary_mobile_account', {
+      p_google_user_id: input.googleUserId,
+      p_google_email: input.googleEmail,
+      p_display_name: input.displayName,
+      p_platform: input.platform,
+      p_public_key: input.publicKey,
+      p_recovery_configured: input.recoveryConfigured,
+    });
+    return {
+      account: camelAccount(row.account),
+      device: camelDevice(row.device),
+    };
+  }
+
+  async transferPrimaryMobile(input: RegisterPrimaryTransferInput): Promise<{ account: SyncAccount; device: SyncDevice; revokedDevices: SyncDevice[] }> {
+    const row = await this.rpc<any>('transfer_primary_mobile', {
+      p_google_user_id: input.googleUserId,
+      p_google_email: input.googleEmail,
+      p_display_name: input.displayName,
+      p_platform: input.platform,
+      p_public_key: input.publicKey,
+      p_recovery_configured: input.recoveryConfigured,
+      p_previous_primary_device_id: input.previousPrimaryDeviceId || null,
+    });
+    return {
+      account: camelAccount(row.account),
+      device: camelDevice(row.device),
+      revokedDevices: (row.revoked_devices || []).map(camelDevice),
+    };
+  }
+
+  async getDeviceStatus(deviceId: string): Promise<SyncDevice | null> {
+    const row = firstRow(await this.rpc<any>('get_device_status', { p_device_id: deviceId }));
+    return row ? camelDevice(row) : null;
+  }
+
+  async listAccountDevices(requestingDeviceId: string): Promise<SyncDevice[]> {
+    const rows = await this.rpc<any[]>('list_account_devices', {
+      p_requesting_device_id: requestingDeviceId,
+    });
+    return rows.map(camelDevice);
+  }
+
+  async commitSyncObject(input: CommitSyncObjectInput): Promise<SyncObjectMetadata> {
+    const row = await this.rpc<any>('commit_sync_object', {
+      p_device_id: input.deviceId,
+      p_after_sequence: input.afterSequence,
+      p_drive_file_id: input.driveFileId,
+      p_object_kind: input.objectKind,
+      p_sha256: input.sha256,
+      p_size_bytes: input.sizeBytes,
+      p_record_type: input.recordType || null,
+      p_record_id: input.recordId || null,
+      p_base_record_version: input.baseRecordVersion ?? null,
+      p_affected_records: (input.affectedRecords || []).map(record => ({
+        record_type: record.recordType,
+        record_id: record.recordId,
+        base_record_version: record.baseRecordVersion,
+        record_version: record.recordVersion,
+      })),
+    });
+    return camelSyncObject(row);
+  }
+
+  async listSyncObjectsAfter(deviceId: string, afterSequence: number, limit = 100): Promise<SyncObjectMetadata[]> {
+    const rows = await this.rpc<any[]>('list_sync_objects_after', {
+      p_device_id: deviceId,
+      p_after_sequence: afterSequence,
+      p_limit: limit,
+    });
+    return rows.map(camelSyncObject);
+  }
+
+  async listAccountRecoveryObjects(): Promise<SyncObjectMetadata[]> {
+    const rows = await this.rpc<any[]>('list_account_recovery_objects', {});
+    return rows.map(camelSyncObject);
+  }
+
+  async updateDeviceCursor(input: UpdateCursorInput): Promise<SyncDeviceCursor> {
+    const row = await this.rpc<any>('update_device_cursor', {
+      p_device_id: input.deviceId,
+      p_last_applied_sequence: input.lastAppliedSequence,
+    });
+    return camelCursor(row);
+  }
+
+  async createPairingSession(input: CreatePairingSessionInput): Promise<PairingSession> {
+    const row = await this.rpc<any>('create_pairing_session', {
+      p_requested_device_public_key: input.requestedDevicePublicKey,
+      p_requested_display_name: input.requestedDisplayName,
+      p_requested_platform: input.requestedPlatform,
+      p_pairing_code_hash: input.pairingCodeHash,
+      p_expires_at: input.expiresAt,
+    });
+    return camelPairingSession(row);
+  }
+
+  async getPairingSession(sessionId: string): Promise<PairingSessionDetails> {
+    return camelPairingDetails(await this.rpc<any>('get_pairing_session', { p_session_id: sessionId }));
+  }
+
+  async listPendingPairingSessions(primaryDeviceId: string): Promise<PairingSession[]> {
+    const rows = await this.rpc<any[]>('list_pending_pairing_sessions', {
+      p_primary_device_id: primaryDeviceId,
+    });
+    return rows.map(camelPairingSession);
+  }
+
+  async approvePairingSession(input: ApprovePairingSessionInput): Promise<PairingSessionDetails> {
+    const row = await this.rpc<any>('approve_pairing_session', {
+      p_session_id: input.sessionId,
+      p_primary_device_id: input.primaryDeviceId,
+      p_pairing_code: input.pairingCode,
+      p_after_sequence: input.afterSequence,
+      p_drive_file_id: input.driveFileId,
+      p_sha256: input.sha256,
+      p_size_bytes: input.sizeBytes,
+    });
+    return camelPairingDetails(row);
+  }
+
+  async revokeDevice(input: RevokeDeviceInput): Promise<DeviceRevocation> {
+    const row = await this.rpc<any>('revoke_device', {
+      p_primary_device_id: input.primaryDeviceId,
+      p_device_id: input.deviceId,
+      p_reason: input.reason,
+    });
+    return camelRevocation(row);
+  }
+
+  async retireKeyPackages(primaryDeviceId: string, driveFileIds: string[]): Promise<SyncObjectMetadata[]> {
+    const rows = await this.rpc<any[]>('retire_key_packages', {
+      p_primary_device_id: primaryDeviceId,
+      p_drive_file_ids: driveFileIds,
+    });
+    return rows.map(camelSyncObject);
+  }
+
+  async listSyncObjectsForMaintenance(
+    primaryDeviceId: string,
+    afterSequence: number,
+    limit = 500,
+  ): Promise<SyncObjectMetadata[]> {
+    const rows = await this.rpc<any[]>('list_sync_objects_for_maintenance', {
+      p_primary_device_id: primaryDeviceId,
+      p_after_sequence: afterSequence,
+      p_limit: limit,
+    });
+    return rows.map(camelSyncObject);
+  }
+
+  async retireSnapshots(primaryDeviceId: string, driveFileIds: string[]): Promise<SyncObjectMetadata[]> {
+    const rows = await this.rpc<any[]>('retire_snapshots', {
+      p_primary_device_id: primaryDeviceId,
+      p_drive_file_ids: driveFileIds,
+    });
+    return rows.map(camelSyncObject);
+  }
+
+  private async rpc<T>(functionName: string, payload: Record<string, unknown>): Promise<T> {
+    const accessToken = typeof this.config.accessToken === 'function'
+      ? await this.config.accessToken()
+      : this.config.accessToken;
+    const response = await this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/${functionName}`, {
+      method: 'POST',
+      headers: {
+        apikey: this.config.anonKey,
+        Authorization: `Bearer ${accessToken || this.config.anonKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      const message = typeof detail?.message === 'string'
+        ? detail.message
+        : `Supabase control-plane request failed (${response.status}).`;
+      throw new SupabaseControlPlaneError(message, response.status, detail);
+    }
+
+    return response.json() as Promise<T>;
+  }
+}
+
+export const createSupabaseControlPlaneClient = (
+  config: SupabaseControlPlaneConfig,
+): SupabaseControlPlaneClient => new SupabaseControlPlaneClient(config);

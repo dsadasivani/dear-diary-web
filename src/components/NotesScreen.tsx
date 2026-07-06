@@ -9,6 +9,7 @@ import RichTextEditor from './RichTextEditor';
 import { diaryRepository } from '../repositories';
 import { getTagsForSettings } from '../domain/appSettings';
 import OverlayPortal from './OverlayPortal';
+import { SyncConflictError } from '../sync/eventSyncEngine';
 
 interface NotesScreenProps {
   notes: Note[];
@@ -42,6 +43,7 @@ export default function NotesScreen({
   const [editPinned, setEditingPinned] = useState<boolean>(false);
   const [editTags, setEditingTags] = useState<string[]>([]);
   const [showConfirmDeleteId, setShowConfirmDeleteId] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState('');
 
   const pinnedNotes = notes.filter(n => n.isPinned);
   const totalNotes = notes.length;
@@ -99,9 +101,18 @@ export default function NotesScreen({
       tags: editTags
     };
 
-    await diaryRepository.updateNote(updated);
-    setEditingNote(null);
-    await onRefreshNotes();
+    try {
+      await diaryRepository.updateNote(updated);
+      setEditingNote(null);
+      setSyncError('');
+      await onRefreshNotes();
+    } catch (saveError: any) {
+      setSyncError(saveError?.message || 'Note could not be saved.');
+      if (saveError instanceof SyncConflictError) {
+        setEditingNote(null);
+        await onRefreshNotes();
+      }
+    }
   };
 
   const handleDeleteNote = async (id: string) => {
@@ -181,6 +192,12 @@ export default function NotesScreen({
           {pinnedNotes.length} Pinned • {totalNotes} Notes
         </div>
       </header>
+
+      {syncError && (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+          {syncError}
+        </p>
+      )}
 
       {/* Quick Thought Textarea Input Card */}
       <section aria-label="Jot a quick note" className="w-full">

@@ -106,6 +106,7 @@ export interface GoogleAccountSession {
   displayName: string | null;
   imageUrl?: string | null;
   accessToken: string | null;
+  idToken?: string | null;
 }
 
 export interface GoogleAccountIdentity {
@@ -213,4 +214,189 @@ export interface BackupFileSummary {
   modifiedTime?: string;
   size?: number;
   appProperties?: Record<string, string>;
+}
+
+export type SyncDeviceRole = 'primary_mobile' | 'web_companion' | 'desktop_companion';
+export type SyncObjectKind = 'event' | 'media' | 'snapshot' | 'key_package';
+export type PairingPlatform = 'android' | 'ios' | 'web' | 'desktop';
+
+export interface SyncAccount {
+  id: string;
+  googleUserId: string;
+  googleEmail: string;
+  createdAt: string;
+  activePrimaryDeviceId: string | null;
+  currentSyncSequence: number;
+  currentSnapshotSequence: number;
+  recoveryConfigured: boolean;
+}
+
+export interface SyncDevice {
+  id: string;
+  accountId: string;
+  role: SyncDeviceRole;
+  publicKey: string;
+  displayName: string;
+  platform: PairingPlatform | string;
+  createdAt: string;
+  lastSeenAt: string;
+  revokedAt: string | null;
+  replacedByDeviceId: string | null;
+}
+
+export interface SyncObjectMetadata {
+  id: string;
+  accountId: string;
+  sequence: number;
+  driveFileId: string;
+  objectKind: SyncObjectKind;
+  sha256: string;
+  sizeBytes: number;
+  createdByDeviceId: string;
+  createdAt: string;
+  recordType?: SyncRecordType | null;
+  recordId?: string | null;
+  baseRecordVersion?: number | null;
+  recordVersion?: number | null;
+  affectedRecords?: SyncAffectedRecordVersion[];
+  retiredAt?: string | null;
+}
+
+export interface SyncMediaPointer {
+  mediaId: string;
+  sequence: number;
+  driveFileId: string;
+  sha256: string;
+  sizeBytes: number;
+  createdByDeviceId: string;
+  createdAt: string;
+  localUri?: string;
+}
+
+export type SyncRecordType = 'diary' | 'entry' | 'note' | 'settings' | 'profile';
+export type SyncEventOperation = 'upsert' | 'delete';
+
+export interface SyncAffectedRecordVersion {
+  recordType: SyncRecordType;
+  recordId: string;
+  baseRecordVersion: number;
+  recordVersion: number;
+}
+
+interface SyncDomainEventBase {
+  version: 1;
+  eventId: string;
+  accountId: string;
+  deviceId: string;
+  createdAt: string;
+  operation: SyncEventOperation;
+  recordId: string;
+  baseRecordVersion: number;
+  recordVersion: number;
+  affectedRecords?: SyncAffectedRecordVersion[];
+}
+
+export type SyncDomainEvent =
+  | (SyncDomainEventBase & { recordType: 'diary'; payload: Diary | null })
+  | (SyncDomainEventBase & { recordType: 'entry'; payload: Entry | null })
+  | (SyncDomainEventBase & { recordType: 'note'; payload: Note | null })
+  | (SyncDomainEventBase & { recordType: 'settings'; payload: AppSettings | null })
+  | (SyncDomainEventBase & { recordType: 'profile'; payload: UserProfile | null });
+
+export interface SyncDeviceCursor {
+  accountId: string;
+  deviceId: string;
+  lastAppliedSequence: number;
+  updatedAt: string;
+}
+
+export interface PairingSession {
+  id: string;
+  accountId: string;
+  requestedDevicePublicKey: string;
+  requestedDisplayName: string;
+  requestedPlatform: PairingPlatform | string;
+  pairingCodeHash: string;
+  expiresAt: string;
+  approvedByPrimaryDeviceId: string | null;
+  approvedAt: string | null;
+  approvedDeviceId: string | null;
+  keyPackageDriveFileId: string | null;
+  keyPackageSha256: string | null;
+  keyPackageSizeBytes: number | null;
+}
+
+export interface PairingSessionDetails {
+  session: PairingSession;
+  device: SyncDevice | null;
+  keyObject: SyncObjectMetadata | null;
+}
+
+export interface DevicePublicKeyBundle {
+  version: 1;
+  signing: JsonWebKey;
+  encryption: JsonWebKey;
+}
+
+export interface DevicePrivateKeyBundle {
+  version: 1;
+  signing: JsonWebKey;
+  encryption: JsonWebKey;
+}
+
+export interface CompanionKeyPackage {
+  version: 1;
+  packageKind: 'companion_root_key';
+  cipher: 'AES-256-GCM';
+  kdf: 'HKDF-SHA-256';
+  accountId: string;
+  targetDevicePublicKeySha256: string;
+  senderEphemeralPublicKey: JsonWebKey;
+  salt: string;
+  nonce: string;
+  wrappedRootKey: string;
+  createdAt: string;
+}
+
+export interface DeviceRevocation {
+  accountId: string;
+  deviceId: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface RecoveryKeyPackage {
+  version: 1;
+  packageKind: 'root_key';
+  cipher: 'AES-256-GCM';
+  kdf: 'PBKDF2-SHA-256';
+  iterations: number;
+  keyVersion: number;
+  accountId?: string;
+  createdAt: string;
+  salt: string;
+  nonce: string;
+  wrappedRootKey: string;
+}
+
+export interface LocalSyncAccountState {
+  accountId: string;
+  deviceId: string;
+  deviceRole: SyncDeviceRole;
+  googleUserId: string;
+  googleEmail: string;
+  devicePublicKey: string;
+  recoveryKeyDriveFileId: string;
+  latestSnapshotDriveFileId: string;
+  latestSnapshotSequence?: number;
+  currentSyncSequence: number;
+  linkedAt: number;
+}
+
+export interface SupabaseAuthSession {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt?: number;
+  userId?: string;
+  email?: string | null;
 }

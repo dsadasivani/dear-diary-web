@@ -5,8 +5,12 @@ import type {
   Diary,
   DriveBackupSettings,
   Entry,
+  LocalSyncAccountState,
   Note,
   SecurityConfig,
+  SyncDomainEvent,
+  SyncMediaPointer,
+  SyncRecordType,
   UserProfile,
 } from '../types';
 
@@ -22,6 +26,8 @@ export interface RepositorySnapshot {
   userProfile?: UserProfile;
   security?: SecurityConfig;
   driveBackupSettings?: DriveBackupSettings;
+  syncRecordVersions?: Record<string, number>;
+  syncMediaPointers?: Record<string, SyncMediaPointer>;
 }
 
 export type RepositoryImportMode = 'replace' | 'replace-portable';
@@ -57,6 +63,14 @@ export interface DiaryRepository {
   saveSecurityConfig(config: SecurityConfig): Promise<void>;
   getDriveBackupSettings(): Promise<DriveBackupSettings>;
   saveDriveBackupSettings(settings: DriveBackupSettings): Promise<void>;
+  getLocalSyncAccountState(): Promise<LocalSyncAccountState | null>;
+  saveLocalSyncAccountState(state: LocalSyncAccountState): Promise<void>;
+  clearLocalSyncAccountState(): Promise<void>;
+  getSyncRecordVersion(recordType: SyncRecordType, recordId: string): Promise<number>;
+  applySyncEvent(event: SyncDomainEvent, sequence: number): Promise<void>;
+  getSyncMediaPointer(sequence: number): Promise<SyncMediaPointer | null>;
+  saveSyncMediaPointer(pointer: SyncMediaPointer): Promise<void>;
+  replaceSyncMediaPointers(pointers: SyncMediaPointer[]): Promise<void>;
 
   resetContent(): Promise<void>;
 

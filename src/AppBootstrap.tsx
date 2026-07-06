@@ -1,17 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BookOpen, RefreshCw } from 'lucide-react';
-import type { AppSettings, SecurityConfig, UserProfile } from './types';
+import type { AppSettings, LocalSyncAccountState, SecurityConfig, UserProfile } from './types';
 import { diaryRepository } from './repositories';
 import { hydrateNativeUiPreferences } from './mobile/nativeStorageBridge';
 import { migrateLegacyDataUriMedia } from './mobile/legacyMediaMigration';
-import { backupCoordinator } from './utils/backupCoordinator';
 import { initializeMediaGarbageCollection } from './mobile/mediaGarbageCollector';
 import App from './App';
+import { isWeb } from './platform';
+import WebCompanionLink from './components/WebCompanionLink';
 
 interface BootstrapData {
   settings: AppSettings;
   security: SecurityConfig;
   userProfile: UserProfile;
+  syncAccount: LocalSyncAccountState | null;
 }
 
 let bootstrapPromise: Promise<BootstrapData> | null = null;
@@ -25,13 +27,13 @@ const loadBootstrapData = (): Promise<BootstrapData> => {
         console.warn('Legacy media migration will be retried on the next launch:', error);
       });
       initializeMediaGarbageCollection();
-      await backupCoordinator.initialize();
-      const [settings, security, userProfile] = await Promise.all([
+      const [settings, security, userProfile, syncAccount] = await Promise.all([
         diaryRepository.getSettings(),
         diaryRepository.getSecurityConfig(),
         diaryRepository.getUserProfile(),
+        diaryRepository.getLocalSyncAccountState(),
       ]);
-      return { settings, security, userProfile };
+      return { settings, security, userProfile, syncAccount };
     })();
   }
   return bootstrapPromise;
@@ -41,6 +43,16 @@ export default function AppBootstrap() {
   const [data, setData] = useState<BootstrapData | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
+
+  const handleCompanionLinked = useCallback(async () => {
+    const [settings, security, userProfile, syncAccount] = await Promise.all([
+      diaryRepository.getSettings(),
+      diaryRepository.getSecurityConfig(),
+      diaryRepository.getUserProfile(),
+      diaryRepository.getLocalSyncAccountState(),
+    ]);
+    setData({ settings, security, userProfile, syncAccount });
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -59,6 +71,9 @@ export default function AppBootstrap() {
   }, [attempt]);
 
   if (data) {
+    if (isWeb() && !data.syncAccount) {
+      return <WebCompanionLink onLinked={handleCompanionLinked} />;
+    }
     return (
       <App
         initialSettings={data.settings}

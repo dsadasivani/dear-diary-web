@@ -2,10 +2,12 @@ import { diaryRepository } from '../repositories';
 import { fileStorageService } from '../platform/filesystem';
 import { isNativePlatform } from '../platform';
 import type { StoredFileEntry } from '../platform/filesystem';
+import { parseSyncMediaReference } from '../sync/syncMedia';
+import type { SyncMediaPointer } from '../types';
 
 const MEDIA_DIRECTORY = 'media';
 const DEFAULT_GRACE_MS = 24 * 60 * 60 * 1000;
-const OWNED_MEDIA_NAME = /^(audio|photo|cover|avatar)-[a-zA-Z0-9._-]+$/;
+const OWNED_MEDIA_NAME = /^(audio|photo|cover|avatar|sync)-[a-zA-Z0-9._-]+$/;
 let initialized = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -20,10 +22,24 @@ const basenameFromUri = (uri: string | undefined): string | null => {
   }
 };
 
-const collectReferencedNames = async (): Promise<Set<string>> => {
+interface ReferencedMedia {
+  names: Set<string>;
+  pointerByName: Map<string, SyncMediaPointer>;
+  pointers: SyncMediaPointer[];
+  referencedSequences: Set<number>;
+}
+
+const collectReferencedNames = async (): Promise<ReferencedMedia> => {
   const snapshot = await diaryRepository.exportSnapshot();
   const names = new Set<string>();
+  const referencedSequences = new Set<number>();
+  const pointerByName = new Map<string, SyncMediaPointer>();
   const add = (uri: string | undefined) => {
+    const reference = parseSyncMediaReference(uri);
+    if (reference) {
+      referencedSequences.add(reference.sequence);
+      return;
+    }
     const name = basenameFromUri(uri);
     if (name) names.add(name);
   };
@@ -34,7 +50,19 @@ const collectReferencedNames = async (): Promise<Set<string>> => {
     entry.blocks?.forEach(block => add(block.audioUri));
   });
   add(snapshot.userProfile?.avatarUri);
-  return names;
+  Object.values(snapshot.syncMediaPointers || {}).forEach(pointer => {
+    const name = basenameFromUri(pointer.localUri);
+    if (name) {
+      pointerByName.set(name, pointer);
+      if (referencedSequences.has(pointer.sequence)) names.add(name);
+    }
+  });
+  return {
+    names,
+    pointerByName,
+    pointers: Object.values(snapshot.syncMediaPointers || {}),
+    referencedSequences,
+  };
 };
 
 export interface MediaCleanupResult {
@@ -59,13 +87,16 @@ export const selectOrphanedMedia = (
 };
 
 export const pruneOrphanedMedia = async (minimumAgeMs = DEFAULT_GRACE_MS): Promise<MediaCleanupResult> => {
+  const referenced = await collectReferencedNames();
+  for (const pointer of referenced.pointers) {
+    if (pointer.localUri && !referenced.referencedSequences.has(pointer.sequence)) {
+      await diaryRepository.saveSyncMediaPointer({ ...pointer, localUri: undefined });
+    }
+  }
   if (!isNativePlatform()) return { scanned: 0, removed: 0, retained: 0, reclaimedBytes: 0 };
-  const [files, referenced] = await Promise.all([
-    fileStorageService.list(MEDIA_DIRECTORY).catch(() => []),
-    collectReferencedNames(),
-  ]);
+  const files = await fileStorageService.list(MEDIA_DIRECTORY).catch(() => []);
   const result: MediaCleanupResult = { scanned: files.length, removed: 0, retained: 0, reclaimedBytes: 0 };
-  const removable = new Set(selectOrphanedMedia(files, referenced, minimumAgeMs).map(file => file.path));
+  const removable = new Set(selectOrphanedMedia(files, referenced.names, minimumAgeMs).map(file => file.path));
   for (const file of files) {
     if (!removable.has(file.path)) {
       result.retained += 1;
@@ -73,6 +104,8 @@ export const pruneOrphanedMedia = async (minimumAgeMs = DEFAULT_GRACE_MS): Promi
     }
     try {
       await fileStorageService.delete(file.path);
+      const pointer = referenced.pointerByName.get(file.name);
+      if (pointer) await diaryRepository.saveSyncMediaPointer({ ...pointer, localUri: undefined });
       result.removed += 1;
       result.reclaimedBytes += file.size || 0;
     } catch (error) {
@@ -84,7 +117,7 @@ export const pruneOrphanedMedia = async (minimumAgeMs = DEFAULT_GRACE_MS): Promi
 };
 
 export const initializeMediaGarbageCollection = (): void => {
-  if (initialized || !isNativePlatform()) return;
+  if (initialized) return;
   initialized = true;
   diaryRepository.subscribeChanges(() => {
     if (timer) clearTimeout(timer);

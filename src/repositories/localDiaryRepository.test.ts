@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { LocalDataStore } from '../platform/storage';
 import type { AppSettings, SecurityConfig, UserProfile } from '../types';
 import { LocalDiaryRepository } from './localDiaryRepository';
+import { createSyncDomainEvent } from '../sync/domainEvents';
 
 class MemoryDataStore implements LocalDataStore {
   private values = new Map<string, string>();
@@ -175,4 +176,77 @@ test('increments and publishes a content revision after portable writes only', a
 
   assert.deepEqual(revisions, [1, 2]);
   assert.equal((await repository.getDriveBackupSettings()).contentRevision, 2);
+});
+
+test('applies canonical sync events idempotently and tracks record versions', async () => {
+  const repository = await createRepository();
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
+  });
+  const note = {
+    id: 'note-cloud',
+    title: 'Cloud note',
+    body: 'Applied once.',
+    isPinned: false,
+    tags: [],
+    createdAt: 10,
+    updatedAt: 10,
+  };
+  const event = createSyncDomainEvent({
+    accountId: 'account-1',
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: note.id,
+    baseRecordVersion: 0,
+    payload: note,
+  });
+
+  await repository.applySyncEvent(event, 3);
+  await repository.applySyncEvent(event, 3);
+
+  assert.deepEqual(await repository.getNote(note.id), note);
+  assert.equal(await repository.getSyncRecordVersion('note', note.id), 1);
+  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 3);
+});
+
+test('applies portable settings and profile events without replacing local reminder settings', async () => {
+  const repository = await createRepository();
+  await repository.saveSettings({ remindersEnabled: true, reminderTime: '07:30', theme: 'light' });
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
+    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2, linkedAt: 1,
+  });
+  const settingsEvent = createSyncDomainEvent({
+    accountId: 'account-1', deviceId: 'device-2', recordType: 'settings', operation: 'upsert',
+    recordId: 'settings', baseRecordVersion: 0,
+    payload: { remindersEnabled: false, reminderTime: '22:00', theme: 'dark', customTags: ['cloud'] },
+  });
+  await repository.applySyncEvent(settingsEvent, 3);
+  const profile = {
+    name: 'Cloud Writer', email: 'writer@example.com', bio: '', avatarEmoji: 'W',
+    avatarColor: '#000000', writingGoal: 500, joinedDate: '07/2026',
+  };
+  await repository.applySyncEvent(createSyncDomainEvent({
+    accountId: 'account-1', deviceId: 'device-2', recordType: 'profile', operation: 'upsert',
+    recordId: 'profile', baseRecordVersion: 0, payload: profile,
+  }), 4);
+
+  const settings = await repository.getSettings();
+  assert.equal(settings.remindersEnabled, true);
+  assert.equal(settings.reminderTime, '07:30');
+  assert.equal(settings.theme, 'dark');
+  assert.deepEqual(settings.customTags, ['cloud']);
+  assert.deepEqual(await repository.getUserProfile(), profile);
 });

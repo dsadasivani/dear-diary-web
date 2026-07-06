@@ -1,9 +1,10 @@
 import { GoogleSignIn } from '@capawesome/capacitor-google-sign-in';
+import type { SignInResult } from '@capawesome/capacitor-google-sign-in';
 import { isNativePlatform } from '../platform';
 import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
 import type { GoogleAccountIdentity, GoogleAccountSession, GoogleConnectionState } from '../types';
 
-export type GoogleAuthIntent = 'backup' | 'pin-reset';
+export type GoogleAuthIntent = 'backup' | 'pin-reset' | 'sync';
 
 const GOOGLE_AUTH_INTENT_KEY = 'deardiary_google_auth_intent';
 const DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
@@ -35,16 +36,17 @@ const initializeNativeGoogleSignIn = async (): Promise<void> => {
 const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleAccountSession> => {
   await initializeNativeGoogleSignIn();
 
-  const result = await GoogleSignIn.signIn();
+  const result: SignInResult = await GoogleSignIn.signIn();
   let session: GoogleAccountSession = {
     userId: result.userId,
     email: result.email,
     displayName: result.displayName,
     imageUrl: result.imageUrl,
     accessToken: null,
+    idToken: result.idToken,
   };
 
-  if (intent === 'backup') {
+  if (intent === 'backup' || intent === 'sync') {
     if (!result.email) throw new Error('Google did not return an email address for the selected account.');
     const account: GoogleAccountIdentity = {
       userId: result.userId,
@@ -63,6 +65,7 @@ const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleA
       displayName: authorization.account.displayName,
       imageUrl: result.imageUrl,
       accessToken: authorization.accessToken,
+      idToken: result.idToken,
     };
     cachedDriveSession = session;
   }
@@ -103,6 +106,7 @@ export const restoreGoogleDriveSession = async (interactive = false): Promise<Go
     displayName: authorization.account.displayName,
     imageUrl: null,
     accessToken: authorization.accessToken,
+    idToken: null,
   };
   cachedDriveSession = session;
   return session;

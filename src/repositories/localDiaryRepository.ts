@@ -5,8 +5,12 @@ import type {
   Diary,
   DriveBackupSettings,
   Entry,
+  LocalSyncAccountState,
   Note,
   SecurityConfig,
+  SyncDomainEvent,
+  SyncMediaPointer,
+  SyncRecordType,
   UserProfile,
 } from '../types';
 import type { LocalDataStore } from '../platform/storage';
@@ -37,6 +41,9 @@ const STORAGE_KEYS = {
   userProfile: 'deardiary_userprofile',
   security: 'deardiary_security',
   driveBackup: 'deardiary_drive_backup',
+  syncAccount: 'deardiary_sync_account',
+  syncRecordVersions: 'deardiary_sync_record_versions',
+  syncMediaPointers: 'deardiary_sync_media_pointers',
 } as const;
 
 const INITIAL_DIARIES: Diary[] = [{
@@ -332,18 +339,136 @@ export class LocalDiaryRepository implements DiaryRepository {
     });
   }
 
+  async getLocalSyncAccountState(): Promise<LocalSyncAccountState | null> {
+    await this.waitForWrites();
+    return this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount);
+  }
+
+  saveLocalSyncAccountState(state: LocalSyncAccountState): Promise<void> {
+    return this.enqueueWrite(() => this.writeJson(STORAGE_KEYS.syncAccount, state));
+  }
+
+  clearLocalSyncAccountState(): Promise<void> {
+    return this.enqueueWrite(async () => {
+      await this.writePortableItems({
+        [STORAGE_KEYS.diaries]: clone(INITIAL_DIARIES),
+        [STORAGE_KEYS.entries]: [],
+        [STORAGE_KEYS.notes]: [],
+        [STORAGE_KEYS.syncRecordVersions]: {},
+        [STORAGE_KEYS.syncMediaPointers]: {},
+      });
+      await this.store.removeItem(STORAGE_KEYS.syncAccount);
+    });
+  }
+
+  async getSyncRecordVersion(recordType: SyncRecordType, recordId: string): Promise<number> {
+    await this.waitForWrites();
+    const versions = await this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {});
+    return versions[`${recordType}:${recordId}`] || 0;
+  }
+
+  applySyncEvent(event: SyncDomainEvent, sequence: number): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const syncState = await this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount);
+      if (!syncState || syncState.accountId !== event.accountId) {
+        throw new Error('The sync event does not belong to the local account.');
+      }
+      if (sequence <= syncState.currentSyncSequence) return;
+
+      const versions = await this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {});
+      const recordKey = `${event.recordType}:${event.recordId}`;
+      const currentVersion = versions[recordKey] || 0;
+      if (currentVersion !== event.baseRecordVersion || event.recordVersion !== currentVersion + 1) {
+        throw new Error(`Sync record version mismatch for ${recordKey}.`);
+      }
+
+      const items: Record<string, unknown> = {};
+      if (event.recordType === 'diary') {
+        const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+        const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
+        const nextDiaries = event.operation === 'delete'
+          ? diaries.filter(diary => diary.id !== event.recordId)
+          : this.upsertRecord(diaries, event.payload as Diary);
+        const nextEntries = event.operation === 'delete'
+          ? entries.filter(entry => entry.diaryId !== event.recordId)
+          : entries;
+        items[STORAGE_KEYS.entries] = nextEntries;
+        items[STORAGE_KEYS.diaries] = this.withDiaryStats(nextDiaries, nextEntries);
+      } else if (event.recordType === 'entry') {
+        const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
+        const nextEntries = event.operation === 'delete'
+          ? entries.filter(entry => entry.id !== event.recordId)
+          : this.upsertRecord(entries, event.payload as Entry);
+        const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+        items[STORAGE_KEYS.entries] = nextEntries;
+        items[STORAGE_KEYS.diaries] = this.withDiaryStats(diaries, nextEntries);
+      } else if (event.recordType === 'note') {
+        const notes = await this.readJson<Note[]>(STORAGE_KEYS.notes, []);
+        items[STORAGE_KEYS.notes] = event.operation === 'delete'
+          ? notes.filter(note => note.id !== event.recordId)
+          : this.upsertRecord(notes, event.payload as Note);
+      } else if (event.recordType === 'settings') {
+        if (event.operation === 'delete' || !event.payload) throw new Error('Settings cannot be deleted.');
+        const currentSettings = await this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS));
+        items[STORAGE_KEYS.settings] = {
+          ...currentSettings,
+          customTags: event.payload.customTags,
+          customMoods: event.payload.customMoods,
+          theme: event.payload.theme,
+        };
+      } else {
+        if (event.operation === 'delete' || !event.payload) throw new Error('Profile cannot be deleted.');
+        items[STORAGE_KEYS.userProfile] = event.payload;
+      }
+
+      versions[recordKey] = event.recordVersion;
+      for (const affected of event.affectedRecords || []) {
+        versions[`${affected.recordType}:${affected.recordId}`] = affected.recordVersion;
+      }
+      items[STORAGE_KEYS.syncRecordVersions] = versions;
+      items[STORAGE_KEYS.syncAccount] = { ...syncState, currentSyncSequence: sequence };
+      await this.writePortableItems(items);
+      if (event.recordType === 'settings') {
+        await syncReminderNotification(await this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS)));
+      }
+    });
+  }
+
+  async getSyncMediaPointer(sequence: number): Promise<SyncMediaPointer | null> {
+    await this.waitForWrites();
+    const pointers = await this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {});
+    return pointers[String(sequence)] || null;
+  }
+
+  saveSyncMediaPointer(pointer: SyncMediaPointer): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const pointers = await this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {});
+      pointers[String(pointer.sequence)] = clone(pointer);
+      await this.writeJson(STORAGE_KEYS.syncMediaPointers, pointers);
+    });
+  }
+
+  replaceSyncMediaPointers(pointers: SyncMediaPointer[]): Promise<void> {
+    return this.enqueueWrite(() => this.writeJson(
+      STORAGE_KEYS.syncMediaPointers,
+      Object.fromEntries(pointers.map(pointer => [String(pointer.sequence), clone(pointer)])),
+    ));
+  }
+
   resetContent(): Promise<void> {
     return this.enqueueWrite(async () => {
       await this.writePortableItems({
         [STORAGE_KEYS.diaries]: clone(INITIAL_DIARIES),
         [STORAGE_KEYS.entries]: [],
         [STORAGE_KEYS.notes]: [],
+        [STORAGE_KEYS.syncRecordVersions]: {},
+        [STORAGE_KEYS.syncMediaPointers]: {},
       });
     });
   }
 
   async exportSnapshot(): Promise<RepositorySnapshot> {
-    const [diaries, entries, notes, settings, userProfile, security, driveBackupSettings] = await Promise.all([
+    const [diaries, entries, notes, settings, userProfile, security, driveBackupSettings, syncRecordVersions, syncMediaPointers] = await Promise.all([
       this.listDiaries(),
       this.listEntries(),
       this.listNotes(),
@@ -351,6 +476,8 @@ export class LocalDiaryRepository implements DiaryRepository {
       this.getUserProfile(),
       this.getSecurityConfig(),
       this.getDriveBackupSettings(),
+      this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}),
+      this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {}),
     ]);
 
     return {
@@ -361,6 +488,8 @@ export class LocalDiaryRepository implements DiaryRepository {
       userProfile,
       security,
       driveBackupSettings,
+      syncRecordVersions,
+      syncMediaPointers,
     };
   }
 
@@ -401,6 +530,8 @@ export class LocalDiaryRepository implements DiaryRepository {
         }
       }
       if (snapshot.userProfile) items[STORAGE_KEYS.userProfile] = snapshot.userProfile;
+      if (snapshot.syncRecordVersions) items[STORAGE_KEYS.syncRecordVersions] = snapshot.syncRecordVersions;
+      if (snapshot.syncMediaPointers) items[STORAGE_KEYS.syncMediaPointers] = snapshot.syncMediaPointers;
       if (mode === 'replace' && snapshot.security) items[STORAGE_KEYS.security] = snapshot.security;
       if (mode === 'replace' && snapshot.driveBackupSettings) items[STORAGE_KEYS.driveBackup] = snapshot.driveBackupSettings;
       await this.writePortableItems(items);
@@ -425,6 +556,12 @@ export class LocalDiaryRepository implements DiaryRepository {
         lastUpdated: getLastUpdatedLabel(diaryEntries),
       };
     });
+  }
+
+  private upsertRecord<T extends { id: string }>(records: T[], record: T): T[] {
+    const next = records.map(item => item.id === record.id ? clone(record) : item);
+    if (!records.some(item => item.id === record.id)) next.push(clone(record));
+    return next;
   }
 
   private async readJson<T>(key: string, fallback: T): Promise<T> {

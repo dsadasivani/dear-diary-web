@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AlertCircle, ArrowLeft, BarChart2, BookOpen, Check, ClipboardList, Eye, EyeOff,
-  Fingerprint, Home, Lock, Search, ShieldCheck, X
+  Fingerprint, Home, Lock, RefreshCw, Search, ShieldCheck, WifiOff, X
 } from 'lucide-react';
 
 // Import our modular screens
@@ -23,7 +23,7 @@ import { addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mob
 import { isAndroid } from './platform';
 
 import { secureAuthService } from './platform/security';
-import { diaryRepository } from './repositories';
+import { diaryRepository, eventSyncEngine } from './repositories';
 import { isValidPin, unlockWithPin } from './domain/security';
 
 interface AppProps {
@@ -35,6 +35,9 @@ interface AppProps {
 export default function App({ initialSettings, initialSecurity, initialUserProfile }: AppProps) {
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator === 'undefined' || navigator.onLine);
+  const [syncAuthorizationMessage, setSyncAuthorizationMessage] = useState('');
+  const [isReauthorizingSync, setIsReauthorizingSync] = useState(false);
   
   // Navigation states
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
@@ -119,12 +122,62 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     await reloadData();
     setUnlockedDiaryIds(new Set());
     setIsAuthenticated(true);
+    if (await diaryRepository.getLocalSyncAccountState()) eventSyncEngine.startPolling();
   };
 
   // On mount: load initial state
   useEffect(() => {
     void reloadData();
     setIsAuthenticated(false);
+    return () => eventSyncEngine.stopPolling();
+  }, []);
+
+  useEffect(() => {
+    const handleAuthorizationRequired = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      setSyncAuthorizationMessage(detail?.message || 'Reconnect your account to resume sync.');
+    };
+    window.addEventListener('deardiary-sync-auth-required', handleAuthorizationRequired);
+    return () => window.removeEventListener('deardiary-sync-auth-required', handleAuthorizationRequired);
+  }, []);
+
+  const handleSyncReauthorization = async () => {
+    setIsReauthorizingSync(true);
+    try {
+      await eventSyncEngine.reauthorize();
+      setSyncAuthorizationMessage('');
+      await eventSyncEngine.pullPending();
+      showToast('Encrypted sync reconnected.', 'success');
+    } catch (reauthorizationError: any) {
+      showToast(reauthorizationError?.message || 'Sync reconnection failed.', 'error');
+    } finally {
+      setIsReauthorizingSync(false);
+    }
+  };
+
+  useEffect(() => {
+    const updateOnlineState = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', updateOnlineState);
+    window.addEventListener('offline', updateOnlineState);
+    return () => {
+      window.removeEventListener('online', updateOnlineState);
+      window.removeEventListener('offline', updateOnlineState);
+    };
+  }, []);
+
+  useEffect(() => diaryRepository.subscribeChanges(() => {
+    if (isAuthenticated) void reloadData();
+  }), [isAuthenticated]);
+
+  useEffect(() => {
+    const handleRejectedSyncWrite = (event: PromiseRejectionEvent) => {
+      const message = event.reason?.message || '';
+      if (!message.includes('online') && !message.includes('another device') && !message.includes('revoked')) return;
+      event.preventDefault();
+      showToast(message, 'warning');
+    };
+    window.addEventListener('unhandledrejection', handleRejectedSyncWrite);
+    return () => window.removeEventListener('unhandledrejection', handleRejectedSyncWrite);
   }, []);
 
   const [selectedPrompt, setSelectedPrompt] = useState<string>('');
@@ -232,9 +285,20 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const handleLockApp = () => {
+    eventSyncEngine.stopPolling();
     setUnlockedDiaryIds(new Set());
     setIsAuthenticated(false);
   };
+
+  useEffect(() => {
+    const handleRevokedDevice = () => {
+      showToast('This device was revoked and its encrypted cache was cleared.', 'warning');
+      handleLockApp();
+      window.setTimeout(() => window.location.reload(), 300);
+    };
+    window.addEventListener('deardiary-device-revoked', handleRevokedDevice);
+    return () => window.removeEventListener('deardiary-device-revoked', handleRevokedDevice);
+  }, []);
 
   const handleBackNavigation = useCallback(() => {
     if (!isAuthenticated) {
@@ -604,6 +668,21 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     }
   };
 
+  const renderSyncAuthorizationBanner = () => syncAuthorizationMessage ? (
+    <div className="fixed inset-x-3 top-3 z-[91] mx-auto flex max-w-sm items-center gap-3 rounded-lg bg-brand-plum px-3 py-2 text-white shadow-lg">
+      <p className="min-w-0 flex-1 text-xs font-semibold">{syncAuthorizationMessage}</p>
+      <button
+        type="button"
+        onClick={() => void handleSyncReauthorization()}
+        disabled={isReauthorizingSync}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15 disabled:opacity-50"
+        title="Reconnect encrypted sync"
+      >
+        <RefreshCw className={`h-4 w-4 ${isReauthorizingSync ? 'animate-spin' : ''}`} />
+      </button>
+    </div>
+  ) : null;
+
   // If locked, return LockScreen view
   if (!isAuthenticated) {
     return (
@@ -621,6 +700,13 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   if (isEditorFocusMode && activeTab === 'diaries' && currentScreen === 'entryEditor') {
     return (
       <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col font-sans select-none relative safe-area-root">
+        {renderSyncAuthorizationBanner()}
+        {!isOnline && (
+          <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+            <WifiOff className="h-4 w-4" />
+            <span>Offline. Synced changes are paused.</span>
+          </div>
+        )}
         {/* Background Soft Ambient Light Blurs */}
         <div className="fixed inset-0 z-0 pointer-events-none opacity-20">
           <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full bg-brand-blush-dark blur-[120px]" />
@@ -635,6 +721,13 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   return (
     <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none pb-24 relative safe-area-root app-shell">
+      {renderSyncAuthorizationBanner()}
+      {!isOnline && (
+        <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+          <WifiOff className="h-4 w-4" />
+          <span>Offline. Synced changes are paused.</span>
+        </div>
+      )}
       
       {/* Background Soft Ambient Light Blurs */}
       <div className="fixed inset-0 z-0 pointer-events-none opacity-20">
