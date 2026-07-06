@@ -2,10 +2,19 @@ import { useEffect, useState } from 'react';
 import { Check, Link2, LoaderCircle, Monitor, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import type { PairingSession, SyncDevice } from '../types';
 import { diaryRepository, eventSyncEngine } from '../repositories';
+import type { GoogleAccountSession } from '../types';
+import { encodeCompanionKeyPackage, wrapRootKeyForCompanion } from '../sync/companionKeyPackage';
 import { approveCompanionPairing } from '../sync/companionPairing';
 import { createConfiguredSupabaseControlPlaneClient } from '../sync/config';
-import { loadSyncSecrets } from '../sync/syncSecrets';
+import { uploadDriveSyncObject } from '../sync/driveSyncObjects';
+import { generateAccountRootKey } from '../sync/e2eeKeyPackage';
+import { loadSyncSecrets, saveSyncSecrets, withAccountRootKeyForEpoch } from '../sync/syncSecrets';
 import { restoreGoogleDriveSession } from '../utils/googleAuth';
+
+const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+};
 
 export default function CompanionApprovalPanel() {
   const [sessions, setSessions] = useState<PairingSession[]>([]);
@@ -95,7 +104,48 @@ export default function CompanionApprovalPanel() {
         deviceId: device.id,
         reason: 'revoked_by_primary',
       });
-      setMessage(`${device.displayName} was revoked.`);
+      const nextKeyEpoch = await controlPlane.rotateAccountKeyEpoch(state.deviceId);
+      const nextRootKey = generateAccountRootKey();
+      const updatedSecrets = withAccountRootKeyForEpoch({
+        ...secrets,
+        accountRootKeys: {
+          ...(secrets.accountRootKeys || {}),
+          [state.keyEpoch || 1]: secrets.accountRootKey,
+        },
+      }, nextKeyEpoch, nextRootKey);
+      await saveSyncSecrets(updatedSecrets);
+      const googleSession = await restoreGoogleDriveSession(false) || await restoreGoogleDriveSession(true);
+      if (!googleSession) throw new Error('Google Drive authorization is required to distribute the new key epoch.');
+      const remainingDevices = (await controlPlane.listAccountDevices(state.deviceId))
+        .filter(candidate => (
+          candidate.role !== 'primary_mobile' &&
+          candidate.id !== device.id &&
+          !candidate.revokedAt
+        ));
+      const account = await controlPlane.lookupCurrentGoogleAccount();
+      const lastKeyPackageSequence = await publishKeyEpochPackages({
+        accountId: state.accountId,
+        primaryDeviceId: state.deviceId,
+        keyEpoch: nextKeyEpoch,
+        accountRootKey: nextRootKey,
+        googleSession,
+        devices: remainingDevices,
+        controlPlane,
+        afterSequence: account?.currentSyncSequence ?? state.currentSyncSequence,
+      });
+      const updatedState = {
+        ...state,
+        keyEpoch: nextKeyEpoch,
+        currentSyncSequence: Math.max(state.currentSyncSequence, lastKeyPackageSequence),
+      };
+      await diaryRepository.saveLocalSyncAccountState(updatedState);
+      if (updatedState.currentSyncSequence > state.currentSyncSequence) {
+        await controlPlane.updateDeviceCursor({
+          deviceId: state.deviceId,
+          lastAppliedSequence: updatedState.currentSyncSequence,
+        });
+      }
+      setMessage(`${device.displayName} was revoked. Future sync writes will use key epoch ${nextKeyEpoch}.`);
       await refresh();
     } catch (revokeError: any) {
       setError(revokeError?.message || 'Device revocation failed.');
@@ -194,3 +244,53 @@ export default function CompanionApprovalPanel() {
     </section>
   );
 }
+
+const publishKeyEpochPackages = async ({
+  accountId,
+  primaryDeviceId,
+  keyEpoch,
+  accountRootKey,
+  googleSession,
+  devices,
+  controlPlane,
+  afterSequence,
+}: {
+  accountId: string;
+  primaryDeviceId: string;
+  keyEpoch: number;
+  accountRootKey: Uint8Array;
+  googleSession: GoogleAccountSession;
+  devices: SyncDevice[];
+  controlPlane: ReturnType<typeof createConfiguredSupabaseControlPlaneClient>;
+  afterSequence: number;
+}): Promise<number> => {
+  let latestSequence = afterSequence;
+  for (const device of devices) {
+    const keyPackage = await wrapRootKeyForCompanion(accountRootKey, accountId, device.publicKey, { keyEpoch });
+    const bytes = encodeCompanionKeyPackage(keyPackage);
+    const file = await uploadDriveSyncObject({
+      session: googleSession,
+      name: `/key-packages/root-key-epoch-${keyEpoch}-${device.id}.ddkey`,
+      objectKind: 'key_package',
+      bytes,
+      appProperties: {
+        accountId,
+        keyEpoch,
+        targetDeviceId: device.id,
+        targetDevicePublicKeySha256: keyPackage.targetDevicePublicKeySha256,
+      },
+    });
+    const committed = await controlPlane.commitSyncObject({
+      deviceId: primaryDeviceId,
+      afterSequence: latestSequence,
+      driveFileId: file.id,
+      objectKind: 'key_package',
+      sha256: await sha256Hex(bytes),
+      sizeBytes: bytes.byteLength,
+      operationId: `key-epoch:${accountId}:${keyEpoch}:${device.id}`,
+      keyEpoch,
+    });
+    latestSequence = Math.max(latestSequence, committed.sequence);
+  }
+  return latestSequence;
+};

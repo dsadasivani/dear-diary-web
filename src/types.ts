@@ -217,7 +217,16 @@ export interface BackupFileSummary {
 }
 
 export type SyncDeviceRole = 'primary_mobile' | 'web_companion' | 'desktop_companion';
-export type SyncObjectKind = 'event' | 'media' | 'snapshot' | 'key_package';
+export type SyncObjectKind =
+  | 'event'
+  | 'media'
+  | 'snapshot'
+  | 'key_package'
+  | 'manifest'
+  | 'partition_snapshot'
+  | 'thumbnail';
+
+export type SyncPartitionKey = 'core' | `month:${string}`;
 export type PairingPlatform = 'android' | 'ios' | 'web' | 'desktop';
 
 export interface SyncAccount {
@@ -228,6 +237,8 @@ export interface SyncAccount {
   activePrimaryDeviceId: string | null;
   currentSyncSequence: number;
   currentSnapshotSequence: number;
+  currentKeyEpoch?: number;
+  partitionedSyncEnabled?: boolean;
   recoveryConfigured: boolean;
 }
 
@@ -260,6 +271,88 @@ export interface SyncObjectMetadata {
   recordVersion?: number | null;
   affectedRecords?: SyncAffectedRecordVersion[];
   retiredAt?: string | null;
+  partitionKey?: SyncPartitionKey | string | null;
+  affectedPartitionKeys?: string[];
+  operationId?: string | null;
+  keyEpoch?: number;
+}
+
+export interface SyncPartitionHead {
+  accountId: string;
+  partitionKey: SyncPartitionKey | string;
+  latestSnapshotSequence: number;
+  latestEventSequence: number;
+  updatedAt: string;
+}
+
+export interface SyncPartitionCursor {
+  accountId: string;
+  deviceId: string;
+  partitionKey: SyncPartitionKey | string;
+  lastAppliedSequence: number;
+  hydratedAt: string | null;
+  updatedAt: string;
+}
+
+export interface SyncPartitionManifestEntry {
+  partitionKey: SyncPartitionKey | string;
+  displayLabel: string;
+  rangeStart: string | null;
+  rangeEnd: string | null;
+  entryCount: number;
+  noteCount: number;
+  mediaCount: number;
+  approximateBytes: number;
+  latestSnapshotSequence: number;
+  latestSnapshotDriveFileId: string | null;
+  latestSnapshotSha256: string | null;
+  latestSnapshotSizeBytes: number | null;
+  headSequence: number;
+  sealed: boolean;
+  searchIndexAvailable?: boolean;
+}
+
+export interface SyncPartitionManifest {
+  version: 1;
+  kind: 'partition_manifest';
+  accountId: string;
+  keyEpoch: number;
+  generatedAt: string;
+  currentMonth: string;
+  previousMonth: string;
+  partitions: SyncPartitionManifestEntry[];
+}
+
+export interface PartitionHydrationState {
+  partitionKey: SyncPartitionKey | string;
+  status: 'not_available' | 'available' | 'hydrating' | 'hydrated' | 'failed';
+  lastAppliedSequence: number;
+  hydratedAt?: number;
+  error?: string;
+}
+
+export type SyncOutboxOperationState =
+  | 'prepared'
+  | 'media_uploading'
+  | 'media_uploaded'
+  | 'event_uploading'
+  | 'metadata_committing'
+  | 'committed'
+  | 'applied'
+  | 'failed';
+
+export interface SyncOutboxOperation {
+  operationId: string;
+  accountId: string;
+  deviceId: string;
+  partitionKey: SyncPartitionKey | string;
+  affectedPartitionKeys: string[];
+  recordType: SyncRecordType;
+  recordId: string;
+  state: SyncOutboxOperationState;
+  createdAt: number;
+  updatedAt: number;
+  error?: string;
 }
 
 export interface SyncMediaPointer {
@@ -271,6 +364,11 @@ export interface SyncMediaPointer {
   createdByDeviceId: string;
   createdAt: string;
   localUri?: string;
+  thumbnailSequence?: number;
+  thumbnailDriveFileId?: string;
+  thumbnailSha256?: string;
+  thumbnailSizeBytes?: number;
+  keyEpoch?: number;
 }
 
 export type SyncRecordType = 'diary' | 'entry' | 'note' | 'settings' | 'profile';
@@ -350,6 +448,7 @@ export interface CompanionKeyPackage {
   cipher: 'AES-256-GCM';
   kdf: 'HKDF-SHA-256';
   accountId: string;
+  keyEpoch?: number;
   targetDevicePublicKeySha256: string;
   senderEphemeralPublicKey: JsonWebKey;
   salt: string;
@@ -390,6 +489,10 @@ export interface LocalSyncAccountState {
   latestSnapshotDriveFileId: string;
   latestSnapshotSequence?: number;
   currentSyncSequence: number;
+  keyEpoch?: number;
+  partitionedSyncEnabled?: boolean;
+  latestManifestDriveFileId?: string;
+  latestManifestSequence?: number;
   linkedAt: number;
 }
 

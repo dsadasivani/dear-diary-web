@@ -114,6 +114,7 @@ export const findLatestValidSnapshot = async (input: {
   objects: SyncObjectMetadata[];
   accountId: string;
   accountRootKey: Uint8Array;
+  accountRootKeys?: Record<number, Uint8Array>;
   googleSession: GoogleAccountSession;
   download?: SyncObjectDownloader;
 }): Promise<ValidSnapshotCandidate> => {
@@ -126,7 +127,10 @@ export const findLatestValidSnapshot = async (input: {
   for (const object of candidates) {
     try {
       const encrypted = await downloadVerifiedSyncObject(input.googleSession, object, input.download);
-      const decrypted = await decryptSyncPayload(input.accountRootKey, encrypted);
+      const decrypted = await decryptSyncPayload(
+        input.accountRootKeys?.[object.keyEpoch || 1] || input.accountRootKey,
+        encrypted,
+      );
       if (decrypted.objectKind !== 'snapshot') throw new Error('Snapshot metadata does not match its payload.');
       const parsed = parseRepositorySnapshotPayload(decrypted.payload, input.accountId);
       if (parsed.baseSequence > object.sequence) throw new Error('Snapshot base sequence is ahead of its object sequence.');

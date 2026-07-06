@@ -15,13 +15,15 @@ export interface SyncSecrets {
   version: 1;
   accountId: string;
   accountRootKey: Uint8Array;
+  accountRootKeys?: Record<number, Uint8Array>;
   devicePrivateKeyJwk: string;
   supabaseSession: SupabaseAuthSession;
   googleSession?: GoogleAccountSession;
 }
 
-interface StoredSyncSecrets extends Omit<SyncSecrets, 'accountRootKey'> {
+interface StoredSyncSecrets extends Omit<SyncSecrets, 'accountRootKey' | 'accountRootKeys'> {
   accountRootKey: string;
+  accountRootKeys?: Record<string, string>;
 }
 
 export interface SyncSecretStorage {
@@ -74,9 +76,17 @@ export const saveSyncSecrets = async (
   if (secrets.accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) {
     throw new Error(`Account root key must be ${ACCOUNT_ROOT_KEY_BYTES} bytes.`);
   }
+  Object.entries(secrets.accountRootKeys || {}).forEach(([epoch, key]) => {
+    if (!Number.isInteger(Number(epoch)) || Number(epoch) < 1 || key.byteLength !== ACCOUNT_ROOT_KEY_BYTES) {
+      throw new Error('Epoch root key metadata is invalid.');
+    }
+  });
   const stored: StoredSyncSecrets = {
     ...secrets,
     accountRootKey: bytesToBase64(secrets.accountRootKey),
+    accountRootKeys: Object.fromEntries(
+      Object.entries(secrets.accountRootKeys || {}).map(([epoch, key]) => [epoch, bytesToBase64(key)]),
+    ),
   };
   await storage.setItem(SYNC_SECRETS_KEY, JSON.stringify(stored));
 };
@@ -92,10 +102,42 @@ export const loadSyncSecrets = async (
     if (stored.version !== 1 || !stored.accountId || accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) {
       return null;
     }
-    return { ...stored, accountRootKey };
+    const accountRootKeys = Object.fromEntries(
+      Object.entries(stored.accountRootKeys || {}).map(([epoch, key]) => [Number(epoch), base64ToBytes(key)]),
+    );
+    Object.values(accountRootKeys).forEach(key => {
+      if (key.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Stored epoch key length is invalid.');
+    });
+    return { ...stored, accountRootKey, accountRootKeys };
   } catch {
     return null;
   }
+};
+
+export const getAccountRootKeyForEpoch = (
+  secrets: Pick<SyncSecrets, 'accountRootKey' | 'accountRootKeys'>,
+  keyEpoch?: number | null,
+): Uint8Array => {
+  const epoch = Number(keyEpoch || 1);
+  return secrets.accountRootKeys?.[epoch] || secrets.accountRootKey;
+};
+
+export const withAccountRootKeyForEpoch = (
+  secrets: SyncSecrets,
+  keyEpoch: number,
+  accountRootKey: Uint8Array,
+): SyncSecrets => {
+  if (!Number.isInteger(keyEpoch) || keyEpoch < 1 || accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) {
+    throw new Error('Epoch root key metadata is invalid.');
+  }
+  return {
+    ...secrets,
+    accountRootKey,
+    accountRootKeys: {
+      ...(secrets.accountRootKeys || {}),
+      [keyEpoch]: accountRootKey,
+    },
+  };
 };
 
 export const clearSyncSecrets = async (

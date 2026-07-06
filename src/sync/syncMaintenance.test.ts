@@ -7,6 +7,8 @@ const object = (
   sequence: number,
   objectKind: SyncObjectMetadata['objectKind'],
   retiredAt: string | null = null,
+  partitionKey?: string,
+  affectedPartitionKeys?: string[],
 ): SyncObjectMetadata => ({
   id: `object-${sequence}`,
   accountId: 'account-1',
@@ -18,6 +20,8 @@ const object = (
   createdByDeviceId: 'device-1',
   createdAt: '2026-07-01T00:00:00.000Z',
   retiredAt,
+  partitionKey,
+  affectedPartitionKeys,
 });
 
 test('retains the newest snapshots and identifies only safe Drive cleanup candidates', () => {
@@ -44,5 +48,63 @@ test('retains the newest snapshots and identifies only safe Drive cleanup candid
   });
 
   assert.deepEqual(plan.snapshotsToRetire.map(item => item.sequence), [2]);
+  assert.deepEqual(plan.objectsToRetire.map(item => item.sequence), [2]);
   assert.deepEqual(plan.driveFilesToDelete.map(item => item.id), ['file-6', 'orphan-old']);
+});
+
+test('retains manifests and partition snapshots independently', () => {
+  const metadata = [
+    object(1, 'manifest'),
+    object(2, 'manifest'),
+    object(3, 'manifest'),
+    object(4, 'partition_snapshot', null, 'core'),
+    object(5, 'partition_snapshot', null, 'core'),
+    object(6, 'partition_snapshot', null, 'core'),
+    object(7, 'partition_snapshot', null, 'month:2026-07'),
+    object(8, 'partition_snapshot', null, 'month:2026-07'),
+    object(9, 'partition_snapshot', null, 'month:2026-07'),
+  ];
+  const plan = planSyncMaintenance({
+    metadata,
+    driveFiles: [],
+    manifestRetentionCount: 2,
+    partitionSnapshotRetentionCount: 2,
+  });
+
+  assert.deepEqual(plan.snapshotsToRetire.map(item => item.sequence), [1, 4, 7]);
+  assert.deepEqual(plan.eventsToRetire, []);
+});
+
+test('retires event tails covered by retained partition snapshots', () => {
+  const metadata = [
+    object(1, 'event', null, 'month:2026-07'),
+    object(2, 'event', null, 'month:2026-07'),
+    object(3, 'event', null, 'month:2026-07'),
+    object(4, 'partition_snapshot', null, 'month:2026-07'),
+    object(5, 'partition_snapshot', null, 'month:2026-07'),
+  ];
+  const plan = planSyncMaintenance({
+    metadata,
+    driveFiles: [],
+    partitionSnapshotRetentionCount: 2,
+  });
+
+  assert.deepEqual(plan.eventsToRetire.map(item => item.sequence), [1, 2, 3]);
+  assert.deepEqual(plan.objectsToRetire.map(item => item.sequence), [1, 2, 3]);
+});
+
+test('keeps cross-partition events until every affected partition is covered', () => {
+  const metadata = [
+    object(3, 'event', null, 'month:2026-07', ['month:2026-07', 'month:2026-08']),
+    object(4, 'partition_snapshot', null, 'month:2026-07'),
+    object(5, 'event', null, 'month:2026-07', ['month:2026-07', 'month:2026-08']),
+    object(6, 'partition_snapshot', null, 'month:2026-08'),
+  ];
+  const plan = planSyncMaintenance({
+    metadata,
+    driveFiles: [],
+    partitionSnapshotRetentionCount: 2,
+  });
+
+  assert.deepEqual(plan.eventsToRetire.map(item => item.sequence), [3]);
 });

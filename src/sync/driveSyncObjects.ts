@@ -2,12 +2,16 @@ import type { GoogleAccountSession, SyncObjectKind } from '../types';
 
 const DRIVE_FILES_ENDPOINT = 'https://www.googleapis.com/drive/v3/files';
 const DRIVE_UPLOAD_ENDPOINT = 'https://www.googleapis.com/upload/drive/v3/files';
+export const RESUMABLE_UPLOAD_THRESHOLD_BYTES = 5 * 1024 * 1024;
 
 const SYNC_MIME_TYPES: Record<SyncObjectKind, string> = {
   event: 'application/vnd.deardiary.event',
   media: 'application/vnd.deardiary.media',
   snapshot: 'application/vnd.deardiary.snapshot',
   key_package: 'application/vnd.deardiary.key-package',
+  manifest: 'application/vnd.deardiary.manifest',
+  partition_snapshot: 'application/vnd.deardiary.partition-snapshot',
+  thumbnail: 'application/vnd.deardiary.thumbnail',
 };
 
 export interface DriveSyncObjectSummary {
@@ -91,6 +95,9 @@ export const uploadDriveSyncObject = async ({
     parents: ['appDataFolder'],
     appProperties: toAppProperties(objectKind, appProperties),
   };
+  if (bytes.byteLength > RESUMABLE_UPLOAD_THRESHOLD_BYTES) {
+    return uploadDriveSyncObjectResumable(session, metadata, objectKind, bytes);
+  }
   const delimiter = `dear-diary-${crypto.randomUUID()}`;
   const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
   const prefix = new TextEncoder().encode(
@@ -119,6 +126,45 @@ export const uploadDriveSyncObject = async ({
     body,
   });
 
+  if (!response.ok) await throwDriveError(response);
+  return toSummary(await response.json());
+};
+
+const uploadDriveSyncObjectResumable = async (
+  session: GoogleAccountSession,
+  metadata: {
+    name: string;
+    mimeType: string;
+    parents: string[];
+    appProperties: Record<string, string>;
+  },
+  objectKind: SyncObjectKind,
+  bytes: Uint8Array,
+): Promise<DriveSyncObjectSummary> => {
+  const fields = encodeURIComponent('id,name,createdTime,modifiedTime,size,appProperties');
+  const start = await fetch(`${DRIVE_UPLOAD_ENDPOINT}?uploadType=resumable&fields=${fields}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${requireDriveAccessToken(session)}`,
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': SYNC_MIME_TYPES[objectKind],
+      'X-Upload-Content-Length': String(bytes.byteLength),
+    },
+    body: JSON.stringify(metadata),
+  });
+  if (!start.ok) await throwDriveError(start);
+  const location = start.headers.get('Location');
+  if (!location) throw new Error('Google Drive did not return a resumable upload session.');
+
+  const response = await fetch(location, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${requireDriveAccessToken(session)}`,
+      'Content-Type': SYNC_MIME_TYPES[objectKind],
+      'Content-Length': String(bytes.byteLength),
+    },
+    body: bytes,
+  });
   if (!response.ok) await throwDriveError(response);
   return toSummary(await response.json());
 };

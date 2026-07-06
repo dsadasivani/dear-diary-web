@@ -7,9 +7,12 @@ import type {
   Entry,
   LocalSyncAccountState,
   Note,
+  PartitionHydrationState,
   SecurityConfig,
   SyncDomainEvent,
   SyncMediaPointer,
+  SyncOutboxOperation,
+  SyncPartitionKey,
   SyncRecordType,
   UserProfile,
 } from '../types';
@@ -32,6 +35,7 @@ import {
 } from './defaults';
 import { normalizeSecurityConfig } from '../domain/security';
 import { buildPortableMergePlan } from '../domain/backupMerge';
+import { CORE_PARTITION_KEY, filterSnapshotForPartition, isMonthPartitionKey, monthFromTimestamp } from '../sync/syncPartitioning';
 
 const STORAGE_KEYS = {
   diaries: 'deardiary_diaries',
@@ -44,6 +48,8 @@ const STORAGE_KEYS = {
   syncAccount: 'deardiary_sync_account',
   syncRecordVersions: 'deardiary_sync_record_versions',
   syncMediaPointers: 'deardiary_sync_media_pointers',
+  syncPartitionHydration: 'deardiary_sync_partition_hydration',
+  syncOutbox: 'deardiary_sync_outbox',
 } as const;
 
 const INITIAL_DIARIES: Diary[] = [{
@@ -356,6 +362,8 @@ export class LocalDiaryRepository implements DiaryRepository {
         [STORAGE_KEYS.notes]: [],
         [STORAGE_KEYS.syncRecordVersions]: {},
         [STORAGE_KEYS.syncMediaPointers]: {},
+        [STORAGE_KEYS.syncPartitionHydration]: {},
+        [STORAGE_KEYS.syncOutbox]: {},
       });
       await this.store.removeItem(STORAGE_KEYS.syncAccount);
     });
@@ -367,13 +375,13 @@ export class LocalDiaryRepository implements DiaryRepository {
     return versions[`${recordType}:${recordId}`] || 0;
   }
 
-  applySyncEvent(event: SyncDomainEvent, sequence: number): Promise<void> {
+  applySyncEvent(event: SyncDomainEvent, sequence: number, options: { allowHistorical?: boolean } = {}): Promise<void> {
     return this.enqueueWrite(async () => {
       const syncState = await this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount);
       if (!syncState || syncState.accountId !== event.accountId) {
         throw new Error('The sync event does not belong to the local account.');
       }
-      if (sequence <= syncState.currentSyncSequence) return;
+      if (!options.allowHistorical && sequence <= syncState.currentSyncSequence) return;
 
       const versions = await this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {});
       const recordKey = `${event.recordType}:${event.recordId}`;
@@ -426,7 +434,10 @@ export class LocalDiaryRepository implements DiaryRepository {
         versions[`${affected.recordType}:${affected.recordId}`] = affected.recordVersion;
       }
       items[STORAGE_KEYS.syncRecordVersions] = versions;
-      items[STORAGE_KEYS.syncAccount] = { ...syncState, currentSyncSequence: sequence };
+      items[STORAGE_KEYS.syncAccount] = {
+        ...syncState,
+        currentSyncSequence: Math.max(syncState.currentSyncSequence, sequence),
+      };
       await this.writePortableItems(items);
       if (event.recordType === 'settings') {
         await syncReminderNotification(await this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS)));
@@ -437,13 +448,40 @@ export class LocalDiaryRepository implements DiaryRepository {
   async getSyncMediaPointer(sequence: number): Promise<SyncMediaPointer | null> {
     await this.waitForWrites();
     const pointers = await this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {});
-    return pointers[String(sequence)] || null;
+    return pointers[String(sequence)]
+      || Object.values(pointers).find(pointer => pointer.sequence === sequence)
+      || null;
+  }
+
+  async getSyncMediaPointerByMediaId(mediaId: string): Promise<SyncMediaPointer | null> {
+    await this.waitForWrites();
+    const pointers = await this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {});
+    return Object.values(pointers).find(pointer => pointer.mediaId === mediaId) || null;
+  }
+
+  async getSyncMediaPointerByDriveFileId(driveFileId: string): Promise<SyncMediaPointer | null> {
+    await this.waitForWrites();
+    const pointers = await this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {});
+    return Object.values(pointers).find(pointer => pointer.driveFileId === driveFileId) || null;
   }
 
   saveSyncMediaPointer(pointer: SyncMediaPointer): Promise<void> {
     return this.enqueueWrite(async () => {
       const pointers = await this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {});
-      pointers[String(pointer.sequence)] = clone(pointer);
+      const key = pointer.sequence > 0 ? String(pointer.sequence) : `media:${pointer.mediaId}`;
+      Object.entries(pointers).forEach(([existingKey, existing]) => {
+        if (
+          existingKey !== key
+          && (
+            (pointer.sequence > 0 && existing.sequence === pointer.sequence)
+            || (!!pointer.mediaId && existing.mediaId === pointer.mediaId)
+            || existing.driveFileId === pointer.driveFileId
+          )
+        ) {
+          delete pointers[existingKey];
+        }
+      });
+      pointers[key] = clone(pointer);
       await this.writeJson(STORAGE_KEYS.syncMediaPointers, pointers);
     });
   }
@@ -455,6 +493,147 @@ export class LocalDiaryRepository implements DiaryRepository {
     ));
   }
 
+  async exportPartitionSnapshot(partitionKey: SyncPartitionKey | string): Promise<RepositorySnapshot> {
+    return filterSnapshotForPartition(await this.exportSnapshot(), partitionKey);
+  }
+
+  async importPartitionSnapshot(partitionKey: SyncPartitionKey | string, snapshot: RepositorySnapshot): Promise<void> {
+    if (!Array.isArray(snapshot.diaries) || !Array.isArray(snapshot.entries) || !Array.isArray(snapshot.notes)) {
+      throw new Error('The partition snapshot is incomplete.');
+    }
+    const current = await this.exportSnapshot();
+    if (partitionKey === CORE_PARTITION_KEY) {
+      await this.importSnapshot({
+        ...current,
+        diaries: snapshot.diaries.length > 0 ? snapshot.diaries : current.diaries,
+        settings: snapshot.settings || current.settings,
+        userProfile: snapshot.userProfile || current.userProfile,
+        syncRecordVersions: { ...(current.syncRecordVersions || {}), ...(snapshot.syncRecordVersions || {}) },
+        syncMediaPointers: { ...(current.syncMediaPointers || {}), ...(snapshot.syncMediaPointers || {}) },
+      }, 'replace-portable');
+      return;
+    }
+    if (!isMonthPartitionKey(partitionKey)) throw new Error('Unsupported partition key.');
+    const month = partitionKey.slice('month:'.length);
+    const nextEntries = [
+      ...current.entries.filter(entry => !entry.date.startsWith(month)),
+      ...snapshot.entries,
+    ];
+    const nextNotes = [
+      ...current.notes.filter(note => {
+        try {
+          return monthFromTimestamp(note.createdAt) !== month;
+        } catch {
+          return true;
+        }
+      }),
+      ...snapshot.notes,
+    ];
+    await this.importSnapshot({
+      ...current,
+      entries: nextEntries,
+      notes: nextNotes,
+      syncRecordVersions: { ...(current.syncRecordVersions || {}), ...(snapshot.syncRecordVersions || {}) },
+      syncMediaPointers: { ...(current.syncMediaPointers || {}), ...(snapshot.syncMediaPointers || {}) },
+    }, 'replace-portable');
+  }
+
+  async getPartitionHydrationState(partitionKey: SyncPartitionKey | string): Promise<PartitionHydrationState> {
+    await this.waitForWrites();
+    const states = await this.readJson<Record<string, PartitionHydrationState>>(STORAGE_KEYS.syncPartitionHydration, {});
+    return states[partitionKey] || {
+      partitionKey,
+      status: 'not_available',
+      lastAppliedSequence: 0,
+    };
+  }
+
+  async listAvailableArchiveMonths(): Promise<PartitionHydrationState[]> {
+    await this.waitForWrites();
+    const states = await this.readJson<Record<string, PartitionHydrationState>>(STORAGE_KEYS.syncPartitionHydration, {});
+    return Object.values(states)
+      .filter(state => isMonthPartitionKey(state.partitionKey) && state.status !== 'not_available')
+      .sort((left, right) => String(right.partitionKey).localeCompare(String(left.partitionKey)));
+  }
+
+  markPartitionAvailable(partitionKey: SyncPartitionKey | string, sequence: number): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const states = await this.readJson<Record<string, PartitionHydrationState>>(STORAGE_KEYS.syncPartitionHydration, {});
+      const existing = states[partitionKey];
+      if (existing?.status === 'hydrated') return;
+      states[partitionKey] = {
+        partitionKey,
+        status: 'available',
+        lastAppliedSequence: Math.max(existing?.lastAppliedSequence || 0, sequence),
+      };
+      await this.writeJson(STORAGE_KEYS.syncPartitionHydration, states);
+    });
+  }
+
+  markPartitionHydrating(partitionKey: SyncPartitionKey | string): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const states = await this.readJson<Record<string, PartitionHydrationState>>(STORAGE_KEYS.syncPartitionHydration, {});
+      const existing = states[partitionKey];
+      states[partitionKey] = {
+        partitionKey,
+        status: 'hydrating',
+        lastAppliedSequence: existing?.lastAppliedSequence || 0,
+      };
+      await this.writeJson(STORAGE_KEYS.syncPartitionHydration, states);
+    });
+  }
+
+  markPartitionHydrated(partitionKey: SyncPartitionKey | string, sequence: number): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const states = await this.readJson<Record<string, PartitionHydrationState>>(STORAGE_KEYS.syncPartitionHydration, {});
+      states[partitionKey] = {
+        partitionKey,
+        status: 'hydrated',
+        lastAppliedSequence: sequence,
+        hydratedAt: Date.now(),
+      };
+      await this.writeJson(STORAGE_KEYS.syncPartitionHydration, states);
+    });
+  }
+
+  markPartitionHydrationFailed(partitionKey: SyncPartitionKey | string, error: string): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const states = await this.readJson<Record<string, PartitionHydrationState>>(STORAGE_KEYS.syncPartitionHydration, {});
+      const existing = states[partitionKey];
+      states[partitionKey] = {
+        partitionKey,
+        status: 'failed',
+        lastAppliedSequence: existing?.lastAppliedSequence || 0,
+        error,
+      };
+      await this.writeJson(STORAGE_KEYS.syncPartitionHydration, states);
+    });
+  }
+
+  saveSyncOutboxOperation(operation: SyncOutboxOperation): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {});
+      outbox[operation.operationId] = clone({ ...operation, updatedAt: Date.now() });
+      await this.writeJson(STORAGE_KEYS.syncOutbox, outbox);
+    });
+  }
+
+  async listSyncOutboxOperations(states?: SyncOutboxOperation['state'][]): Promise<SyncOutboxOperation[]> {
+    await this.waitForWrites();
+    const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {});
+    return Object.values(outbox)
+      .filter(operation => !states || states.includes(operation.state))
+      .sort((left, right) => left.createdAt - right.createdAt);
+  }
+
+  removeSyncOutboxOperation(operationId: string): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {});
+      delete outbox[operationId];
+      await this.writeJson(STORAGE_KEYS.syncOutbox, outbox);
+    });
+  }
+
   resetContent(): Promise<void> {
     return this.enqueueWrite(async () => {
       await this.writePortableItems({
@@ -463,6 +642,8 @@ export class LocalDiaryRepository implements DiaryRepository {
         [STORAGE_KEYS.notes]: [],
         [STORAGE_KEYS.syncRecordVersions]: {},
         [STORAGE_KEYS.syncMediaPointers]: {},
+        [STORAGE_KEYS.syncPartitionHydration]: {},
+        [STORAGE_KEYS.syncOutbox]: {},
       });
     });
   }

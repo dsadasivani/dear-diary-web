@@ -4,7 +4,7 @@ import { SupabaseControlPlaneClient, SupabaseControlPlaneError } from './supabas
 
 test('posts metadata operations through Supabase RPC with auth headers', async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
-  const fetchImpl: typeof fetch = async (input, init = {}) => {
+  const fetchImpl: typeof fetch = async (input, init: RequestInit = {}) => {
     calls.push({ url: String(input), init });
     return new Response(JSON.stringify({
       id: 'object-1',
@@ -59,6 +59,148 @@ test('posts metadata operations through Supabase RPC with auth headers', async (
     p_record_id: 'note-1',
     p_base_record_version: 3,
     p_affected_records: [],
+    p_partition_key: null,
+    p_affected_partition_keys: [],
+    p_operation_id: null,
+    p_key_epoch: 1,
+  }));
+});
+
+test('posts idempotent batch commits with partition metadata', async () => {
+  let requestUrl = '';
+  let requestBody = '';
+  const fetchImpl: typeof fetch = async (input, init: RequestInit = {}) => {
+    requestUrl = String(input);
+    requestBody = String(init.body);
+    return new Response(JSON.stringify([{
+      id: 'object-1',
+      account_id: 'account-1',
+      sequence: 10,
+      drive_file_id: 'drive-event-1',
+      object_kind: 'event',
+      sha256: 'a'.repeat(64),
+      size_bytes: 456,
+      created_by_device_id: 'device-1',
+      created_at: '2026-07-05T00:00:00.000Z',
+      record_type: 'entry',
+      record_id: 'entry-1',
+      base_record_version: 0,
+      record_version: 1,
+      partition_key: 'month:2026-07',
+      affected_partition_keys: ['month:2026-07'],
+      operation_id: 'operation-1',
+      key_epoch: 2,
+    }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const client = new SupabaseControlPlaneClient({
+    url: 'https://example.supabase.co',
+    anonKey: 'anon-key',
+    accessToken: 'access-token',
+    fetchImpl,
+  });
+
+  const objects = await client.commitSyncBatch({
+    deviceId: 'device-1',
+    operationId: 'operation-1',
+    objects: [{
+      driveFileId: 'drive-event-1',
+      objectKind: 'event',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 456,
+      partitionKey: 'month:2026-07',
+    }],
+    recordType: 'entry',
+    recordId: 'entry-1',
+    baseRecordVersion: 0,
+    partitionKey: 'month:2026-07',
+    affectedPartitionKeys: ['month:2026-07'],
+    keyEpoch: 2,
+  });
+
+  assert.equal(requestUrl, 'https://example.supabase.co/rest/v1/rpc/commit_sync_batch');
+  assert.equal(objects[0].partitionKey, 'month:2026-07');
+  assert.equal(objects[0].operationId, 'operation-1');
+  assert.equal(objects[0].keyEpoch, 2);
+  assert.equal(requestBody, JSON.stringify({
+    p_device_id: 'device-1',
+    p_operation_id: 'operation-1',
+    p_objects: [{
+      drive_file_id: 'drive-event-1',
+      object_kind: 'event',
+      sha256: 'a'.repeat(64),
+      size_bytes: 456,
+      partition_key: 'month:2026-07',
+    }],
+    p_record_type: 'entry',
+    p_record_id: 'entry-1',
+    p_base_record_version: 0,
+    p_affected_records: [],
+    p_partition_key: 'month:2026-07',
+    p_affected_partition_keys: ['month:2026-07'],
+    p_key_epoch: 2,
+  }));
+});
+
+test('rotates account key epoch through Supabase RPC', async () => {
+  let requestUrl = '';
+  let requestBody = '';
+  const client = new SupabaseControlPlaneClient({
+    url: 'https://example.supabase.co',
+    anonKey: 'anon-key',
+    accessToken: 'access-token',
+    fetchImpl: async (input, init: RequestInit = {}) => {
+      requestUrl = String(input);
+      requestBody = String(init.body);
+      return new Response(JSON.stringify(3), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+
+  const epoch = await client.rotateAccountKeyEpoch('primary-device-1');
+
+  assert.equal(epoch, 3);
+  assert.equal(requestUrl, 'https://example.supabase.co/rest/v1/rpc/rotate_account_key_epoch');
+  assert.equal(requestBody, JSON.stringify({ p_primary_device_id: 'primary-device-1' }));
+});
+
+test('retires generic sync objects through Supabase RPC', async () => {
+  let requestUrl = '';
+  let requestBody = '';
+  const client = new SupabaseControlPlaneClient({
+    url: 'https://example.supabase.co',
+    anonKey: 'anon-key',
+    accessToken: 'access-token',
+    fetchImpl: async (input, init: RequestInit = {}) => {
+      requestUrl = String(input);
+      requestBody = String(init.body);
+      return new Response(JSON.stringify([{
+        id: 'object-1',
+        account_id: 'account-1',
+        sequence: 1,
+        drive_file_id: 'drive-event-1',
+        object_kind: 'event',
+        sha256: 'a'.repeat(64),
+        size_bytes: 123,
+        created_by_device_id: 'device-1',
+        created_at: '2026-07-05T00:00:00.000Z',
+        retired_at: '2026-07-06T00:00:00.000Z',
+      }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+
+  const retired = await client.retireSyncObjects('primary-device-1', ['drive-event-1']);
+
+  assert.equal(retired[0].objectKind, 'event');
+  assert.equal(retired[0].retiredAt, '2026-07-06T00:00:00.000Z');
+  assert.equal(requestUrl, 'https://example.supabase.co/rest/v1/rpc/retire_sync_objects');
+  assert.equal(requestBody, JSON.stringify({
+    p_primary_device_id: 'primary-device-1',
+    p_drive_file_ids: ['drive-event-1'],
   }));
 });
 

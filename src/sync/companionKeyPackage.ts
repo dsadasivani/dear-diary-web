@@ -41,6 +41,7 @@ export const wrapRootKeyForCompanion = async (
   accountRootKey: Uint8Array,
   accountId: string,
   targetDevicePublicKey: string,
+  options: { keyEpoch?: number } = {},
 ): Promise<CompanionKeyPackage> => {
   if (accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Account root key length is invalid.');
   const targetBundle = parseDevicePublicKeyBundle(targetDevicePublicKey);
@@ -55,7 +56,8 @@ export const wrapRootKeyForCompanion = async (
   const wrappingKey = await deriveWrappingKey(senderPair.privateKey, targetPublicKey, salt);
   const senderEphemeralPublicKey = await crypto.subtle.exportKey('jwk', senderPair.publicKey);
   const targetDevicePublicKeySha256 = await fingerprintDevicePublicKey(targetDevicePublicKey);
-  const additionalData = encoder.encode(`${accountId}:${targetDevicePublicKeySha256}`);
+  const keyEpoch = options.keyEpoch || 1;
+  const additionalData = encoder.encode(`${accountId}:${targetDevicePublicKeySha256}:${keyEpoch}`);
   const wrappedRootKey = new Uint8Array(await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: nonce, additionalData }, wrappingKey, accountRootKey,
   ));
@@ -65,6 +67,7 @@ export const wrapRootKeyForCompanion = async (
     cipher: 'AES-256-GCM',
     kdf: 'HKDF-SHA-256',
     accountId,
+    keyEpoch,
     targetDevicePublicKeySha256,
     senderEphemeralPublicKey,
     salt: bytesToBase64(salt),
@@ -102,7 +105,7 @@ export const unwrapRootKeyForCompanion = async (
       {
         name: 'AES-GCM',
         iv: base64ToBytes(keyPackage.nonce),
-        additionalData: encoder.encode(`${keyPackage.accountId}:${fingerprint}`),
+        additionalData: encoder.encode(`${keyPackage.accountId}:${fingerprint}:${keyPackage.keyEpoch || 1}`),
       },
       wrappingKey,
       base64ToBytes(keyPackage.wrappedRootKey),

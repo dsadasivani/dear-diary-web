@@ -30,28 +30,38 @@ export interface ReplaySyncObjectsInput {
   repository: DiaryRepository;
   localState: LocalSyncAccountState;
   accountRootKey: Uint8Array;
+  accountRootKeys?: Record<number, Uint8Array>;
   googleSession: GoogleAccountSession;
   objects: SyncObjectMetadata[];
   download?: SyncObjectDownloader;
+  allowHistorical?: boolean;
 }
+
+const keyForObject = (
+  accountRootKey: Uint8Array,
+  accountRootKeys: Record<number, Uint8Array> | undefined,
+  object: SyncObjectMetadata,
+): Uint8Array => accountRootKeys?.[object.keyEpoch || 1] || accountRootKey;
 
 export const replaySyncObjects = async ({
   repository,
   localState,
   accountRootKey,
+  accountRootKeys,
   googleSession,
   objects,
   download,
+  allowHistorical = false,
 }: ReplaySyncObjectsInput): Promise<LocalSyncAccountState> => {
   let state = localState;
   const ordered = [...objects].sort((left, right) => left.sequence - right.sequence);
   for (const object of ordered) {
-    if (object.sequence <= state.currentSyncSequence) continue;
+    if (!allowHistorical && object.sequence <= state.currentSyncSequence) continue;
     if (object.accountId !== state.accountId) throw new Error('Sync metadata belongs to another account.');
 
     if (object.objectKind === 'event') {
       const encrypted = await downloadVerifiedSyncObject(googleSession, object, download);
-      const decrypted = await decryptSyncPayload(accountRootKey, encrypted);
+      const decrypted = await decryptSyncPayload(keyForObject(accountRootKey, accountRootKeys, object), encrypted);
       if (decrypted.objectKind !== 'event') throw new Error('Sync object metadata does not match its encrypted payload.');
       const event = decodeSyncDomainEvent(decrypted.payload);
       if (
@@ -66,7 +76,7 @@ export const replaySyncObjects = async ({
       if (JSON.stringify(event.affectedRecords || []) !== JSON.stringify(object.affectedRecords || [])) {
         throw new Error('Encrypted sync event affected records do not match control-plane metadata.');
       }
-      await repository.applySyncEvent(event, object.sequence);
+      await repository.applySyncEvent(event, object.sequence, { allowHistorical });
     } else {
       if (object.objectKind === 'media') {
         await repository.saveSyncMediaPointer({
@@ -77,11 +87,15 @@ export const replaySyncObjects = async ({
           sizeBytes: object.sizeBytes,
           createdByDeviceId: object.createdByDeviceId,
           createdAt: object.createdAt,
+          keyEpoch: object.keyEpoch || 1,
         });
       }
-      await repository.saveLocalSyncAccountState({ ...state, currentSyncSequence: object.sequence });
+      await repository.saveLocalSyncAccountState({
+        ...state,
+        currentSyncSequence: Math.max(state.currentSyncSequence, object.sequence),
+      });
     }
-    state = { ...state, currentSyncSequence: object.sequence };
+    state = { ...state, currentSyncSequence: Math.max(state.currentSyncSequence, object.sequence) };
   }
   return state;
 };

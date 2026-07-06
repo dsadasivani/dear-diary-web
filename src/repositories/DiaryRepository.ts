@@ -7,9 +7,12 @@ import type {
   Entry,
   LocalSyncAccountState,
   Note,
+  PartitionHydrationState,
   SecurityConfig,
   SyncDomainEvent,
   SyncMediaPointer,
+  SyncOutboxOperation,
+  SyncPartitionKey,
   SyncRecordType,
   UserProfile,
 } from '../types';
@@ -67,10 +70,23 @@ export interface DiaryRepository {
   saveLocalSyncAccountState(state: LocalSyncAccountState): Promise<void>;
   clearLocalSyncAccountState(): Promise<void>;
   getSyncRecordVersion(recordType: SyncRecordType, recordId: string): Promise<number>;
-  applySyncEvent(event: SyncDomainEvent, sequence: number): Promise<void>;
+  applySyncEvent(event: SyncDomainEvent, sequence: number, options?: { allowHistorical?: boolean }): Promise<void>;
   getSyncMediaPointer(sequence: number): Promise<SyncMediaPointer | null>;
+  getSyncMediaPointerByMediaId(mediaId: string): Promise<SyncMediaPointer | null>;
+  getSyncMediaPointerByDriveFileId(driveFileId: string): Promise<SyncMediaPointer | null>;
   saveSyncMediaPointer(pointer: SyncMediaPointer): Promise<void>;
   replaceSyncMediaPointers(pointers: SyncMediaPointer[]): Promise<void>;
+  exportPartitionSnapshot(partitionKey: SyncPartitionKey | string): Promise<RepositorySnapshot>;
+  importPartitionSnapshot(partitionKey: SyncPartitionKey | string, snapshot: RepositorySnapshot): Promise<void>;
+  getPartitionHydrationState(partitionKey: SyncPartitionKey | string): Promise<PartitionHydrationState>;
+  listAvailableArchiveMonths(): Promise<PartitionHydrationState[]>;
+  markPartitionAvailable(partitionKey: SyncPartitionKey | string, sequence: number): Promise<void>;
+  markPartitionHydrating(partitionKey: SyncPartitionKey | string): Promise<void>;
+  markPartitionHydrated(partitionKey: SyncPartitionKey | string, sequence: number): Promise<void>;
+  markPartitionHydrationFailed(partitionKey: SyncPartitionKey | string, error: string): Promise<void>;
+  saveSyncOutboxOperation(operation: SyncOutboxOperation): Promise<void>;
+  listSyncOutboxOperations(states?: SyncOutboxOperation['state'][]): Promise<SyncOutboxOperation[]>;
+  removeSyncOutboxOperation(operationId: string): Promise<void>;
 
   resetContent(): Promise<void>;
 

@@ -19,6 +19,7 @@ import { downloadVerifiedSyncObject, replaySyncObjects } from './eventReplay';
 import { loadSyncSecrets, saveSyncSecrets } from './syncSecrets';
 import { findLatestValidSnapshot } from './syncSnapshot';
 import { SupabaseControlPlaneClient } from './supabaseControlPlane';
+import { restoreLatestPartitions } from './partitionedRestore';
 
 export const PAIRING_SESSION_MINUTES = 10;
 
@@ -87,9 +88,10 @@ export const approveCompanionPairing = async (input: {
   repository: DiaryRepository;
   controlPlane: SupabaseControlPlaneClient;
   googleSession: GoogleAccountSession;
+  loadSecrets?: typeof loadSyncSecrets;
 }): Promise<PairingSession> => {
   const state = await input.repository.getLocalSyncAccountState();
-  const secrets = await loadSyncSecrets();
+  const secrets = await (input.loadSecrets || loadSyncSecrets)();
   if (!state || state.deviceRole !== 'primary_mobile' || !secrets || secrets.accountId !== state.accountId) {
     throw new Error('Only the active primary mobile can approve a companion.');
   }
@@ -101,10 +103,15 @@ export const approveCompanionPairing = async (input: {
     throw new Error('Pairing code is incorrect.');
   }
 
+  const account = await input.controlPlane.lookupCurrentGoogleAccount();
+  if (!account) throw new Error('Encrypted account metadata was not found.');
+  const keyEpoch = account.currentKeyEpoch || state.keyEpoch || 1;
+
   const keyPackage = await wrapRootKeyForCompanion(
     secrets.accountRootKey,
     state.accountId,
     details.session.requestedDevicePublicKey,
+    { keyEpoch },
   );
   const bytes = encodeCompanionKeyPackage(keyPackage);
   const sha256 = await sha256Hex(bytes);
@@ -117,10 +124,9 @@ export const approveCompanionPairing = async (input: {
       accountId: state.accountId,
       pairingSessionId: details.session.id,
       targetDevicePublicKeySha256: keyPackage.targetDevicePublicKeySha256,
+      keyEpoch,
     },
   });
-  const account = await input.controlPlane.lookupCurrentGoogleAccount();
-  if (!account) throw new Error('Encrypted account metadata was not found.');
   const approved = await input.controlPlane.approvePairingSession({
     sessionId: details.session.id,
     primaryDeviceId: state.deviceId,
@@ -151,22 +157,16 @@ export const completeCompanionPairing = async (input: {
   }
 
   const keyBytes = await downloadVerifiedSyncObject(input.googleSession, details.keyObject);
+  const keyPackage = decodeCompanionKeyPackage(keyBytes);
+  if ((keyPackage.keyEpoch || 1) !== (details.keyObject.keyEpoch || 1)) {
+    throw new Error('Companion key package epoch does not match its sync metadata.');
+  }
   const accountRootKey = await unwrapRootKeyForCompanion(
-    decodeCompanionKeyPackage(keyBytes),
+    keyPackage,
     input.pending.devicePublicKey,
     input.pending.devicePrivateKey,
   );
-  const objects = await listAllSyncObjects(input.controlPlane, details.device.id);
-  const validSnapshot = await findLatestValidSnapshot({
-    objects,
-    accountId: details.session.accountId,
-    accountRootKey,
-    googleSession: input.googleSession,
-  });
-  const snapshotObject = validSnapshot.object;
-
   await input.repository.resetContent();
-  await input.repository.importSnapshot(validSnapshot.snapshot, 'replace-portable');
   const localState: LocalSyncAccountState = {
     accountId: details.session.accountId,
     deviceId: details.device.id,
@@ -175,9 +175,9 @@ export const completeCompanionPairing = async (input: {
     googleEmail: input.googleSession.email || '',
     devicePublicKey: input.pending.devicePublicKey,
     recoveryKeyDriveFileId: details.keyObject.driveFileId,
-    latestSnapshotDriveFileId: snapshotObject.driveFileId,
-    latestSnapshotSequence: snapshotObject.sequence,
-    currentSyncSequence: snapshotObject.sequence,
+    latestSnapshotDriveFileId: '',
+    currentSyncSequence: 0,
+    keyEpoch: details.keyObject.keyEpoch || 1,
     linkedAt: Date.now(),
   };
   await input.repository.saveLocalSyncAccountState(localState);
@@ -185,14 +185,50 @@ export const completeCompanionPairing = async (input: {
     version: 1,
     accountId: localState.accountId,
     accountRootKey,
+    accountRootKeys: { [localState.keyEpoch || 1]: accountRootKey },
     devicePrivateKeyJwk: input.pending.devicePrivateKey,
     supabaseSession: input.supabaseSession,
     googleSession: input.googleSession,
   });
-  const replayed = await replaySyncObjects({
+  const partitioned = await restoreLatestPartitions({
     repository: input.repository,
+    controlPlane: input.controlPlane,
     localState,
     accountRootKey,
+    accountRootKeys: { [localState.keyEpoch || 1]: accountRootKey },
+    googleSession: input.googleSession,
+  });
+  if (partitioned.mode === 'partitioned') {
+    const restoredState = await input.repository.getLocalSyncAccountState();
+    if (!restoredState) throw new Error('Partitioned companion restore did not create local account state.');
+    await input.controlPlane.updateDeviceCursor({
+      deviceId: restoredState.deviceId,
+      lastAppliedSequence: restoredState.currentSyncSequence,
+    });
+    return restoredState;
+  }
+
+  const objects = await listAllSyncObjects(input.controlPlane, details.device.id);
+  const validSnapshot = await findLatestValidSnapshot({
+    objects,
+    accountId: details.session.accountId,
+    accountRootKey,
+    accountRootKeys: { [details.keyObject.keyEpoch || 1]: accountRootKey },
+    googleSession: input.googleSession,
+  });
+  const snapshotObject = validSnapshot.object;
+  await input.repository.importSnapshot(validSnapshot.snapshot, 'replace-portable');
+  await input.repository.saveLocalSyncAccountState({
+    ...localState,
+    latestSnapshotDriveFileId: snapshotObject.driveFileId,
+    latestSnapshotSequence: snapshotObject.sequence,
+    currentSyncSequence: snapshotObject.sequence,
+  });
+  const replayed = await replaySyncObjects({
+    repository: input.repository,
+    localState: { ...localState, latestSnapshotDriveFileId: snapshotObject.driveFileId, latestSnapshotSequence: snapshotObject.sequence, currentSyncSequence: snapshotObject.sequence },
+    accountRootKey,
+    accountRootKeys: { [localState.keyEpoch || 1]: accountRootKey },
     googleSession: input.googleSession,
     objects: objects.filter(object => object.sequence > snapshotObject.sequence),
   });

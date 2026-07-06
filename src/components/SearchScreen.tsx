@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
-  Search, BookOpen, FileText, Image, Calendar, Tag, ArrowRight, X, Filter 
+  Search, BookOpen, FileText, Image, Calendar, Tag, ArrowRight, X, Filter, Download, RefreshCw
 } from 'lucide-react';
-import { AppSettings, Diary, Entry, Note } from '../types';
+import { AppSettings, Diary, Entry, Note, PartitionHydrationState } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
 
 interface SearchScreenProps {
@@ -11,6 +11,8 @@ interface SearchScreenProps {
   entries: Entry[];
   notes: Note[];
   settings: AppSettings;
+  archiveMonths?: PartitionHydrationState[];
+  onHydrateArchiveMonth?: (partitionKey: string) => void | Promise<void>;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onEditNote: (note: Note) => void;
 }
@@ -20,6 +22,8 @@ export default function SearchScreen({
   entries,
   notes,
   settings,
+  archiveMonths = [],
+  onHydrateArchiveMonth,
   onNavigate,
   onEditNote
 }: SearchScreenProps) {
@@ -33,6 +37,10 @@ export default function SearchScreen({
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
   const [showFilters, setShowFilters] = useState<boolean>(false);
+  const [restoringArchiveKey, setRestoringArchiveKey] = useState<string>('');
+  const [archiveRestoreError, setArchiveRestoreError] = useState<string>('');
+  const unloadedArchiveMonths = archiveMonths.filter(month => month.status !== 'hydrated');
+  const nextRestorableArchiveMonth = unloadedArchiveMonths.find(month => month.status !== 'hydrating');
 
   const [results, setResults] = useState<{
     type: 'entry' | 'note';
@@ -295,6 +303,44 @@ export default function SearchScreen({
           {results.length} results found
         </span>
       </div>
+
+      {unloadedArchiveMonths.length > 0 && (
+        <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-xs text-brand-sage-dark">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p>
+              Searching downloaded memories first. {unloadedArchiveMonths.length} older archive month{unloadedArchiveMonths.length === 1 ? '' : 's'} will appear after restore or when opened.
+            </p>
+            {onHydrateArchiveMonth && nextRestorableArchiveMonth && (
+              <button
+                type="button"
+                disabled={restoringArchiveKey === nextRestorableArchiveMonth.partitionKey}
+                onClick={async () => {
+                  setRestoringArchiveKey(String(nextRestorableArchiveMonth.partitionKey));
+                  setArchiveRestoreError('');
+                  try {
+                    await onHydrateArchiveMonth(String(nextRestorableArchiveMonth.partitionKey));
+                  } catch (error: any) {
+                    setArchiveRestoreError(error?.message || 'Could not restore this archive month.');
+                  } finally {
+                    setRestoringArchiveKey('');
+                  }
+                }}
+                className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-brand-sage px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-white transition-all hover:bg-brand-sage-dark disabled:cursor-wait disabled:bg-brand-sage/60"
+              >
+                {restoringArchiveKey === nextRestorableArchiveMonth.partitionKey ? (
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Download className="h-3 w-3" />
+                )}
+                {restoringArchiveKey === nextRestorableArchiveMonth.partitionKey
+                  ? 'Restoring'
+                  : `Restore ${String(nextRestorableArchiveMonth.partitionKey).replace('month:', '')}`}
+              </button>
+            )}
+          </div>
+          {archiveRestoreError && <p className="mt-2 text-[11px] font-bold text-red-600">{archiveRestoreError}</p>}
+        </div>
+      )}
 
       {/* Results List */}
       <div className="flex flex-col gap-4">

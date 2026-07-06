@@ -250,3 +250,71 @@ test('applies portable settings and profile events without replacing local remin
   assert.deepEqual(settings.customTags, ['cloud']);
   assert.deepEqual(await repository.getUserProfile(), profile);
 });
+
+test('exports, imports, and tracks monthly partition hydration state', async () => {
+  const source = await createRepository();
+  const diary = await source.createDiary({ name: 'Travel', emoji: 'T', color: '#123456', isLocked: false });
+  await source.createEntry({
+    diaryId: diary.id,
+    date: '2026-07-04',
+    title: 'July',
+    body: 'Recent',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+  });
+  await source.createEntry({
+    diaryId: diary.id,
+    date: '2021-03-02',
+    title: 'March',
+    body: 'Archive',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+  });
+
+  const july = await source.exportPartitionSnapshot('month:2026-07');
+  assert.deepEqual(july.entries.map(entry => entry.title), ['July']);
+
+  const target = await createRepository();
+  await target.importPartitionSnapshot('month:2026-07', july);
+  assert.deepEqual((await target.listEntries()).map(entry => entry.title), ['July']);
+
+  await target.markPartitionHydrated('month:2026-07', 12);
+  assert.equal((await target.getPartitionHydrationState('month:2026-07')).status, 'hydrated');
+  assert.deepEqual((await target.listAvailableArchiveMonths()).map(state => state.partitionKey), ['month:2026-07']);
+
+  await target.markPartitionAvailable('month:2021-03', 4);
+  await target.markPartitionHydrating('month:2021-03');
+  assert.equal((await target.getPartitionHydrationState('month:2021-03')).status, 'hydrating');
+  await target.markPartitionHydrationFailed('month:2021-03', 'temporary failure');
+  const failedMarch = await target.getPartitionHydrationState('month:2021-03');
+  assert.equal(failedMarch.status, 'failed');
+  assert.equal(failedMarch.error, 'temporary failure');
+  assert.deepEqual((await target.listAvailableArchiveMonths()).map(state => state.partitionKey), [
+    'month:2026-07',
+    'month:2021-03',
+  ]);
+});
+
+test('persists durable sync outbox operations', async () => {
+  const repository = await createRepository();
+  await repository.saveSyncOutboxOperation({
+    operationId: 'operation-1',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    partitionKey: 'month:2026-07',
+    affectedPartitionKeys: ['month:2026-07'],
+    recordType: 'entry',
+    recordId: 'entry-1',
+    state: 'prepared',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+
+  assert.equal((await repository.listSyncOutboxOperations(['prepared'])).length, 1);
+  await repository.removeSyncOutboxOperation('operation-1');
+  assert.equal((await repository.listSyncOutboxOperations()).length, 0);
+});

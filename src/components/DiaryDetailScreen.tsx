@@ -4,9 +4,9 @@ import {
   ArrowLeft, Edit, Download, Settings, ChevronLeft, ChevronRight, 
   Smile, Tag, Camera, Plus, Trash2, Calendar, X, Maximize2,
   Search, List, Printer, FileText, ArrowUpRight, Clock, HelpCircle,
-  MoreVertical
+  MoreVertical, RefreshCw
 } from 'lucide-react';
-import { Diary, Entry } from '../types';
+import { Diary, Entry, PartitionHydrationState } from '../types';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import { diaryRepository } from '../repositories';
 import { exportDiaryArchive } from '../utils/diaryArchive';
@@ -21,6 +21,8 @@ interface DiaryDetailScreenProps {
   onNewEntry: (diaryId: string, dateStr?: string) => void;
   onOpenSettings: (diaryId: string) => void;
   onRefreshEntries?: () => void | Promise<void>;
+  archiveMonths?: PartitionHydrationState[];
+  onHydrateArchiveMonth?: (partitionKey: string) => void | Promise<void>;
 }
 
 export default function DiaryDetailScreen({
@@ -30,7 +32,9 @@ export default function DiaryDetailScreen({
   onEditEntry,
   onNewEntry,
   onOpenSettings,
-  onRefreshEntries
+  onRefreshEntries,
+  archiveMonths = [],
+  onHydrateArchiveMonth,
 }: DiaryDetailScreenProps) {
   // Filter entries for this specific diary (newest first)
   const diaryEntries = useMemo(() => {
@@ -59,6 +63,8 @@ export default function DiaryDetailScreen({
     const today = new Date();
     return today.getMonth(); // 0-11
   });
+  const [hydratingArchiveKey, setHydratingArchiveKey] = useState<string | null>(null);
+  const [archiveHydrationError, setArchiveHydrationError] = useState<string>('');
 
   // Swipe Gestures refs
   const touchStartX = useRef<number | null>(null);
@@ -184,6 +190,15 @@ export default function DiaryDetailScreen({
     "July", "August", "September", "October", "November", "December"
   ];
 
+  const partitionKeyForDate = (dateStr: string) => `month:${dateStr.slice(0, 7)}`;
+  const visibleCalendarPartitionKey = `month:${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
+  const visibleArchiveState = archiveMonths.find(month => month.partitionKey === visibleCalendarPartitionKey);
+  const visibleArchiveNeedsHydration = Boolean(
+    visibleArchiveState
+    && visibleArchiveState.status !== 'hydrated'
+    && visibleArchiveState.status !== 'not_available'
+  );
+
   // Calculate days for the calendar grid
   const calendarDays = useMemo(() => {
     const firstDayOfMonth = new Date(calendarYear, calendarMonth, 1);
@@ -221,7 +236,27 @@ export default function DiaryDetailScreen({
     return days;
   }, [calendarYear, calendarMonth]);
 
-  const handleCalendarDayClick = (dateStr: string) => {
+  const handleCalendarDayClick = async (dateStr: string) => {
+    const clickedPartitionKey = partitionKeyForDate(dateStr);
+    const clickedArchiveState = archiveMonths.find(month => month.partitionKey === clickedPartitionKey);
+    if (
+      clickedArchiveState
+      && clickedArchiveState.status !== 'hydrated'
+      && clickedArchiveState.status !== 'not_available'
+      && onHydrateArchiveMonth
+    ) {
+      setHydratingArchiveKey(clickedPartitionKey);
+      setArchiveHydrationError('');
+      try {
+        await onHydrateArchiveMonth(clickedPartitionKey);
+      } catch (error: any) {
+        setArchiveHydrationError(error?.message || 'Could not restore this archive month.');
+      } finally {
+        setHydratingArchiveKey(null);
+      }
+      return;
+    }
+
     // Check if there are entries on this date in this diary
     const entryForDate = diaryEntries.find(e => e.date === dateStr);
     if (entryForDate) {
@@ -486,6 +521,49 @@ export default function DiaryDetailScreen({
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
+
+              {visibleArchiveNeedsHydration && (
+                <div className="rounded-2xl border border-brand-pink/20 bg-brand-pink/5 p-3 text-left">
+                  <div className="flex items-start gap-2">
+                    <Download className="mt-0.5 h-4 w-4 shrink-0 text-brand-pink" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-brand-pink">
+                        Archive month not on this device
+                      </p>
+                      <p className="mt-1 text-[11px] font-medium leading-relaxed text-brand-text-muted">
+                        This month exists in your encrypted archive. Restore it before opening or creating entries here.
+                      </p>
+                      {archiveHydrationError && (
+                        <p className="mt-1 text-[11px] font-bold text-red-500">{archiveHydrationError}</p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={hydratingArchiveKey === visibleCalendarPartitionKey}
+                    onClick={async () => {
+                      if (!onHydrateArchiveMonth) return;
+                      setHydratingArchiveKey(visibleCalendarPartitionKey);
+                      setArchiveHydrationError('');
+                      try {
+                        await onHydrateArchiveMonth(visibleCalendarPartitionKey);
+                      } catch (error: any) {
+                        setArchiveHydrationError(error?.message || 'Could not restore this archive month.');
+                      } finally {
+                        setHydratingArchiveKey(null);
+                      }
+                    }}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-brand-pink px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-white shadow-sm transition-all hover:bg-brand-pink-dark disabled:cursor-wait disabled:bg-brand-pink/60"
+                  >
+                    {hydratingArchiveKey === visibleCalendarPartitionKey ? (
+                      <RefreshCw className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Download className="h-3 w-3" />
+                    )}
+                    {hydratingArchiveKey === visibleCalendarPartitionKey ? 'Restoring' : 'Restore month'}
+                  </button>
+                </div>
+              )}
               
               {/* Weekdays */}
               <div className="grid grid-cols-7 text-center text-[10px] font-bold text-brand-sage uppercase tracking-wider">

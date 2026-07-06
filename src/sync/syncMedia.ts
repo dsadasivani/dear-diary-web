@@ -8,19 +8,33 @@ export interface DecodedSyncMediaPayload {
   bytes: Uint8Array;
 }
 
+export interface DecodedSyncThumbnailPayload extends DecodedSyncMediaPayload {
+  source: 'thumbnail';
+}
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const MEDIA_REFERENCE = /^ddmedia:(\d+):([a-zA-Z0-9-]+)$/;
+const LEGACY_MEDIA_REFERENCE = /^ddmedia:(\d+):([a-zA-Z0-9-]+)$/;
+const STABLE_MEDIA_REFERENCE = /^ddmedia:v2:([a-zA-Z0-9-]+):([a-zA-Z0-9_-]+)$/;
 
 export const createSyncMediaReference = (sequence: number, mediaId: string): string => {
   if (!Number.isInteger(sequence) || sequence < 1 || !mediaId) throw new Error('Sync media reference is invalid.');
   return `ddmedia:${sequence}:${mediaId}`;
 };
 
-export const parseSyncMediaReference = (value: string | undefined): { sequence: number; mediaId: string } | null => {
+export const createStableSyncMediaReference = (mediaId: string, driveFileId: string): string => {
+  if (!mediaId || !driveFileId) throw new Error('Sync media reference is invalid.');
+  return `ddmedia:v2:${mediaId}:${driveFileId}`;
+};
+
+export const parseSyncMediaReference = (
+  value: string | undefined,
+): { sequence?: number; mediaId: string; driveFileId?: string } | null => {
   if (!value) return null;
-  const match = MEDIA_REFERENCE.exec(value);
-  return match ? { sequence: Number(match[1]), mediaId: match[2] } : null;
+  const stable = STABLE_MEDIA_REFERENCE.exec(value);
+  if (stable) return { mediaId: stable[1], driveFileId: stable[2] };
+  const legacy = LEGACY_MEDIA_REFERENCE.exec(value);
+  return legacy ? { sequence: Number(legacy[1]), mediaId: legacy[2] } : null;
 };
 
 export const encodeSyncMediaPayload = (
@@ -56,6 +70,28 @@ export const decodeSyncMediaPayload = (payload: Uint8Array): DecodedSyncMediaPay
   };
 };
 
+export const encodeSyncThumbnailPayload = (
+  mediaId: string,
+  mimeType: string,
+  bytes: Uint8Array,
+): Uint8Array => {
+  if (!mediaId || !mimeType) throw new Error('Sync thumbnail metadata is incomplete.');
+  const header = encoder.encode(JSON.stringify({ version: 1, mediaId, mimeType, source: 'thumbnail' }));
+  const payload = new Uint8Array(4 + header.byteLength + bytes.byteLength);
+  new DataView(payload.buffer).setUint32(0, header.byteLength, false);
+  payload.set(header, 4);
+  payload.set(bytes, 4 + header.byteLength);
+  return payload;
+};
+
+export const decodeSyncThumbnailPayload = (payload: Uint8Array): DecodedSyncThumbnailPayload => {
+  const decoded = decodeSyncMediaPayload(payload) as DecodedSyncThumbnailPayload;
+  const headerLength = new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(0, false);
+  const header = JSON.parse(decoder.decode(payload.subarray(4, 4 + headerLength))) as { source?: string };
+  if (header.source !== 'thumbnail') throw new Error('Encrypted thumbnail payload is unsupported.');
+  return { ...decoded, source: 'thumbnail' };
+};
+
 const base64ToBytes = (value: string): Uint8Array => {
   const binary = typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
   return Uint8Array.from(binary, character => character.charCodeAt(0));
@@ -88,6 +124,54 @@ export const readMediaUri = async (uri: string): Promise<{ bytes: Uint8Array; mi
     mimeType: blob.type || 'application/octet-stream',
     bytes: new Uint8Array(await blob.arrayBuffer()),
   };
+};
+
+export const createImageThumbnail = async (
+  media: { bytes: Uint8Array; mimeType: string },
+  options: { maxDimension?: number; quality?: number } = {},
+): Promise<{ bytes: Uint8Array; mimeType: string } | null> => {
+  if (!media.mimeType.startsWith('image/')) return null;
+  if (
+    typeof document === 'undefined'
+    || typeof Blob === 'undefined'
+    || typeof URL === 'undefined'
+    || typeof Image === 'undefined'
+  ) {
+    return null;
+  }
+  const maxDimension = options.maxDimension || 320;
+  const quality = options.quality || 0.72;
+  const blob = new Blob([media.bytes], { type: media.mimeType });
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Image thumbnail decoding failed.'));
+      img.src = url;
+    });
+    const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+    const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+    const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+    context.drawImage(image, 0, 0, width, height);
+    const thumbnailBlob = await new Promise<Blob | null>(resolve => (
+      canvas.toBlob(resolve, 'image/jpeg', quality)
+    ));
+    if (!thumbnailBlob) return null;
+    return {
+      mimeType: thumbnailBlob.type || 'image/jpeg',
+      bytes: new Uint8Array(await thumbnailBlob.arrayBuffer()),
+    };
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 };
 
 const extensionFromMime = (mimeType: string): string => {

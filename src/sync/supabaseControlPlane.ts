@@ -9,6 +9,8 @@ import type {
   SyncDeviceRole,
   SyncObjectKind,
   SyncObjectMetadata,
+  SyncPartitionCursor,
+  SyncPartitionHead,
   SyncRecordType,
   SyncAffectedRecordVersion,
 } from '../types';
@@ -35,7 +37,7 @@ export interface RegisterPrimaryTransferInput extends CreatePrimaryMobileInput {
 
 export interface CommitSyncObjectInput {
   deviceId: string;
-  afterSequence: number;
+  afterSequence?: number;
   driveFileId: string;
   objectKind: SyncObjectKind;
   sha256: string;
@@ -44,6 +46,31 @@ export interface CommitSyncObjectInput {
   recordId?: string;
   baseRecordVersion?: number;
   affectedRecords?: SyncAffectedRecordVersion[];
+  partitionKey?: string | null;
+  affectedPartitionKeys?: string[];
+  operationId?: string | null;
+  keyEpoch?: number;
+}
+
+export interface CommitSyncBatchObjectInput {
+  driveFileId: string;
+  objectKind: SyncObjectKind;
+  sha256: string;
+  sizeBytes: number;
+  partitionKey?: string | null;
+}
+
+export interface CommitSyncBatchInput {
+  deviceId: string;
+  operationId: string;
+  objects: CommitSyncBatchObjectInput[];
+  recordType?: SyncRecordType;
+  recordId?: string;
+  baseRecordVersion?: number;
+  affectedRecords?: SyncAffectedRecordVersion[];
+  partitionKey?: string | null;
+  affectedPartitionKeys?: string[];
+  keyEpoch?: number;
 }
 
 export interface CreatePairingSessionInput {
@@ -69,6 +96,13 @@ export interface UpdateCursorInput {
   lastAppliedSequence: number;
 }
 
+export interface UpdatePartitionCursorInput {
+  deviceId: string;
+  partitionKey: string;
+  lastAppliedSequence: number;
+  hydratedAt?: string | null;
+}
+
 export interface RevokeDeviceInput {
   primaryDeviceId: string;
   deviceId: string;
@@ -83,6 +117,8 @@ const camelAccount = (row: any): SyncAccount => ({
   activePrimaryDeviceId: row.active_primary_device_id,
   currentSyncSequence: Number(row.current_sync_sequence || 0),
   currentSnapshotSequence: Number(row.current_snapshot_sequence || 0),
+  currentKeyEpoch: Number(row.current_key_epoch || 1),
+  partitionedSyncEnabled: Boolean(row.partitioned_sync_enabled),
   recoveryConfigured: Boolean(row.recovery_configured),
 });
 
@@ -126,12 +162,33 @@ const camelSyncObject = (row: any): SyncObjectMetadata => ({
       }))
     : [],
   retiredAt: row.retired_at || null,
+  partitionKey: row.partition_key || null,
+  affectedPartitionKeys: Array.isArray(row.affected_partition_keys) ? row.affected_partition_keys : [],
+  operationId: row.operation_id || null,
+  keyEpoch: Number(row.key_epoch || 1),
 });
 
 const camelCursor = (row: any): SyncDeviceCursor => ({
   accountId: row.account_id,
   deviceId: row.device_id,
   lastAppliedSequence: Number(row.last_applied_sequence || 0),
+  updatedAt: row.updated_at,
+});
+
+const camelPartitionCursor = (row: any): SyncPartitionCursor => ({
+  accountId: row.account_id,
+  deviceId: row.device_id,
+  partitionKey: row.partition_key,
+  lastAppliedSequence: Number(row.last_applied_sequence || 0),
+  hydratedAt: row.hydrated_at || null,
+  updatedAt: row.updated_at,
+});
+
+const camelPartitionHead = (row: any): SyncPartitionHead => ({
+  accountId: row.account_id,
+  partitionKey: row.partition_key,
+  latestSnapshotSequence: Number(row.latest_snapshot_sequence || 0),
+  latestEventSequence: Number(row.latest_event_sequence || 0),
   updatedAt: row.updated_at,
 });
 
@@ -244,7 +301,7 @@ export class SupabaseControlPlaneClient {
   async commitSyncObject(input: CommitSyncObjectInput): Promise<SyncObjectMetadata> {
     const row = await this.rpc<any>('commit_sync_object', {
       p_device_id: input.deviceId,
-      p_after_sequence: input.afterSequence,
+      p_after_sequence: input.afterSequence ?? null,
       p_drive_file_id: input.driveFileId,
       p_object_kind: input.objectKind,
       p_sha256: input.sha256,
@@ -258,8 +315,39 @@ export class SupabaseControlPlaneClient {
         base_record_version: record.baseRecordVersion,
         record_version: record.recordVersion,
       })),
+      p_partition_key: input.partitionKey || null,
+      p_affected_partition_keys: input.affectedPartitionKeys || [],
+      p_operation_id: input.operationId || null,
+      p_key_epoch: input.keyEpoch || 1,
     });
     return camelSyncObject(row);
+  }
+
+  async commitSyncBatch(input: CommitSyncBatchInput): Promise<SyncObjectMetadata[]> {
+    const rows = await this.rpc<any[]>('commit_sync_batch', {
+      p_device_id: input.deviceId,
+      p_operation_id: input.operationId,
+      p_objects: input.objects.map(object => ({
+        drive_file_id: object.driveFileId,
+        object_kind: object.objectKind,
+        sha256: object.sha256,
+        size_bytes: object.sizeBytes,
+        partition_key: object.partitionKey || null,
+      })),
+      p_record_type: input.recordType || null,
+      p_record_id: input.recordId || null,
+      p_base_record_version: input.baseRecordVersion ?? null,
+      p_affected_records: (input.affectedRecords || []).map(record => ({
+        record_type: record.recordType,
+        record_id: record.recordId,
+        base_record_version: record.baseRecordVersion,
+        record_version: record.recordVersion,
+      })),
+      p_partition_key: input.partitionKey || null,
+      p_affected_partition_keys: input.affectedPartitionKeys || [],
+      p_key_epoch: input.keyEpoch || 1,
+    });
+    return rows.map(camelSyncObject);
   }
 
   async listSyncObjectsAfter(deviceId: string, afterSequence: number, limit = 100): Promise<SyncObjectMetadata[]> {
@@ -269,6 +357,52 @@ export class SupabaseControlPlaneClient {
       p_limit: limit,
     });
     return rows.map(camelSyncObject);
+  }
+
+  async listPartitionObjectsAfter(
+    deviceId: string,
+    partitionKey: string,
+    afterSequence: number,
+    limit = 100,
+  ): Promise<SyncObjectMetadata[]> {
+    const rows = await this.rpc<any[]>('list_partition_objects_after', {
+      p_device_id: deviceId,
+      p_partition_key: partitionKey,
+      p_after_sequence: afterSequence,
+      p_limit: limit,
+    });
+    return rows.map(camelSyncObject);
+  }
+
+  async getLatestRestoreManifest(deviceId: string): Promise<{
+    manifestObject: SyncObjectMetadata | null;
+    coreSnapshotObject: SyncObjectMetadata | null;
+    currentSyncSequence: number;
+    keyEpoch: number;
+  }> {
+    const row = await this.rpc<any>('get_latest_restore_manifest', { p_device_id: deviceId });
+    return {
+      manifestObject: row.manifest_object ? camelSyncObject(row.manifest_object) : null,
+      coreSnapshotObject: row.core_snapshot_object ? camelSyncObject(row.core_snapshot_object) : null,
+      currentSyncSequence: Number(row.current_sync_sequence || 0),
+      keyEpoch: Number(row.key_epoch || 1),
+    };
+  }
+
+  async getPartitionRestoreBundle(deviceId: string, partitionKeys: string[]): Promise<{
+    partitionKey: string;
+    snapshotObject: SyncObjectMetadata | null;
+    tailObjects: SyncObjectMetadata[];
+  }[]> {
+    const rows = await this.rpc<any[]>('get_partition_restore_bundle', {
+      p_device_id: deviceId,
+      p_partition_keys: partitionKeys,
+    });
+    return rows.map(row => ({
+      partitionKey: row.partition_key,
+      snapshotObject: row.snapshot_object ? camelSyncObject(row.snapshot_object) : null,
+      tailObjects: (row.tail_objects || []).map(camelSyncObject),
+    }));
   }
 
   async listAccountRecoveryObjects(): Promise<SyncObjectMetadata[]> {
@@ -282,6 +416,21 @@ export class SupabaseControlPlaneClient {
       p_last_applied_sequence: input.lastAppliedSequence,
     });
     return camelCursor(row);
+  }
+
+  async updatePartitionCursor(input: UpdatePartitionCursorInput): Promise<SyncPartitionCursor> {
+    const row = await this.rpc<any>('update_partition_cursor', {
+      p_device_id: input.deviceId,
+      p_partition_key: input.partitionKey,
+      p_last_applied_sequence: input.lastAppliedSequence,
+      p_hydrated_at: input.hydratedAt ?? null,
+    });
+    return camelPartitionCursor(row);
+  }
+
+  async listPartitionHeads(deviceId: string): Promise<SyncPartitionHead[]> {
+    const rows = await this.rpc<any[]>('list_partition_heads', { p_device_id: deviceId });
+    return rows.map(camelPartitionHead);
   }
 
   async createPairingSession(input: CreatePairingSessionInput): Promise<PairingSession> {
@@ -328,6 +477,13 @@ export class SupabaseControlPlaneClient {
     return camelRevocation(row);
   }
 
+  async rotateAccountKeyEpoch(primaryDeviceId: string): Promise<number> {
+    const epoch = await this.rpc<number>('rotate_account_key_epoch', {
+      p_primary_device_id: primaryDeviceId,
+    });
+    return Number(epoch);
+  }
+
   async retireKeyPackages(primaryDeviceId: string, driveFileIds: string[]): Promise<SyncObjectMetadata[]> {
     const rows = await this.rpc<any[]>('retire_key_packages', {
       p_primary_device_id: primaryDeviceId,
@@ -351,6 +507,14 @@ export class SupabaseControlPlaneClient {
 
   async retireSnapshots(primaryDeviceId: string, driveFileIds: string[]): Promise<SyncObjectMetadata[]> {
     const rows = await this.rpc<any[]>('retire_snapshots', {
+      p_primary_device_id: primaryDeviceId,
+      p_drive_file_ids: driveFileIds,
+    });
+    return rows.map(camelSyncObject);
+  }
+
+  async retireSyncObjects(primaryDeviceId: string, driveFileIds: string[]): Promise<SyncObjectMetadata[]> {
+    const rows = await this.rpc<any[]>('retire_sync_objects', {
       p_primary_device_id: primaryDeviceId,
       p_drive_file_ids: driveFileIds,
     });

@@ -18,7 +18,7 @@ import StatsScreen from './components/StatsScreen';
 import AppSettingsScreen from './components/AppSettingsScreen';
 import OverlayPortal from './components/OverlayPortal';
 
-import { AppSettings, Diary, Entry, Note, SecurityConfig, UserProfile } from './types';
+import { AppSettings, Diary, Entry, Note, PartitionHydrationState, SecurityConfig, UserProfile } from './types';
 import { addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
 import { isAndroid } from './platform';
 
@@ -82,6 +82,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
   const [theme, setTheme] = useState<'light' | 'dark'>(initialSettings.theme || 'light');
   const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
+  const [archiveMonths, setArchiveMonths] = useState<PartitionHydrationState[]>([]);
 
   const accessibleEntries = React.useMemo(() => {
     const lockedDiaryIds = new Set(
@@ -94,13 +95,14 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   // Reload data from the async repository. SQLite is authoritative on native.
   const reloadData = async () => {
-    const [storedDiaries, storedEntries, storedNotes, storedProfile, storedSettings, storedSecurity] = await Promise.all([
+    const [storedDiaries, storedEntries, storedNotes, storedProfile, storedSettings, storedSecurity, storedArchiveMonths] = await Promise.all([
       diaryRepository.listDiaries(),
       diaryRepository.listEntries(),
       diaryRepository.listNotes(),
       diaryRepository.getUserProfile(),
       diaryRepository.getSettings(),
       diaryRepository.getSecurityConfig(),
+      diaryRepository.listAvailableArchiveMonths(),
     ]);
     setDiaries(storedDiaries);
     setEntries(storedEntries);
@@ -108,6 +110,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setUserProfile(storedProfile);
     setSettings(storedSettings);
     setSecurity(storedSecurity);
+    setArchiveMonths(storedArchiveMonths);
     const currentTheme = storedSettings.theme || 'light';
     setTheme(currentTheme);
     if (currentTheme === 'dark') {
@@ -152,6 +155,19 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       showToast(reauthorizationError?.message || 'Sync reconnection failed.', 'error');
     } finally {
       setIsReauthorizingSync(false);
+    }
+  };
+
+  const handleHydrateArchiveMonth = async (partitionKey: string) => {
+    try {
+      showToast('Restoring that archive month…', 'info');
+      await eventSyncEngine.hydrateArchivePartition(partitionKey);
+      await reloadData();
+      showToast('Archive month restored.', 'success');
+    } catch (archiveError: any) {
+      const message = archiveError?.message || 'Could not restore that archive month yet.';
+      showToast(message, 'error');
+      throw archiveError;
     }
   };
 
@@ -550,6 +566,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 onNewEntry={(diaryId, dateStr) => handleNavigate('diaries', 'entryEditor', diaryId, '', dateStr)}
                 onOpenSettings={(diaryId) => handleNavigate('diaries', 'diarySettings', diaryId)}
                 onRefreshEntries={reloadData}
+                archiveMonths={archiveMonths}
+                onHydrateArchiveMonth={handleHydrateArchiveMonth}
               />
             );
           }
@@ -624,6 +642,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             entries={accessibleEntries}
             notes={notes}
             settings={settings}
+            archiveMonths={archiveMonths}
+            onHydrateArchiveMonth={handleHydrateArchiveMonth}
             onNavigate={handleNavigate}
             onEditNote={(note) => {
               // Deep-link note editing from search results

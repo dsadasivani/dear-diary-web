@@ -7,6 +7,7 @@ export interface EncryptedSyncObjectHeader {
   objectKind: SyncObjectKind;
   nonce: string;
   createdAt: string;
+  keyEpoch?: number;
 }
 
 export interface EncryptedSyncObject {
@@ -53,6 +54,7 @@ export const encryptSyncPayload = async (
   accountRootKey: Uint8Array,
   objectKind: SyncObjectKind,
   payload: Uint8Array,
+  options: { keyEpoch?: number } = {},
 ): Promise<EncryptedSyncObject> => {
   const nonce = new Uint8Array(12);
   crypto.getRandomValues(nonce);
@@ -62,6 +64,7 @@ export const encryptSyncPayload = async (
     objectKind,
     nonce: bytesToBase64(nonce),
     createdAt: new Date().toISOString(),
+    keyEpoch: options.keyEpoch,
   };
   const headerBytes = encoder.encode(JSON.stringify(header));
   const key = await importRootKey(accountRootKey);
