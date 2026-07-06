@@ -676,3 +676,40 @@ test('background archive hydration skips available months when policy blocks', a
   assert.equal(openedControlPlane, false);
   assert.equal((await repository.getPartitionHydrationState('month:2021-03')).status, 'available');
 });
+
+test('background archive hydration backs off failed months until retry time', async () => {
+  const repository = await createRepository();
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
+    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 20, partitionedSyncEnabled: true, latestManifestDriveFileId: 'drive-manifest',
+    linkedAt: 1,
+  });
+  await repository.markPartitionAvailable('month:2021-03', 6);
+  await repository.markPartitionHydrationFailed('month:2021-03', 'temporary cloud error');
+  let openedControlPlane = false;
+  const engine = new EventSyncEngine(repository, {
+    isOnline: () => true,
+    now: () => 1,
+    createControlPlane: () => {
+      openedControlPlane = true;
+      return {} as SupabaseControlPlaneClient;
+    },
+    getArchiveHydrationPolicyInput: () => ({
+      isOnline: true,
+      isWifi: true,
+      isCharging: true,
+      batteryLevel: 0.9,
+    }),
+  });
+
+  const result = await engine.hydrateBackgroundArchiveOnce();
+
+  assert.deepEqual(result.hydratedPartitionKeys, []);
+  assert.equal(openedControlPlane, false);
+  const failed = await repository.getPartitionHydrationState('month:2021-03');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.failureCount, 1);
+  assert.ok((failed.nextRetryAt || 0) > (failed.failedAt || 0));
+});

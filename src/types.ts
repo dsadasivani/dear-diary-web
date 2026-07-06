@@ -328,6 +328,9 @@ export interface PartitionHydrationState {
   status: 'not_available' | 'available' | 'hydrating' | 'hydrated' | 'failed';
   lastAppliedSequence: number;
   hydratedAt?: number;
+  failedAt?: number;
+  failureCount?: number;
+  nextRetryAt?: number;
   error?: string;
 }
 

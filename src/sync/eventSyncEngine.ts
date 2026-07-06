@@ -261,8 +261,12 @@ export class EventSyncEngine {
       const state = await this.repository.getLocalSyncAccountState();
       if (!state?.partitionedSyncEnabled) return { decision, hydratedPartitionKeys: [] };
 
+      const now = this.now();
       const candidates = (await this.repository.listAvailableArchiveMonths())
-        .filter(partition => partition.status === 'available' || partition.status === 'failed')
+        .filter(partition => (
+          partition.status === 'available' ||
+          (partition.status === 'failed' && (partition.nextRetryAt || 0) <= now)
+        ))
         .slice(0, this.backgroundArchiveBatchSize);
       if (candidates.length === 0) return { decision, hydratedPartitionKeys: [] };
 

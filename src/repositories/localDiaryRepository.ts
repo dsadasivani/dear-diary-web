@@ -52,6 +52,9 @@ const STORAGE_KEYS = {
   syncOutbox: 'deardiary_sync_outbox',
 } as const;
 
+const ARCHIVE_HYDRATION_RETRY_BASE_MS = 5 * 60 * 1000;
+const ARCHIVE_HYDRATION_RETRY_MAX_MS = 24 * 60 * 60 * 1000;
+
 const INITIAL_DIARIES: Diary[] = [{
   id: 'diary-default',
   name: 'My Diary',
@@ -565,6 +568,10 @@ export class LocalDiaryRepository implements DiaryRepository {
         partitionKey,
         status: 'available',
         lastAppliedSequence: Math.max(existing?.lastAppliedSequence || 0, sequence),
+        failureCount: existing?.failureCount,
+        failedAt: existing?.failedAt,
+        nextRetryAt: existing?.nextRetryAt,
+        error: existing?.error,
       };
       await this.writeJson(STORAGE_KEYS.syncPartitionHydration, states);
     });
@@ -578,6 +585,10 @@ export class LocalDiaryRepository implements DiaryRepository {
         partitionKey,
         status: 'hydrating',
         lastAppliedSequence: existing?.lastAppliedSequence || 0,
+        failureCount: existing?.failureCount,
+        failedAt: existing?.failedAt,
+        nextRetryAt: existing?.nextRetryAt,
+        error: existing?.error,
       };
       await this.writeJson(STORAGE_KEYS.syncPartitionHydration, states);
     });
@@ -600,10 +611,19 @@ export class LocalDiaryRepository implements DiaryRepository {
     return this.enqueueWrite(async () => {
       const states = await this.readJson<Record<string, PartitionHydrationState>>(STORAGE_KEYS.syncPartitionHydration, {});
       const existing = states[partitionKey];
+      const failureCount = (existing?.failureCount || 0) + 1;
+      const retryDelay = Math.min(
+        ARCHIVE_HYDRATION_RETRY_MAX_MS,
+        ARCHIVE_HYDRATION_RETRY_BASE_MS * (2 ** Math.min(failureCount - 1, 12)),
+      );
+      const failedAt = Date.now();
       states[partitionKey] = {
         partitionKey,
         status: 'failed',
         lastAppliedSequence: existing?.lastAppliedSequence || 0,
+        failedAt,
+        failureCount,
+        nextRetryAt: failedAt + retryDelay,
         error,
       };
       await this.writeJson(STORAGE_KEYS.syncPartitionHydration, states);

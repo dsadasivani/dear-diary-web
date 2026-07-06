@@ -293,6 +293,9 @@ test('exports, imports, and tracks monthly partition hydration state', async () 
   const failedMarch = await target.getPartitionHydrationState('month:2021-03');
   assert.equal(failedMarch.status, 'failed');
   assert.equal(failedMarch.error, 'temporary failure');
+  assert.equal(failedMarch.failureCount, 1);
+  assert.ok((failedMarch.failedAt || 0) > 0);
+  assert.ok((failedMarch.nextRetryAt || 0) > (failedMarch.failedAt || 0));
   assert.deepEqual((await target.listAvailableArchiveMonths()).map(state => state.partitionKey), [
     'month:2026-07',
     'month:2021-03',
