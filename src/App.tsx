@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AlertCircle, ArrowLeft, BarChart2, BookOpen, Check, ClipboardList, Eye, EyeOff,
-  Fingerprint, Home, LoaderCircle, Lock, RefreshCw, Search, ShieldCheck, WifiOff, X
+  Fingerprint, Home, LoaderCircle, Lock, Plus, RefreshCw, Search, ShieldCheck, WifiOff, X
 } from 'lucide-react';
 
 // Import our modular screens
@@ -17,14 +17,18 @@ import SearchScreen from './components/SearchScreen';
 import StatsScreen from './components/StatsScreen';
 import AppSettingsScreen from './components/AppSettingsScreen';
 import OverlayPortal from './components/OverlayPortal';
+import ProfileAvatar from './components/ProfileAvatar';
 
-import { AppSettings, Diary, Entry, Note, PartitionHydrationState, SecurityConfig, UserProfile } from './types';
+import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
 import { addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
-import { isAndroid } from './platform';
+import { isAndroid, isNativePlatform } from './platform';
 
 import { secureAuthService } from './platform/security';
 import { diaryRepository, eventSyncEngine } from './repositories';
 import { isValidPin, unlockWithPin } from './domain/security';
+import useIsDesktop from './hooks/useIsDesktop';
+import { calculateStreak } from './domain/journalCatalog';
+import { applyThemePreference, getLocalThemePreference, setLocalThemePreference } from './utils/themePreference';
 
 interface AppProps {
   initialSettings: AppSettings;
@@ -82,11 +86,16 @@ const isLikelyCellularConnection = (): boolean => {
 };
 
 export default function App({ initialSettings, initialSecurity, initialUserProfile }: AppProps) {
+  const isDesktop = useIsDesktop();
+  const layout: ResponsiveLayout = isDesktop ? 'desktop' : 'mobile';
+
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator === 'undefined' || navigator.onLine);
   const [syncAuthorizationMessage, setSyncAuthorizationMessage] = useState('');
   const [isReauthorizingSync, setIsReauthorizingSync] = useState(false);
+  const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
+  const [searchInitialQuery, setSearchInitialQuery] = useState('');
   
   // Navigation states
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
@@ -148,7 +157,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [notes, setNotes] = useState<Note[]>([]);
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
-  const [theme, setTheme] = useState<'light' | 'dark'>(initialSettings.theme || 'light');
   const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
   const [archiveMonths, setArchiveMonths] = useState<PartitionHydrationState[]>([]);
 
@@ -160,6 +168,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     );
     return entries.filter(entry => !lockedDiaryIds.has(entry.diaryId));
   }, [diaries, entries, unlockedDiaryIds]);
+
+  const visibleStreak = React.useMemo(() => calculateStreak(accessibleEntries), [accessibleEntries]);
 
   // Reload data from the async repository. SQLite is authoritative on native.
   const reloadData = async () => {
@@ -176,17 +186,18 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setEntries(storedEntries);
     setNotes(storedNotes);
     setUserProfile(storedProfile);
-    setSettings(storedSettings);
+    const currentTheme = getLocalThemePreference(storedSettings.theme || 'light');
+    setSettings({ ...storedSettings, theme: currentTheme });
     setSecurity(storedSecurity);
     setArchiveMonths(storedArchiveMonths);
-    const currentTheme = storedSettings.theme || 'light';
-    setTheme(currentTheme);
-    if (currentTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    applyThemePreference(currentTheme);
     void syncNativeStatusBar(currentTheme);
+  };
+
+  const handleLocalThemeChange = (nextTheme: 'light' | 'dark') => {
+    setLocalThemePreference(nextTheme);
+    setSettings(prev => ({ ...prev, theme: nextTheme }));
+    void syncNativeStatusBar(nextTheme);
   };
 
   const handleUnlock = async () => {
@@ -337,6 +348,26 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     void reloadData();
   };
 
+  const handleDesktopSearchSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmedQuery = desktopSearchQuery.trim();
+    if (!trimmedQuery) {
+      handleNavigate('search');
+      return;
+    }
+    setSearchInitialQuery(trimmedQuery);
+    handleNavigate('search');
+  };
+
+  const handleDesktopNewEntry = () => {
+    const targetDiary = diaries[0];
+    if (targetDiary) {
+      handleNavigate('diaries', 'entryEditor', targetDiary.id);
+      return;
+    }
+    handleNavigate('diaries');
+  };
+
   useEffect(() => {
     setDiaryUnlockPin('');
     setShowDiaryUnlockPin(false);
@@ -379,7 +410,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const handleDiaryBiometricUnlock = async (diary: Diary) => {
-    if (!security.isBiometricsEnabled) {
+    if (!isNativePlatform() || !security.isBiometricsEnabled) {
       setDiaryUnlockError('Biometric unlock is not enabled. Use your app PIN.');
       setDiaryUnlockSuccess('');
       return;
@@ -530,6 +561,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const renderDiaryUnlockPrompt = (diary: Diary) => {
     const requiredLength = security.pinLength || 4;
     const canSubmitPin = isValidPin(diaryUnlockPin, security.pinLength);
+    const canUseBiometricDiaryUnlock = isNativePlatform() && security.isBiometricsEnabled;
 
     return (
       <OverlayPortal>
@@ -567,11 +599,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 {diary.name}
               </h2>
               <p className="text-xs leading-relaxed text-brand-text-muted">
-                This journal is private. Confirm your app PIN or biometric identity to open it for this session.
+                This journal is private. Confirm your app PIN{canUseBiometricDiaryUnlock ? ' or biometric identity' : ''} to open it for this session.
               </p>
             </div>
 
-            {security.isBiometricsEnabled && (
+            {canUseBiometricDiaryUnlock && (
               <button
                 type="button"
                 onClick={() => handleDiaryBiometricUnlock(diary)}
@@ -661,6 +693,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             entries={accessibleEntries}
             notes={notes}
             userProfile={userProfile}
+            layout={layout}
             onNavigate={handleNavigate}
             onOpenQuickNote={handleOpenQuickNote}
             onOpenNewEntryWithPrompt={handleOpenNewEntryWithPrompt}
@@ -683,6 +716,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               <DiaryDetailScreen 
                 diary={selectedDiary}
                 entries={accessibleEntries}
+                entryId={selectedEntryId}
+                layout={layout}
                 onBack={() => handleNavigate('diaries', 'list')}
                 onEditEntry={(entryId) => handleNavigate('diaries', 'entryEditor', selectedDiaryId, entryId)}
                 onNewEntry={(diaryId, dateStr) => handleNavigate('diaries', 'entryEditor', diaryId, '', dateStr)}
@@ -715,6 +750,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               settings={settings}
               diaryId={selectedDiaryId}
               entryId={selectedEntryId}
+              layout={layout}
               initialDate={selectedDate}
               initialPrompt={selectedPrompt}
               showDiarySelector={!!selectedPrompt}
@@ -741,6 +777,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           <DiariesScreen 
             diaries={diaries}
             entries={entries}
+            layout={layout}
             onNavigate={handleNavigate}
             onRefreshDiaries={reloadData}
           />
@@ -751,6 +788,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           <NotesScreen 
             notes={notes}
             settings={settings}
+            layout={layout}
             onRefreshNotes={reloadData}
             onConvertToDiaryEntry={handleConvertToDiaryEntry}
             initialNoteId={selectedNoteId}
@@ -765,6 +803,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             entries={accessibleEntries}
             notes={notes}
             settings={settings}
+            layout={layout}
+            initialQuery={searchInitialQuery}
             archiveMonths={archiveMonths}
             onHydrateArchiveMonth={handleHydrateArchiveMonth}
             onHydrateAllArchiveMonths={handleHydrateAllArchiveMonths}
@@ -786,6 +826,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               initialSettings={settings}
               initialSecurity={security}
               initialProfile={userProfile}
+              layout={layout}
               onBack={() => handleNavigate('stats', 'list')}
               onResetSuccess={() => {
                 void reloadData();
@@ -793,6 +834,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               }}
               onDataChanged={reloadData}
               onShowToast={showToast}
+              onThemeChange={handleLocalThemeChange}
             />
           );
         }
@@ -803,6 +845,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             entries={accessibleEntries}
             notes={notes}
             userProfile={userProfile}
+            layout={layout}
             onNavigate={handleNavigate}
           />
         );
@@ -827,6 +870,208 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     </div>
   ) : null;
 
+  const renderToast = () => (
+    <AnimatePresence>
+      {toast && (
+        <motion.div
+          initial={{ opacity: 0, y: -40, scale: 0.92, x: '-50%' }}
+          animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
+          exit={{ opacity: 0, y: -15, scale: 0.95, x: '-50%' }}
+          transition={{ type: "spring", stiffness: 350, damping: 25 }}
+          className="fixed top-6 left-1/2 z-50 flex items-center gap-3 bg-white/95 dark:bg-brand-card-bg/95 backdrop-blur-md px-5 py-3.5 rounded-2xl border border-brand-border/80 shadow-2xl max-w-sm w-[90%] select-none pointer-events-auto toast-safe"
+        >
+          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 animate-pulse ${
+            toast.type === 'success' ? 'bg-brand-sage' :
+            toast.type === 'error' ? 'bg-brand-rose' : 'bg-brand-pink'
+          }`} />
+
+          <p className="text-xs font-bold text-brand-plum leading-snug flex-grow">
+            {toast.message}
+          </p>
+
+          <button
+            onClick={() => setToast(null)}
+            className="text-brand-text-muted hover:text-brand-rose transition-colors p-1 rounded-lg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
+  const desktopPageTitle = () => {
+    if (activeTab === 'stats' && currentScreen === 'appSettings') return 'Settings';
+    if (activeTab === 'stats') return 'Reflections';
+    if (activeTab === 'diaries' && currentScreen === 'entryEditor') return selectedEntryId ? 'Edit Entry' : 'New Entry';
+    if (activeTab === 'diaries' && currentScreen === 'diaryDetail') {
+      return diaries.find(diary => diary.id === selectedDiaryId)?.name || 'My Journal';
+    }
+    return {
+      home: 'Home',
+      diaries: 'Diaries Library',
+      notes: 'Quick Notes',
+      search: 'Global Search',
+    }[activeTab] || 'Dear Diary';
+  };
+
+  const renderDesktopBackground = () => (
+    <div className="fixed inset-0 z-0 pointer-events-none">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.74),transparent_42%)] dark:bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05),transparent_40%)]" />
+      <div className="absolute left-[15rem] top-[-18rem] h-[38rem] w-[38rem] rounded-full bg-brand-blush-dark/28 blur-[150px]" />
+      <div className="absolute bottom-[-16rem] right-[-10rem] h-[34rem] w-[34rem] rounded-full bg-brand-sage-light/28 blur-[145px]" />
+    </div>
+  );
+
+  const renderDesktopShell = () => {
+    const navItems = [
+      { id: 'home', label: 'Home', icon: Home, onClick: () => handleNavigate('home'), active: activeTab === 'home' },
+      { id: 'diaries', label: 'Diaries', icon: BookOpen, onClick: () => handleNavigate('diaries'), active: activeTab === 'diaries' },
+      { id: 'notes', label: 'Notes', icon: ClipboardList, onClick: () => handleNavigate('notes'), active: activeTab === 'notes' },
+      { id: 'search', label: 'Search', icon: Search, onClick: () => handleNavigate('search'), active: activeTab === 'search' },
+      { id: 'stats', label: 'Reflections', icon: BarChart2, onClick: () => handleNavigate('stats'), active: activeTab === 'stats' && currentScreen !== 'appSettings' },
+      { id: 'settings', label: 'Settings', icon: ShieldCheck, onClick: () => handleNavigate('stats', 'appSettings'), active: activeTab === 'stats' && currentScreen === 'appSettings' },
+    ];
+
+    return (
+      <div className="min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-hidden">
+        {renderSyncAuthorizationBanner()}
+        <GlobalLoaderOverlay loading={globalLoading} />
+        {renderDesktopBackground()}
+        {!isOnline && (
+          <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+            <WifiOff className="h-4 w-4" />
+            <span>Offline. Synced changes are paused.</span>
+          </div>
+        )}
+
+        <div className="relative z-10 flex h-screen min-h-0">
+          <aside className="flex h-screen w-[232px] shrink-0 flex-col border-r border-brand-border/70 bg-gradient-to-b from-brand-blush-light/78 via-brand-blush-light/48 to-white/35 px-4 py-5 shadow-[18px_0_70px_rgba(62,36,41,0.06)] backdrop-blur-xl dark:from-brand-card-bg/78 dark:via-brand-card-bg/55 dark:to-brand-bg/45 xl:w-72 xl:px-6 xl:py-7">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-brand-border bg-white text-brand-sage shadow-sm dark:bg-brand-bg/40 xl:h-12 xl:w-12">
+                <BookOpen className="h-5 w-5 xl:h-6 xl:w-6" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="font-serif-diary text-2xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-3xl">Dear Diary</h1>
+                <p className="mt-0.5 text-xs font-semibold text-brand-text-muted">{visibleStreak} Day Streak</p>
+              </div>
+            </div>
+
+            <nav className="mt-9 flex flex-col gap-1.5 xl:mt-14 xl:gap-2">
+              {navItems.map(item => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={item.onClick}
+                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-bold transition-all xl:gap-4 xl:rounded-2xl xl:px-4 xl:py-3 ${
+                      item.active
+                        ? 'bg-white/86 text-brand-plum shadow-[0_10px_28px_rgba(62,36,41,0.08)] ring-1 ring-brand-border/75 dark:bg-white/10 dark:text-brand-text'
+                        : 'text-brand-plum/72 hover:bg-white/55 hover:text-brand-plum dark:text-brand-text/75 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    <Icon className={`h-5 w-5 ${item.active ? 'text-brand-sage' : 'text-brand-plum/75 dark:text-brand-text/70'}`} />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            <div className="mt-auto flex flex-col gap-4">
+              <div className="hidden rounded-2xl border border-brand-border/70 bg-white/62 p-4 shadow-sm dark:bg-white/5 xl:block">
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-brand-sage">Private Vault</p>
+                <p className="mt-2 text-xs leading-relaxed text-brand-text-muted">Local-first, encrypted sync aware, and ready to lock instantly.</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleLockApp}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-sage px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark active:scale-[0.99]"
+              >
+                <Lock className="h-4 w-4" />
+                Lock
+              </button>
+            </div>
+          </aside>
+
+          <section className="flex min-w-0 flex-1 flex-col">
+            <header className="flex h-16 shrink-0 items-center justify-between border-b border-brand-border/55 bg-brand-bg/78 px-5 backdrop-blur-2xl dark:bg-brand-bg/70 xl:h-20 xl:px-10">
+              <div className="min-w-0">
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-brand-sage">Dear Diary</p>
+                <h2 className="truncate font-serif-diary text-xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-2xl">{desktopPageTitle()}</h2>
+              </div>
+
+              <div className="flex min-w-0 items-center gap-3 xl:gap-4">
+                <form onSubmit={handleDesktopSearchSubmit} className="relative hidden w-[18rem] max-w-[30vw] lg:block xl:w-[28rem] xl:max-w-[36vw]">
+                  <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
+                  <input
+                    type="text"
+                    value={desktopSearchQuery}
+                    onChange={(event) => setDesktopSearchQuery(event.target.value)}
+                    placeholder="Search thoughts, memories, dreams"
+                    className="w-full rounded-full border border-brand-border/60 bg-white/68 py-2.5 pl-11 pr-4 text-sm font-semibold text-brand-plum placeholder:text-brand-text-muted/55 outline-none transition-all focus:border-brand-sage focus:bg-white focus:shadow-[0_8px_30px_rgba(62,36,41,0.08)] dark:bg-white/5 dark:text-brand-text xl:py-3"
+                  />
+                </form>
+                <button
+                  type="button"
+                  onClick={handleDesktopNewEntry}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-sage px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark active:scale-[0.98] xl:px-5 xl:py-3"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span className="hidden xl:inline">New Entry</span>
+                  <span className="xl:hidden">New</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavigate('stats', 'appSettings')}
+                  className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-brand-border bg-white text-xl shadow-sm transition-transform hover:scale-105 dark:bg-brand-card-bg xl:h-12 xl:w-12"
+                  style={{ backgroundColor: userProfile.avatarColor }}
+                  title="Open settings"
+                >
+                  <ProfileAvatar profile={userProfile} />
+                </button>
+              </div>
+            </header>
+
+            <main className="min-h-0 flex-1 overflow-y-auto px-5 py-5 xl:px-10 xl:py-7">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={`${activeTab}-${currentScreen}`}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.22 }}
+                  className="mx-auto w-full max-w-[1280px] 2xl:max-w-[1460px]"
+                >
+                  {renderContent()}
+                </motion.div>
+              </AnimatePresence>
+            </main>
+          </section>
+        </div>
+        {renderToast()}
+      </div>
+    );
+  };
+
+  const renderDesktopEditorShell = () => (
+    <div className="min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-x-hidden">
+      {renderSyncAuthorizationBanner()}
+      <GlobalLoaderOverlay loading={globalLoading} />
+      {renderDesktopBackground()}
+      {!isOnline && (
+        <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+          <WifiOff className="h-4 w-4" />
+          <span>Offline. Synced changes are paused.</span>
+        </div>
+      )}
+      <main className="relative z-10 mx-auto min-h-screen w-full max-w-[1500px] px-5 py-5 xl:px-8 xl:py-8">
+        {renderContent()}
+      </main>
+      {renderToast()}
+    </div>
+  );
+
   // If locked, return LockScreen view
   if (!isAuthenticated) {
     return (
@@ -835,7 +1080,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           initialSecurity={security}
           initialSettings={settings}
           onSecurityChange={setSecurity}
-          onSettingsChange={setSettings}
+          onThemeChange={handleLocalThemeChange}
           onUnlock={handleUnlock}
         />
         <GlobalLoaderOverlay loading={globalLoading} />
@@ -863,8 +1108,17 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         <div className="z-10 flex-grow flex flex-col">
           {renderContent()}
         </div>
+        {renderToast()}
       </div>
     );
+  }
+
+  if (isDesktop && activeTab === 'diaries' && currentScreen === 'entryEditor') {
+    return renderDesktopEditorShell();
+  }
+
+  if (isDesktop) {
+    return renderDesktopShell();
   }
 
   return (
@@ -978,34 +1232,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         </nav>
       )}
 
-      {/* Elegant, Non-blocking Floating Toast Notification System */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: -40, scale: 0.92, x: '-50%' }}
-            animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
-            exit={{ opacity: 0, y: -15, scale: 0.95, x: '-50%' }}
-            transition={{ type: "spring", stiffness: 350, damping: 25 }}
-            className="fixed top-6 left-1/2 z-50 flex items-center gap-3 bg-white/95 dark:bg-brand-card-bg/95 backdrop-blur-md px-5 py-3.5 rounded-2xl border border-brand-border/80 shadow-2xl max-w-sm w-[90%] select-none pointer-events-auto toast-safe"
-          >
-            <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 animate-pulse ${
-              toast.type === 'success' ? 'bg-brand-sage' :
-              toast.type === 'error' ? 'bg-brand-rose' : 'bg-brand-pink'
-            }`} />
-            
-            <p className="text-xs font-bold text-brand-plum leading-snug flex-grow">
-              {toast.message}
-            </p>
-            
-            <button 
-              onClick={() => setToast(null)}
-              className="text-brand-text-muted hover:text-brand-rose transition-colors p-1 rounded-lg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {renderToast()}
     </div>
   );
 }

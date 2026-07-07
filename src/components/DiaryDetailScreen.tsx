@@ -6,7 +6,7 @@ import {
   Search, List, Clock, HelpCircle,
   MoreVertical, RefreshCw
 } from 'lucide-react';
-import { Diary, Entry, PartitionHydrationState } from '../types';
+import { Diary, Entry, PartitionHydrationState, ResponsiveLayout } from '../types';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import { diaryRepository } from '../repositories';
 import OverlayPortal from './OverlayPortal';
@@ -15,6 +15,8 @@ import SyncedImage from './SyncedImage';
 interface DiaryDetailScreenProps {
   diary: Diary;
   entries: Entry[];
+  entryId?: string;
+  layout?: ResponsiveLayout;
   onBack: () => void;
   onEditEntry: (entryId: string) => void;
   onNewEntry: (diaryId: string, dateStr?: string) => void;
@@ -35,6 +37,8 @@ const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): strin
 export default function DiaryDetailScreen({
   diary,
   entries,
+  entryId,
+  layout = 'mobile',
   onBack,
   onEditEntry,
   onNewEntry,
@@ -101,6 +105,14 @@ export default function DiaryDetailScreen({
     if (!activeEntry || filteredEntries.length === 0) return -1;
     return filteredEntries.findIndex(e => e.id === activeEntry.id);
   }, [filteredEntries, activeEntry]);
+
+  React.useEffect(() => {
+    if (!entryId) return;
+    const realIndex = diaryEntries.findIndex(entry => entry.id === entryId);
+    if (realIndex >= 0) {
+      setCurrentIndex(realIndex);
+    }
+  }, [entryId, diaryEntries]);
 
   const handlePrev = () => {
     if (activeEntryIndex < filteredEntries.length - 1) {
@@ -309,6 +321,291 @@ export default function DiaryDetailScreen({
       }
     })
   };
+
+  if (layout === 'desktop') {
+    return (
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[270px_minmax(0,1fr)] xl:gap-7 2xl:grid-cols-[290px_minmax(0,1fr)_280px] 2xl:gap-8">
+        <aside className="xl:sticky xl:top-6 flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-[26px] border border-brand-border bg-white/68 shadow-[0_18px_55px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/55">
+          <div className="border-b border-brand-border p-5">
+            <button
+              type="button"
+              onClick={onBack}
+              className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-brand-sage transition-colors hover:text-brand-pink"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to library
+            </button>
+            <div className="flex items-center gap-3">
+              <span className="flex h-12 w-12 items-center justify-center rounded-2xl text-2xl shadow-inner" style={{ backgroundColor: diary.color }}>
+                {diary.emoji}
+              </span>
+              <div className="min-w-0">
+                <h1 className="truncate font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{diary.name}</h1>
+                <p className="text-xs font-semibold text-brand-text-muted">{diaryEntries.length} entries</p>
+              </div>
+            </div>
+            <div className="relative mt-5">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search entries..."
+                className="w-full rounded-full border border-brand-border bg-brand-bg/65 py-2.5 pl-10 pr-4 text-sm font-semibold text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+              />
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {filteredEntries.map((entry, idx) => {
+              const isSelected = activeEntry?.id === entry.id;
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  onClick={() => {
+                    const realIndex = diaryEntries.findIndex(candidate => candidate.id === entry.id);
+                    setCurrentIndex(realIndex);
+                  }}
+                  className={`block w-full border-l-4 px-6 py-5 text-left transition-all ${
+                    isSelected
+                      ? 'border-brand-sage bg-brand-sage-light/36'
+                      : 'border-transparent hover:bg-brand-blush-light/45'
+                  }`}
+                >
+                  <p className="text-sm font-bold text-brand-sage">{new Date(entry.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                  <h2 className="mt-2 font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">{entry.title || 'Untitled reflection'}</h2>
+                  <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{entry.body.replace(/<[^>]*>/g, ' ')}</p>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {entry.tags.slice(0, 3).map(tag => (
+                      <span key={tag} className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold text-brand-sage-dark">
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-brand-border p-5">
+            <button
+              type="button"
+              onClick={() => onNewEntry(diary.id)}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-sage px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark"
+            >
+              <Plus className="h-4 w-4" />
+              New Entry
+            </button>
+          </div>
+        </aside>
+
+        <main className="min-w-0">
+          {diaryEntries.length === 0 ? (
+            <section className="flex min-h-[560px] flex-col items-center justify-center rounded-2xl border border-brand-border bg-white/70 p-12 text-center shadow-sm dark:bg-brand-card-bg/70">
+              <Calendar className="h-12 w-12 text-brand-sage" />
+              <h2 className="mt-6 font-serif-diary text-4xl font-bold text-brand-plum dark:text-brand-text">A Clean Canvas Awaits</h2>
+              <p className="mt-3 max-w-md text-sm leading-relaxed text-brand-text-muted">Every intimate story begins with a single silent word.</p>
+              <button
+                type="button"
+                onClick={() => onNewEntry(diary.id)}
+                className="mt-7 inline-flex items-center gap-2 rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white"
+              >
+                <Plus className="h-4 w-4" />
+                Write the First Page
+              </button>
+            </section>
+          ) : !activeEntry || filteredEntries.length === 0 ? (
+            <section className="rounded-2xl border border-dashed border-brand-border bg-white/55 p-12 text-center">
+              <Search className="mx-auto h-10 w-10 text-brand-sage" />
+              <h2 className="mt-4 font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">No pages found</h2>
+              <button type="button" onClick={() => setSearchQuery('')} className="mt-4 text-sm font-bold text-brand-pink">
+                Clear search
+              </button>
+            </section>
+          ) : (
+            <article className="rounded-[30px] border border-brand-border bg-white/86 px-7 py-8 shadow-[0_20px_65px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/80 xl:px-10 xl:py-10 2xl:px-12 2xl:py-11">
+              <div className="flex flex-wrap items-start justify-between gap-5 xl:gap-6">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-brand-sage">
+                    {diary.isLocked && <Lock className="h-4 w-4" />}
+                    {new Date(activeEntry.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                    {activeEntry.time && ` - ${formatTime12(activeEntry.time)}`}
+                  </p>
+                  <h1 className="mt-4 font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
+                    {activeEntry.title === 'Untitled entry' ? 'Untitled Reflection' : activeEntry.title}
+                  </h1>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onEditEntry(activeEntry.id)}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-pink px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-pink-dark"
+                >
+                  <Edit className="h-4 w-4" />
+                  Edit
+                </button>
+              </div>
+
+              <div className="mt-10 max-w-3xl font-serif-diary text-xl leading-[1.8] text-brand-plum/95 dark:text-brand-text xl:text-2xl">
+                {activeEntry.isTimelineBifurcated && activeEntry.blocks && activeEntry.blocks.length > 0 ? (
+                  <div className="space-y-8">
+                    {activeEntry.blocks.map(block => (
+                      <section key={block.id} className="border-l-2 border-brand-sage/25 pl-6">
+                        <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-brand-sage-light px-3 py-1 text-xs font-bold uppercase tracking-widest text-brand-sage-dark">
+                          <Clock className="h-3 w-3" />
+                          {formatTime12(block.time)}
+                        </p>
+                        <div className="rich-text-editor-content" dangerouslySetInnerHTML={{ __html: block.body || (block.audioUri ? '' : 'No content written yet.') }} />
+                        {block.audioUri && (
+                          <div className="mt-4 max-w-md">
+                            <AudioWaveformPlayer src={block.audioUri} title="Voice Moment" />
+                          </div>
+                        )}
+                      </section>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rich-text-editor-content" dangerouslySetInnerHTML={{ __html: activeEntry.body || (!allAudioUris.length ? 'No content written yet.' : '') }} />
+                )}
+              </div>
+
+              <footer className="mt-12 flex items-center justify-between border-t border-brand-border pt-6">
+                <button
+                  type="button"
+                  onClick={handlePrev}
+                  disabled={activeEntryIndex === filteredEntries.length - 1}
+                  className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage disabled:opacity-30"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                  Previous
+                </button>
+                <span className="text-xs font-bold uppercase tracking-[0.18em] text-brand-text-muted">
+                  Page {activeEntryIndex + 1} of {filteredEntries.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleNext}
+                  disabled={activeEntryIndex === 0}
+                  className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage disabled:opacity-30"
+                >
+                  Next
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+              </footer>
+            </article>
+          )}
+        </main>
+
+        <aside className="flex flex-col gap-5 overflow-visible xl:col-start-2 xl:row-start-2 2xl:sticky 2xl:top-8 2xl:col-start-auto 2xl:row-start-auto 2xl:max-h-[calc(100vh-10rem)] 2xl:overflow-y-auto">
+          {activeEntry && (
+            <>
+              <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Mood</h2>
+                <div className="mt-4 flex items-center gap-3 rounded-2xl bg-brand-bg/70 p-4">
+                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-sage-light text-2xl">{activeEntry.moodEmoji}</span>
+                  <div>
+                    <p className="font-bold text-brand-plum dark:text-brand-text">{activeEntry.moodName}</p>
+                    <p className="text-xs text-brand-text-muted">{activeEntry.wordCount} words</p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Tags</h2>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {activeEntry.tags.length > 0 ? activeEntry.tags.map(tag => (
+                    <span key={tag} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-sm font-bold text-brand-sage-dark">
+                      #{tag}
+                    </span>
+                  )) : (
+                    <p className="text-sm text-brand-text-muted">No tags yet.</p>
+                  )}
+                </div>
+              </section>
+
+              {allAudioUris.length > 0 && (
+                <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+                  <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Voice Notes</h2>
+                  <div className="mt-4 space-y-3">
+                    {allAudioUris.map((audio, index) => (
+                      <div key={`${audio.uri}-${index}`}>
+                        <AudioWaveformPlayer src={audio.uri} title={audio.title} variant="minimal" />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Scrapbook</h2>
+                  <span className="text-xs font-bold text-brand-text-muted">{activeEntry.photoUris?.length || 0}</span>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  {activeEntry.photoUris && activeEntry.photoUris.length > 0 ? activeEntry.photoUris.slice(0, 6).map((src, index) => (
+                    <button
+                      key={`${src}-${index}`}
+                      type="button"
+                      onClick={() => setLightboxImg(src)}
+                      className="aspect-square overflow-hidden rounded-xl border border-brand-border bg-brand-bg"
+                    >
+                      <SyncedImage
+                        src={src}
+                        alt={`Memory ${index + 1}`}
+                        className="h-full w-full object-cover transition-transform duration-500 hover:scale-105"
+                        fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                        label="entry photo"
+                      />
+                    </button>
+                  )) : (
+                    <p className="col-span-2 rounded-xl border border-dashed border-brand-border p-5 text-center text-sm text-brand-text-muted">No photos attached.</p>
+                  )}
+                </div>
+              </section>
+            </>
+          )}
+        </aside>
+
+        <AnimatePresence>
+          {lightboxImg && (
+            <OverlayPortal>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setLightboxImg(null)}
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-4 backdrop-blur-lg"
+              >
+                <button
+                  type="button"
+                  onClick={() => setLightboxImg(null)}
+                  className="absolute right-6 top-6 rounded-full bg-white/10 p-3 text-white transition-all hover:bg-white/20"
+                >
+                  <X className="h-6 w-6" />
+                </button>
+                <motion.div
+                  initial={{ scale: 0.95 }}
+                  animate={{ scale: 1 }}
+                  exit={{ scale: 0.95 }}
+                  className="relative max-h-[85vh] max-w-3xl overflow-hidden rounded-2xl shadow-2xl"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <SyncedImage
+                    src={lightboxImg}
+                    alt="Enlarged memory"
+                    className="max-h-[80vh] max-w-full rounded-2xl object-contain"
+                    referrerPolicy="no-referrer"
+                    fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=1200"
+                    label="entry photo"
+                  />
+                </motion.div>
+              </motion.div>
+            </OverlayPortal>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6 font-sans select-none relative">

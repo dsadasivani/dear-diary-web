@@ -12,6 +12,11 @@ const countWords = (body: string): number => {
   return plainText ? plainText.split(/\s+/).filter(Boolean).length : 0;
 };
 
+const toSyncedSettingsPayload = (settings: AppSettings): AppSettings => {
+  const { theme: _theme, ...syncedSettings } = settings;
+  return syncedSettings;
+};
+
 export const createSyncingDiaryRepository = (
   localRepository: DiaryRepository,
   syncEngine: EventSyncEngine,
@@ -39,7 +44,7 @@ export const createSyncingDiaryRepository = (
         await localRepository.saveSettings(settings);
         return;
       }
-      await syncEngine.commitMutation('settings', 'upsert', 'settings', settings);
+      await syncEngine.commitMutation('settings', 'upsert', 'settings', toSyncedSettingsPayload(settings));
     };
     if (property === 'saveUserProfile') return async (profile: UserProfile): Promise<void> => {
       if (!await localRepository.getLocalSyncAccountState()) {

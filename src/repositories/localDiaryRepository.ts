@@ -448,7 +448,7 @@ export class LocalDiaryRepository implements DiaryRepository {
           ...currentSettings,
           customTags: event.payload.customTags,
           customMoods: event.payload.customMoods,
-          theme: event.payload.theme,
+          theme: currentSettings.theme,
         };
       } else {
         if (event.operation === 'delete' || !event.payload) throw new Error('Profile cannot be deleted.');
@@ -747,7 +747,7 @@ export class LocalDiaryRepository implements DiaryRepository {
             ...currentSettings,
             customTags: snapshot.settings.customTags,
             customMoods: snapshot.settings.customMoods,
-            theme: snapshot.settings.theme,
+            theme: currentSettings.theme,
           };
         } else {
           items[STORAGE_KEYS.settings] = snapshot.settings;

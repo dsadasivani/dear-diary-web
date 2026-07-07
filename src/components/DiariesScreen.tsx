@@ -1,9 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  BookOpen, Plus, Lock, ArrowLeft, Check, List, LayoutGrid, Upload
+  BookOpen, Plus, Lock, ArrowLeft, Check, List, LayoutGrid, Upload, Search
 } from 'lucide-react';
-import { Diary, Entry } from '../types';
+import { Diary, Entry, ResponsiveLayout } from '../types';
 import { PREDEFINED_COLORS } from '../domain/journalCatalog';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
 import { persistMediaDataUri } from '../mobile/mediaStorage';
@@ -14,6 +14,7 @@ type DiaryViewMode = 'compact' | 'list';
 interface DiariesScreenProps {
   diaries: Diary[];
   entries: Entry[];
+  layout?: ResponsiveLayout;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onRefreshDiaries: () => void | Promise<void>;
 }
@@ -24,10 +25,12 @@ const FOIL_ICON_OPTIONS = ['⭐', '👑', '🕊️', '🍀', '🗝️', '💎', 
 export default function DiariesScreen({ 
   diaries, 
   entries, 
+  layout = 'mobile',
   onNavigate,
   onRefreshDiaries
 }: DiariesScreenProps) {
   const [showCreateForm, setShowCreateForm] = useState<boolean>(false);
+  const [diarySearch, setDiarySearch] = useState('');
   
   // View mode state: compact (uniform grid), list (classic list)
   const [viewMode, setViewMode] = useState<DiaryViewMode>(() => {
@@ -53,6 +56,10 @@ export default function DiariesScreen({
   const coverFileInputRef = useRef<HTMLInputElement>(null);
 
   const totalEntries = entries.length;
+  const visibleDiaries = diaries.filter(diary => (
+    !diarySearch.trim() ||
+    diary.name.toLowerCase().includes(diarySearch.trim().toLowerCase())
+  ));
 
   const handleDiaryClick = (diary: Diary) => {
     onNavigate('diaries', 'diaryDetail', diary.id);
@@ -110,6 +117,154 @@ export default function DiariesScreen({
     setSelectedFoilIcons([]);
     setShowCreateForm(false);
   };
+
+  if (layout === 'desktop' && !showCreateForm) {
+    return (
+      <div className="space-y-7">
+        <header className="flex items-start justify-between gap-6">
+          <div>
+            <h1 className="font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
+              Diaries Library
+            </h1>
+            <p className="mt-2 text-lg text-brand-text-muted">Your collection of safe spaces and quiet reflections.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCreateForm(true)}
+            className="inline-flex items-center gap-2 rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark"
+          >
+            <Plus className="h-4 w-4" />
+            Start New
+          </button>
+        </header>
+
+        <section className="grid grid-cols-3 gap-4">
+          <div className="rounded-[22px] border border-brand-border bg-white/65 p-5 shadow-sm dark:bg-brand-card-bg/60">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-sage">Diaries</p>
+            <p className="mt-2 font-serif-diary text-3xl font-semibold text-brand-plum dark:text-brand-text">{diaries.length}</p>
+          </div>
+          <div className="rounded-[22px] border border-brand-border bg-white/65 p-5 shadow-sm dark:bg-brand-card-bg/60">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-sage">Entries</p>
+            <p className="mt-2 font-serif-diary text-3xl font-semibold text-brand-plum dark:text-brand-text">{totalEntries}</p>
+          </div>
+          <div className="rounded-[22px] border border-brand-border bg-white/65 p-5 shadow-sm dark:bg-brand-card-bg/60">
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-sage">Last Updated</p>
+            <p className="mt-2 font-serif-diary text-3xl font-semibold text-brand-plum dark:text-brand-text">{diaries[0]?.lastUpdated || 'Today'}</p>
+          </div>
+        </section>
+
+        <section className="flex items-center gap-4 rounded-[26px] border border-brand-border bg-white/68 p-3 shadow-[0_14px_44px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/60">
+          <div className="relative min-w-0 flex-1">
+            <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-brand-text-muted" />
+            <input
+              type="text"
+              value={diarySearch}
+              onChange={(event) => setDiarySearch(event.target.value)}
+              placeholder="Search within diaries..."
+              className="w-full rounded-2xl border border-transparent bg-transparent py-3 pl-12 pr-4 text-base font-semibold text-brand-plum outline-none placeholder:text-brand-text-muted/55 focus:border-brand-border focus:bg-white dark:text-brand-text"
+            />
+          </div>
+          <div className="flex items-center gap-1 rounded-xl bg-brand-bg/70 p-1">
+            <button
+              type="button"
+              onClick={() => handleViewModeChange('compact')}
+              className={`rounded-lg p-3 transition-all ${viewMode === 'compact' ? 'bg-white text-brand-sage shadow-sm' : 'text-brand-text-muted hover:text-brand-sage'}`}
+              title="Grid view"
+            >
+              <LayoutGrid className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => handleViewModeChange('list')}
+              className={`rounded-lg p-3 transition-all ${viewMode === 'list' ? 'bg-white text-brand-sage shadow-sm' : 'text-brand-text-muted hover:text-brand-sage'}`}
+              title="List view"
+            >
+              <List className="h-5 w-5" />
+            </button>
+          </div>
+        </section>
+
+        {viewMode === 'compact' ? (
+          <section className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-5">
+            {visibleDiaries.map(diary => (
+              <button
+                key={diary.id}
+                type="button"
+                onClick={() => handleDiaryClick(diary)}
+                className="group relative min-h-[248px] overflow-hidden rounded-[28px] border border-brand-border bg-white/76 p-6 text-left shadow-[0_16px_44px_rgba(62,36,41,0.07)] transition-all hover:-translate-y-1 hover:bg-white hover:shadow-[0_24px_60px_rgba(62,36,41,0.11)] dark:bg-brand-card-bg/70"
+              >
+                <div className="absolute inset-x-0 top-0 h-24 opacity-[0.18]" style={{ background: `linear-gradient(135deg, ${diary.color}, transparent)` }} />
+                <div className="flex items-start justify-between">
+                  <span className="flex h-16 w-16 items-center justify-center rounded-3xl text-3xl shadow-inner" style={{ backgroundColor: diary.color }}>
+                    {diary.emoji}
+                  </span>
+                  {diary.isLocked ? (
+                    <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-brand-border bg-brand-bg text-brand-text-muted">
+                      <Lock className="h-4 w-4" />
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-brand-bg/70 px-3 py-1 text-xs font-bold text-brand-text-muted">
+                      {diary.lastUpdated}
+                    </span>
+                  )}
+                </div>
+                <div className="relative mt-12">
+                  <h2 className="font-serif-diary text-3xl font-bold leading-tight text-brand-plum transition-colors group-hover:text-brand-pink-dark dark:text-brand-text">
+                    {diary.name}
+                  </h2>
+                  <p className="mt-3 text-sm leading-relaxed text-brand-text-muted">
+                    {diary.entryCount > 0 ? `${diary.entryCount} private entries` : 'A quiet space ready for its first reflection.'}
+                  </p>
+                </div>
+                <div className="relative mt-5 h-1.5 overflow-hidden rounded-full bg-brand-border/40">
+                  <span className="block h-full w-1/2 rounded-full bg-brand-sage/70 transition-all group-hover:w-3/4" />
+                </div>
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowCreateForm(true)}
+              className="flex min-h-[248px] flex-col items-center justify-center rounded-[28px] border-2 border-dashed border-brand-border bg-white/38 p-6 text-center transition-all hover:border-brand-sage hover:bg-white/66 dark:bg-brand-card-bg/35"
+            >
+              <span className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-blush-light text-brand-sage">
+                <Plus className="h-7 w-7" />
+              </span>
+              <h2 className="mt-6 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Start New</h2>
+              <p className="mt-2 text-sm font-semibold text-brand-text-muted">Create a new theme or safe space.</p>
+            </button>
+          </section>
+        ) : (
+          <section className="divide-y divide-brand-border overflow-hidden rounded-2xl border border-brand-border bg-white/60 dark:bg-brand-card-bg/60">
+            {visibleDiaries.map(diary => (
+              <button
+                key={diary.id}
+                type="button"
+                onClick={() => handleDiaryClick(diary)}
+                className="flex w-full items-center gap-5 px-6 py-5 text-left transition-colors hover:bg-brand-blush-light/40"
+              >
+                <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-2xl shadow-inner" style={{ backgroundColor: diary.color }}>
+                  {diary.emoji}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{diary.name}</span>
+                  <span className="text-sm font-semibold text-brand-text-muted">{diary.entryCount} entries {' '}&bull;{' '}{diary.lastUpdated}</span>
+                </span>
+                {diary.isLocked && <Lock className="h-5 w-5 text-brand-text-muted" />}
+              </button>
+            ))}
+          </section>
+        )}
+
+        {visibleDiaries.length === 0 && (
+          <section className="rounded-2xl border border-dashed border-brand-border bg-white/45 p-12 text-center">
+            <BookOpen className="mx-auto h-10 w-10 text-brand-sage" />
+            <h2 className="mt-4 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">No matching diaries</h2>
+            <p className="mt-2 text-sm text-brand-text-muted">Try a different search term or start a new diary.</p>
+          </section>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6 font-sans relative">

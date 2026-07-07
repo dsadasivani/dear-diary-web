@@ -19,6 +19,7 @@ import {
   SecurityConfig,
   Mood,
   Note,
+  ResponsiveLayout,
   UserProfile
 } from '../types';
 import { PREDEFINED_TAGS, PREDEFINED_MOODS, PREDEFINED_COLORS } from '../domain/journalCatalog';
@@ -81,10 +82,12 @@ interface AppSettingsScreenProps {
   initialSettings: AppSettings;
   initialSecurity: SecurityConfig;
   initialProfile: UserProfile;
+  layout?: ResponsiveLayout;
   onBack: () => void;
   onResetSuccess: () => void | Promise<void>;
   onDataChanged: () => void | Promise<void>;
   onShowToast?: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+  onThemeChange?: (theme: 'light' | 'dark') => void;
 }
 
 const formatBytes = (bytes: number): string => {
@@ -128,11 +131,14 @@ export default function AppSettingsScreen({
   initialSettings,
   initialSecurity,
   initialProfile,
+  layout = 'mobile',
   onBack,
   onResetSuccess,
   onDataChanged,
-  onShowToast
+  onShowToast,
+  onThemeChange
 }: AppSettingsScreenProps) {
+  const isDesktop = layout === 'desktop';
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
   const [activeTab, setActiveTab] = useState<'profile' | 'security' | 'backup' | 'customize'>('profile');
@@ -351,17 +357,9 @@ export default function AppSettingsScreen({
     }
   };
 
-  const handleThemeChange = async (newTheme: 'light' | 'dark') => {
-    const updated: AppSettings = {
-      ...settings,
-      theme: newTheme
-    };
-    await persistSettings(updated);
-    if (newTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+  const handleThemeChange = (newTheme: 'light' | 'dark') => {
+    setSettings(prev => ({ ...prev, theme: newTheme }));
+    onThemeChange?.(newTheme);
   };
 
   const handleAddCustomTag = async () => {
@@ -628,22 +626,25 @@ export default function AppSettingsScreen({
   };
 
   return (
-    <div className="flex flex-col gap-6 font-sans">
+    <div className={`${isDesktop ? 'grid grid-cols-1 items-start gap-7 xl:grid-cols-[220px_minmax(0,980px)] xl:gap-10 2xl:grid-cols-[230px_minmax(0,1040px)]' : 'flex flex-col gap-6'} font-sans`}>
       {/* Header */}
-      <header className="flex justify-between items-center bg-brand-bg/95 backdrop-blur-md sticky top-0 py-3 z-30 border-b border-brand-rose-light/40">
+      <header className={`${isDesktop ? 'col-span-full border-none bg-transparent py-0' : 'bg-brand-bg/95 sticky top-0 border-b border-brand-rose-light/40 py-3'} flex justify-between items-center backdrop-blur-md z-30`}>
         <div className="flex items-center gap-2">
           <button 
             onClick={onBack}
-            className="p-2 text-brand-plum hover:bg-brand-blush-light rounded-full transition-all"
+            className={`${isDesktop ? 'hidden' : 'p-2'} text-brand-plum hover:bg-brand-blush-light rounded-full transition-all`}
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="font-serif-diary text-xl font-bold text-brand-plum">Diary Protection & Settings</h1>
+          <div>
+            <h1 className={`${isDesktop ? 'text-4xl font-semibold xl:text-5xl' : 'text-xl font-bold'} font-serif-diary text-brand-plum dark:text-brand-text`}>Settings</h1>
+            {isDesktop && <p className="mt-2 text-lg text-brand-text-muted">Manage your digital sanctuary and privacy preferences.</p>}
+          </div>
         </div>
       </header>
 
       {/* Tab Navigation Wrapper */}
-      <div className="relative w-full">
+      <div className={`${isDesktop ? 'rounded-[24px] border border-brand-border bg-white/68 p-3 shadow-[0_14px_42px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/55 xl:sticky xl:top-6' : 'relative w-full'}`}>
         {/* Left scroll fade & chevron indicator */}
         <AnimatePresence>
           {canScrollLeft && (
@@ -691,7 +692,7 @@ export default function AppSettingsScreen({
         {/* Tab Navigation */}
         <div 
           ref={tabsContainerRef}
-          className="flex bg-brand-bg/50 dark:bg-brand-card-bg/40 p-1.5 rounded-2xl border border-brand-border/60 dark:border-white/5 shadow-inner gap-1 overflow-x-auto no-scrollbar scroll-smooth relative"
+          className={`${isDesktop ? 'flex-col bg-transparent p-0 border-none shadow-none overflow-visible' : 'bg-brand-bg/50 dark:bg-brand-card-bg/40 p-1.5 rounded-2xl border border-brand-border/60 dark:border-white/5 shadow-inner overflow-x-auto no-scrollbar'} flex gap-1 scroll-smooth relative`}
         >
           {[
             { 
@@ -733,7 +734,7 @@ export default function AppSettingsScreen({
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className="relative flex-1 min-w-[100px] py-2 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center cursor-pointer select-none group active:scale-[0.98]"
+                className={`relative ${isDesktop ? 'w-full justify-start px-4 py-3 text-sm' : 'flex-1 min-w-[100px] justify-center py-2 px-2.5 text-xs'} rounded-xl font-bold transition-all flex items-center cursor-pointer select-none group active:scale-[0.98]`}
               >
                 {isActive && (
                   <motion.div
@@ -766,7 +767,7 @@ export default function AppSettingsScreen({
       </div>
 
       {/* Security Config settings */}
-      <div className="flex flex-col gap-5">
+      <div className={`${isDesktop ? 'min-w-0' : ''} flex flex-col gap-5`}>
         <AnimatePresence mode="wait">
           {activeTab === 'profile' && (
             <motion.div
@@ -1252,6 +1253,8 @@ export default function AppSettingsScreen({
                 </div>
               )}
 
+              {isNativePlatform() && (
+                <>
               {/* Passkey & Biometric settings card */}
               <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
                 <div className="flex items-center justify-between">
@@ -1333,6 +1336,8 @@ export default function AppSettingsScreen({
                   )}
                 </div>
               </div>
+                </>
+              )}
             </motion.div>
           )}
 

@@ -1,3 +1,5 @@
+export type ResponsiveLayout = 'mobile' | 'desktop';
+
 export interface Diary {
   id: string;
   name: string;

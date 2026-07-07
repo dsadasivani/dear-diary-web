@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Plus, Flame, Shuffle, Lock, Settings, Calendar, ChevronRight, Sparkles
+  Plus, Flame, Shuffle, Lock, Settings, Calendar, ChevronRight, Sparkles, PenLine
 } from 'lucide-react';
-import { Diary, Entry, Note, UserProfile } from '../types';
+import { Diary, Entry, Note, ResponsiveLayout, UserProfile } from '../types';
 import { PREDEFINED_TAGS, calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
 import ProfileAvatar from './ProfileAvatar';
 
@@ -12,6 +12,7 @@ interface HomeScreenProps {
   entries: Entry[];
   notes: Note[];
   userProfile: UserProfile;
+  layout?: ResponsiveLayout;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onOpenQuickNote: (noteText: string) => void;
   onOpenNewEntryWithPrompt: (promptText: string) => void;
@@ -32,6 +33,7 @@ export default function HomeScreen({
   entries, 
   notes, 
   userProfile,
+  layout = 'mobile',
   onNavigate,
   onOpenQuickNote,
   onOpenNewEntryWithPrompt
@@ -103,6 +105,205 @@ export default function HomeScreen({
     .slice(0, 4);
 
   const freqTags = getFrequentlyUsedTags();
+  const goalPercent = Math.min(100, Math.round((todayWordCount / Math.max(1, userProfile.writingGoal)) * 100));
+  const recentEntries = [...entries]
+    .sort((a, b) => `${b.date} ${b.time || ''}`.localeCompare(`${a.date} ${a.time || ''}`))
+    .slice(0, 4);
+  const recentPhotos = [...entries]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .flatMap(entry => (entry.photoUris || []).map(src => ({ src, entry })))
+    .slice(0, 4);
+
+  if (layout === 'desktop') {
+    return (
+      <div className="grid grid-cols-1 gap-7 2xl:grid-cols-[minmax(0,1fr)_300px]">
+        <section className="min-w-0 space-y-7">
+          <header className="flex flex-wrap items-start justify-between gap-5 xl:gap-6">
+            <div>
+              <p className="text-sm font-bold uppercase tracking-[0.22em] text-brand-sage">
+                {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+              </p>
+              <h1 className="mt-2 font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-[3.25rem]">
+                {greeting}, {userProfile.name || 'Writer'}
+              </h1>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('stats', 'appSettings')}
+              className="rounded-full border border-brand-border bg-white/70 px-5 py-2.5 text-sm font-bold text-brand-sage shadow-sm transition-all hover:bg-white"
+            >
+              Customize sanctuary
+            </button>
+          </header>
+
+          <section className="space-y-5">
+            <div>
+              <p className="text-sm font-bold uppercase tracking-[0.22em] text-brand-pink-dark">Prompt of the day</p>
+              <h2 className="mt-3 max-w-4xl font-serif-diary text-4xl font-semibold leading-tight tracking-tight text-brand-plum dark:text-brand-text xl:text-[3rem]">
+                {activePrompt}
+              </h2>
+            </div>
+
+            <form onSubmit={handleQuickThoughtSubmit} className="rounded-[26px] border border-brand-border bg-white/82 p-5 shadow-[0_18px_55px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/82 xl:p-6">
+              <textarea
+                value={quickThought}
+                onChange={(event) => setQuickThought(event.target.value)}
+                placeholder="Start writing your quick jot..."
+                className="min-h-[220px] w-full resize-none bg-transparent font-serif-diary text-2xl leading-relaxed text-brand-plum outline-none placeholder:text-brand-text-muted/35 dark:text-brand-text xl:min-h-[250px]"
+              />
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-brand-border/60 pt-4">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onOpenNewEntryWithPrompt(activePrompt)}
+                    className="inline-flex items-center gap-2 rounded-full bg-brand-sage px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark"
+                  >
+                    <PenLine className="h-4 w-4" />
+                    Write full entry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleShufflePrompt}
+                    className="inline-flex items-center gap-2 rounded-full border border-brand-border bg-brand-bg/60 px-5 py-3 text-sm font-bold text-brand-sage transition-all hover:bg-brand-blush-light"
+                  >
+                    <Shuffle className="h-4 w-4" />
+                    Shuffle prompt
+                  </button>
+                </div>
+                <button
+                  type="submit"
+                  disabled={!quickThought.trim()}
+                  className="rounded-full bg-brand-pink px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-pink-dark disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Save quick note
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_270px]">
+            <div>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Last Week's Fragments</h3>
+                <button type="button" onClick={() => onNavigate('search')} className="text-sm font-bold text-brand-sage hover:text-brand-pink">
+                  Browse all
+                </button>
+              </div>
+              <div className="divide-y divide-brand-border overflow-hidden rounded-[24px] border border-brand-border bg-white/68 shadow-sm dark:bg-brand-card-bg/60">
+                {recentEntries.length > 0 ? recentEntries.map(entry => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    onClick={() => onNavigate('diaries', 'diaryDetail', entry.diaryId, entry.id)}
+                    className="block w-full px-5 py-4 text-left transition-colors hover:bg-brand-blush-light/45"
+                  >
+                    <p className="text-sm font-bold text-brand-pink-dark">{new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', weekday: 'long' })}</p>
+                    <h4 className="mt-1 font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">{entry.title}</h4>
+                    <p className="mt-1 line-clamp-1 text-sm text-brand-text-muted">{entry.body.replace(/<[^>]*>/g, ' ')}</p>
+                  </button>
+                )) : (
+                  <div className="px-5 py-10 text-center text-sm font-semibold text-brand-text-muted">Your first fragment will appear after you save an entry.</div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Journals</h3>
+                <button type="button" onClick={() => onNavigate('diaries')} className="text-brand-sage hover:text-brand-pink">
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="space-y-3">
+                {recentDiaries.map(diary => (
+                  <button
+                    key={diary.id}
+                    type="button"
+                    onClick={() => handleDiaryClick(diary)}
+                    className="flex w-full items-center gap-3 rounded-2xl border border-brand-border bg-white/72 p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_14px_34px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/65"
+                  >
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-xl shadow-inner" style={{ backgroundColor: diary.color }}>
+                      {diary.isLocked ? <Lock className="h-4 w-4 text-white" /> : diary.emoji}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate font-serif-diary text-lg font-bold text-brand-plum dark:text-brand-text">{diary.name}</span>
+                      <span className="text-xs font-semibold text-brand-text-muted">{diary.entryCount} entries {' '}&bull;{' '}{diary.lastUpdated}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <aside className="grid gap-5 xl:grid-cols-2 2xl:sticky 2xl:top-6 2xl:block 2xl:self-start 2xl:space-y-5">
+          <section className="rounded-[24px] border border-brand-border bg-white/76 p-5 shadow-[0_14px_40px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/70">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Your streak</p>
+              <Flame className="h-5 w-5 text-brand-pink" />
+            </div>
+            <div className="mt-5 flex items-end gap-2">
+              <span className="font-serif-diary text-5xl font-semibold text-brand-plum dark:text-brand-text">{streak}</span>
+              <span className="pb-2 text-sm font-semibold text-brand-text-muted">days</span>
+            </div>
+          </section>
+
+          <section className="rounded-[24px] border border-brand-border bg-white/60 p-5 shadow-sm dark:bg-brand-card-bg/60">
+            <div className="flex items-center justify-between text-sm font-bold uppercase tracking-[0.16em] text-brand-plum dark:text-brand-text">
+              <span>Daily goal</span>
+              <span className="text-brand-text-muted normal-case tracking-normal">{todayWordCount} / {userProfile.writingGoal} words</span>
+            </div>
+            <div className="mt-4 h-2 rounded-full bg-brand-border/50">
+              <div className="h-full rounded-full bg-brand-sage transition-all" style={{ width: `${goalPercent}%` }} />
+            </div>
+          </section>
+
+          <section className="rounded-[24px] border border-brand-border bg-white/60 p-5 shadow-sm dark:bg-brand-card-bg/60">
+            <h3 className="mb-4 text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Recent memories</h3>
+            <div className="grid grid-cols-2 gap-3">
+              {recentPhotos.length > 0 ? recentPhotos.map(({ src, entry }, index) => (
+                <button
+                  key={`${entry.id}-${index}`}
+                  type="button"
+                  onClick={() => onNavigate('diaries', 'diaryDetail', entry.diaryId, entry.id)}
+                  className="aspect-square overflow-hidden rounded-xl border border-brand-border bg-white shadow-sm"
+                >
+                  <img
+                    src={src}
+                    alt=""
+                    className="h-full w-full object-cover transition-transform duration-500 hover:scale-105"
+                    onError={(event) => {
+                      (event.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1517842645767-c639042777db?w=600';
+                    }}
+                  />
+                </button>
+              )) : (
+                <div className="col-span-2 rounded-2xl border border-dashed border-brand-border p-6 text-center text-xs font-semibold text-brand-text-muted">
+                  Photo memories appear here.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-[24px] border border-brand-border bg-white/60 p-5 shadow-sm dark:bg-brand-card-bg/60">
+            <h3 className="mb-4 text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Frequent tags</h3>
+            <div className="flex flex-wrap gap-2">
+              {freqTags.map(tag => (
+                <span key={tag} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-sm font-bold text-brand-sage-dark">
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-[24px] border border-brand-border bg-white/68 p-5 shadow-sm dark:bg-brand-card-bg/55">
+            <h3 className="font-serif-diary text-xl font-bold italic text-brand-plum dark:text-brand-text">Mindful Minute</h3>
+            <p className="mt-2 text-sm leading-relaxed text-brand-text-muted">Close your eyes for three deep breaths before you start writing today.</p>
+          </section>
+        </aside>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6 font-sans">

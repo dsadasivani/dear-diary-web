@@ -128,7 +128,7 @@ test('initializes settings, profile, security, and Drive metadata through the re
   assert.equal(backup.contentRevision, 0);
 });
 
-test('portable restore preserves local security, reminders, and backup identity', async () => {
+test('portable restore preserves local security, reminders, theme, and backup identity', async () => {
   const source = await createRepository();
   await source.createNote({ title: 'Cloud note', body: 'Restored', isPinned: false, tags: [] });
   await source.saveSettings({
@@ -157,7 +157,7 @@ test('portable restore preserves local security, reminders, and backup identity'
   const settings = await target.getSettings();
   assert.equal(settings.remindersEnabled, true);
   assert.equal(settings.reminderTime, '07:15');
-  assert.equal(settings.theme, 'dark');
+  assert.equal(settings.theme, 'light');
   assert.deepEqual(settings.customTags, ['cloud']);
   const after = await target.getDriveBackupSettings();
   assert.equal(after.deviceId, before.deviceId);
@@ -219,7 +219,7 @@ test('applies canonical sync events idempotently and tracks record versions', as
   assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 3);
 });
 
-test('applies portable settings and profile events without replacing local reminder settings', async () => {
+test('applies portable settings and profile events without replacing local reminder or theme settings', async () => {
   const repository = await createRepository();
   await repository.saveSettings({ remindersEnabled: true, reminderTime: '07:30', theme: 'light' });
   await repository.saveLocalSyncAccountState({
@@ -246,7 +246,7 @@ test('applies portable settings and profile events without replacing local remin
   const settings = await repository.getSettings();
   assert.equal(settings.remindersEnabled, true);
   assert.equal(settings.reminderTime, '07:30');
-  assert.equal(settings.theme, 'dark');
+  assert.equal(settings.theme, 'light');
   assert.deepEqual(settings.customTags, ['cloud']);
   assert.deepEqual(await repository.getUserProfile(), profile);
 });

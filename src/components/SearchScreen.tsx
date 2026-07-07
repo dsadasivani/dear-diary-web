@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { 
   Search, BookOpen, FileText, Image, Calendar, Tag, ArrowRight, X, Filter, Download, RefreshCw
 } from 'lucide-react';
-import { AppSettings, Diary, Entry, Note, PartitionHydrationState } from '../types';
+import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
 
 interface SearchScreenProps {
@@ -11,6 +11,8 @@ interface SearchScreenProps {
   entries: Entry[];
   notes: Note[];
   settings: AppSettings;
+  layout?: ResponsiveLayout;
+  initialQuery?: string;
   archiveMonths?: PartitionHydrationState[];
   onHydrateArchiveMonth?: (partitionKey: string) => void | Promise<void>;
   onHydrateAllArchiveMonths?: () => void | Promise<void>;
@@ -31,6 +33,8 @@ export default function SearchScreen({
   entries,
   notes,
   settings,
+  layout = 'mobile',
+  initialQuery,
   archiveMonths = [],
   onHydrateArchiveMonth,
   onHydrateAllArchiveMonths,
@@ -39,6 +43,7 @@ export default function SearchScreen({
 }: SearchScreenProps) {
   const availableTags = getTagsForSettings(settings);
   const [query, setQuery] = useState<string>('');
+  const [selectedResultId, setSelectedResultId] = useState<string>('');
   
   // Filter states
   const [selectedSource, setSelectedSource] = useState<'all' | 'diaries' | 'notes'>('all');
@@ -67,6 +72,12 @@ export default function SearchScreen({
     photoCount?: number;
     rawObj: any;
   }[]>([]);
+
+  useEffect(() => {
+    if (initialQuery !== undefined) {
+      setQuery(initialQuery);
+    }
+  }, [initialQuery]);
 
   // Real-time search filter triggers
   useEffect(() => {
@@ -168,6 +179,197 @@ export default function SearchScreen({
       onEditNote(item.rawObj);
     }
   };
+
+  const selectedResult = results.find(item => item.id === selectedResultId) || results[0] || null;
+
+  if (layout === 'desktop') {
+    const filterPanel = (
+      <aside className="space-y-6 rounded-[26px] border border-brand-border bg-white/68 p-5 shadow-[0_18px_55px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/60 xl:sticky xl:top-6 xl:max-h-[calc(100vh-9rem)] xl:overflow-y-auto 2xl:p-6">
+        <div>
+          <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Source</h2>
+          <div className="mt-4 space-y-2">
+            {(['all', 'diaries', 'notes'] as const).map(source => (
+              <button
+                key={source}
+                type="button"
+                onClick={() => setSelectedSource(source)}
+                className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left text-sm font-bold capitalize transition-all ${
+                  selectedSource === source
+                    ? 'border-brand-sage bg-white text-brand-plum shadow-[0_8px_24px_rgba(62,36,41,0.07)]'
+                    : 'border-brand-border bg-brand-bg/45 text-brand-text-muted hover:bg-white'
+                }`}
+              >
+                <span>{source === 'all' ? 'All Entries' : source}</span>
+                <span className={`h-3 w-3 rounded-full border ${selectedSource === source ? 'border-brand-sage bg-brand-sage' : 'border-brand-border'}`} />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Refine by tags</h2>
+          <div className="mt-4 flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+            {availableTags.map(tag => {
+              const isSelected = selectedTags.includes(tag);
+              return (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => handleTagToggle(tag)}
+                  className={`rounded-full px-3 py-1.5 text-sm font-bold transition-all ${isSelected ? 'bg-brand-sage text-white' : 'bg-brand-sage-light text-brand-sage-dark hover:bg-brand-blush-light'}`}
+                >
+                  #{tag}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Date range</h2>
+          <div className="mt-4 space-y-3">
+            <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className="w-full rounded-xl border border-brand-border bg-white/70 px-4 py-3 text-sm font-bold text-brand-plum outline-none" />
+            <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className="w-full rounded-xl border border-brand-border bg-white/70 px-4 py-3 text-sm font-bold text-brand-plum outline-none" />
+          </div>
+        </div>
+
+        <label className="flex cursor-pointer items-center justify-between rounded-xl border border-brand-border bg-brand-bg/45 px-4 py-3">
+          <span className="text-sm font-bold text-brand-plum dark:text-brand-text">Requires Photos</span>
+          <input type="checkbox" checked={hasPhotos} onChange={(event) => setHasPhotos(event.target.checked)} className="h-5 w-5 accent-brand-sage" />
+        </label>
+
+        <button type="button" onClick={clearAllFilters} className="w-full rounded-full border border-brand-border bg-white/65 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-white">
+          Clear Filters
+        </button>
+      </aside>
+    );
+
+    return (
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)_320px] 2xl:gap-7">
+        {filterPanel}
+
+        <main className="min-w-0 space-y-6">
+          <header className="space-y-4">
+            <h1 className="font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">Global Search</h1>
+            <div className="relative">
+              <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-brand-text-muted" />
+              <input
+                type="text"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search thoughts, memories, dreams..."
+                className="w-full rounded-full border border-brand-border bg-white/72 py-3.5 pl-12 pr-4 text-base font-semibold text-brand-plum outline-none transition-all focus:border-brand-sage focus:bg-white focus:shadow-[0_10px_34px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/70 dark:text-brand-text"
+              />
+            </div>
+            <p className="text-lg text-brand-text-muted">
+              Showing <strong className="text-brand-plum dark:text-brand-text">{results.length}</strong> result{results.length === 1 ? '' : 's'}
+              {query.trim() ? ` for "${query.trim()}"` : ''}
+            </p>
+          </header>
+
+          {unloadedArchiveMonths.length > 0 && (
+            <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-xs text-brand-sage-dark">
+              Searching downloaded memories first. Restore older archive months to include more results.
+            </div>
+          )}
+
+          <section className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
+            {results.map(item => {
+              const isSelected = selectedResult?.id === item.id;
+              return (
+                <button
+                  key={`${item.type}-${item.id}`}
+                  type="button"
+                  onClick={() => {
+                    const hasPreviewRail = typeof window !== 'undefined' && window.matchMedia('(min-width: 1536px)').matches;
+                    if (hasPreviewRail) {
+                      setSelectedResultId(item.id);
+                    } else {
+                      handleResultClick(item);
+                    }
+                  }}
+                  onDoubleClick={() => handleResultClick(item)}
+                  className={`min-h-[188px] rounded-[24px] border bg-white/74 p-5 text-left shadow-[0_12px_35px_rgba(62,36,41,0.06)] transition-all hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_18px_45px_rgba(62,36,41,0.09)] dark:bg-brand-card-bg/70 ${
+                    isSelected ? 'border-brand-sage ring-2 ring-brand-sage/15' : 'border-brand-border'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${item.type === 'entry' ? 'bg-brand-sage-light text-brand-sage-dark' : 'bg-brand-blush-light text-brand-pink-dark'}`}>
+                      {item.type === 'entry' ? 'Journal Entry' : 'Quick Note'}
+                    </span>
+                    <span className="text-xs font-bold text-brand-text-muted">{item.date}</span>
+                  </div>
+                  <h2 className="mt-5 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{item.title}</h2>
+                  <p className="mt-3 line-clamp-4 text-base leading-relaxed text-brand-plum/80 dark:text-brand-text/80">{item.body.replace(/<[^>]*>/g, ' ')}</p>
+                  <div className="mt-4 flex flex-wrap gap-1.5">
+                    {item.tags.slice(0, 4).map(tag => (
+                      <span key={tag} className="rounded-full bg-brand-bg px-2 py-0.5 text-[10px] font-bold text-brand-sage-dark">
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+
+            {results.length === 0 && (
+              <div className="rounded-2xl border border-dashed border-brand-border bg-white/45 p-12 text-center 2xl:col-span-2">
+                <Search className="mx-auto h-12 w-12 text-brand-sage opacity-60" />
+                <h2 className="mt-4 font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">No results found</h2>
+                <p className="mt-2 text-sm text-brand-text-muted">Try adjusting text, filters, dates, or tags.</p>
+              </div>
+            )}
+          </section>
+        </main>
+
+        <aside className="hidden rounded-[28px] border border-brand-border bg-white/76 p-6 shadow-[0_18px_55px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/72 2xl:sticky 2xl:top-8 2xl:block 2xl:max-h-[calc(100vh-10rem)] 2xl:overflow-y-auto">
+          {selectedResult ? (
+            <div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-bold uppercase tracking-[0.2em] text-brand-sage">
+                    {selectedResult.type === 'entry' ? 'Journal Entry' : 'Quick Note'}
+                  </p>
+                  <h2 className="mt-4 font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">{selectedResult.title}</h2>
+                  <p className="mt-2 text-sm font-bold text-brand-text-muted">{selectedResult.date}</p>
+                </div>
+                <button type="button" onClick={() => setSelectedResultId('')} className="rounded-full p-2 text-brand-text-muted hover:bg-brand-blush-light">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="mt-7 flex flex-wrap gap-2">
+                {selectedResult.tags.map(tag => (
+                  <span key={tag} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-sm font-bold text-brand-sage-dark">
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+
+              <p className="mt-7 whitespace-pre-line text-base leading-relaxed text-brand-plum/90 dark:text-brand-text/90">
+                {selectedResult.body.replace(/<[^>]*>/g, ' ')}
+              </p>
+
+              <button
+                type="button"
+                onClick={() => handleResultClick(selectedResult)}
+                className="mt-8 inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-sage px-5 py-3 text-sm font-bold text-white hover:bg-brand-sage-dark"
+              >
+                Open {selectedResult.type === 'entry' ? 'Entry' : 'Note'}
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
+              <Search className="h-10 w-10 text-brand-sage" />
+              <h2 className="mt-4 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Select a result</h2>
+              <p className="mt-2 text-sm text-brand-text-muted">Preview a memory before opening it.</p>
+            </div>
+          )}
+        </aside>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-5 font-sans">

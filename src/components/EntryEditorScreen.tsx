@@ -8,7 +8,7 @@ import {
   ChevronUp, ChevronDown, Mic, MicOff, Pause, Play, Square, Circle, Sparkles,
   Clock, Edit
 } from 'lucide-react';
-import { AppSettings, Diary, Entry, EntryBlock } from '../types';
+import { AppSettings, Diary, Entry, EntryBlock, ResponsiveLayout } from '../types';
 import RichTextEditor from './RichTextEditor';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import SyncedImage from './SyncedImage';
@@ -26,6 +26,7 @@ interface EntryEditorScreenProps {
   settings: AppSettings;
   diaryId?: string; // Optional default diary ID
   entryId?: string; // Optional entry ID if editing
+  layout?: ResponsiveLayout;
   onBack: () => void;
   onRefreshEntries: () => void | Promise<void>;
   onFocusModeChange?: (active: boolean) => void;
@@ -42,6 +43,7 @@ export default function EntryEditorScreen({
   settings,
   diaryId: initialDiaryId,
   entryId,
+  layout = 'mobile',
   onBack,
   onRefreshEntries,
   onFocusModeChange,
@@ -1984,6 +1986,412 @@ export default function EntryEditorScreen({
 
         </div>
         {localReflectionUI}
+        {recordingOverlayUI}
+      </div>
+    );
+  }
+
+  if (layout === 'desktop') {
+    return (
+      <div className="space-y-6">
+        <header className="flex flex-wrap items-center justify-between gap-5 xl:gap-6">
+          <div className="min-w-0">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage transition-colors hover:text-brand-pink"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              My Journal
+            </button>
+            <h1 className="mt-2 font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
+              {isEditing ? 'Edit Reflection' : 'New Entry'}
+            </h1>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="rounded-full border border-brand-border bg-white/60 px-5 py-3 text-sm font-bold text-brand-sage transition-all hover:bg-white"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={isSaving}
+              className="rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              {isSaving ? 'Saving...' : 'Save Entry'}
+            </button>
+          </div>
+        </header>
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_340px] 2xl:gap-8">
+          <main className="min-w-0 overflow-hidden rounded-[28px] border border-brand-border bg-white/86 shadow-[0_18px_60px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/82">
+            <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-4 border-b border-brand-border bg-white/92 px-5 py-4 backdrop-blur-xl dark:bg-brand-card-bg/90 xl:px-7">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { key: 'bold', icon: Bold, action: () => execCommand('bold'), label: 'Bold' },
+                  { key: 'italic', icon: Italic, action: () => execCommand('italic'), label: 'Italic' },
+                  { key: 'underline', icon: Underline, action: () => execCommand('underline'), label: 'Underline' },
+                  { key: 'strikeThrough', icon: Strikethrough, action: () => execCommand('strikeThrough'), label: 'Strikethrough' },
+                ].map(item => {
+                  const Icon = item.icon;
+                  const active = Boolean(activeFormats[item.key as keyof typeof activeFormats]);
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        item.action();
+                      }}
+                      className={`rounded-xl p-2 transition-all ${active ? 'bg-brand-pink text-white' : 'text-brand-plum hover:bg-brand-blush-light dark:text-brand-text'}`}
+                      title={item.label}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </button>
+                  );
+                })}
+                <span className="mx-2 h-6 w-px bg-brand-border" />
+                <button
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    toggleFormatBlock('h2');
+                  }}
+                  className={`rounded-xl p-2 transition-all ${activeFormats.h2 ? 'bg-brand-pink text-white' : 'text-brand-plum hover:bg-brand-blush-light dark:text-brand-text'}`}
+                  title="Heading"
+                >
+                  <Heading2 className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    toggleFormatBlock('blockquote');
+                  }}
+                  className={`rounded-xl p-2 transition-all ${activeFormats.blockquote ? 'bg-brand-pink text-white' : 'text-brand-plum hover:bg-brand-blush-light dark:text-brand-text'}`}
+                  title="Quote"
+                >
+                  <Quote className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    execCommand('insertUnorderedList');
+                  }}
+                  className={`rounded-xl p-2 transition-all ${activeFormats.list ? 'bg-brand-pink text-white' : 'text-brand-plum hover:bg-brand-blush-light dark:text-brand-text'}`}
+                  title="List"
+                >
+                  <List className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs font-bold text-brand-text-muted">
+                <span>{liveWordCount} words</span>
+                <span className="h-2 w-2 rounded-full bg-brand-sage" />
+                <span>Local draft</span>
+              </div>
+            </div>
+
+            <section className="mx-auto max-w-4xl px-7 py-8 xl:px-10 xl:py-9 2xl:px-12 2xl:py-10">
+              {showDiarySelector && diaries.length > 0 && (
+                <label className="mb-7 flex flex-col gap-2">
+                  <span className="text-xs font-bold uppercase tracking-[0.18em] text-brand-sage">Destination journal</span>
+                  <select
+                    value={diaryId}
+                    onChange={(event) => setDiaryId(event.target.value)}
+                    className="w-full rounded-xl border border-brand-border bg-brand-bg/55 px-4 py-3 text-sm font-bold text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+                  >
+                    {diaries.map(diary => (
+                      <option key={diary.id} value={diary.id}>{diary.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <div className="flex flex-wrap items-center justify-center gap-3 text-sm font-bold text-brand-text-muted">
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(event) => setDate(event.target.value)}
+                  className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 font-serif-diary text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+                />
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(event) => setTime(event.target.value)}
+                  className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 font-serif-diary text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+                />
+                <select
+                  value={mood.name}
+                  onChange={(event) => {
+                    const found = availableMoods.find(item => item.name === event.target.value);
+                    if (found) setMood(found);
+                  }}
+                  className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+                >
+                  {availableMoods.map(item => (
+                    <option key={item.name} value={item.name}>{item.emoji} {item.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <input
+                type="text"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Title of your reflection..."
+                className={`mt-9 w-full border-none bg-transparent text-center text-4xl font-semibold tracking-tight text-brand-plum outline-none placeholder:text-brand-text-muted/30 dark:text-brand-text xl:text-[3rem] ${
+                  fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                }`}
+              />
+
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
+                {selectedTags.map(tag => (
+                  <span key={tag} className="inline-flex items-center gap-2 rounded-full bg-brand-sage-light px-3 py-1.5 text-sm font-bold text-brand-sage-dark">
+                    #{tag}
+                    <button type="button" onClick={() => handleTagToggle(tag)} className="text-brand-sage-dark/65 hover:text-brand-rose">x</button>
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setShowTagPicker(prev => !prev)}
+                  className="inline-flex items-center gap-1 rounded-full border border-dashed border-brand-border px-3 py-1.5 text-sm font-bold text-brand-sage hover:border-brand-sage"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Tag
+                </button>
+              </div>
+
+              {showTagPicker && (
+                <div className="mx-auto mt-4 flex max-h-32 max-w-2xl flex-wrap justify-center gap-2 overflow-y-auto rounded-2xl border border-brand-border bg-brand-bg/55 p-4">
+                  {availableTags.map(tag => {
+                    const isSelected = selectedTags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => handleTagToggle(tag)}
+                        className={`rounded-full px-3 py-1.5 text-xs font-bold transition-all ${isSelected ? 'bg-brand-pink text-white' : 'bg-white text-brand-sage-dark hover:bg-brand-sage-light'}`}
+                      >
+                        #{tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="mt-10 space-y-8">
+                {blocks.length > 0 && (
+                  <section className="space-y-5 border-b border-brand-border pb-8">
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-brand-pink">Saved Moments ({blocks.length})</p>
+                    {blocks.map((block, index) => (
+                      <div key={block.id} className="border-l-2 border-brand-pink/25 pl-6">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <input
+                            type="time"
+                            value={block.time}
+                            onChange={(event) => {
+                              const updated = [...blocks];
+                              updated[index].time = event.target.value;
+                              setBlocks(updated);
+                            }}
+                            className="rounded-full border border-brand-border bg-brand-bg/70 px-3 py-1 text-xs font-bold text-brand-plum outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setBlocks(prev => prev.filter(item => item.id !== block.id))}
+                            className="rounded-full p-2 text-brand-rose hover:bg-red-50"
+                            title="Delete moment"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                        <RichTextEditor
+                          html={block.body}
+                          onChange={(newHtml) => {
+                            const updated = [...blocks];
+                            updated[index].body = newHtml;
+                            setBlocks(updated);
+                          }}
+                          onFocus={() => setActiveBlockId(block.id)}
+                          placeholder="Edit moment..."
+                          className={`rich-text-editor min-h-[120px] w-full text-xl leading-relaxed text-brand-plum outline-none dark:text-brand-text ${
+                            fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                          }`}
+                        />
+                        {block.audioUri && (
+                          <div className="mt-4 max-w-md">
+                            <AudioWaveformPlayer
+                              src={block.audioUri}
+                              title="Voice moment"
+                              variant="minimal"
+                              onDelete={() => {
+                                const updated = [...blocks];
+                                updated[index].audioUri = undefined;
+                                setBlocks(updated);
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </section>
+                )}
+
+                <section>
+                  <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-brand-pink/5 px-3 py-1 text-xs font-bold uppercase tracking-[0.16em] text-brand-pink">
+                    <Clock className="h-3.5 w-3.5" />
+                    Drafting Moment at {formatTime12(currentTimeText)}
+                    <input
+                      type="time"
+                      value={currentTimeText}
+                      onChange={(event) => setCurrentTimeText(event.target.value)}
+                      className="ml-2 w-20 bg-transparent font-mono text-brand-plum outline-none"
+                    />
+                  </div>
+                  <RichTextEditor
+                    html={body}
+                    onChange={setBody}
+                    onFocus={() => setActiveBlockId(null)}
+                    placeholder="Write a brand-new moment reflection..."
+                    className={`rich-text-editor min-h-[360px] w-full text-2xl leading-[1.75] text-brand-plum outline-none dark:text-brand-text ${
+                      fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                    }`}
+                  />
+                  {audioUri && (
+                    <div className="mt-5 max-w-md">
+                      <AudioWaveformPlayer src={audioUri} variant="minimal" onDelete={() => setAudioUri(undefined)} />
+                    </div>
+                  )}
+                </section>
+              </div>
+            </section>
+          </main>
+
+          <aside className="flex flex-col gap-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-5rem)] xl:overflow-y-auto">
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-[0_14px_38px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/70">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Scrapbook</h2>
+                <button type="button" onClick={triggerPhotoInput} className="rounded-full border border-brand-border p-2 text-brand-sage hover:bg-brand-blush-light" title="Attach photo">
+                  <Camera className="h-4 w-4" />
+                </button>
+              </div>
+              <input type="file" ref={fileInputRef} onChange={handlePhotoUpload} multiple accept="image/*" className="hidden" />
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={triggerPhotoInput}
+                  className="flex aspect-square flex-col items-center justify-center rounded-xl border border-dashed border-brand-border bg-brand-bg/50 text-xs font-bold uppercase tracking-wider text-brand-text-muted hover:border-brand-sage hover:text-brand-sage"
+                >
+                  <Camera className="mb-2 h-5 w-5" />
+                  Drop photo
+                </button>
+                {photoUris.map((photo, index) => (
+                  <div key={`${photo}-${index}`} className="relative aspect-square overflow-hidden rounded-xl border border-brand-border bg-brand-bg">
+                    <SyncedImage src={photo} alt="" className="h-full w-full object-cover" label="entry photo" />
+                    <button
+                      type="button"
+                      onClick={() => removePhoto(index)}
+                      className="absolute right-1.5 top-1.5 rounded-full bg-black/60 p-1 text-white hover:bg-red-600"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
+              <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Voice Memo</h2>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => toggleRecording('voice-dictation')}
+                  className="rounded-2xl border border-brand-border bg-brand-bg/60 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-brand-sage-light"
+                >
+                  Audio note
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleRecording('speech-to-text')}
+                  className="rounded-2xl border border-brand-border bg-brand-bg/60 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-brand-sage-light"
+                >
+                  Dictate text
+                </button>
+              </div>
+            </section>
+
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
+              <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-sage">Local Reflection</h2>
+              <p className="mt-2 text-sm leading-relaxed text-brand-text-muted">Private suggestions are generated on this device from your draft.</p>
+              <button
+                type="button"
+                onClick={() => void handleAiEnhance()}
+                disabled={aiLoading}
+                className="mt-4 w-full rounded-full bg-brand-sage px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
+              >
+                {aiLoading ? 'Reflecting...' : 'Suggest mood and tags'}
+              </button>
+              {aiError && <p className="mt-3 text-xs font-bold text-brand-rose">{aiError}</p>}
+              {aiResult && (
+                <div className="mt-4 rounded-2xl bg-brand-sage-light/35 p-4">
+                  <p className="text-sm leading-relaxed text-brand-plum dark:text-brand-text">{aiResult.reflection}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => applyAiMood(aiResult.mood)} className="rounded-full bg-brand-pink/10 px-3 py-1 text-xs font-bold text-brand-pink">
+                      Use mood: {aiResult.mood}
+                    </button>
+                    {aiResult.tags.map(tag => (
+                      <button key={tag} type="button" onClick={() => applyAiTag(tag)} className="rounded-full bg-brand-sage/10 px-3 py-1 text-xs font-bold text-brand-sage">
+                        #{tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-[24px] border border-brand-border bg-white/62 p-5 shadow-sm dark:bg-brand-card-bg/55">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFocusMode(true);
+                  setIsDockMinimized(true);
+                  onFocusModeChange?.(true);
+                }}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-border bg-brand-bg/60 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-brand-blush-light"
+              >
+                <Maximize2 className="h-4 w-4" />
+                Focus mode
+              </button>
+            </section>
+          </aside>
+        </div>
+
+        {isEditing && (
+          <section className="max-w-4xl rounded-[24px] border border-red-100 bg-red-50/45 px-5 py-4">
+            <p className="text-sm font-semibold text-red-700">Deleting this journal entry is irreversible.</p>
+            {!showConfirmDelete ? (
+              <button type="button" onClick={() => setShowConfirmDelete(true)} className="mt-3 rounded-full border border-red-200 bg-white/65 px-4 py-2 text-sm font-bold text-red-700 hover:bg-red-100">
+                Delete Entry
+              </button>
+            ) : (
+              <div className="mt-3 flex gap-2">
+                <button type="button" onClick={handleDeleteEntry} className="rounded-full bg-red-600 px-4 py-2 text-sm font-bold text-white shadow-sm">
+                  Confirm Delete
+                </button>
+                <button type="button" onClick={() => setShowConfirmDelete(false)} className="rounded-full border border-red-200 px-4 py-2 text-sm font-bold text-red-700">
+                  Cancel
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
         {recordingOverlayUI}
       </div>
     );

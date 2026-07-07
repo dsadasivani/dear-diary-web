@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle, ArrowLeft, BookOpen, CalendarDays, Check, Delete,
-  Cloud, Eye, EyeOff, Fingerprint, Lock, Moon, ShieldCheck, Sparkles, Sun
+  Cloud, Eye, EyeOff, Lock, Moon, ShieldCheck, Sparkles, Sun
 } from 'lucide-react';
 import { AppSettings, GoogleAccountSession, SecurityConfig } from '../types';
 import {
@@ -19,9 +19,9 @@ import {
   verifyRecoveryAnswer,
 } from '../domain/security';
 import type { PinLength } from '../domain/security';
-import { secureAuthService } from '../platform/security';
 import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
 import { diaryRepository } from '../repositories';
+import { applyThemePreference, getLocalThemePreference, setLocalThemePreference } from '../utils/themePreference';
 import { bootstrapNewMobileAccount } from '../sync/accountBootstrap';
 import {
   createConfiguredSupabaseControlPlaneClient,
@@ -35,7 +35,7 @@ interface LockScreenProps {
   initialSecurity: SecurityConfig;
   initialSettings: AppSettings;
   onSecurityChange: (security: SecurityConfig) => void;
-  onSettingsChange: (settings: AppSettings) => void;
+  onThemeChange?: (theme: 'light' | 'dark') => void;
   onUnlock: () => void | Promise<void>;
 }
 
@@ -74,7 +74,7 @@ export default function LockScreen({
   initialSecurity,
   initialSettings,
   onSecurityChange,
-  onSettingsChange,
+  onThemeChange,
   onUnlock,
 }: LockScreenProps) {
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
@@ -90,7 +90,6 @@ export default function LockScreen({
   const [successMsg, setSuccessMsg] = useState('');
   const [showPin, setShowPin] = useState(false);
   const [shakeTrigger, setShakeTrigger] = useState(false);
-  const [isBiometricActive, setIsBiometricActive] = useState(false);
   const [requiresRecoverySetup, setRequiresRecoverySetup] = useState(false);
   const [recoveryMode, setRecoveryMode] = useState<RecoveryMode>(null);
   const [isResetting, setIsResetting] = useState(false);
@@ -98,13 +97,14 @@ export default function LockScreen({
   const [resetNewPin, setResetNewPin] = useState('');
   const [resetConfirmPin, setResetConfirmPin] = useState('');
   const [recoveryVerifiedBy, setRecoveryVerifiedBy] = useState<'question' | 'google' | null>(null);
-  const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() => (
-    initialSecurity.isPinCreated ? 'ambient' : 'keypad'
-  ));
+  const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() => {
+    const isDesktopViewport = typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches;
+    return initialSecurity.isPinCreated && !isDesktopViewport ? 'ambient' : 'keypad';
+  });
   const [time, setTime] = useState('');
   const [date, setDate] = useState('');
   const [quoteIndex, setQuoteIndex] = useState(0);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => initialSettings.theme || 'light');
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => getLocalThemePreference(initialSettings.theme || 'light'));
   const [showBackupChoice, setShowBackupChoice] = useState(false);
   const [isLinkingBackup, setIsLinkingBackup] = useState(false);
   const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
@@ -130,17 +130,8 @@ export default function LockScreen({
   }, []);
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
+    applyThemePreference(theme);
   }, [theme]);
-
-  useEffect(() => {
-    if (security.isPinCreated && security.isBiometricsEnabled && security.isBiometricsSimulated) {
-      const timer = setTimeout(() => {
-        void handleBiometricUnlock();
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [security.isPinCreated, security.isBiometricsEnabled, security.isBiometricsSimulated]);
 
   const triggerHaptic = (pattern: number | number[]) => {
     if (typeof window !== 'undefined' && typeof window.navigator?.vibrate === 'function') {
@@ -213,36 +204,6 @@ export default function LockScreen({
     triggerHaptic(20);
     setPin('');
     setError('');
-  };
-
-  const handleBiometricUnlock = async () => {
-    triggerHaptic(15);
-    setIsBiometricActive(true);
-    setError('');
-
-    if (security.isBiometricsSimulated) {
-      setSuccessMsg('Verifying fingerprint...');
-      setTimeout(() => {
-        setIsBiometricActive(false);
-        void completeUnlock(security);
-      }, 900);
-      return;
-    }
-
-    setSuccessMsg('Initializing secure credential authorization...');
-    try {
-      const success = await secureAuthService.authenticate(security.passkeyCredentialId);
-      if (success) {
-        await completeUnlock(security);
-      } else {
-        fail('Authentication did not return validation.');
-      }
-    } catch (err: any) {
-      console.warn('WebAuthn Authentication Error:', err);
-      fail(err?.name === 'NotAllowedError' ? 'Credential dialog closed. Use PIN.' : (err?.message || 'Biometric authenticator failed.'));
-    } finally {
-      setIsBiometricActive(false);
-    }
   };
 
   const handleSubmit = async () => {
@@ -473,12 +434,11 @@ export default function LockScreen({
     }
   };
 
-  const toggleTheme = async () => {
+  const toggleTheme = () => {
     const nextTheme: 'light' | 'dark' = theme === 'light' ? 'dark' : 'light';
-    const updatedSettings = { ...initialSettings, theme: nextTheme };
-    await diaryRepository.saveSettings(updatedSettings);
-    onSettingsChange(updatedSettings);
     setTheme(nextTheme);
+    setLocalThemePreference(nextTheme);
+    onThemeChange?.(nextTheme);
     triggerHaptic(15);
   };
 
@@ -507,8 +467,8 @@ export default function LockScreen({
           : 'Choose a 4-digit or 8-digit PIN.';
 
   const activeBgClass = theme === 'dark'
-    ? 'bg-gradient-to-tr from-[#131012] via-[#241B1E] to-[#131012]'
-    : 'bg-gradient-to-tr from-[#FAF6F0] via-[#FFF5F1] to-[#FAF2EA]';
+    ? 'bg-gradient-to-tr from-[#100F10] via-[#21191C] to-[#151214]'
+    : 'bg-gradient-to-tr from-[#FAF7F2] via-[#FFF8F4] to-[#F4EFE7]';
 
   const showRecoveryForm = !showBackupChoice && (requiresRecoverySetup || setupStep === 'recovery');
   const isCustomRecoveryQuestion = questionId === CUSTOM_QUESTION_SELECT_VALUE;
@@ -516,27 +476,62 @@ export default function LockScreen({
   const visiblePinLength = security.isPinCreated ? (security.pinLength || (pin.length > 4 ? 8 : 4)) : selectedPinLength;
 
   return (
-    <div className={`min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-all duration-700`}>
+    <div className={`min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-all duration-700 lg:justify-center lg:px-8 lg:py-8`}>
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        <motion.div animate={{ scale: [1, 1.15, 1], x: [0, 30, 0], y: [0, -30, 0] }} transition={{ duration: 15, repeat: Infinity, ease: 'easeInOut' }} className="absolute top-[-20%] left-[-20%] w-[80%] h-[80%] rounded-full opacity-60 bg-brand-pink/15 dark:bg-brand-pink/25 blur-[120px]" />
-        <motion.div animate={{ scale: [1, 1.2, 1], x: [0, -40, 0], y: [0, 40, 0] }} transition={{ duration: 20, repeat: Infinity, ease: 'easeInOut', delay: 2 }} className="absolute bottom-[-20%] right-[-10%] w-[90%] h-[90%] rounded-full opacity-50 bg-brand-sage/10 dark:bg-brand-sage/18 blur-[150px]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.58),transparent_42%)] dark:bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.08),transparent_40%)]" />
+        <motion.div animate={{ scale: [1, 1.08, 1], x: [0, 18, 0], y: [0, -18, 0] }} transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }} className="absolute top-[-22%] left-[-16%] h-[42rem] w-[42rem] rounded-full bg-brand-pink/10 blur-[140px] dark:bg-brand-pink/16" />
+        <motion.div animate={{ scale: [1, 1.1, 1], x: [0, -24, 0], y: [0, 24, 0] }} transition={{ duration: 24, repeat: Infinity, ease: 'easeInOut', delay: 2 }} className="absolute bottom-[-24%] right-[-12%] h-[44rem] w-[44rem] rounded-full bg-brand-sage/10 blur-[160px] dark:bg-brand-sage/14" />
+        <div className="absolute inset-y-0 left-0 hidden w-1/2 bg-brand-blush-light/28 dark:bg-[#2A1720]/34 lg:block" />
+        <div className="absolute inset-y-0 left-1/2 hidden w-px bg-brand-border/45 dark:bg-white/10 lg:block" />
       </div>
 
-      <header className="w-full max-w-sm flex justify-between items-center z-10">
-        <div className="flex items-center gap-2 bg-white/70 dark:bg-black/15 backdrop-blur-xl px-3.5 py-1.5 rounded-full border border-brand-border/60 dark:border-white/5 shadow-sm">
+      <section className="pointer-events-none absolute inset-y-0 left-0 z-10 hidden w-1/2 items-center justify-center px-10 lg:flex xl:px-16">
+        <motion.div
+          initial={{ opacity: 0, x: -18 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+          className="w-full max-w-[460px] text-center"
+        >
+          <div className="select-none">
+            <p className="font-serif-diary text-[5.75rem] font-semibold leading-none tracking-tight text-brand-plum/95 dark:text-[#ECE6E1] xl:text-[6.75rem] 2xl:text-[7.15rem]">{time}</p>
+            <p className="mt-5 flex items-center justify-center gap-2 text-sm font-semibold uppercase tracking-[0.18em] text-brand-text-muted dark:text-[#EADCD1]/68">
+              <CalendarDays className="h-3.5 w-3.5 text-brand-pink/80" />
+              {date}
+            </p>
+          </div>
+          <div className="mx-auto mt-12 h-px w-16 bg-brand-border dark:bg-white/18" />
+          <div className="mx-auto mt-10 max-w-md">
+            <p className="font-serif-diary text-2xl italic leading-snug text-brand-plum/90 dark:text-[#ECE6E1]/90">
+              "{SANCTUARY_QUOTES[quoteIndex]}"
+            </p>
+            <p className="mt-3 text-lg font-medium text-brand-text-muted dark:text-[#EADCD1]/62">- Sanctuary Note</p>
+            <button onClick={(e) => { e.stopPropagation(); setQuoteIndex(prev => (prev + 1) % SANCTUARY_QUOTES.length); }} className="pointer-events-auto mt-5 inline-flex items-center gap-2 rounded-full border border-brand-border/50 bg-white/38 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-brand-text-muted transition-all hover:border-brand-pink/35 hover:text-brand-pink dark:border-white/10 dark:bg-white/5" title="Cycle note">
+              <Sparkles className="h-3 w-3" />
+              Another note
+            </button>
+          </div>
+          <div className="mt-16 flex items-center justify-center gap-2 text-xs font-semibold text-brand-text-muted dark:text-[#EADCD1]/62">
+            <ShieldCheck className="h-4 w-4 text-brand-sage/85" />
+            <span>Private by default. Encrypted when synced.</span>
+          </div>
+        </motion.div>
+      </section>
+
+      <header className="w-full max-w-sm lg:absolute lg:left-8 lg:right-auto lg:top-8 lg:max-w-none xl:left-10 flex justify-between items-center z-10">
+        <div className="flex items-center gap-2 bg-white/55 dark:bg-white/[0.06] backdrop-blur-xl px-3.5 py-1.5 rounded-full border border-brand-border/50 dark:border-white/10 shadow-sm">
           <BookOpen className="w-3.5 h-3.5 text-brand-pink" />
           <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#3E2429] dark:text-[#EADCD1]">Dear Diary</span>
         </div>
-        <motion.button onClick={toggleTheme} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="w-9 h-9 rounded-full bg-white/70 dark:bg-black/15 border border-brand-border/60 dark:border-white/5 backdrop-blur-xl flex items-center justify-center text-brand-plum hover:text-brand-pink transition-colors shadow-sm cursor-pointer" title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}>
+        <motion.button onClick={toggleTheme} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} className="w-9 h-9 rounded-full bg-white/55 dark:bg-white/[0.06] border border-brand-border/50 dark:border-white/10 backdrop-blur-xl flex items-center justify-center text-brand-plum hover:text-brand-pink transition-colors shadow-sm cursor-pointer lg:fixed lg:right-8 lg:top-8" title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}>
           {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-200" />}
         </motion.button>
       </header>
 
-      <main className="w-full max-w-sm flex-grow flex flex-col justify-center items-center z-10 relative">
+      <main className="w-full max-w-sm lg:absolute lg:inset-y-0 lg:left-1/2 lg:ml-0 lg:mr-0 lg:w-1/2 lg:max-w-none lg:flex-grow-0 lg:px-10 xl:px-16 flex-grow flex flex-col justify-center items-center z-10 relative">
         <AnimatePresence mode="wait">
           {screenMode === 'ambient' ? (
-            <motion.div key="ambient" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, y: -40, scale: 0.98 }} transition={{ duration: 0.4 }} className="w-full flex flex-col items-center text-center justify-between h-[65vh] sm:h-[70vh] py-4">
-              <div className="w-full max-w-[310px] mt-3 select-none px-5 py-5">
+            <motion.div key="ambient" initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, y: -32, scale: 0.98 }} transition={{ duration: 0.4 }} className="w-full flex flex-col items-center text-center justify-between h-[65vh] sm:h-[70vh] py-4 lg:h-auto lg:max-w-[420px] lg:justify-center lg:gap-7 lg:p-0">
+              <div className="w-full max-w-[310px] mt-3 select-none px-5 py-5 lg:hidden">
                 <h2 className="font-serif-diary text-[4.75rem] font-bold text-brand-plum dark:text-[#ECE6E1] leading-none">{time}</h2>
                 <div className="mt-3 inline-flex items-center justify-center gap-2 text-[12px] font-bold text-brand-text-muted dark:text-[#EADCD1]/80">
                   <CalendarDays className="w-3.5 h-3.5 text-brand-pink" />
@@ -544,31 +539,24 @@ export default function LockScreen({
                 </div>
               </div>
 
-              <div className="flex flex-col items-center gap-4">
-                {security.isBiometricsEnabled ? (
-                  <motion.button onClick={handleBiometricUnlock} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="flex flex-col items-center gap-2.5 group">
-                    <div className="w-18 h-18 rounded-full bg-white/80 dark:bg-black/10 border border-brand-border dark:border-white/10 backdrop-blur-md flex items-center justify-center shadow-lg relative">
-                      <motion.div animate={{ scale: [1, 1.15, 1], opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }} className="absolute inset-0 rounded-full border-2 border-brand-pink pointer-events-none" />
-                      <Fingerprint className="w-8 h-8 text-brand-pink animate-pulse" />
-                    </div>
-                    <span className="text-[10px] font-bold tracking-[0.25em] text-brand-pink dark:text-brand-pink-dark uppercase">Touch to Scan</span>
-                  </motion.button>
-                ) : (
-                  <motion.button onClick={() => { triggerHaptic(15); setScreenMode('keypad'); }} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="flex flex-col items-center gap-2.5 group">
-                    <div className="w-16 h-16 rounded-full bg-white/80 dark:bg-black/10 border border-brand-border dark:border-white/10 backdrop-blur-md flex items-center justify-center shadow-md relative">
-                      <Lock className="w-6 h-6 text-brand-plum/85 dark:text-brand-text/80 group-hover:text-brand-pink transition-colors stroke-[1.5]" />
-                    </div>
-                    <span className="text-[10px] font-bold tracking-[0.2em] text-brand-text-muted uppercase">Tap to Unlock</span>
-                  </motion.button>
-                )}
-                {security.isBiometricsEnabled && (
-                  <button onClick={() => { triggerHaptic(12); setScreenMode('keypad'); }} className="text-[10px] font-bold text-brand-text-muted hover:text-brand-pink uppercase tracking-widest underline decoration-dotted mt-1">
-                    Use PIN Code
-                  </button>
-                )}
+              <div className="hidden flex-col items-center gap-2 lg:flex">
+                <span className="flex h-[3.25rem] w-[3.25rem] items-center justify-center rounded-2xl border border-brand-border/55 bg-white/50 text-brand-pink shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
+                  <BookOpen className="h-5 w-5" />
+                </span>
+                <h1 className="font-serif-diary text-3xl font-semibold text-brand-plum dark:text-[#ECE6E1]">Locked</h1>
+                <p className="max-w-[250px] text-xs font-medium leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/65">Unlock when you are ready to return to your private writing space.</p>
               </div>
 
-              <div className="w-full max-w-xs bg-white dark:bg-[#1A1517]/35 border border-brand-border dark:border-white/10 px-4 py-4 rounded-2xl shadow-md text-center flex flex-col gap-2">
+              <div className="flex flex-col items-center gap-4">
+                <motion.button onClick={() => { triggerHaptic(15); setScreenMode('keypad'); }} whileHover={{ scale: 1.025 }} whileTap={{ scale: 0.97 }} className="flex flex-col items-center gap-2.5 group">
+                  <div className="w-16 h-16 rounded-full bg-white/70 dark:bg-white/[0.06] border border-brand-border/65 dark:border-white/10 backdrop-blur-md flex items-center justify-center shadow-[0_16px_45px_rgba(62,36,41,0.1)] relative">
+                    <Lock className="w-6 h-6 text-brand-plum/85 dark:text-brand-text/80 group-hover:text-brand-pink transition-colors stroke-[1.5]" />
+                  </div>
+                  <span className="text-[10px] font-bold tracking-[0.2em] text-brand-text-muted uppercase">Tap to Unlock</span>
+                </motion.button>
+              </div>
+
+              <div className="w-full max-w-xs bg-white dark:bg-[#1A1517]/35 border border-brand-border dark:border-white/10 px-4 py-4 rounded-2xl shadow-md text-center flex flex-col gap-2 lg:hidden">
                 <p className="text-[9px] font-bold tracking-[0.2em] text-brand-pink uppercase">Sanctuary Note</p>
                 <p className="font-serif-diary text-base text-brand-plum dark:text-brand-text leading-snug">{SANCTUARY_QUOTES[quoteIndex]}</p>
                 <button onClick={(e) => { e.stopPropagation(); setQuoteIndex(prev => (prev + 1) % SANCTUARY_QUOTES.length); }} className="self-center p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 text-brand-text-muted hover:text-brand-pink transition-all" title="Cycle Inspiration">
@@ -577,25 +565,35 @@ export default function LockScreen({
               </div>
             </motion.div>
           ) : (
-            <motion.div key="keypad" initial={{ opacity: 0, y: 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 80 }} transition={{ type: 'spring', damping: 25, stiffness: 180 }} className="w-full">
-              <motion.div animate={shakeTrigger ? { x: [-10, 10, -8, 8, -5, 5, 0] } : {}} transition={{ duration: 0.4 }} className="w-full p-4 sm:p-5 flex flex-col gap-4 relative overflow-hidden">
+            <motion.div key="keypad" initial={{ opacity: 0, y: 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 80 }} transition={{ type: 'spring', damping: 25, stiffness: 180 }} className="w-full lg:max-w-[440px]">
+              <motion.div animate={shakeTrigger ? { x: [-10, 10, -8, 8, -5, 5, 0] } : {}} transition={{ duration: 0.4 }} className="w-full p-4 sm:p-5 lg:p-0 flex flex-col gap-3.5 lg:gap-6 relative overflow-visible">
+                <div className="pointer-events-none absolute inset-x-10 top-0 hidden h-px bg-gradient-to-r from-transparent via-white/80 to-transparent dark:via-white/20" />
                 {security.isPinCreated && !requiresRecoverySetup && (
-                  <button onClick={() => { triggerHaptic(10); setScreenMode('ambient'); setPin(''); setError(''); }} className="absolute top-1 left-1 p-2 rounded-full hover:bg-white/40 dark:hover:bg-black/20 text-brand-text-muted hover:text-brand-plum transition-colors" title="Back to Clock">
+                  <button onClick={() => { triggerHaptic(10); setScreenMode('ambient'); setPin(''); setError(''); }} className="absolute top-2 left-2 p-2 rounded-full hover:bg-white/40 dark:hover:bg-white/10 text-brand-text-muted hover:text-brand-plum transition-colors lg:hidden" title="Back to Clock">
                     <ArrowLeft className="w-4 h-4 stroke-[2.5]" />
                   </button>
                 )}
 
-                <div className="text-center space-y-1 sm:space-y-1.5 flex flex-col items-center mt-2">
-                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 shadow-md flex items-center justify-center relative backdrop-blur-md">
+                <div className="text-center space-y-1 sm:space-y-1.5 flex flex-col items-center mt-1">
+                  <div className="relative w-12 h-12 sm:w-14 sm:h-14 lg:h-20 lg:w-20 lg:rounded-full rounded-2xl bg-white/70 dark:bg-white/[0.06] border border-brand-border/60 dark:border-white/10 shadow-sm flex items-center justify-center backdrop-blur-md">
                     <BookOpen className="w-5.5 h-5.5 sm:w-6.5 sm:h-6.5 text-brand-pink" />
+                    <span className="absolute -right-1 -top-1 hidden h-7 w-7 items-center justify-center rounded-full bg-brand-plum text-white shadow-md dark:bg-[#151214] lg:flex">
+                      <Lock className="h-3.5 w-3.5" />
+                    </span>
                   </div>
                   <div className="space-y-0.5">
-                    <h1 className="font-serif-diary text-xl sm:text-2xl text-[#2C1D21] dark:text-[#ECE6E1] font-bold tracking-tight">Dear Diary</h1>
-                    <p className="text-[8px] sm:text-[9px] font-bold tracking-[0.25em] text-brand-pink dark:text-brand-pink-dark uppercase">Your Private Sanctuary</p>
+                    <h1 className="font-serif-diary text-xl sm:text-2xl lg:text-3xl text-[#2C1D21] dark:text-[#ECE6E1] font-bold tracking-tight">
+                      <span className="lg:hidden">Dear Diary</span>
+                      <span className="hidden lg:inline">{security.isPinCreated && !requiresRecoverySetup ? 'Welcome Back' : setupTitle}</span>
+                    </h1>
+                    <p className="text-[8px] sm:text-[9px] lg:text-base lg:font-normal lg:normal-case lg:tracking-normal font-bold tracking-[0.25em] text-brand-pink/85 dark:text-brand-pink-dark uppercase">
+                      <span className="lg:hidden">Private Access</span>
+                      <span className="hidden lg:inline text-brand-text-muted dark:text-[#EADCD1]/70">{security.isPinCreated && !requiresRecoverySetup ? 'Your sanctuary is currently locked.' : setupCopy}</span>
+                    </p>
                   </div>
                 </div>
 
-                <div className="text-center py-1 border-b border-brand-pink/10 pb-2">
+                <div className="text-center py-1 border-b border-brand-border/45 pb-2 lg:hidden">
                   <span className="inline-flex p-1.5 bg-brand-pink/10 text-brand-pink rounded-xl mb-1">
                     <ShieldCheck className="w-4 h-4" />
                   </span>
@@ -709,21 +707,13 @@ export default function LockScreen({
                       </div>
                     )}
 
-                    {security.isPinCreated && security.isBiometricsEnabled && (
-                      <button onClick={handleBiometricUnlock} className="w-full bg-brand-pink/90 dark:bg-brand-pink text-white py-3 rounded-2xl flex items-center justify-center gap-2.5 transition-all duration-300 font-bold text-xs uppercase tracking-wider shadow-md shadow-brand-pink/15 relative overflow-hidden cursor-pointer">
-                        {isBiometricActive && <motion.div initial={{ scale: 0, opacity: 0.5 }} animate={{ scale: 3, opacity: 0 }} transition={{ duration: 1, repeat: Infinity }} className="absolute w-24 h-24 bg-white/20 rounded-full" />}
-                        <Fingerprint className="w-4 h-4" />
-                        <span>Scan Biometric Authenticator</span>
-                      </button>
-                    )}
-
-                    <div className="flex flex-col items-center gap-2 py-1">
-                      <div className="flex gap-2.5 py-1 justify-center min-h-[32px] items-center">
+                    <div className="flex flex-col items-center gap-1.5 py-0.5">
+                      <div className="flex gap-3 py-0.5 justify-center min-h-[28px] items-center lg:mt-2 lg:gap-4">
                         {Array.from({ length: visiblePinLength }).map((_, i) => {
                           const hasDigit = i < pin.length;
                           return (
                             <div key={i} className="relative flex items-center justify-center">
-                              <div className={`w-3 h-3 rounded-full border-2 transition-all ${hasDigit ? 'bg-brand-pink border-brand-pink shadow-md' : 'border-brand-text-muted/25 bg-transparent'}`} />
+                              <div className={`w-3 h-3 rounded-full border-2 transition-all lg:h-3.5 lg:w-3.5 ${hasDigit ? 'bg-brand-pink border-brand-pink shadow-md' : 'border-brand-text-muted/25 bg-transparent lg:border-brand-plum/45 dark:lg:border-[#EADCD1]/55'}`} />
                               {hasDigit && showPin && <span className="absolute text-[8px] font-black text-white leading-none">{pin[i]}</span>}
                             </div>
                           );
@@ -747,27 +737,28 @@ export default function LockScreen({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-y-2.5 gap-x-5 mt-1 justify-items-center">
+                    <div className="grid grid-cols-3 gap-y-2 gap-x-4 mt-0.5 justify-items-center lg:mx-auto lg:mt-9 lg:w-[300px] lg:gap-x-8 lg:gap-y-8">
                       {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
-                        <motion.button key={num} type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress(num)} className="w-12.5 h-12.5 sm:w-14 sm:h-14 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer">
-                          <span className="leading-none text-lg sm:text-xl font-bold text-[#2C1D21] dark:text-[#ECE6E1]">{num}</span>
+                        <motion.button key={num} type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress(num)} className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5">
+                          <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">{num}</span>
                         </motion.button>
                       ))}
-                      <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => { pin.length > 0 ? handleClear() : setShowPin(!showPin); }} className="w-12.5 h-12.5 sm:w-14 sm:h-14 rounded-full flex flex-col items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer">
+                      <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => { pin.length > 0 ? handleClear() : setShowPin(!showPin); }} className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex flex-col items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5">
                         {pin.length > 0 ? <span className="text-[10px] font-bold uppercase tracking-wider text-brand-pink">Clear</span> : <>{showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}<span className="text-[7px] font-bold tracking-wider uppercase text-brand-text-muted mt-1">Reveal</span></>}
                       </motion.button>
-                      <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress('0')} className="w-12.5 h-12.5 sm:w-14 sm:h-14 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer">
-                        <span className="leading-none text-lg sm:text-xl font-bold text-[#2C1D21] dark:text-[#ECE6E1]">0</span>
+                      <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress('0')} className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5">
+                        <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">0</span>
                       </motion.button>
-                      <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={handleBackspace} disabled={pin.length === 0} className={`w-12.5 h-12.5 sm:w-14 sm:h-14 rounded-full flex flex-col items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}>
+                      <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={handleBackspace} disabled={pin.length === 0} className={`w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex flex-col items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5 ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}>
                         <Delete className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
                         <span className="text-[7px] font-bold tracking-wider uppercase text-brand-text-muted mt-1">Erase</span>
                       </motion.button>
                     </div>
 
-                    <button onClick={handleSubmit} disabled={!isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength)} className={`w-full py-3.5 rounded-2xl font-bold text-[11px] sm:text-xs uppercase tracking-widest transition-all mt-2 shadow-md cursor-pointer ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-pink text-white hover:bg-brand-pink-dark shadow-brand-pink/15' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed'}`}>
+                    <button onClick={handleSubmit} disabled={!isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength)} className={`w-full py-3.5 lg:py-3 rounded-2xl font-bold text-[11px] sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}>
                       {security.isPinCreated ? 'Unlock Diary' : setupStep === 'confirm' ? 'Confirm PIN' : 'Continue'}
                     </button>
+
                   </>
                 )}
 
@@ -785,7 +776,7 @@ export default function LockScreen({
                 )}
 
                 {security.isPinCreated && !requiresRecoverySetup && !isResetting && (
-                  <div className="text-center pt-1 mt-2">
+                  <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
                     <button onClick={() => { triggerHaptic(15); setRecoveryMode('choosing'); }} className="text-[10px] sm:text-[11px] font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors">
                       Forgot security passcode PIN?
                     </button>
@@ -794,44 +785,46 @@ export default function LockScreen({
 
                 <AnimatePresence>
                   {recoveryMode && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-40 bg-brand-bg/95 dark:bg-brand-bg/95 backdrop-blur-md p-6 flex flex-col justify-center items-center text-center gap-4 overflow-y-auto">
-                      <motion.div initial={{ scale: 0.85, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.85, opacity: 0 }} transition={{ type: 'spring', damping: 20 }} className="flex flex-col items-center gap-3.5 w-full">
-                        <div className="w-12 h-12 rounded-full bg-brand-pink/10 flex items-center justify-center text-brand-pink">
-                          <ShieldCheck className="w-6 h-6 stroke-[2]" />
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-y-0 left-0 right-0 z-40 flex items-center justify-center overflow-y-auto bg-brand-bg/96 px-6 py-8 backdrop-blur-md dark:bg-[#151214]/96 lg:left-1/2 lg:bg-transparent lg:px-10 lg:py-10 lg:backdrop-blur-0 xl:px-16">
+                      <motion.div initial={{ scale: 0.96, opacity: 0, y: 14 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0, y: 14 }} transition={{ type: 'spring', damping: 24, stiffness: 190 }} className="flex w-full max-w-[390px] flex-col items-center text-center">
+                        <div className="flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-full border border-brand-border/60 bg-white/50 text-brand-pink shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.05] lg:h-20 lg:w-20">
+                          <ShieldCheck className="h-7 w-7 stroke-[1.7]" />
                         </div>
-                        <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Reset Passcode PIN</h3>
+                        <h3 className="mt-4 font-serif-diary text-2xl font-bold text-brand-plum dark:text-[#ECE6E1] lg:text-3xl">Reset Passcode PIN</h3>
 
                         {recoveryMode === 'choosing' && (
-                          <div className="flex flex-col gap-2 w-full min-w-[220px] mt-2">
-                            <p className="text-[11px] leading-relaxed text-brand-text-muted max-w-[240px] mx-auto">Choose a verified recovery method.</p>
-                            <button onClick={() => { setRecoveryMode('question'); setRecoveryAnswer(''); }} className="w-full bg-brand-pink text-white py-2.5 rounded-xl text-[10px] font-extrabold uppercase tracking-widest hover:bg-brand-pink-dark transition-colors shadow-md shadow-brand-pink/10">
-                              Answer Security Question
+                          <div className="mt-3 flex w-full flex-col gap-3">
+                            <p className="mx-auto mb-3 max-w-[260px] text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">Choose a verified recovery method to create a new passcode.</p>
+                            <button onClick={() => { setRecoveryMode('question'); setRecoveryAnswer(''); }} className="group w-full rounded-2xl border border-brand-border/65 bg-white/45 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-pink/40 hover:bg-brand-pink/8 dark:border-white/10 dark:bg-white/[0.04] dark:hover:bg-white/[0.07]">
+                              <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-brand-pink">Recovery Method</span>
+                              <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">Answer Security Question</span>
                             </button>
                             {(security.linkedGoogleUserId || security.linkedGoogleUid) && (
-                              <button onClick={handleVerifyGoogleReset} disabled={isResetting} className="w-full bg-brand-sage text-white py-2.5 rounded-xl text-[10px] font-extrabold uppercase tracking-widest hover:bg-brand-sage-dark transition-colors shadow-md shadow-brand-sage/10 disabled:opacity-50">
-                                Verify Linked Google Account
+                              <button onClick={handleVerifyGoogleReset} disabled={isResetting} className="group w-full rounded-2xl border border-brand-sage/30 bg-brand-sage/12 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-sage/55 hover:bg-brand-sage/18 disabled:opacity-50 dark:border-brand-sage/35 dark:bg-brand-sage/10">
+                                <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-brand-sage dark:text-brand-sage-light">Linked Account</span>
+                                <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">Verify Google Account</span>
                               </button>
                             )}
                           </div>
                         )}
 
                         {recoveryMode === 'question' && (
-                          <div className="flex flex-col gap-3 w-full min-w-[220px]">
-                            <p className="text-[11px] text-brand-sage font-bold">{getRecoveryQuestionText(security)}</p>
+                          <div className="mt-6 flex w-full flex-col gap-3">
+                            <p className="rounded-2xl border border-brand-border/55 bg-white/35 px-4 py-3 text-sm font-semibold leading-relaxed text-brand-sage backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:text-brand-sage-light">{getRecoveryQuestionText(security)}</p>
                             <div className="relative">
-                              <input type={showRecoveryAnswer ? 'text' : 'password'} value={recoveryAnswer} onChange={(e) => setRecoveryAnswer(e.target.value)} placeholder="Answer" className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" />
-                              <button type="button" onClick={() => setShowRecoveryAnswer(prev => !prev)} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink" title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}>
+                              <input type={showRecoveryAnswer ? 'text' : 'password'} value={recoveryAnswer} onChange={(e) => setRecoveryAnswer(e.target.value)} placeholder="Your answer" className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 pr-11 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]" />
+                              <button type="button" onClick={() => setShowRecoveryAnswer(prev => !prev)} className="absolute inset-y-0 right-3 flex items-center text-brand-sage transition-colors hover:text-brand-pink" title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}>
                                 {showRecoveryAnswer ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                               </button>
                             </div>
-                            <button onClick={handleVerifySecurityAnswer} disabled={!recoveryAnswer.trim()} className="w-full bg-brand-pink text-white py-2.5 rounded-xl text-[10px] font-extrabold uppercase tracking-widest hover:bg-brand-pink-dark disabled:opacity-40">Verify Answer</button>
+                            <button onClick={handleVerifySecurityAnswer} disabled={!recoveryAnswer.trim()} className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-md shadow-brand-plum/10 transition-all hover:bg-brand-pink disabled:cursor-not-allowed disabled:opacity-40 dark:bg-[#EADCD1] dark:text-[#21191C]">Verify Answer</button>
                           </div>
                         )}
 
                         {recoveryMode === 'newPin' && (
-                          <div className="flex flex-col gap-3 w-full min-w-[220px]">
-                            <p className="text-[11px] leading-relaxed text-brand-text-muted">Recovery verified by {recoveryVerifiedBy === 'google' ? 'Google' : 'security question'}. Choose a 4-digit or 8-digit PIN.</p>
-                            <div className="grid grid-cols-2 gap-2 bg-brand-bg/60 border border-brand-border/50 rounded-xl p-1">
+                          <div className="mt-6 flex w-full flex-col gap-3">
+                            <p className="text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">Recovery verified by {recoveryVerifiedBy === 'google' ? 'Google' : 'security question'}. Choose a new 4-digit or 8-digit PIN.</p>
+                            <div className="grid grid-cols-2 gap-2 rounded-2xl border border-brand-border/50 bg-white/35 p-1 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
                               {([4, 8] as PinLength[]).map(length => (
                                 <button
                                   key={length}
@@ -842,23 +835,23 @@ export default function LockScreen({
                                     setResetConfirmPin('');
                                   }}
                                   className={`py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${
-                                    resetPinLength === length ? 'bg-brand-pink text-white' : 'text-brand-sage'
+                                    resetPinLength === length ? 'bg-brand-pink text-white shadow-sm' : 'text-brand-sage hover:text-brand-plum dark:text-[#EADCD1]/70'
                                   }`}
                                 >
                                   {length} Digit
                                 </button>
                               ))}
                             </div>
-                            <input type="password" inputMode="numeric" maxLength={resetPinLength} value={resetNewPin} onChange={(e) => setResetNewPin(e.target.value.replace(/\D/g, '').slice(0, resetPinLength))} placeholder={`${resetPinLength}-digit new PIN`} className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" />
-                            <input type="password" inputMode="numeric" maxLength={resetPinLength} value={resetConfirmPin} onChange={(e) => setResetConfirmPin(e.target.value.replace(/\D/g, '').slice(0, resetPinLength))} placeholder={`Confirm ${resetPinLength}-digit PIN`} className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" />
-                            <button onClick={handleResetPin} disabled={!isValidPin(resetNewPin, resetPinLength) || resetNewPin !== resetConfirmPin} className="w-full bg-brand-pink text-white py-2.5 rounded-xl text-[10px] font-extrabold uppercase tracking-widest hover:bg-brand-pink-dark disabled:opacity-40">Reset PIN</button>
+                            <input type="password" inputMode="numeric" maxLength={resetPinLength} value={resetNewPin} onChange={(e) => setResetNewPin(e.target.value.replace(/\D/g, '').slice(0, resetPinLength))} placeholder={`${resetPinLength}-digit new PIN`} className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]" />
+                            <input type="password" inputMode="numeric" maxLength={resetPinLength} value={resetConfirmPin} onChange={(e) => setResetConfirmPin(e.target.value.replace(/\D/g, '').slice(0, resetPinLength))} placeholder={`Confirm ${resetPinLength}-digit PIN`} className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]" />
+                            <button onClick={handleResetPin} disabled={!isValidPin(resetNewPin, resetPinLength) || resetNewPin !== resetConfirmPin} className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-md shadow-brand-plum/10 transition-all hover:bg-brand-pink disabled:cursor-not-allowed disabled:opacity-40 dark:bg-[#EADCD1] dark:text-[#21191C]">Reset PIN</button>
                           </div>
                         )}
 
                         {(error || successMsg) && (
-                          <p className={`text-[11px] font-bold ${error ? 'text-brand-rose' : 'text-brand-sage'}`}>{error || successMsg}</p>
+                          <p className={`mt-4 text-[11px] font-bold ${error ? 'text-brand-rose' : 'text-brand-sage'}`}>{error || successMsg}</p>
                         )}
-                        <button onClick={() => { triggerHaptic(10); setRecoveryMode(null); setRecoveryVerifiedBy(null); setError(''); setSuccessMsg(''); }} className="w-full py-2 text-[10px] font-black uppercase tracking-wider text-brand-text-muted hover:text-brand-plum mt-1">
+                        <button onClick={() => { triggerHaptic(10); setRecoveryMode(null); setRecoveryVerifiedBy(null); setError(''); setSuccessMsg(''); }} className="mt-7 w-full py-2 text-[10px] font-black uppercase tracking-[0.18em] text-brand-text-muted transition-colors hover:text-brand-plum dark:hover:text-[#ECE6E1]">
                           Cancel
                         </button>
                       </motion.div>
@@ -871,13 +864,13 @@ export default function LockScreen({
         </AnimatePresence>
       </main>
 
-      <footer className="w-full max-w-sm text-center flex flex-col items-center gap-1 z-10 py-1 opacity-70">
-        <div className="flex items-center gap-1 bg-brand-rose-light/50 dark:bg-black/10 px-2.5 py-0.5 rounded-full border border-brand-border/80 dark:border-white/5 text-[8px] sm:text-[9px] font-bold text-brand-plum dark:text-brand-text-muted uppercase tracking-widest">
+      <footer className="w-full max-w-sm lg:absolute lg:bottom-8 lg:left-8 lg:right-auto lg:max-w-none lg:items-start lg:text-left xl:left-10 text-center flex flex-col items-center gap-1 z-10 py-1 opacity-65">
+        <div className="flex items-center gap-1.5 bg-white/36 dark:bg-white/[0.05] px-3 py-1 rounded-full border border-brand-border/50 dark:border-white/10 text-[8px] sm:text-[9px] font-bold text-brand-plum dark:text-brand-text-muted uppercase tracking-widest backdrop-blur-xl">
           <Lock className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
-          <span>Account-First Encrypted Access</span>
+          <span>Protected Access</span>
         </div>
-        <p className="text-[8px] sm:text-[9px] text-brand-text-muted max-w-[260px] leading-normal font-medium">
-          Google proves identity. Your recovery passphrase protects the diary key before anything reaches Drive.
+        <p className="text-[8px] sm:text-[9px] text-brand-text-muted max-w-[260px] leading-normal font-medium lg:hidden">
+          Your recovery passphrase protects the diary key before anything reaches Drive.
         </p>
       </footer>
     </div>

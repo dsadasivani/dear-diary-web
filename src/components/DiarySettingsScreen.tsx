@@ -311,15 +311,15 @@ export default function DiarySettingsScreen({
                 </div>
               </div>
 
-              {/* Biometric Toggle Card */}
+              {/* Private diary lock card */}
               <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
                     <Lock className="w-4 h-4" />
                   </span>
                   <div>
-                    <h3 className="text-sm font-bold text-brand-plum">Biometric App Lock</h3>
-                    <p className="text-[11px] text-brand-sage mt-0.5">Require Face ID / PIN code verification to open</p>
+                    <h3 className="text-sm font-bold text-brand-plum">Private Diary Lock</h3>
+                    <p className="text-[11px] text-brand-sage mt-0.5">Require your app PIN to open this diary</p>
                   </div>
                 </div>
 
