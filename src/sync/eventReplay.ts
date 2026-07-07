@@ -1,5 +1,5 @@
 import type { DiaryRepository } from '../repositories';
-import type { GoogleAccountSession, LocalSyncAccountState, SyncObjectMetadata } from '../types';
+import type { GoogleAccountSession, LocalSyncAccountState, SyncMediaPointer, SyncObjectMetadata } from '../types';
 import { decodeSyncDomainEvent } from './domainEvents';
 import { downloadDriveSyncObject } from './driveSyncObjects';
 import { decryptSyncPayload } from './encryptedSyncObject';
@@ -54,6 +54,7 @@ export const replaySyncObjects = async ({
   allowHistorical = false,
 }: ReplaySyncObjectsInput): Promise<LocalSyncAccountState> => {
   let state = localState;
+  let lastMediaPointer: SyncMediaPointer | null = null;
   const ordered = [...objects].sort((left, right) => left.sequence - right.sequence);
   for (const object of ordered) {
     if (!allowHistorical && object.sequence <= state.currentSyncSequence) continue;
@@ -77,9 +78,10 @@ export const replaySyncObjects = async ({
         throw new Error('Encrypted sync event affected records do not match control-plane metadata.');
       }
       await repository.applySyncEvent(event, object.sequence, { allowHistorical });
+      lastMediaPointer = null;
     } else {
       if (object.objectKind === 'media') {
-        await repository.saveSyncMediaPointer({
+        lastMediaPointer = {
           mediaId: '',
           sequence: object.sequence,
           driveFileId: object.driveFileId,
@@ -88,7 +90,19 @@ export const replaySyncObjects = async ({
           createdByDeviceId: object.createdByDeviceId,
           createdAt: object.createdAt,
           keyEpoch: object.keyEpoch || 1,
-        });
+        };
+        await repository.saveSyncMediaPointer(lastMediaPointer);
+      } else if (object.objectKind === 'thumbnail' && lastMediaPointer) {
+        lastMediaPointer = {
+          ...lastMediaPointer,
+          thumbnailSequence: object.sequence,
+          thumbnailDriveFileId: object.driveFileId,
+          thumbnailSha256: object.sha256,
+          thumbnailSizeBytes: object.sizeBytes,
+        };
+        await repository.saveSyncMediaPointer(lastMediaPointer);
+      } else {
+        lastMediaPointer = null;
       }
       await repository.saveLocalSyncAccountState({
         ...state,

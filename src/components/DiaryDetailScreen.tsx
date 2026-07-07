@@ -10,6 +10,7 @@ import { Diary, Entry, PartitionHydrationState } from '../types';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import { diaryRepository } from '../repositories';
 import OverlayPortal from './OverlayPortal';
+import SyncedImage from './SyncedImage';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
@@ -827,19 +828,18 @@ export default function DiaryDetailScreen({
                   <motion.div 
                     key={idx}
                     whileHover={{ scale: 1.02, y: -2 }}
-                    onClick={() => setLightboxImg(imgSrc)}
                     className="w-44 h-56 flex-none rounded-2xl overflow-hidden shadow-md border border-brand-border/60 bg-brand-blush-light/10 relative group cursor-zoom-in"
                   >
-                    <img 
+                    <SyncedImage
                       src={imgSrc}
                       alt={`Memory ${idx + 1}`}
                       className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                       referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1517842645767-c639042777db?w=600";
-                      }}
+                      fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                      label="entry photo"
+                      onClick={setLightboxImg}
                     />
-                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="pointer-events-none absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <Maximize2 className="w-5 h-5 text-white drop-shadow-md" />
                     </div>
                   </motion.div>
@@ -965,11 +965,13 @@ export default function DiaryDetailScreen({
               className="max-w-3xl max-h-[85vh] rounded-2xl overflow-hidden shadow-2xl relative"
               onClick={(e) => e.stopPropagation()}
             >
-              <img 
+              <SyncedImage
                 src={lightboxImg} 
                 alt="Enlarged memory" 
                 className="max-w-full max-h-[80vh] object-contain rounded-2xl"
                 referrerPolicy="no-referrer"
+                fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=1200"
+                label="entry photo"
               />
             </motion.div>
             </motion.div>

@@ -251,6 +251,42 @@ test('applies portable settings and profile events without replacing local remin
   assert.deepEqual(await repository.getUserProfile(), profile);
 });
 
+test('skips already-covered historical events during partition replay', async () => {
+  const repository = await createRepository();
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
+    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 50,
+    linkedAt: 1,
+  });
+  const note = {
+    id: 'note-historical',
+    title: 'Already covered',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 10,
+    updatedAt: 10,
+  };
+  const event = createSyncDomainEvent({
+    accountId: 'account-1',
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: note.id,
+    baseRecordVersion: 0,
+    payload: note,
+  });
+
+  await repository.applySyncEvent(event, 12, { allowHistorical: true });
+  await repository.applySyncEvent(event, 12, { allowHistorical: true });
+
+  assert.deepEqual(await repository.getNote(note.id), note);
+  assert.equal(await repository.getSyncRecordVersion('note', note.id), 1);
+  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 50);
+});
+
 test('exports, imports, and tracks monthly partition hydration state', async () => {
   const source = await createRepository();
   const diary = await source.createDiary({ name: 'Travel', emoji: 'T', color: '#123456', isLocked: false });

@@ -136,6 +136,7 @@ export default function CompanionApprovalPanel() {
         primaryDeviceId: state.deviceId,
         keyEpoch: nextKeyEpoch,
         accountRootKey: nextRootKey,
+        accountRootKeys: updatedSecrets.accountRootKeys || { [nextKeyEpoch]: nextRootKey },
         googleSession,
         devices: remainingDevices,
         controlPlane,
@@ -256,6 +257,7 @@ const publishKeyEpochPackages = async ({
   primaryDeviceId,
   keyEpoch,
   accountRootKey,
+  accountRootKeys,
   googleSession,
   devices,
   controlPlane,
@@ -265,6 +267,7 @@ const publishKeyEpochPackages = async ({
   primaryDeviceId: string;
   keyEpoch: number;
   accountRootKey: Uint8Array;
+  accountRootKeys: Record<number, Uint8Array>;
   googleSession: GoogleAccountSession;
   devices: SyncDevice[];
   controlPlane: ReturnType<typeof createConfiguredSupabaseControlPlaneClient>;
@@ -272,7 +275,10 @@ const publishKeyEpochPackages = async ({
 }): Promise<number> => {
   let latestSequence = afterSequence;
   for (const device of devices) {
-    const keyPackage = await wrapRootKeyForCompanion(accountRootKey, accountId, device.publicKey, { keyEpoch });
+    const keyPackage = await wrapRootKeyForCompanion(accountRootKey, accountId, device.publicKey, {
+      keyEpoch,
+      accountRootKeys,
+    });
     const bytes = encodeCompanionKeyPackage(keyPackage);
     const file = await uploadDriveSyncObject({
       session: googleSession,

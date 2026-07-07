@@ -8,6 +8,7 @@ import {
   encodeSyncMediaPayload,
   encodeSyncThumbnailPayload,
   parseSyncMediaReference,
+  readMediaUri,
 } from './syncMedia';
 
 test('round-trips binary media payloads without base64 expansion', () => {
@@ -33,4 +34,11 @@ test('round-trips encrypted thumbnail payload input', () => {
   assert.equal(decoded.mimeType, 'image/jpeg');
   assert.equal(decoded.source, 'thumbnail');
   assert.deepEqual(decoded.bytes, bytes);
+});
+
+test('reads audio data URIs with media type parameters', async () => {
+  const media = await readMediaUri('data:audio/webm;codecs=opus;base64,aGVsbG8=');
+
+  assert.equal(media.mimeType, 'audio/webm;codecs=opus');
+  assert.equal(new TextDecoder().decode(media.bytes), 'hello');
 });

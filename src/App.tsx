@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AlertCircle, ArrowLeft, BarChart2, BookOpen, Check, ClipboardList, Eye, EyeOff,
-  Fingerprint, Home, Lock, RefreshCw, Search, ShieldCheck, WifiOff, X
+  Fingerprint, Home, LoaderCircle, Lock, RefreshCw, Search, ShieldCheck, WifiOff, X
 } from 'lucide-react';
 
 // Import our modular screens
@@ -31,6 +31,46 @@ interface AppProps {
   initialSecurity: SecurityConfig;
   initialUserProfile: UserProfile;
 }
+
+type GlobalLoadingState = {
+  message: string;
+  detail?: string;
+};
+
+const GlobalLoaderOverlay = ({ loading }: { loading: GlobalLoadingState | null }) => (
+  <AnimatePresence>
+    {loading && (
+      <OverlayPortal>
+        <motion.div
+          key="global-loader"
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-brand-bg/65 px-5 backdrop-blur-sm"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+        >
+          <motion.div
+            className="flex w-full max-w-xs flex-col items-center gap-3 rounded-2xl border border-brand-border bg-white/95 p-5 text-center shadow-2xl dark:bg-brand-card-bg/95"
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.97 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 24 }}
+          >
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-pink/10 text-brand-pink">
+              <LoaderCircle className="h-6 w-6 animate-spin" />
+            </span>
+            <div className="space-y-1">
+              <p className="text-sm font-extrabold text-brand-plum dark:text-brand-text">{loading.message}</p>
+              {loading.detail && (
+                <p className="text-[11px] font-semibold leading-relaxed text-brand-text-muted">{loading.detail}</p>
+              )}
+            </div>
+          </motion.div>
+        </motion.div>
+      </OverlayPortal>
+    )}
+  </AnimatePresence>
+);
 
 const isLikelyCellularConnection = (): boolean => {
   if (typeof navigator === 'undefined') return false;
@@ -69,10 +109,29 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   
   // Toast notification state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
+  const [globalLoading, setGlobalLoading] = useState<GlobalLoadingState | null>(null);
+  const loadingDepthRef = React.useRef(0);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
     setToast({ message, type });
   };
+
+  const runWithGlobalLoader = useCallback(async (
+    message: string,
+    operation: () => Promise<void>,
+    detail?: string
+  ) => {
+    loadingDepthRef.current += 1;
+    setGlobalLoading({ message, detail });
+    try {
+      await operation();
+    } finally {
+      loadingDepthRef.current = Math.max(0, loadingDepthRef.current - 1);
+      if (loadingDepthRef.current === 0) {
+        setGlobalLoading(null);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (toast) {
@@ -131,10 +190,18 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const handleUnlock = async () => {
-    await reloadData();
-    setUnlockedDiaryIds(new Set());
-    setIsAuthenticated(true);
-    if (await diaryRepository.getLocalSyncAccountState()) eventSyncEngine.startPolling();
+    await runWithGlobalLoader('Unlocking your diary', async () => {
+      await reloadData();
+      setUnlockedDiaryIds(new Set());
+      setIsAuthenticated(true);
+    }, 'Loading your latest local data.');
+    void diaryRepository.getLocalSyncAccountState()
+      .then(syncAccount => {
+        if (syncAccount) eventSyncEngine.startPolling();
+      })
+      .catch(err => {
+        console.warn('Unable to start sync polling after unlock:', err);
+      });
   };
 
   // On mount: load initial state
@@ -156,9 +223,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const handleSyncReauthorization = async () => {
     setIsReauthorizingSync(true);
     try {
-      await eventSyncEngine.reauthorize();
-      setSyncAuthorizationMessage('');
-      await eventSyncEngine.pullPending();
+      await runWithGlobalLoader('Reconnecting encrypted sync', async () => {
+        await eventSyncEngine.reauthorize();
+        setSyncAuthorizationMessage('');
+        await eventSyncEngine.pullPending();
+      }, 'Checking Google Drive and bringing in pending updates.');
       showToast('Encrypted sync reconnected.', 'success');
     } catch (reauthorizationError: any) {
       showToast(reauthorizationError?.message || 'Sync reconnection failed.', 'error');
@@ -170,8 +239,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const handleHydrateArchiveMonth = async (partitionKey: string) => {
     try {
       showToast('Restoring that archive month…', 'info');
-      await eventSyncEngine.hydrateArchivePartition(partitionKey);
-      await reloadData();
+      await runWithGlobalLoader('Restoring archive month', async () => {
+        await eventSyncEngine.hydrateArchivePartition(partitionKey);
+        await reloadData();
+      }, 'Downloading older encrypted entries.');
       showToast('Archive month restored.', 'success');
     } catch (archiveError: any) {
       const message = archiveError?.message || 'Could not restore that archive month yet.';
@@ -197,16 +268,18 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     let restoredCount = 0;
     let failedCount = 0;
     showToast(`Restoring ${candidates.length} archive month${candidates.length === 1 ? '' : 's'} on Wi-Fi…`, 'info');
-    for (const candidate of candidates) {
-      try {
-        await eventSyncEngine.hydrateArchivePartition(String(candidate.partitionKey));
-        restoredCount += 1;
-        await reloadData();
-      } catch {
-        failedCount += 1;
+    await runWithGlobalLoader(`Restoring ${candidates.length} archive month${candidates.length === 1 ? '' : 's'}`, async () => {
+      for (const candidate of candidates) {
+        try {
+          await eventSyncEngine.hydrateArchivePartition(String(candidate.partitionKey));
+          restoredCount += 1;
+          await reloadData();
+        } catch {
+          failedCount += 1;
+        }
       }
-    }
-    await reloadData();
+      await reloadData();
+    }, 'Keep the app open while older entries come back.');
     if (failedCount > 0) {
       const message = `Restored ${restoredCount} archive month${restoredCount === 1 ? '' : 's'}. ${failedCount} need retry later.`;
       showToast(message, restoredCount > 0 ? 'warning' : 'error');
@@ -415,16 +488,18 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     const targetDiary = diaries[0];
     if (!targetDiary) return;
 
-    await diaryRepository.createEntry({
-      diaryId: targetDiary.id,
-      date: new Date().toISOString().split('T')[0],
-      title: noteTitle,
-      body: noteBody,
-      moodName: 'Reflective',
+    await runWithGlobalLoader('Creating diary entry', async () => {
+      await diaryRepository.createEntry({
+        diaryId: targetDiary.id,
+        date: new Date().toISOString().split('T')[0],
+        title: noteTitle,
+        body: noteBody,
+        moodName: 'Reflective',
       moodEmoji: '💭',
-      tags: tags,
-      photoUris: []
-    });
+        tags: tags,
+        photoUris: []
+      });
+    }, 'Saving and preparing it for sync.');
 
     showToast(`Successfully converted quick note to diary entry inside "${targetDiary.name}"!`, 'success');
     handleNavigate('diaries', 'diaryDetail', targetDiary.id);
@@ -432,12 +507,14 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   // Quick Capturing note helpers
   const handleOpenQuickNote = async (noteText: string) => {
-    await diaryRepository.createNote({
-      title: noteText.substring(0, 24) || 'Untitled quick thought',
-      body: noteText,
-      isPinned: false,
-      tags: ['thoughts']
-    });
+    await runWithGlobalLoader('Saving quick thought', async () => {
+      await diaryRepository.createNote({
+        title: noteText.substring(0, 24) || 'Untitled quick thought',
+        body: noteText,
+        isPinned: false,
+        tags: ['thoughts']
+      });
+    }, 'Adding it to your notes.');
     showToast('Saved a quick thought to your notes!', 'success');
     handleNavigate('notes');
   };
@@ -655,6 +732,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               onFocusModeChange={setIsEditorFocusMode}
               initialFocusMode={isEditorFocusMode}
               onShowToast={showToast}
+              onRunWithLoader={runWithGlobalLoader}
             />
           );
         }
@@ -752,13 +830,16 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   // If locked, return LockScreen view
   if (!isAuthenticated) {
     return (
-      <LockScreen
-        initialSecurity={security}
-        initialSettings={settings}
-        onSecurityChange={setSecurity}
-        onSettingsChange={setSettings}
-        onUnlock={handleUnlock}
-      />
+      <>
+        <LockScreen
+          initialSecurity={security}
+          initialSettings={settings}
+          onSecurityChange={setSecurity}
+          onSettingsChange={setSettings}
+          onUnlock={handleUnlock}
+        />
+        <GlobalLoaderOverlay loading={globalLoading} />
+      </>
     );
   }
 
@@ -767,6 +848,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     return (
       <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col font-sans select-none relative safe-area-root">
         {renderSyncAuthorizationBanner()}
+        <GlobalLoaderOverlay loading={globalLoading} />
         {!isOnline && (
           <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
             <WifiOff className="h-4 w-4" />
@@ -788,6 +870,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   return (
     <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none pb-24 relative safe-area-root app-shell">
       {renderSyncAuthorizationBanner()}
+      <GlobalLoaderOverlay loading={globalLoading} />
       {!isOnline && (
         <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
           <WifiOff className="h-4 w-4" />

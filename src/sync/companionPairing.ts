@@ -10,13 +10,13 @@ import type {
 import {
   decodeCompanionKeyPackage,
   encodeCompanionKeyPackage,
-  unwrapRootKeyForCompanion,
+  unwrapRootKeysForCompanion,
   wrapRootKeyForCompanion,
 } from './companionKeyPackage';
 import { generateDeviceKeyPair } from './deviceKeys';
 import { uploadDriveSyncObject } from './driveSyncObjects';
 import { downloadVerifiedSyncObject, replaySyncObjects } from './eventReplay';
-import { loadSyncSecrets, saveSyncSecrets } from './syncSecrets';
+import { getAccountRootKeyForEpoch, loadSyncSecrets, saveSyncSecrets } from './syncSecrets';
 import { findLatestValidSnapshot } from './syncSnapshot';
 import { SupabaseControlPlaneClient } from './supabaseControlPlane';
 import { restoreLatestPartitions } from './partitionedRestore';
@@ -107,11 +107,18 @@ export const approveCompanionPairing = async (input: {
   if (!account) throw new Error('Encrypted account metadata was not found.');
   const keyEpoch = account.currentKeyEpoch || state.keyEpoch || 1;
 
+  const activeRootKey = getAccountRootKeyForEpoch(secrets, keyEpoch);
+  const stateRootKey = getAccountRootKeyForEpoch(secrets, state.keyEpoch || 1);
+  const accountRootKeys = {
+    [state.keyEpoch || 1]: stateRootKey,
+    ...(secrets.accountRootKeys || {}),
+    [keyEpoch]: activeRootKey,
+  };
   const keyPackage = await wrapRootKeyForCompanion(
-    secrets.accountRootKey,
+    activeRootKey,
     state.accountId,
     details.session.requestedDevicePublicKey,
-    { keyEpoch },
+    { keyEpoch, accountRootKeys },
   );
   const bytes = encodeCompanionKeyPackage(keyPackage);
   const sha256 = await sha256Hex(bytes);
@@ -146,6 +153,8 @@ export const completeCompanionPairing = async (input: {
   controlPlane: SupabaseControlPlaneClient;
   googleSession: GoogleAccountSession;
   supabaseSession: SupabaseAuthSession;
+  saveSecrets?: typeof saveSyncSecrets;
+  download?: Parameters<typeof downloadVerifiedSyncObject>[2];
 }): Promise<LocalSyncAccountState | null> => {
   const details = await input.controlPlane.getPairingSession(input.pending.session.id);
   if (!details.session.approvedAt) {
@@ -157,7 +166,7 @@ export const completeCompanionPairing = async (input: {
     throw new Error('Approved pairing targets another device key.');
   }
 
-  const keyBytes = await downloadVerifiedSyncObject(input.googleSession, details.keyObject);
+  const keyBytes = await downloadVerifiedSyncObject(input.googleSession, details.keyObject, input.download);
   const keyPackage = decodeCompanionKeyPackage(keyBytes);
   const packageKeyEpoch = keyPackage.keyEpoch || 1;
   const metadataKeyEpoch = details.keyObject.keyEpoch || 1;
@@ -167,11 +176,12 @@ export const completeCompanionPairing = async (input: {
       metadataKeyEpoch,
     });
   }
-  const accountRootKey = await unwrapRootKeyForCompanion(
+  const unwrappedKeys = await unwrapRootKeysForCompanion(
     keyPackage,
     input.pending.devicePublicKey,
     input.pending.devicePrivateKey,
   );
+  const accountRootKey = unwrappedKeys.accountRootKey;
   await input.repository.resetContent();
   const localState: LocalSyncAccountState = {
     accountId: details.session.accountId,
@@ -187,16 +197,16 @@ export const completeCompanionPairing = async (input: {
     linkedAt: Date.now(),
   };
   await input.repository.saveLocalSyncAccountState(localState);
-  await saveSyncSecrets({
+  await (input.saveSecrets || saveSyncSecrets)({
     version: 1,
     accountId: localState.accountId,
     accountRootKey,
-    accountRootKeys: { [localState.keyEpoch || 1]: accountRootKey },
+    accountRootKeys: unwrappedKeys.accountRootKeys,
     devicePrivateKeyJwk: input.pending.devicePrivateKey,
     supabaseSession: input.supabaseSession,
     googleSession: input.googleSession,
   });
-  const accountRootKeys = { [localState.keyEpoch || 1]: accountRootKey };
+  const accountRootKeys = unwrappedKeys.accountRootKeys;
   const objects = await listAllSyncObjects(input.controlPlane, details.device.id);
   const snapshotRestored = await findLatestValidSnapshot({
     objects,
@@ -204,6 +214,7 @@ export const completeCompanionPairing = async (input: {
     accountRootKey,
     accountRootKeys,
     googleSession: input.googleSession,
+    download: input.download,
   }).then(async validSnapshot => {
     const snapshotObject = validSnapshot.object;
     await input.repository.importSnapshot(validSnapshot.snapshot, 'replace-portable');
@@ -221,6 +232,7 @@ export const completeCompanionPairing = async (input: {
       accountRootKeys,
       googleSession: input.googleSession,
       objects: objects.filter(object => object.sequence > snapshotObject.sequence),
+      download: input.download,
     });
     await input.controlPlane.updateDeviceCursor({
       deviceId: replayed.deviceId,
@@ -240,6 +252,7 @@ export const completeCompanionPairing = async (input: {
     accountRootKey,
     accountRootKeys,
     googleSession: input.googleSession,
+    download: input.download,
   }).catch(error => {
     console.warn('Partitioned companion restore failed; falling back to the latest valid snapshot.', error);
     return null;

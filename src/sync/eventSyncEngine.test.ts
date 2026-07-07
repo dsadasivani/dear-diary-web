@@ -140,6 +140,7 @@ test('creates an encrypted version-aware snapshot and advances local sync metada
       objectsToRetire: [],
       snapshotsToRetire: [],
       eventsToRetire: [],
+      mediaToRetire: [],
       driveFilesToDelete: [],
     }),
   });
@@ -440,6 +441,7 @@ test('partitioned sync pulls hydrated archive partitions by partition cursor', a
       objectsToRetire: [],
       snapshotsToRetire: [],
       eventsToRetire: [],
+      mediaToRetire: [],
       driveFilesToDelete: [],
     }),
   });
@@ -518,7 +520,7 @@ test('partitioned sync repairs an untracked recent month before pulling companio
     createControlPlane: () => controlPlane,
     download: async () => encrypted.bytes,
     maintenance: async () => ({
-      objectsToRetire: [], snapshotsToRetire: [], eventsToRetire: [], driveFilesToDelete: [],
+      objectsToRetire: [], snapshotsToRetire: [], eventsToRetire: [], mediaToRetire: [], driveFilesToDelete: [],
     }),
   });
 
@@ -608,6 +610,7 @@ test('partitioned companions process new epoch key packages before partition eve
       objectsToRetire: [],
       snapshotsToRetire: [],
       eventsToRetire: [],
+      mediaToRetire: [],
       driveFilesToDelete: [],
     }),
   });

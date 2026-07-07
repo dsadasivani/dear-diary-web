@@ -16,6 +16,7 @@ export interface SyncMaintenancePlan {
   objectsToRetire: SyncObjectMetadata[];
   snapshotsToRetire: SyncObjectMetadata[];
   eventsToRetire: SyncObjectMetadata[];
+  mediaToRetire: SyncObjectMetadata[];
   driveFilesToDelete: DriveSyncObjectSummary[];
 }
 
@@ -36,6 +37,7 @@ export const planSyncMaintenance = (input: {
   manifestRetentionCount?: number;
   partitionSnapshotRetentionCount?: number;
   orphanGracePeriodMs?: number;
+  liveDriveFileIds?: Iterable<string>;
 }): SyncMaintenancePlan => {
   const now = input.now ?? Date.now();
   const snapshotRetentionCount = input.snapshotRetentionCount ?? SNAPSHOT_RETENTION_COUNT;
@@ -85,7 +87,18 @@ export const planSyncMaintenance = (input: {
       ));
     })
     .sort((left, right) => left.sequence - right.sequence);
-  const objectsToRetire = [...snapshotsToRetire, ...eventsToRetire]
+  const liveDriveFileIds = new Set(input.liveDriveFileIds || []);
+  const mediaToRetire = input.liveDriveFileIds
+    ? input.metadata
+        .filter(object => (object.objectKind === 'media' || object.objectKind === 'thumbnail') && !object.retiredAt)
+        .filter(object => !liveDriveFileIds.has(object.driveFileId))
+        .filter(object => {
+          const createdAt = Date.parse(object.createdAt);
+          return Number.isFinite(createdAt) && now - createdAt >= orphanGracePeriodMs;
+        })
+        .sort((left, right) => left.sequence - right.sequence)
+    : [];
+  const objectsToRetire = [...snapshotsToRetire, ...eventsToRetire, ...mediaToRetire]
     .sort((left, right) => left.sequence - right.sequence);
   const knownFileIds = new Set(input.metadata.map(object => object.driveFileId));
   const retiredFileIds = new Set(
@@ -96,7 +109,7 @@ export const planSyncMaintenance = (input: {
     if (knownFileIds.has(file.id) || !file.createdTime) return false;
     return now - new Date(file.createdTime).getTime() >= orphanGracePeriodMs;
   });
-  return { objectsToRetire, snapshotsToRetire, eventsToRetire, driveFilesToDelete };
+  return { objectsToRetire, snapshotsToRetire, eventsToRetire, mediaToRetire, driveFilesToDelete };
 };
 
 const listAllMetadata = async (
@@ -118,6 +131,7 @@ export const performSyncMaintenance = async (input: {
   primaryDeviceId: string;
   googleSession: GoogleAccountSession;
   now?: number;
+  liveDriveFileIds?: Iterable<string>;
 }): Promise<SyncMaintenancePlan> => {
   const startedAt = Date.now();
   emitSyncTelemetry('sync.gc.start');
@@ -125,23 +139,30 @@ export const performSyncMaintenance = async (input: {
     listAllMetadata(input.controlPlane, input.primaryDeviceId),
     listDriveSyncObjects(input.googleSession),
   ]);
-  const plan = planSyncMaintenance({ metadata, driveFiles, now: input.now });
+  const plan = planSyncMaintenance({
+    metadata,
+    driveFiles,
+    now: input.now,
+    liveDriveFileIds: input.liveDriveFileIds,
+  });
   emitSyncTelemetry('sync.gc.plan', {
     metadataCount: metadata.length,
     driveFileCount: driveFiles.length,
     objectsToRetire: plan.objectsToRetire.length,
     snapshotsToRetire: plan.snapshotsToRetire.length,
     eventsToRetire: plan.eventsToRetire.length,
+    mediaToRetire: plan.mediaToRetire.length,
     driveFilesToDelete: plan.driveFilesToDelete.length,
   });
+  let retiredObjects: SyncObjectMetadata[] = [];
   if (plan.objectsToRetire.length > 0) {
-    await input.controlPlane.retireSyncObjects(
+    retiredObjects = await input.controlPlane.retireSyncObjects(
       input.primaryDeviceId,
       plan.objectsToRetire.map(object => object.driveFileId),
     );
   }
   const deleteIds = new Set([
-    ...plan.objectsToRetire.map(object => object.driveFileId),
+    ...retiredObjects.map(object => object.driveFileId),
     ...plan.driveFilesToDelete.map(file => file.id),
   ]);
   await Promise.all([...deleteIds].map(fileId => (
@@ -155,7 +176,7 @@ export const performSyncMaintenance = async (input: {
   )));
   emitSyncTelemetry('sync.gc.complete', {
     durationMs: Date.now() - startedAt,
-    retiredObjectCount: plan.objectsToRetire.length,
+    retiredObjectCount: retiredObjects.length,
     deleteAttemptCount: deleteIds.size,
   });
   return plan;

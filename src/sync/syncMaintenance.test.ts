@@ -108,3 +108,29 @@ test('keeps cross-partition events until every affected partition is covered', (
 
   assert.deepEqual(plan.eventsToRetire.map(item => item.sequence), [3]);
 });
+
+test('retires old unreferenced media while keeping current media references', () => {
+  const now = Date.parse('2026-07-06T12:00:00.000Z');
+  const metadata = [
+    object(1, 'media', null, 'month:2026-07'),
+    object(2, 'thumbnail', null, 'month:2026-07'),
+    object(3, 'media', null, 'month:2026-07'),
+  ];
+  metadata[0].driveFileId = 'deleted-media';
+  metadata[0].createdAt = '2026-07-04T00:00:00.000Z';
+  metadata[1].driveFileId = 'deleted-thumb';
+  metadata[1].createdAt = '2026-07-04T00:00:00.000Z';
+  metadata[2].driveFileId = 'live-media';
+  metadata[2].createdAt = '2026-07-04T00:00:00.000Z';
+
+  const plan = planSyncMaintenance({
+    metadata,
+    driveFiles: [],
+    now,
+    orphanGracePeriodMs: 24 * 60 * 60 * 1000,
+    liveDriveFileIds: ['live-media'],
+  });
+
+  assert.deepEqual(plan.mediaToRetire.map(item => item.driveFileId), ['deleted-media', 'deleted-thumb']);
+  assert.deepEqual(plan.objectsToRetire.map(item => item.driveFileId), ['deleted-media', 'deleted-thumb']);
+});

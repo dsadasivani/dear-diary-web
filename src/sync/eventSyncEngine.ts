@@ -1,4 +1,4 @@
-import type { DiaryRepository } from '../repositories/DiaryRepository';
+import type { DiaryRepository, RepositorySnapshot } from '../repositories/DiaryRepository';
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import type {
   Diary,
@@ -18,6 +18,7 @@ import { getConfiguredSupabaseAnonKey, getConfiguredSupabaseUrl } from './config
 import { createSyncDomainEvent, encodeSyncDomainEvent } from './domainEvents';
 import {
   getDriveStorageQuota,
+  downloadDriveSyncObject,
   listDriveSyncObjects,
   uploadDriveSyncObject,
   type DriveStorageQuota,
@@ -26,7 +27,7 @@ import {
 } from './driveSyncObjects';
 import { decryptSyncPayload, encryptSyncPayload } from './encryptedSyncObject';
 import { replaySyncObjects } from './eventReplay';
-import { decodeCompanionKeyPackage, unwrapRootKeyForCompanion } from './companionKeyPackage';
+import { decodeCompanionKeyPackage, unwrapRootKeysForCompanion } from './companionKeyPackage';
 import { refreshSupabaseSession } from './supabaseAuth';
 import { exchangeGoogleIdTokenForSupabaseSession } from './supabaseAuth';
 import { SupabaseControlPlaneClient, SupabaseControlPlaneError } from './supabaseControlPlane';
@@ -56,7 +57,7 @@ import {
   readMediaUri,
 } from './syncMedia';
 import { downloadVerifiedSyncObject, type SyncObjectDownloader } from './eventReplay';
-import { startWebGoogleSyncSignIn } from './webGoogleAuth';
+import { restoreWebGoogleSyncSession, startWebGoogleSyncSignIn } from './webGoogleAuth';
 import { performSyncMaintenance } from './syncMaintenance';
 import { migrateLocalAccountToPartitionedSync } from './partitionedMigration';
 import {
@@ -115,6 +116,11 @@ const mediaKindFromMimeType = (mimeType: string): PreparedMediaUpload['mediaKind
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('audio/')) return 'audio';
   return 'file';
+};
+
+const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 };
 
 const buildStorageBreakdown = (files: DriveSyncObjectSummary[]): DriveSyncStorageBreakdown => {
@@ -192,6 +198,38 @@ const defaultArchiveHydrationPolicyInput = async (
     userAllowedMobileData: false,
     storagePressure: 'normal',
   };
+};
+
+const collectLiveMediaDriveFileIds = (snapshot: RepositorySnapshot): Set<string> => {
+  const live = new Set<string>();
+  const pointers = Object.values(snapshot.syncMediaPointers || {});
+  const addPointer = (pointer: (typeof pointers)[number] | undefined) => {
+    if (!pointer) return;
+    live.add(pointer.driveFileId);
+    if (pointer.thumbnailDriveFileId) live.add(pointer.thumbnailDriveFileId);
+  };
+  const addReference = (reference?: string) => {
+    const parsed = parseSyncMediaReference(reference);
+    if (!parsed) return;
+    if (parsed.driveFileId) live.add(parsed.driveFileId);
+    addPointer(
+      parsed.sequence
+        ? pointers.find(pointer => pointer.sequence === parsed.sequence)
+        : pointers.find(pointer => (
+            (!!parsed.driveFileId && pointer.driveFileId === parsed.driveFileId) ||
+            (!!parsed.mediaId && pointer.mediaId === parsed.mediaId)
+          )),
+    );
+  };
+
+  snapshot.diaries.forEach(diary => addReference(diary.coverImage));
+  snapshot.entries.forEach(entry => {
+    entry.photoUris.forEach(addReference);
+    addReference(entry.audioUri);
+    (entry.blocks || []).forEach(block => addReference(block.audioUri));
+  });
+  addReference(snapshot.userProfile?.avatarUri);
+  return live;
 };
 
 export class SyncConflictError extends Error {
@@ -278,6 +316,11 @@ export class EventSyncEngine {
     return this.enqueue(async () => {
       this.requireOnline();
       const runtime = await this.openRuntime();
+      if (runtime.state.deviceRole === 'primary_mobile') {
+        await this.runMaintenanceWithRuntime(runtime, true).catch(error => {
+          console.warn('Encrypted sync cleanup before storage status failed:', error);
+        });
+      }
       const [files, storageQuota] = await Promise.all([
         listDriveSyncObjects(runtime.googleSession),
         getDriveStorageQuota(runtime.googleSession).catch(() => null),
@@ -420,7 +463,7 @@ export class EventSyncEngine {
 
   async hydrateDiary(diary: Diary): Promise<Diary> {
     if (!parseSyncMediaReference(diary.coverImage)) return diary;
-    return { ...diary, coverImage: await this.resolveMediaReference(diary.coverImage!) };
+    return { ...diary, coverImage: await this.resolveMediaReferenceBestEffort(diary.coverImage!, 'diary cover') };
   }
 
   hydrateDiaries(diaries: Diary[]): Promise<Diary[]> {
@@ -436,18 +479,22 @@ export class EventSyncEngine {
     if (!needsMedia) return entries;
     return Promise.all(entries.map(async entry => ({
       ...entry,
-      photoUris: await Promise.all(entry.photoUris.map(uri => this.resolveMediaReference(uri))),
-      audioUri: entry.audioUri ? await this.resolveMediaReference(entry.audioUri) : undefined,
+      photoUris: await Promise.all(entry.photoUris.map(uri => this.resolveMediaReferenceBestEffort(uri, 'entry photo'))),
+      audioUri: entry.audioUri ? await this.resolveMediaReferenceBestEffort(entry.audioUri, 'entry audio') : undefined,
       blocks: entry.blocks ? await Promise.all(entry.blocks.map(async block => ({
         ...block,
-        audioUri: block.audioUri ? await this.resolveMediaReference(block.audioUri) : undefined,
+        audioUri: block.audioUri ? await this.resolveMediaReferenceBestEffort(block.audioUri, 'entry block audio') : undefined,
       }))) : undefined,
     })));
   }
 
   async hydrateProfile(profile: UserProfile): Promise<UserProfile> {
     if (!parseSyncMediaReference(profile.avatarUri)) return profile;
-    return { ...profile, avatarUri: await this.resolveMediaReference(profile.avatarUri!) };
+    return { ...profile, avatarUri: await this.resolveMediaReferenceBestEffort(profile.avatarUri!, 'profile avatar') };
+  }
+
+  hydrateMediaReference(reference: string, label = 'media'): Promise<string> {
+    return this.resolveMediaReferenceBestEffort(reference, label);
   }
 
   startPolling(intervalMs = 15_000): void {
@@ -676,6 +723,10 @@ export class EventSyncEngine {
       });
       return event;
     } catch (error) {
+      preparedMedia.forEach(media => {
+        this.localMediaReferences.delete(media.localUri);
+        this.resolvedMediaReferences.delete(media.reference);
+      });
       if (
         error instanceof SupabaseControlPlaneError &&
         (error.message.includes('stale_sync_sequence') || error.message.includes('stale_record_version'))
@@ -812,8 +863,6 @@ export class EventSyncEngine {
       reference,
       thumbnail: encryptedThumbnail,
     });
-    this.localMediaReferences.set(uri, reference);
-    this.resolvedMediaReferences.set(reference, uri);
     return reference;
   }
 
@@ -822,12 +871,19 @@ export class EventSyncEngine {
     if (!parsed) return reference;
     const cached = this.resolvedMediaReferences.get(reference);
     if (cached) return cached;
-    const pointer = parsed.sequence
+    let pointer = parsed.sequence
       ? await this.repository.getSyncMediaPointer(parsed.sequence)
       : (parsed.driveFileId
           ? await this.repository.getSyncMediaPointerByDriveFileId(parsed.driveFileId)
           : await this.repository.getSyncMediaPointerByMediaId(parsed.mediaId));
+    if (!pointer && parsed.driveFileId) {
+      pointer = await this.restoreMissingMediaPointer(parsed.mediaId, parsed.driveFileId);
+    }
     if (!pointer) throw new Error('Synced media metadata is missing from this device.');
+    if (!pointer.mediaId && parsed.mediaId) {
+      await this.repository.saveSyncMediaPointer({ ...pointer, mediaId: parsed.mediaId });
+      pointer.mediaId = parsed.mediaId;
+    }
     if (pointer.localUri) {
       this.resolvedMediaReferences.set(reference, pointer.localUri);
       this.localMediaReferences.set(pointer.localUri, reference);
@@ -860,6 +916,96 @@ export class EventSyncEngine {
     this.resolvedMediaReferences.set(reference, localUri);
     this.localMediaReferences.set(localUri, reference);
     return localUri;
+  }
+
+  private async restoreMissingMediaPointer(
+    mediaId: string,
+    driveFileId: string,
+  ) {
+    const runtime = await this.openRuntime();
+    let afterSequence = 0;
+    while (true) {
+      const objects = await runtime.controlPlane.listSyncObjectsAfter(runtime.state.deviceId, afterSequence, 500);
+      const mediaObject = objects.find(object => object.objectKind === 'media' && object.driveFileId === driveFileId);
+      if (mediaObject) {
+        const pointer = {
+          mediaId,
+          sequence: mediaObject.sequence,
+          driveFileId: mediaObject.driveFileId,
+          sha256: mediaObject.sha256,
+          sizeBytes: mediaObject.sizeBytes,
+          createdByDeviceId: mediaObject.createdByDeviceId,
+          createdAt: mediaObject.createdAt,
+          keyEpoch: mediaObject.keyEpoch || 1,
+        };
+        await this.repository.saveSyncMediaPointer(pointer);
+        return pointer;
+      }
+      if (objects.length === 0 || objects.length < 500) break;
+      afterSequence = Math.max(afterSequence, ...objects.map(object => object.sequence));
+    }
+    return this.restoreOrphanedDriveMediaPointer(runtime, mediaId, driveFileId);
+  }
+
+  private async restoreOrphanedDriveMediaPointer(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+    mediaId: string,
+    driveFileId: string,
+  ) {
+    const encrypted = this.download
+      ? await this.download(runtime.googleSession, driveFileId)
+      : await downloadDriveSyncObject(runtime.googleSession, driveFileId);
+    let keyEpoch = runtime.state.keyEpoch || 1;
+    try {
+      const envelope = JSON.parse(new TextDecoder().decode(encrypted)) as { header?: { keyEpoch?: number } };
+      if (envelope.header?.keyEpoch) keyEpoch = envelope.header.keyEpoch;
+    } catch {
+      // Decryption below will report invalid encrypted payloads.
+    }
+    const candidateKeys = [
+      runtime.secrets.accountRootKeys?.[keyEpoch],
+      getAccountRootKeyForEpoch(runtime.secrets, keyEpoch),
+      runtime.secrets.accountRootKey,
+      ...Object.values(runtime.secrets.accountRootKeys || {}),
+    ].filter(Boolean) as Uint8Array[];
+    const uniqueKeys = candidateKeys.filter((key, index) => (
+      candidateKeys.findIndex(candidate => candidate === key || candidate.toString() === key.toString()) === index
+    ));
+    for (const rootKey of uniqueKeys) {
+      try {
+        const decrypted = await decryptSyncPayload(rootKey, encrypted);
+        if (decrypted.objectKind !== 'media') continue;
+        const media = decodeSyncMediaPayload(decrypted.payload);
+        if (media.mediaId !== mediaId) continue;
+        const localUri = await cacheSyncMedia(media.mediaId, media.mimeType, media.bytes);
+        const pointer = {
+          mediaId,
+          sequence: 0,
+          driveFileId,
+          sha256: await sha256Hex(encrypted),
+          sizeBytes: encrypted.byteLength,
+          createdByDeviceId: runtime.state.deviceId,
+          createdAt: new Date(this.now()).toISOString(),
+          localUri,
+          keyEpoch,
+        };
+        await this.repository.saveSyncMediaPointer(pointer);
+        return pointer;
+      } catch {
+        // Try the next known account root key.
+      }
+    }
+    return null;
+  }
+
+  private async resolveMediaReferenceBestEffort(reference: string, label: string): Promise<string> {
+    if (!parseSyncMediaReference(reference)) return reference;
+    try {
+      return await this.resolveMediaReference(reference);
+    } catch (error) {
+      console.warn(`Synced ${label} could not be restored yet:`, error);
+      return reference;
+    }
   }
 
   private async pullPendingUnlocked(): Promise<void> {
@@ -960,6 +1106,7 @@ export class EventSyncEngine {
         primaryDeviceId: state.deviceId,
         googleSession: runtime.googleSession,
         now,
+        liveDriveFileIds: collectLiveMediaDriveFileIds(await this.repository.exportSnapshot()),
       });
       emitSyncTelemetry('sync.maintenance.complete', {
         durationMs: this.now() - startedAt,
@@ -1209,9 +1356,13 @@ export class EventSyncEngine {
       }
       maxProcessedSequence = Math.max(maxProcessedSequence, object.sequence);
 
-      let epochRootKey: Uint8Array;
+      let unwrappedKeys: {
+        keyEpoch: number;
+        accountRootKey: Uint8Array;
+        accountRootKeys: Record<number, Uint8Array>;
+      };
       try {
-        epochRootKey = await unwrapRootKeyForCompanion(
+        unwrappedKeys = await unwrapRootKeysForCompanion(
           decoded,
           runtime.state.devicePublicKey,
           runtime.secrets.devicePrivateKeyJwk,
@@ -1234,8 +1385,9 @@ export class EventSyncEngine {
         accountRootKeys: {
           ...(latestSecrets.accountRootKeys || {}),
           [previousEpoch]: latestSecrets.accountRootKey,
+          ...unwrappedKeys.accountRootKeys,
         },
-      }, packageEpoch, epochRootKey);
+      }, packageEpoch, unwrappedKeys.accountRootKeys[packageEpoch] || unwrappedKeys.accountRootKey);
       await this.saveSecrets(updatedSecrets);
       runtime.secrets = updatedSecrets;
 
@@ -1304,6 +1456,18 @@ export class EventSyncEngine {
       secrets = { ...secrets, supabaseSession };
       await this.saveSecrets(secrets);
       if (this.realtimeClient) await this.realtimeClient.realtime.setAuth(supabaseSession.accessToken);
+    }
+    if (!isNativePlatform()) {
+      const webSession = await restoreWebGoogleSyncSession().catch(() => null);
+      if (webSession?.googleSession.userId === state.googleUserId) {
+        secrets = {
+          ...secrets,
+          googleSession: webSession.googleSession,
+          supabaseSession: webSession.supabaseSession,
+        };
+        await this.saveSecrets(secrets);
+        if (this.realtimeClient) await this.realtimeClient.realtime.setAuth(webSession.supabaseSession.accessToken);
+      }
     }
     const googleSession = await this.restoreGoogleSession(secrets);
     if (!googleSession?.accessToken || googleSession.userId !== state.googleUserId) {

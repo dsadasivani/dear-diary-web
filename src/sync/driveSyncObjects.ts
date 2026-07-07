@@ -58,7 +58,7 @@ const readDriveErrorDetail = async (response: Response): Promise<string> => {
 const throwDriveError = async (response: Response): Promise<never> => {
   const detail = await readDriveErrorDetail(response);
   if (response.status === 401) {
-    throw new Error('Google Drive authorization expired. Sign in again and retry account setup.');
+    throw new Error('Google Drive authorization expired. Reconnect encrypted sync and try again.');
   }
   if (response.status === 403) {
     throw new Error(`Google Drive denied sync object access. ${detail || 'Check appDataFolder permission.'}`);

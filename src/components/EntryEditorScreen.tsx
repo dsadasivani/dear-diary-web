@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ArrowLeft, Save, Trash2, Calendar, Smile, Tag, Camera, 
@@ -10,6 +11,7 @@ import {
 import { AppSettings, Diary, Entry, EntryBlock } from '../types';
 import RichTextEditor from './RichTextEditor';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
+import SyncedImage from './SyncedImage';
 import { audioService } from '../platform/audio';
 import { persistMediaDataUri } from '../mobile/mediaStorage';
 import { SyncConflictError } from '../sync/eventSyncEngine';
@@ -31,6 +33,7 @@ interface EntryEditorScreenProps {
   initialDate?: string;
   initialPrompt?: string;
   onShowToast?: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+  onRunWithLoader?: (message: string, operation: () => Promise<void>, detail?: string) => Promise<void>;
   showDiarySelector?: boolean;
 }
 
@@ -46,6 +49,7 @@ export default function EntryEditorScreen({
   initialDate,
   initialPrompt,
   onShowToast,
+  onRunWithLoader,
   showDiarySelector = false
 }: EntryEditorScreenProps) {
   // Find current entry if editing
@@ -76,6 +80,7 @@ export default function EntryEditorScreen({
   const [photoUris, setPhotoUris] = useState<string[]>([]);
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
   const [audioUri, setAudioUri] = useState<string | undefined>(undefined);
+  const [isSaving, setIsSaving] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const [showTagPicker, setShowTagPicker] = useState<boolean>(false);
@@ -560,11 +565,23 @@ export default function EntryEditorScreen({
         const recording = await VoiceRecorder.stopRecording();
         nativeRecordingActiveRef.current = false;
 
-        if (!discard && recording.value.recordDataBase64) {
-          const mimeType = recording.value.mimeType || 'audio/aac';
-          const dataUri = `data:${mimeType};base64,${recording.value.recordDataBase64}`;
-          const mediaUri = await persistMediaDataUri(dataUri, 'audio', mimeType);
+        const recordingValue = recording.value as {
+          recordDataBase64?: string;
+          mimeType?: string;
+          uri?: string;
+        };
+        const mimeType = recordingValue.mimeType || 'audio/aac';
+        let mediaUri: string | null = null;
+        if (!discard && recordingValue.uri) {
+          mediaUri = Capacitor.convertFileSrc(recordingValue.uri);
+        } else if (!discard && recordingValue.recordDataBase64) {
+          const dataUri = recordingValue.recordDataBase64.startsWith('data:')
+            ? recordingValue.recordDataBase64
+            : `data:${mimeType};base64,${recordingValue.recordDataBase64}`;
+          mediaUri = await persistMediaDataUri(dataUri, 'audio', mimeType);
+        }
 
+        if (mediaUri) {
           if (activeBlockId) {
             setBlocks(prev => prev.map(b => b.id === activeBlockId ? { ...b, audioUri: mediaUri } : b));
           } else {
@@ -1178,6 +1195,8 @@ export default function EntryEditorScreen({
   };
 
   const handleSave = async () => {
+    if (isSaving) return;
+
     const finalTitle = title.trim() || 'Untitled entry';
     
     let finalBlocks = [...blocks].filter(b => {
@@ -1210,11 +1229,32 @@ export default function EntryEditorScreen({
     const finalBody = finalBlocks.map(b => b.body).filter(Boolean).join('<br/><br/>');
 
     try {
-      if (isEditing && entryId) {
-        const entryObj = await diaryRepository.getEntry(entryId);
-        if (entryObj) {
-          const updated: Entry = {
-            ...entryObj,
+      setIsSaving(true);
+      const saveOperation = async () => {
+        if (isEditing && entryId) {
+          const entryObj = await diaryRepository.getEntry(entryId);
+          if (entryObj) {
+            const updated: Entry = {
+              ...entryObj,
+              diaryId,
+              date,
+              time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
+              title: finalTitle,
+              body: finalBody,
+              moodName: mood.name,
+              moodEmoji: mood.emoji,
+              tags: selectedTags,
+              photoUris,
+              photoCount: photoUris.length,
+              wordCount: liveWordCount,
+              audioUri: undefined,
+              updatedAt: Date.now(),
+              blocks: finalBlocks,
+            };
+            await diaryRepository.updateEntry(updated);
+          }
+        } else {
+          await diaryRepository.createEntry({
             diaryId,
             date,
             time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
@@ -1224,38 +1264,31 @@ export default function EntryEditorScreen({
             moodEmoji: mood.emoji,
             tags: selectedTags,
             photoUris,
-            photoCount: photoUris.length,
-            wordCount: liveWordCount,
             audioUri: undefined,
-            updatedAt: Date.now(),
             blocks: finalBlocks,
-          };
-          await diaryRepository.updateEntry(updated);
+          });
         }
-      } else {
-        await diaryRepository.createEntry({
-          diaryId,
-          date,
-          time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
-          title: finalTitle,
-          body: finalBody,
-          moodName: mood.name,
-          moodEmoji: mood.emoji,
-          tags: selectedTags,
-          photoUris,
-          audioUri: undefined,
-          blocks: finalBlocks,
-        });
-      }
 
-      await onRefreshEntries();
-      onBack();
+        await onRefreshEntries();
+        onBack();
+      };
+
+      const loaderDetail = photoUris.length > 0
+        ? 'Encrypting your entry and photo before sync.'
+        : 'Encrypting your entry before sync.';
+      if (onRunWithLoader) {
+        await onRunWithLoader('Saving entry', saveOperation, loaderDetail);
+      } else {
+        await saveOperation();
+      }
     } catch (saveError: any) {
       onShowToast(saveError?.message || 'Entry could not be saved.', saveError instanceof SyncConflictError ? 'warning' : 'error');
       if (saveError instanceof SyncConflictError) {
         await onRefreshEntries();
         onBack();
       }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1648,9 +1681,10 @@ export default function EntryEditorScreen({
 
               <button 
                 onClick={handleSave}
-                className="bg-brand-sage hover:bg-brand-sage-dark text-white px-3.5 py-1 rounded-lg text-[11px] font-bold transition-all active:scale-95 shadow-sm"
+                disabled={isSaving}
+                className="bg-brand-sage hover:bg-brand-sage-dark text-white px-3.5 py-1 rounded-lg text-[11px] font-bold transition-all active:scale-95 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Save
+                {isSaving ? 'Saving' : 'Save'}
               </button>
             </div>
           </header>
@@ -1974,9 +2008,10 @@ export default function EntryEditorScreen({
           </button>
           <button 
             onClick={handleSave}
-            className="bg-brand-sage hover:bg-brand-sage-dark text-white px-5 py-2 rounded-full text-xs font-bold transition-all active:scale-95 shadow-sm"
+            disabled={isSaving}
+            className="bg-brand-sage hover:bg-brand-sage-dark text-white px-5 py-2 rounded-full text-xs font-bold transition-all active:scale-95 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Save Entry
+            {isSaving ? 'Saving...' : 'Save Entry'}
           </button>
         </div>
       </header>
@@ -2332,7 +2367,12 @@ export default function EntryEditorScreen({
             <div className="flex overflow-x-auto gap-3 py-1">
               {photoUris.map((photo, idx) => (
                 <div key={idx} className="relative w-20 h-20 rounded-xl overflow-hidden shadow-sm border border-brand-rose-light flex-shrink-0">
-                  <img src={photo} alt="" className="w-full h-full object-cover" />
+                  <SyncedImage
+                    src={photo}
+                    alt=""
+                    className="w-full h-full object-cover"
+                    label="entry photo"
+                  />
                   <button
                     type="button"
                     onClick={() => removePhoto(idx)}

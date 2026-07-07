@@ -93,7 +93,8 @@ export const decodeSyncThumbnailPayload = (payload: Uint8Array): DecodedSyncThum
 };
 
 const base64ToBytes = (value: string): Uint8Array => {
-  const binary = typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
+  const normalized = value.replace(/\s/g, '');
+  const binary = typeof atob === 'function' ? atob(normalized) : Buffer.from(normalized, 'base64').toString('binary');
   return Uint8Array.from(binary, character => character.charCodeAt(0));
 };
 
@@ -108,13 +109,20 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
 
 export const readMediaUri = async (uri: string): Promise<{ bytes: Uint8Array; mimeType: string }> => {
   if (uri.startsWith('data:')) {
-    const match = /^data:([^;,]+)(?:;base64)?,(.*)$/s.exec(uri);
-    if (!match) throw new Error('Media data URI is invalid.');
+    const commaIndex = uri.indexOf(',');
+    if (commaIndex < 0) throw new Error('Media data URI is invalid.');
+    const metadata = uri.slice('data:'.length, commaIndex);
+    const data = uri.slice(commaIndex + 1);
+    const metadataParts = metadata.split(';').filter(Boolean);
+    const isBase64 = metadataParts.some(part => part.toLowerCase() === 'base64');
+    const mediaType = metadataParts
+      .filter(part => part.toLowerCase() !== 'base64')
+      .join(';');
     return {
-      mimeType: match[1] || 'application/octet-stream',
-      bytes: uri.includes(';base64,')
-        ? base64ToBytes(match[2])
-        : encoder.encode(decodeURIComponent(match[2])),
+      mimeType: mediaType || 'application/octet-stream',
+      bytes: isBase64
+        ? base64ToBytes(data)
+        : encoder.encode(decodeURIComponent(data)),
     };
   }
   const response = await fetch(uri);

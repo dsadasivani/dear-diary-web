@@ -389,7 +389,30 @@ export class LocalDiaryRepository implements DiaryRepository {
       const versions = await this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {});
       const recordKey = `${event.recordType}:${event.recordId}`;
       const currentVersion = versions[recordKey] || 0;
-      if (currentVersion !== event.baseRecordVersion || event.recordVersion !== currentVersion + 1) {
+      const affectedVersions = (event.affectedRecords || []).map(affected => ({
+        record: affected,
+        key: `${affected.recordType}:${affected.recordId}`,
+        currentVersion: versions[`${affected.recordType}:${affected.recordId}`] || 0,
+      }));
+      const eventAlreadyCovered = (
+        currentVersion >= event.recordVersion &&
+        affectedVersions.every(affected => affected.currentVersion >= affected.record.recordVersion)
+      );
+      const hasVersionMismatch = (
+        currentVersion !== event.baseRecordVersion ||
+        event.recordVersion !== currentVersion + 1 ||
+        affectedVersions.some(affected => affected.currentVersion !== affected.record.baseRecordVersion)
+      );
+      if (hasVersionMismatch) {
+        if (options.allowHistorical && eventAlreadyCovered) {
+          await this.writeManyJson({
+            [STORAGE_KEYS.syncAccount]: {
+              ...syncState,
+              currentSyncSequence: Math.max(syncState.currentSyncSequence, sequence),
+            },
+          });
+          return;
+        }
         throw new Error(`Sync record version mismatch for ${recordKey}.`);
       }
 

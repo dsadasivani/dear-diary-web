@@ -457,6 +457,11 @@ export interface CompanionKeyPackage {
   salt: string;
   nonce: string;
   wrappedRootKey: string;
+  wrappedEpochRootKeys?: Array<{
+    keyEpoch: number;
+    nonce: string;
+    wrappedRootKey: string;
+  }>;
   createdAt: string;
 }
 
