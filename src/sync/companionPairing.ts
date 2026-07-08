@@ -207,6 +207,26 @@ export const completeCompanionPairing = async (input: {
     googleSession: input.googleSession,
   });
   const accountRootKeys = unwrappedKeys.accountRootKeys;
+
+  const partitioned = await restoreLatestPartitions({
+    repository: input.repository,
+    controlPlane: input.controlPlane,
+    localState,
+    accountRootKey,
+    accountRootKeys,
+    googleSession: input.googleSession,
+    download: input.download,
+  });
+  if (partitioned.mode === 'partitioned') {
+    const restoredState = await input.repository.getLocalSyncAccountState();
+    if (!restoredState) throw new Error('Partitioned companion restore did not create local account state.');
+    await input.controlPlane.updateDeviceCursor({
+      deviceId: restoredState.deviceId,
+      lastAppliedSequence: restoredState.currentSyncSequence,
+    });
+    return restoredState;
+  }
+
   const objects = await listAllSyncObjects(input.controlPlane, details.device.id);
   const snapshotRestored = await findLatestValidSnapshot({
     objects,
@@ -240,31 +260,9 @@ export const completeCompanionPairing = async (input: {
     });
     return replayed;
   }).catch(error => {
-    console.warn('Full companion snapshot restore failed; falling back to partitioned restore.', error);
+    console.warn('Legacy companion snapshot restore failed.', error);
     return null;
   });
   if (snapshotRestored) return snapshotRestored;
-
-  const partitioned = await restoreLatestPartitions({
-    repository: input.repository,
-    controlPlane: input.controlPlane,
-    localState,
-    accountRootKey,
-    accountRootKeys,
-    googleSession: input.googleSession,
-    download: input.download,
-  }).catch(error => {
-    console.warn('Partitioned companion restore failed; falling back to the latest valid snapshot.', error);
-    return null;
-  });
-  if (partitioned?.mode === 'partitioned') {
-    const restoredState = await input.repository.getLocalSyncAccountState();
-    if (!restoredState) throw new Error('Partitioned companion restore did not create local account state.');
-    await input.controlPlane.updateDeviceCursor({
-      deviceId: restoredState.deviceId,
-      lastAppliedSequence: restoredState.currentSyncSequence,
-    });
-    return restoredState;
-  }
   throw new Error('No valid encrypted snapshot could be restored.');
 };

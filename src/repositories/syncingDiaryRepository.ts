@@ -1,6 +1,7 @@
 import type { AppSettings, Diary, Entry, Note, UserProfile } from '../types';
 import type { DiaryRepository, NewDiary, NewEntry, NewNote } from './DiaryRepository';
 import type { EventSyncEngine } from '../sync/eventSyncEngine';
+import { sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
 
 const createId = (prefix: string): string => {
   const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -71,25 +72,27 @@ export const createSyncingDiaryRepository = (
     };
     if (property === 'createEntry') return async (input: NewEntry): Promise<Entry> => {
       const timestamp = Date.now();
-      const entry: Entry = {
+      const entry: Entry = sanitizeEntry({
         ...input,
         id: createId('entry'),
         wordCount: countWords(input.body || ''),
         photoCount: input.photoUris?.length || 0,
         createdAt: timestamp,
         updatedAt: timestamp,
-      };
+      });
+      entry.wordCount = countWords(entry.body || '');
       await syncEngine.commitMutation('entry', 'upsert', entry.id, entry);
       return entry;
     };
     if (property === 'updateEntry') return async (entry: Entry): Promise<Entry | null> => {
       if (!await localRepository.getEntry(entry.id)) return null;
-      const updated = {
+      const updated = sanitizeEntry({
         ...entry,
         wordCount: countWords(entry.body || ''),
         photoCount: entry.photoUris?.length || 0,
         updatedAt: Date.now(),
-      };
+      });
+      updated.wordCount = countWords(updated.body || '');
       await syncEngine.commitMutation('entry', 'upsert', updated.id, updated);
       const stored = await localRepository.getEntry(updated.id);
       return stored ? (await syncEngine.hydrateEntries([stored]))[0] : null;
@@ -101,13 +104,13 @@ export const createSyncingDiaryRepository = (
     };
     if (property === 'createNote') return async (input: NewNote): Promise<Note> => {
       const timestamp = Date.now();
-      const note: Note = { ...input, id: createId('note'), createdAt: timestamp, updatedAt: timestamp };
+      const note: Note = sanitizeNote({ ...input, id: createId('note'), createdAt: timestamp, updatedAt: timestamp });
       await syncEngine.commitMutation('note', 'upsert', note.id, note);
       return note;
     };
     if (property === 'updateNote') return async (note: Note): Promise<Note | null> => {
       if (!await localRepository.getNote(note.id)) return null;
-      const updated = { ...note, updatedAt: Date.now() };
+      const updated = sanitizeNote({ ...note, updatedAt: Date.now() });
       await syncEngine.commitMutation('note', 'upsert', updated.id, updated);
       return localRepository.getNote(updated.id);
     };

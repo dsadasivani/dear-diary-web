@@ -63,6 +63,43 @@ test('creates entries, updates diary statistics, and cascades diary deletion', a
   assert.equal(await repository.getEntry(entry.id), null);
 });
 
+test('sanitizes malicious rich text when creating and updating entries and notes', async () => {
+  const repository = await createRepository();
+  const entry = await repository.createEntry({
+    diaryId: 'diary-default',
+    date: '2026-07-08',
+    title: 'Unsafe',
+    body: '<p onclick="alert(1)">Hello<img src=x onerror=alert(1)><strong style="color:red">world</strong></p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+    blocks: [{ id: 'block-1', time: '10:00', body: '<script>alert(1)</script><em data-x="1">kept</em>' }],
+  });
+  const note = await repository.createNote({
+    title: 'Unsafe note',
+    body: '<div class="x">Note<iframe src="https://evil.example"></iframe></div>',
+    isPinned: false,
+    tags: [],
+  });
+
+  assert.equal(entry.body, '<p>Hello<strong>world</strong></p>');
+  assert.equal(entry.blocks?.[0].body, '<em>kept</em>');
+  assert.equal(note.body, '<div>Note</div>');
+
+  const updatedEntry = await repository.updateEntry({
+    ...entry,
+    body: '<h2 style="font-size:99px">Edited</h2><svg><script>alert(1)</script></svg>',
+  });
+  const updatedNote = await repository.updateNote({
+    ...note,
+    body: '<blockquote onclick="alert(1)">Edited<script>alert(1)</script></blockquote>',
+  });
+
+  assert.equal(updatedEntry?.body, '<h2>Edited</h2>');
+  assert.equal(updatedNote?.body, '<blockquote>Edited</blockquote>');
+});
+
 test('serializes concurrent writes without losing notes', async () => {
   const repository = await createRepository();
   await Promise.all(Array.from({ length: 20 }, (_, index) => repository.createNote({
@@ -113,6 +150,36 @@ test('exports and replaces application content while retaining target device lin
   assert.deepEqual(restored.security, snapshot.security);
   assert.notEqual(restored.driveBackupSettings?.deviceId, snapshot.driveBackupSettings?.deviceId);
   assert.equal(restored.driveBackupSettings?.contentRevision, 1);
+});
+
+test('sanitizes malicious rich text during snapshot import', async () => {
+  const source = await createRepository();
+  const entry = await source.createEntry({
+    diaryId: 'diary-default',
+    date: '2026-07-08',
+    title: 'Imported',
+    body: '<p>safe</p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+  });
+  const note = await source.createNote({ title: 'Imported note', body: '<p>safe</p>', isPinned: false, tags: [] });
+  const snapshot = await source.exportSnapshot();
+  snapshot.entries[0] = {
+    ...entry,
+    body: '<p onmouseover="alert(1)">Entry<script>alert(1)</script></p>',
+  };
+  snapshot.notes[0] = {
+    ...note,
+    body: '<div style="x:1">Note<img src=x onerror=alert(1)></div>',
+  };
+
+  const target = await createRepository();
+  await target.importSnapshot(snapshot, 'replace-portable');
+
+  assert.equal((await target.getEntry(entry.id))?.body, '<p>Entry</p>');
+  assert.equal((await target.getNote(note.id))?.body, '<div>Note</div>');
 });
 
 test('initializes settings, profile, security, and Drive metadata through the repository', async () => {
@@ -217,6 +284,52 @@ test('applies canonical sync events idempotently and tracks record versions', as
   assert.deepEqual(await repository.getNote(note.id), note);
   assert.equal(await repository.getSyncRecordVersion('note', note.id), 1);
   assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 3);
+});
+
+test('sanitizes malicious rich text during sync event replay', async () => {
+  const repository = await createRepository();
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
+  });
+  const entry = {
+    id: 'entry-cloud',
+    diaryId: 'diary-default',
+    date: '2026-07-08',
+    title: 'Cloud entry',
+    body: '<p onclick="alert(1)">Entry<script>alert(1)</script></p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+    photoCount: 0,
+    wordCount: 1,
+    createdAt: 10,
+    updatedAt: 10,
+    blocks: [{ id: 'block-1', time: '10:00', body: '<u style="x:1">under</u><img src=x onerror=alert(1)>' }],
+  };
+
+  await repository.applySyncEvent(createSyncDomainEvent({
+    accountId: 'account-1',
+    deviceId: 'device-2',
+    recordType: 'entry',
+    operation: 'upsert',
+    recordId: entry.id,
+    baseRecordVersion: 0,
+    payload: entry,
+  }), 3);
+
+  const stored = await repository.getEntry(entry.id);
+  assert.equal(stored?.body, '<p>Entry</p>');
+  assert.equal(stored?.blocks?.[0].body, '<u>under</u>');
 });
 
 test('applies portable settings and profile events without replacing local reminder or theme settings', async () => {

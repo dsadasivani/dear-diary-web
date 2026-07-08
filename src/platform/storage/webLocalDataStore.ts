@@ -35,7 +35,13 @@ export class WebLocalDataStore implements LocalDataStore {
   }
 
   async setItems(items: Record<string, string>): Promise<void> {
-    await Promise.all(Object.entries(items).map(([key, value]) => this.setItem(key, value)));
+    this.requireEncryptedBrowserStorage();
+    if (this.useTestFallback) {
+      Object.entries(items).forEach(([key, value]) => localStorage.setItem(key, value));
+      return;
+    }
+    await this.encryptedStore.setItems(items);
+    Object.keys(items).forEach(key => localStorage.removeItem(key));
   }
 
   async removeItem(key: string): Promise<void> {

@@ -1,8 +1,10 @@
 import type {
   DeviceRevocation,
+  KeyEpochRotation,
   PairingPlatform,
   PairingSession,
   PairingSessionDetails,
+  PrimaryRecoveryAttempt,
   SyncAccount,
   SyncDevice,
   SyncDeviceCursor,
@@ -34,6 +36,14 @@ export interface CreatePrimaryMobileInput {
 
 export interface RegisterPrimaryTransferInput extends CreatePrimaryMobileInput {
   previousPrimaryDeviceId?: string | null;
+}
+
+export interface BeginPrimaryRecoveryInput extends RegisterPrimaryTransferInput {}
+
+export interface FinalizePrimaryRecoveryInput {
+  recoveryAttemptId: string;
+  deviceId: string;
+  restoredSequence: number;
 }
 
 export interface CommitSyncObjectInput {
@@ -111,6 +121,14 @@ export interface RevokeDeviceInput {
   reason: string;
 }
 
+export interface BeginDeviceKeyRotationInput extends RevokeDeviceInput {}
+
+export interface FinalizeDeviceKeyRotationInput {
+  primaryDeviceId: string;
+  rotationId: string;
+  keyPackageSequence: number;
+}
+
 const camelAccount = (row: any): SyncAccount => ({
   id: row.id,
   googleUserId: row.google_user_id,
@@ -135,6 +153,40 @@ const camelDevice = (row: any): SyncDevice => ({
   lastSeenAt: row.last_seen_at,
   revokedAt: row.revoked_at,
   replacedByDeviceId: row.replaced_by_device_id,
+  activationState: row.activation_state || 'active',
+});
+
+const camelPrimaryRecoveryAttempt = (row: any): PrimaryRecoveryAttempt => ({
+  id: row.id,
+  accountId: row.account_id,
+  deviceId: row.device_id,
+  previousPrimaryDeviceId: row.previous_primary_device_id || null,
+  googleUserId: row.google_user_id,
+  googleEmail: row.google_email,
+  displayName: row.display_name,
+  platform: row.platform,
+  status: row.status,
+  startedAt: row.started_at,
+  finalizedAt: row.finalized_at || null,
+  restoredSequence: row.restored_sequence === null || row.restored_sequence === undefined
+    ? null
+    : Number(row.restored_sequence),
+});
+
+const camelKeyEpochRotation = (row: any): KeyEpochRotation => ({
+  id: row.id,
+  accountId: row.account_id,
+  primaryDeviceId: row.primary_device_id,
+  revokedDeviceId: row.revoked_device_id,
+  reason: row.reason,
+  nextKeyEpoch: Number(row.next_key_epoch),
+  startingSequence: Number(row.starting_sequence || 0),
+  keyPackageSequence: row.key_package_sequence === null || row.key_package_sequence === undefined
+    ? null
+    : Number(row.key_package_sequence),
+  status: row.status,
+  createdAt: row.created_at,
+  finalizedAt: row.finalized_at || null,
 });
 
 const camelSyncObject = (row: any): SyncObjectMetadata => ({
@@ -313,6 +365,53 @@ export class SupabaseControlPlaneClient {
       device: camelDevice(row.device),
       revokedDevices: (row.revoked_devices || []).map(camelDevice),
     };
+  }
+
+  async beginPrimaryMobileRecovery(input: BeginPrimaryRecoveryInput): Promise<{
+    account: SyncAccount;
+    device: SyncDevice;
+    attempt: PrimaryRecoveryAttempt;
+  }> {
+    const row = await this.rpc<any>('begin_primary_mobile_recovery', {
+      p_google_user_id: input.googleUserId,
+      p_google_email: input.googleEmail,
+      p_display_name: input.displayName,
+      p_platform: input.platform,
+      p_public_key: input.publicKey,
+      p_recovery_configured: input.recoveryConfigured,
+      p_previous_primary_device_id: input.previousPrimaryDeviceId || null,
+    });
+    return {
+      account: camelAccount(row.account),
+      device: camelDevice(row.device),
+      attempt: camelPrimaryRecoveryAttempt(row.attempt),
+    };
+  }
+
+  async finalizePrimaryMobileRecovery(input: FinalizePrimaryRecoveryInput): Promise<{
+    account: SyncAccount;
+    device: SyncDevice;
+    attempt: PrimaryRecoveryAttempt;
+    revokedDevices: SyncDevice[];
+  }> {
+    const row = await this.rpc<any>('finalize_primary_mobile_recovery', {
+      p_recovery_attempt_id: input.recoveryAttemptId,
+      p_device_id: input.deviceId,
+      p_restored_sequence: input.restoredSequence,
+    });
+    return {
+      account: camelAccount(row.account),
+      device: camelDevice(row.device),
+      attempt: camelPrimaryRecoveryAttempt(row.attempt),
+      revokedDevices: (row.revoked_devices || []).map(camelDevice),
+    };
+  }
+
+  async abortPrimaryMobileRecovery(recoveryAttemptId: string, deviceId: string): Promise<PrimaryRecoveryAttempt> {
+    return camelPrimaryRecoveryAttempt(await this.rpc<any>('abort_primary_mobile_recovery', {
+      p_recovery_attempt_id: recoveryAttemptId,
+      p_device_id: deviceId,
+    }));
   }
 
   async getDeviceStatus(deviceId: string): Promise<SyncDevice | null> {
@@ -512,6 +611,38 @@ export class SupabaseControlPlaneClient {
       p_primary_device_id: primaryDeviceId,
     });
     return Number(epoch);
+  }
+
+  async beginDeviceKeyRotation(input: BeginDeviceKeyRotationInput): Promise<KeyEpochRotation> {
+    return camelKeyEpochRotation(await this.rpc<any>('begin_device_key_rotation', {
+      p_primary_device_id: input.primaryDeviceId,
+      p_revoked_device_id: input.deviceId,
+      p_reason: input.reason,
+    }));
+  }
+
+  async finalizeDeviceKeyRotation(input: FinalizeDeviceKeyRotationInput): Promise<{
+    account: SyncAccount;
+    rotation: KeyEpochRotation;
+    revocation: DeviceRevocation;
+  }> {
+    const row = await this.rpc<any>('finalize_device_key_rotation', {
+      p_primary_device_id: input.primaryDeviceId,
+      p_rotation_id: input.rotationId,
+      p_key_package_sequence: input.keyPackageSequence,
+    });
+    return {
+      account: camelAccount(row.account),
+      rotation: camelKeyEpochRotation(row.rotation),
+      revocation: camelRevocation(row.revocation),
+    };
+  }
+
+  async abortDeviceKeyRotation(primaryDeviceId: string, rotationId: string): Promise<KeyEpochRotation> {
+    return camelKeyEpochRotation(await this.rpc<any>('abort_device_key_rotation', {
+      p_primary_device_id: primaryDeviceId,
+      p_rotation_id: rotationId,
+    }));
   }
 
   async retireKeyPackages(primaryDeviceId: string, driveFileIds: string[]): Promise<SyncObjectMetadata[]> {

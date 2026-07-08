@@ -14,6 +14,12 @@ const requestResult = <T>(request: IDBRequest<T>): Promise<T> => new Promise((re
   request.onerror = () => reject(request.error || new Error('Encrypted browser storage request failed.'));
 });
 
+const transactionDone = (transaction: IDBTransaction): Promise<void> => new Promise((resolve, reject) => {
+  transaction.oncomplete = () => resolve();
+  transaction.onabort = () => reject(transaction.error || new Error('Encrypted browser storage transaction aborted.'));
+  transaction.onerror = () => reject(transaction.error || new Error('Encrypted browser storage transaction failed.'));
+});
+
 let databasePromise: Promise<IDBDatabase> | null = null;
 let wrappingKeyPromise: Promise<CryptoKey> | null = null;
 
@@ -69,17 +75,30 @@ export class WebEncryptedKeyValueStore {
   }
 
   async setItem(key: string, value: string): Promise<void> {
-    const nonce = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: nonce },
-      await getWrappingKey(),
-      new TextEncoder().encode(value),
-    );
+    await this.setItems({ [key]: value });
+  }
+
+  async setItems(items: Record<string, string>): Promise<void> {
+    const wrappingKey = await getWrappingKey();
+    const encryptedItems = await Promise.all(Object.entries(items).map(async ([key, value]) => {
+      const nonce = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertext = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: nonce },
+        wrappingKey,
+        new TextEncoder().encode(value),
+      );
+      return [key, {
+        nonce: Array.from(nonce),
+        ciphertext: Array.from(new Uint8Array(ciphertext)),
+      }] as const;
+    }));
     const database = await openDatabase();
-    await requestResult(database.transaction(this.storeName, 'readwrite').objectStore(this.storeName).put({
-      nonce: Array.from(nonce),
-      ciphertext: Array.from(new Uint8Array(ciphertext)),
-    }, key));
+    const transaction = database.transaction(this.storeName, 'readwrite');
+    const store = transaction.objectStore(this.storeName);
+    encryptedItems.forEach(([key, value]) => {
+      store.put(value, key);
+    });
+    await transactionDone(transaction);
   }
 
   async removeItem(key: string): Promise<void> {

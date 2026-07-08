@@ -11,6 +11,8 @@ import AudioWaveformPlayer from './AudioWaveformPlayer';
 import { diaryRepository } from '../repositories';
 import OverlayPortal from './OverlayPortal';
 import SyncedImage from './SyncedImage';
+import SanitizedRichText from './SanitizedRichText';
+import { resolveEntryIndexForEntryId } from './diaryDetailNavigation';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
@@ -108,10 +110,7 @@ export default function DiaryDetailScreen({
 
   React.useEffect(() => {
     if (!entryId) return;
-    const realIndex = diaryEntries.findIndex(entry => entry.id === entryId);
-    if (realIndex >= 0) {
-      setCurrentIndex(realIndex);
-    }
+    setCurrentIndex(resolveEntryIndexForEntryId(diaryEntries, entryId));
   }, [entryId, diaryEntries]);
 
   const handlePrev = () => {
@@ -455,7 +454,7 @@ export default function DiaryDetailScreen({
                           <Clock className="h-3 w-3" />
                           {formatTime12(block.time)}
                         </p>
-                        <div className="rich-text-editor-content" dangerouslySetInnerHTML={{ __html: block.body || (block.audioUri ? '' : 'No content written yet.') }} />
+                        <SanitizedRichText className="rich-text-editor-content" html={block.body} fallback={block.audioUri ? '' : 'No content written yet.'} />
                         {block.audioUri && (
                           <div className="mt-4 max-w-md">
                             <AudioWaveformPlayer src={block.audioUri} title="Voice Moment" />
@@ -465,7 +464,7 @@ export default function DiaryDetailScreen({
                     ))}
                   </div>
                 ) : (
-                  <div className="rich-text-editor-content" dangerouslySetInnerHTML={{ __html: activeEntry.body || (!allAudioUris.length ? 'No content written yet.' : '') }} />
+                  <SanitizedRichText className="rich-text-editor-content" html={activeEntry.body} fallback={!allAudioUris.length ? 'No content written yet.' : ''} />
                 )}
               </div>
 
@@ -1067,9 +1066,10 @@ export default function DiaryDetailScreen({
                           </span>
                         </div>
                         
-                        <div 
+                        <SanitizedRichText
                           className="rich-text-editor-content text-base md:text-lg text-brand-plum/90 font-serif-diary select-text"
-                          dangerouslySetInnerHTML={{ __html: block.body || (block.audioUri ? '' : 'No content written yet.') }}
+                          html={block.body}
+                          fallback={block.audioUri ? '' : 'No content written yet.'}
                         />
 
                         {block.audioUri && (
@@ -1082,9 +1082,10 @@ export default function DiaryDetailScreen({
                   </div>
                 ) : (
                   <div className="flex flex-col gap-2">
-                    <div 
-                      dangerouslySetInnerHTML={{ __html: activeEntry.body || (!allAudioUris.length ? 'No content written yet.' : '') }}
+                    <SanitizedRichText
                       className="rich-text-editor-content text-base md:text-lg text-brand-plum/90 font-serif-diary select-text"
+                      html={activeEntry.body}
+                      fallback={!allAudioUris.length ? 'No content written yet.' : ''}
                     />
                     
                     {allAudioUris.length > 0 && (

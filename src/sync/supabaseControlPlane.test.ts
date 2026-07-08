@@ -141,7 +141,7 @@ test('posts idempotent batch commits with partition metadata', async () => {
   }));
 });
 
-test('rotates account key epoch through Supabase RPC', async () => {
+test('legacy key epoch rotation RPC surfaces server-side two-phase rejection', async () => {
   let requestUrl = '';
   let requestBody = '';
   const client = new SupabaseControlPlaneClient({
@@ -151,18 +151,241 @@ test('rotates account key epoch through Supabase RPC', async () => {
     fetchImpl: async (input, init: RequestInit = {}) => {
       requestUrl = String(input);
       requestBody = String(init.body);
-      return new Response(JSON.stringify(3), {
-        status: 200,
+      return new Response(JSON.stringify({ message: 'device_key_rotation_requires_two_phase' }), {
+        status: 400,
         headers: { 'Content-Type': 'application/json' },
       });
     },
   });
 
-  const epoch = await client.rotateAccountKeyEpoch('primary-device-1');
+  await assert.rejects(
+    () => client.rotateAccountKeyEpoch('primary-device-1'),
+    (error: unknown) => (
+      error instanceof SupabaseControlPlaneError &&
+      error.message === 'device_key_rotation_requires_two_phase'
+    ),
+  );
 
-  assert.equal(epoch, 3);
   assert.equal(requestUrl, 'https://example.supabase.co/rest/v1/rpc/rotate_account_key_epoch');
   assert.equal(requestBody, JSON.stringify({ p_primary_device_id: 'primary-device-1' }));
+});
+
+test('legacy direct revoke RPC surfaces server-side two-phase rejection', async () => {
+  let requestUrl = '';
+  let requestBody = '';
+  const client = new SupabaseControlPlaneClient({
+    url: 'https://example.supabase.co',
+    anonKey: 'anon-key',
+    accessToken: 'access-token',
+    fetchImpl: async (input, init: RequestInit = {}) => {
+      requestUrl = String(input);
+      requestBody = String(init.body);
+      return new Response(JSON.stringify({ message: 'device_key_rotation_requires_two_phase' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+
+  await assert.rejects(
+    () => client.revokeDevice({
+      primaryDeviceId: 'primary-device-1',
+      deviceId: 'web-device-1',
+      reason: 'revoked_by_primary',
+    }),
+    (error: unknown) => (
+      error instanceof SupabaseControlPlaneError &&
+      error.message === 'device_key_rotation_requires_two_phase'
+    ),
+  );
+
+  assert.equal(requestUrl, 'https://example.supabase.co/rest/v1/rpc/revoke_device');
+  assert.equal(requestBody, JSON.stringify({
+    p_primary_device_id: 'primary-device-1',
+    p_device_id: 'web-device-1',
+    p_reason: 'revoked_by_primary',
+  }));
+});
+
+test('begins and finalizes primary recovery through two-phase RPCs', async () => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const account = {
+    id: 'account-1',
+    google_user_id: 'google-1',
+    google_email: 'writer@example.com',
+    created_at: '',
+    active_primary_device_id: 'old-primary',
+    current_sync_sequence: 8,
+    current_snapshot_sequence: 6,
+    current_key_epoch: 1,
+    partitioned_sync_enabled: true,
+    recovery_configured: true,
+  };
+  const device = {
+    id: 'new-primary',
+    account_id: 'account-1',
+    role: 'primary_mobile',
+    public_key: '{}',
+    display_name: 'Phone',
+    platform: 'android',
+    created_at: '',
+    last_seen_at: '',
+    revoked_at: null,
+    replaced_by_device_id: null,
+    activation_state: 'pending_recovery',
+  };
+  const attempt = {
+    id: 'attempt-1',
+    account_id: 'account-1',
+    device_id: 'new-primary',
+    previous_primary_device_id: 'old-primary',
+    google_user_id: 'google-1',
+    google_email: 'writer@example.com',
+    display_name: 'Phone',
+    platform: 'android',
+    status: 'pending',
+    started_at: '',
+    finalized_at: null,
+    restored_sequence: null,
+  };
+  const client = new SupabaseControlPlaneClient({
+    url: 'https://example.supabase.co',
+    anonKey: 'anon-key',
+    accessToken: 'access-token',
+    fetchImpl: async (input, init: RequestInit = {}) => {
+      const url = String(input);
+      calls.push({ url, body: String(init.body) });
+      if (url.endsWith('/begin_primary_mobile_recovery')) {
+        return new Response(JSON.stringify({ account, device, attempt }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        account: { ...account, active_primary_device_id: 'new-primary' },
+        device: { ...device, activation_state: 'active' },
+        attempt: { ...attempt, status: 'finalized', restored_sequence: 8, finalized_at: '' },
+        revoked_devices: [{ ...device, id: 'old-primary', activation_state: 'active', revoked_at: '' }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const begun = await client.beginPrimaryMobileRecovery({
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    displayName: 'Phone',
+    platform: 'android',
+    publicKey: '{}',
+    recoveryConfigured: true,
+    previousPrimaryDeviceId: 'old-primary',
+  });
+  const finalized = await client.finalizePrimaryMobileRecovery({
+    recoveryAttemptId: 'attempt-1',
+    deviceId: 'new-primary',
+    restoredSequence: 8,
+  });
+
+  assert.equal(begun.device.activationState, 'pending_recovery');
+  assert.equal(finalized.device.activationState, 'active');
+  assert.equal(finalized.attempt.restoredSequence, 8);
+  assert.equal(calls[0].url, 'https://example.supabase.co/rest/v1/rpc/begin_primary_mobile_recovery');
+  assert.equal(calls[0].body, JSON.stringify({
+    p_google_user_id: 'google-1',
+    p_google_email: 'writer@example.com',
+    p_display_name: 'Phone',
+    p_platform: 'android',
+    p_public_key: '{}',
+    p_recovery_configured: true,
+    p_previous_primary_device_id: 'old-primary',
+  }));
+  assert.equal(calls[1].url, 'https://example.supabase.co/rest/v1/rpc/finalize_primary_mobile_recovery');
+  assert.equal(calls[1].body, JSON.stringify({
+    p_recovery_attempt_id: 'attempt-1',
+    p_device_id: 'new-primary',
+    p_restored_sequence: 8,
+  }));
+});
+
+test('begins and finalizes device key rotation through two-phase RPCs', async () => {
+  const calls: Array<{ url: string; body: string }> = [];
+  const rotation = {
+    id: 'rotation-1',
+    account_id: 'account-1',
+    primary_device_id: 'primary-1',
+    revoked_device_id: 'web-1',
+    reason: 'user_removed',
+    next_key_epoch: 3,
+    starting_sequence: 12,
+    key_package_sequence: null,
+    status: 'pending',
+    created_at: '',
+    finalized_at: null,
+  };
+  const client = new SupabaseControlPlaneClient({
+    url: 'https://example.supabase.co',
+    anonKey: 'anon-key',
+    accessToken: 'access-token',
+    fetchImpl: async (input, init: RequestInit = {}) => {
+      const url = String(input);
+      calls.push({ url, body: String(init.body) });
+      if (url.endsWith('/begin_device_key_rotation')) {
+        return new Response(JSON.stringify(rotation), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        account: {
+          id: 'account-1',
+          google_user_id: 'google-1',
+          google_email: 'writer@example.com',
+          created_at: '',
+          active_primary_device_id: 'primary-1',
+          current_sync_sequence: 13,
+          current_snapshot_sequence: 12,
+          current_key_epoch: 3,
+          partitioned_sync_enabled: true,
+          recovery_configured: true,
+        },
+        rotation: { ...rotation, status: 'finalized', key_package_sequence: 13, finalized_at: '' },
+        revocation: {
+          id: 'revocation-1',
+          account_id: 'account-1',
+          primary_device_id: 'primary-1',
+          revoked_device_id: 'web-1',
+          reason: 'user_removed',
+          created_at: '',
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const begun = await client.beginDeviceKeyRotation({
+    primaryDeviceId: 'primary-1',
+    deviceId: 'web-1',
+    reason: 'user_removed',
+  });
+  const finalized = await client.finalizeDeviceKeyRotation({
+    primaryDeviceId: 'primary-1',
+    rotationId: 'rotation-1',
+    keyPackageSequence: 13,
+  });
+
+  assert.equal(begun.nextKeyEpoch, 3);
+  assert.equal(finalized.account.currentKeyEpoch, 3);
+  assert.equal(finalized.rotation.keyPackageSequence, 13);
+  assert.equal(calls[0].url, 'https://example.supabase.co/rest/v1/rpc/begin_device_key_rotation');
+  assert.equal(calls[0].body, JSON.stringify({
+    p_primary_device_id: 'primary-1',
+    p_revoked_device_id: 'web-1',
+    p_reason: 'user_removed',
+  }));
+  assert.equal(calls[1].url, 'https://example.supabase.co/rest/v1/rpc/finalize_device_key_rotation');
+  assert.equal(calls[1].body, JSON.stringify({
+    p_primary_device_id: 'primary-1',
+    p_rotation_id: 'rotation-1',
+    p_key_package_sequence: 13,
+  }));
 });
 
 test('retires generic sync objects through Supabase RPC', async () => {

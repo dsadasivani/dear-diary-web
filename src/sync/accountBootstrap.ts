@@ -19,8 +19,8 @@ import { uploadDriveSyncObject } from './driveSyncObjects';
 import { SupabaseControlPlaneClient } from './supabaseControlPlane';
 import type { RepositorySnapshot } from '../repositories/DiaryRepository';
 import type { SyncAccount, SyncObjectMetadata } from '../types';
-import { replaySyncObjects } from './eventReplay';
-import { saveSyncSecrets } from './syncSecrets';
+import { replaySyncObjects, type SyncObjectDownloader } from './eventReplay';
+import { clearSyncSecrets, saveSyncSecrets } from './syncSecrets';
 import {
   encodeRepositorySnapshotPayload,
   findLatestValidSnapshot,
@@ -45,6 +45,7 @@ export interface BootstrapNewMobileAccountInput {
   controlPlane: SupabaseControlPlaneClient;
   displayName?: string;
   platform?: PairingPlatform | string;
+  download?: SyncObjectDownloader;
   onProgress?: (message: string) => void;
 }
 
@@ -67,6 +68,50 @@ const listAllSyncObjects = async (
     if (page.length < 500) return objects;
     afterSequence = page[page.length - 1].sequence;
   }
+};
+
+const isStaleRecoverySequenceError = (error: unknown): boolean => (
+  String((error as { message?: string })?.message || error).includes('stale_recovery_sequence')
+);
+
+const finalizeRecoveredPrimary = async (input: {
+  repository: DiaryRepository;
+  controlPlane: SupabaseControlPlaneClient;
+  localState: LocalSyncAccountState;
+  recoveryAttemptId: string;
+  accountRootKey: Uint8Array;
+  accountRootKeys: Record<number, Uint8Array>;
+  googleSession: GoogleAccountSession;
+  download?: SyncObjectDownloader;
+}): Promise<LocalSyncAccountState> => {
+  let localState = input.localState;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await input.controlPlane.finalizePrimaryMobileRecovery({
+        recoveryAttemptId: input.recoveryAttemptId,
+        deviceId: localState.deviceId,
+        restoredSequence: localState.currentSyncSequence,
+      });
+      return localState;
+    } catch (error) {
+      if (!isStaleRecoverySequenceError(error)) throw error;
+      const objects = await listAllSyncObjects(input.controlPlane, localState.deviceId);
+      localState = await replaySyncObjects({
+        repository: input.repository,
+        localState,
+        accountRootKey: input.accountRootKey,
+        accountRootKeys: input.accountRootKeys,
+        googleSession: input.googleSession,
+        download: input.download,
+        objects: objects.filter(object => object.sequence > localState.currentSyncSequence),
+      });
+      await input.controlPlane.updateDeviceCursor({
+        deviceId: localState.deviceId,
+        lastAppliedSequence: localState.currentSyncSequence,
+      });
+    }
+  }
+  throw new Error('Account recovery could not catch up to the latest synced sequence.');
 };
 
 const saveRecoveredLocalState = async (
@@ -196,6 +241,7 @@ const recoverExistingMobileAccount = async ({
   displayName,
   platform,
   existingAccount,
+  download,
   onProgress,
 }: BootstrapNewMobileAccountInput & { existingAccount: SyncAccount }): Promise<BootstrapNewMobileAccountResult> => {
   onProgress?.('Finding your recovery key...');
@@ -206,13 +252,14 @@ const recoverExistingMobileAccount = async ({
     accountId: existingAccount.id,
     recoveryPassphrase,
     googleSession,
+    download,
   });
   const latestKeyPackage = recoveredKey.object;
   const accountRootKey = recoveredKey.accountRootKey;
 
   onProgress?.('Registering this device...');
   const deviceKeys = await generateDeviceKeyPair();
-  const transferred = await controlPlane.transferPrimaryMobile({
+  const recovery = await controlPlane.beginPrimaryMobileRecovery({
     googleUserId: googleSession.userId,
     googleEmail: googleSession.email!,
     displayName: displayName || googleSession.displayName || platform,
@@ -222,94 +269,126 @@ const recoverExistingMobileAccount = async ({
     previousPrimaryDeviceId: existingAccount.activePrimaryDeviceId,
   });
 
-  onProgress?.('Restoring diary data...');
-  let localState = await saveRecoveredEmptyLocalState(repository, {
-    googleSession,
-    account: transferred.account,
-    deviceId: transferred.device.id,
-    devicePublicKey: deviceKeys.publicKey,
-    recoveryKeyDriveFileId: latestKeyPackage.driveFileId,
-    currentSyncSequence: 0,
-    localPin,
-    recoveryQuestion,
-  });
-  const recoveredKeyEpoch = latestKeyPackage.keyEpoch || transferred.account.currentKeyEpoch || 1;
-  const recoveredRootKeys = { [recoveredKeyEpoch]: accountRootKey };
-  await saveSyncSecrets({
-    version: 1,
-    accountId: transferred.account.id,
-    accountRootKey,
-    accountRootKeys: recoveredRootKeys,
-    devicePrivateKeyJwk: deviceKeys.privateKeyJwk,
-    supabaseSession,
-    googleSession,
-  });
-  const partitioned = await restoreLatestPartitions({
-    repository,
-    controlPlane,
-    localState,
-    accountRootKey,
-    accountRootKeys: recoveredRootKeys,
-    googleSession,
-  });
-  if (partitioned.mode === 'partitioned') {
-    onProgress?.('Finishing account recovery...');
-    localState = (await repository.getLocalSyncAccountState()) || localState;
+  try {
+    onProgress?.('Restoring diary data...');
+    let localState = await saveRecoveredEmptyLocalState(repository, {
+      googleSession,
+      account: recovery.account,
+      deviceId: recovery.device.id,
+      devicePublicKey: deviceKeys.publicKey,
+      recoveryKeyDriveFileId: latestKeyPackage.driveFileId,
+      currentSyncSequence: 0,
+      localPin,
+      recoveryQuestion,
+    });
+    const recoveredKeyEpoch = latestKeyPackage.keyEpoch || recovery.account.currentKeyEpoch || 1;
+    const recoveredRootKeys = { [recoveredKeyEpoch]: accountRootKey };
+    await saveSyncSecrets({
+      version: 1,
+      accountId: recovery.account.id,
+      accountRootKey,
+      accountRootKeys: recoveredRootKeys,
+      devicePrivateKeyJwk: deviceKeys.privateKeyJwk,
+      supabaseSession,
+      googleSession,
+    });
+    const partitioned = await restoreLatestPartitions({
+      repository,
+      controlPlane,
+      localState,
+      accountRootKey,
+      accountRootKeys: recoveredRootKeys,
+      googleSession,
+      download,
+    });
+    if (partitioned.mode === 'partitioned') {
+      onProgress?.('Finishing account recovery...');
+      localState = (await repository.getLocalSyncAccountState()) || localState;
+      await controlPlane.updateDeviceCursor({
+        deviceId: recovery.device.id,
+        lastAppliedSequence: partitioned.currentSyncSequence,
+      });
+      localState = await finalizeRecoveredPrimary({
+        repository,
+        controlPlane,
+        localState,
+        recoveryAttemptId: recovery.attempt.id,
+        accountRootKey,
+        accountRootKeys: recoveredRootKeys,
+        googleSession,
+        download,
+      });
+      return {
+        localState,
+        supabaseAccountId: recovery.account.id,
+        primaryDeviceId: recovery.device.id,
+        mode: 'recovered',
+      };
+    }
+
+    const validSnapshot = await findLatestValidSnapshot({
+      objects: recoveryObjects,
+      accountId: existingAccount.id,
+      accountRootKey,
+      accountRootKeys: recoveredRootKeys,
+      googleSession,
+      download,
+    });
+    const latestSnapshot = validSnapshot.object;
+    onProgress?.('Applying synced diary updates...');
+    const objects = await listAllSyncObjects(controlPlane, recovery.device.id);
+    localState = await saveRecoveredLocalState(repository, {
+      googleSession,
+      account: recovery.account,
+      deviceId: recovery.device.id,
+      devicePublicKey: deviceKeys.publicKey,
+      recoveryKeyDriveFileId: latestKeyPackage.driveFileId,
+      latestSnapshotDriveFileId: latestSnapshot.driveFileId,
+      latestSnapshotSequence: latestSnapshot.sequence,
+      currentSyncSequence: latestSnapshot.sequence,
+      localPin,
+      recoveryQuestion,
+      snapshot: validSnapshot.snapshot,
+    });
+    let replayedState = await replaySyncObjects({
+      repository,
+      localState,
+      accountRootKey,
+      accountRootKeys: recoveredRootKeys,
+      googleSession,
+      download,
+      objects: objects.filter(object => object.sequence > latestSnapshot.sequence),
+    });
     await controlPlane.updateDeviceCursor({
-      deviceId: transferred.device.id,
-      lastAppliedSequence: partitioned.currentSyncSequence,
+      deviceId: recovery.device.id,
+      lastAppliedSequence: replayedState.currentSyncSequence,
+    });
+
+    onProgress?.('Finishing account recovery...');
+    replayedState = await finalizeRecoveredPrimary({
+      repository,
+      controlPlane,
+      localState: replayedState,
+      recoveryAttemptId: recovery.attempt.id,
+      accountRootKey,
+      accountRootKeys: recoveredRootKeys,
+      googleSession,
+      download,
     });
     return {
-      localState,
-      supabaseAccountId: transferred.account.id,
-      primaryDeviceId: transferred.device.id,
+      localState: replayedState,
+      supabaseAccountId: recovery.account.id,
+      primaryDeviceId: recovery.device.id,
       mode: 'recovered',
     };
+  } catch (error) {
+    await controlPlane.abortPrimaryMobileRecovery(recovery.attempt.id, recovery.device.id).catch(abortError => {
+      console.warn('Pending primary recovery could not be aborted:', abortError);
+    });
+    await repository.clearLocalSyncAccountState().catch(() => undefined);
+    await clearSyncSecrets().catch(() => undefined);
+    throw error;
   }
-
-  const validSnapshot = await findLatestValidSnapshot({
-    objects: recoveryObjects,
-    accountId: existingAccount.id,
-    accountRootKey,
-    accountRootKeys: recoveredRootKeys,
-    googleSession,
-  });
-  const latestSnapshot = validSnapshot.object;
-  onProgress?.('Applying synced diary updates...');
-  const objects = await listAllSyncObjects(controlPlane, transferred.device.id);
-  localState = await saveRecoveredLocalState(repository, {
-    googleSession,
-    account: transferred.account,
-    deviceId: transferred.device.id,
-    devicePublicKey: deviceKeys.publicKey,
-    recoveryKeyDriveFileId: latestKeyPackage.driveFileId,
-    latestSnapshotDriveFileId: latestSnapshot.driveFileId,
-    latestSnapshotSequence: latestSnapshot.sequence,
-    currentSyncSequence: latestSnapshot.sequence,
-    localPin,
-    recoveryQuestion,
-    snapshot: validSnapshot.snapshot,
-  });
-  const replayedState = await replaySyncObjects({
-    repository,
-    localState,
-    accountRootKey,
-    accountRootKeys: recoveredRootKeys,
-    googleSession,
-    objects: objects.filter(object => object.sequence > latestSnapshot.sequence),
-  });
-  await controlPlane.updateDeviceCursor({
-    deviceId: transferred.device.id,
-    lastAppliedSequence: replayedState.currentSyncSequence,
-  });
-
-  onProgress?.('Finishing account recovery...');
-  return {
-    localState: replayedState,
-    supabaseAccountId: transferred.account.id,
-    primaryDeviceId: transferred.device.id,
-    mode: 'recovered',
-  };
 };
 
 export const bootstrapNewMobileAccount = async ({
@@ -322,6 +401,7 @@ export const bootstrapNewMobileAccount = async ({
   controlPlane,
   displayName,
   platform = getPlatformName(),
+  download,
   onProgress,
 }: BootstrapNewMobileAccountInput): Promise<BootstrapNewMobileAccountResult> => {
   if (!googleSession.email) throw new Error('Google must return an email address to create a Dear Diary account.');
@@ -341,6 +421,7 @@ export const bootstrapNewMobileAccount = async ({
       controlPlane,
       displayName,
       platform,
+      download,
       existingAccount,
       onProgress,
     });

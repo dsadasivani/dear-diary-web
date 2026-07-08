@@ -35,6 +35,7 @@ import {
 } from './defaults';
 import { normalizeSecurityConfig } from '../domain/security';
 import { buildPortableMergePlan } from '../domain/backupMerge';
+import { sanitizeEntry, sanitizeNote, sanitizeRepositorySnapshot } from '../domain/richTextSanitizer';
 import { CORE_PARTITION_KEY, filterSnapshotForPartition, isMonthPartitionKey, monthFromTimestamp } from '../sync/syncPartitioning';
 
 const STORAGE_KEYS = {
@@ -207,14 +208,15 @@ export class LocalDiaryRepository implements DiaryRepository {
     return this.enqueueWrite(async () => {
       const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
       const timestamp = Date.now();
-      const entry: Entry = {
+      const entry: Entry = sanitizeEntry({
         ...clone(input),
         id: createId('entry'),
         wordCount: countWords(input.body || ''),
         photoCount: input.photoUris?.length || 0,
         createdAt: timestamp,
         updatedAt: timestamp,
-      };
+      });
+      entry.wordCount = countWords(entry.body || '');
       entries.push(entry);
       await this.writeEntriesAndDiaryStats(entries);
       return clone(entry);
@@ -227,12 +229,13 @@ export class LocalDiaryRepository implements DiaryRepository {
       const index = entries.findIndex(entry => entry.id === updatedEntry.id);
       if (index < 0) return null;
 
-      const entry: Entry = {
+      const entry: Entry = sanitizeEntry({
         ...clone(updatedEntry),
         wordCount: countWords(updatedEntry.body || ''),
         photoCount: updatedEntry.photoUris?.length || 0,
         updatedAt: Date.now(),
-      };
+      });
+      entry.wordCount = countWords(entry.body || '');
       entries[index] = entry;
       await this.writeEntriesAndDiaryStats(entries);
       return clone(entry);
@@ -262,7 +265,7 @@ export class LocalDiaryRepository implements DiaryRepository {
     return this.enqueueWrite(async () => {
       const notes = await this.readJson<Note[]>(STORAGE_KEYS.notes, []);
       const timestamp = Date.now();
-      const note: Note = { ...clone(input), id: createId('note'), createdAt: timestamp, updatedAt: timestamp };
+      const note: Note = sanitizeNote({ ...clone(input), id: createId('note'), createdAt: timestamp, updatedAt: timestamp });
       notes.push(note);
       await this.writePortableItems({ [STORAGE_KEYS.notes]: notes });
       return clone(note);
@@ -274,7 +277,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       const notes = await this.readJson<Note[]>(STORAGE_KEYS.notes, []);
       const index = notes.findIndex(note => note.id === updatedNote.id);
       if (index < 0) return null;
-      notes[index] = { ...clone(updatedNote), updatedAt: Date.now() };
+      notes[index] = sanitizeNote({ ...clone(updatedNote), updatedAt: Date.now() });
       await this.writePortableItems({ [STORAGE_KEYS.notes]: notes });
       return clone(notes[index]);
     });
@@ -432,7 +435,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
         const nextEntries = event.operation === 'delete'
           ? entries.filter(entry => entry.id !== event.recordId)
-          : this.upsertRecord(entries, event.payload as Entry);
+          : this.upsertRecord(entries, sanitizeEntry(event.payload as Entry));
         const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
         items[STORAGE_KEYS.entries] = nextEntries;
         items[STORAGE_KEYS.diaries] = this.withDiaryStats(diaries, nextEntries);
@@ -440,7 +443,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         const notes = await this.readJson<Note[]>(STORAGE_KEYS.notes, []);
         items[STORAGE_KEYS.notes] = event.operation === 'delete'
           ? notes.filter(note => note.id !== event.recordId)
-          : this.upsertRecord(notes, event.payload as Note);
+          : this.upsertRecord(notes, sanitizeNote(event.payload as Note));
       } else if (event.recordType === 'settings') {
         if (event.operation === 'delete' || !event.payload) throw new Error('Settings cannot be deleted.');
         const currentSettings = await this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS));
@@ -730,36 +733,37 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   importSnapshot(snapshot: RepositorySnapshot, mode: RepositoryImportMode): Promise<void> {
-    if (!Array.isArray(snapshot.diaries) || !Array.isArray(snapshot.entries) || !Array.isArray(snapshot.notes)) {
+    const sanitizedSnapshot = sanitizeRepositorySnapshot(snapshot);
+    if (!Array.isArray(sanitizedSnapshot.diaries) || !Array.isArray(sanitizedSnapshot.entries) || !Array.isArray(sanitizedSnapshot.notes)) {
       throw new Error('The repository snapshot is incomplete.');
     }
 
     return this.enqueueWrite(async () => {
       const items: Record<string, unknown> = {
-        [STORAGE_KEYS.entries]: clone(snapshot.entries),
-        [STORAGE_KEYS.diaries]: this.withDiaryStats(clone(snapshot.diaries), snapshot.entries),
-        [STORAGE_KEYS.notes]: clone(snapshot.notes),
+        [STORAGE_KEYS.entries]: clone(sanitizedSnapshot.entries),
+        [STORAGE_KEYS.diaries]: this.withDiaryStats(clone(sanitizedSnapshot.diaries), sanitizedSnapshot.entries),
+        [STORAGE_KEYS.notes]: clone(sanitizedSnapshot.notes),
       };
-      if (snapshot.settings) {
+      if (sanitizedSnapshot.settings) {
         if (mode === 'replace-portable') {
           const currentSettings = await this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS));
           items[STORAGE_KEYS.settings] = {
             ...currentSettings,
-            customTags: snapshot.settings.customTags,
-            customMoods: snapshot.settings.customMoods,
+            customTags: sanitizedSnapshot.settings.customTags,
+            customMoods: sanitizedSnapshot.settings.customMoods,
             theme: currentSettings.theme,
           };
         } else {
-          items[STORAGE_KEYS.settings] = snapshot.settings;
+          items[STORAGE_KEYS.settings] = sanitizedSnapshot.settings;
         }
       }
-      if (snapshot.userProfile) items[STORAGE_KEYS.userProfile] = snapshot.userProfile;
-      if (snapshot.syncRecordVersions) items[STORAGE_KEYS.syncRecordVersions] = snapshot.syncRecordVersions;
-      if (snapshot.syncMediaPointers) items[STORAGE_KEYS.syncMediaPointers] = snapshot.syncMediaPointers;
-      if (mode === 'replace' && snapshot.security) items[STORAGE_KEYS.security] = snapshot.security;
-      if (mode === 'replace' && snapshot.driveBackupSettings) items[STORAGE_KEYS.driveBackup] = snapshot.driveBackupSettings;
+      if (sanitizedSnapshot.userProfile) items[STORAGE_KEYS.userProfile] = sanitizedSnapshot.userProfile;
+      if (sanitizedSnapshot.syncRecordVersions) items[STORAGE_KEYS.syncRecordVersions] = sanitizedSnapshot.syncRecordVersions;
+      if (sanitizedSnapshot.syncMediaPointers) items[STORAGE_KEYS.syncMediaPointers] = sanitizedSnapshot.syncMediaPointers;
+      if (mode === 'replace' && sanitizedSnapshot.security) items[STORAGE_KEYS.security] = sanitizedSnapshot.security;
+      if (mode === 'replace' && sanitizedSnapshot.driveBackupSettings) items[STORAGE_KEYS.driveBackup] = sanitizedSnapshot.driveBackupSettings;
       await this.writePortableItems(items);
-      if (mode === 'replace' && snapshot.settings) await syncReminderNotification(snapshot.settings);
+      if (mode === 'replace' && sanitizedSnapshot.settings) await syncReminderNotification(sanitizedSnapshot.settings);
     });
   }
 

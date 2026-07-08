@@ -46,14 +46,9 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   private db: SQLiteDBConnection | null = null;
   private initPromise: Promise<SQLiteDBConnection> | null = null;
   private writeTail: Promise<void> = Promise.resolve();
-  private sqliteUnavailable = false;
-  private fallbackWarned = false;
-
-  constructor(private fallback: LocalDataStore) {}
 
   async getItem(key: string): Promise<string | null> {
-    const db = await this.getDbOrFallback();
-    if (!db) return this.fallback.getItem(key);
+    const db = await this.ensureInitialized();
 
     const compatibilityResult = await db.query('SELECT value FROM kv_store WHERE key = ? LIMIT 1;', [key]);
     const compatibilityValue = compatibilityResult.values?.[0]?.value ?? null;
@@ -66,11 +61,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
 
   async setItems(items: Record<string, string>): Promise<void> {
     await this.enqueueWrite(async () => {
-      const db = await this.getDbOrFallback();
-      if (!db) {
-        await this.fallback.setItems(items);
-        return;
-      }
+      const db = await this.ensureInitialized();
 
       await db.beginTransaction();
       try {
@@ -94,11 +85,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
 
   async removeItem(key: string): Promise<void> {
     await this.enqueueWrite(async () => {
-      const db = await this.getDbOrFallback();
-      if (!db) {
-        await this.fallback.removeItem(key);
-        return;
-      }
+      const db = await this.ensureInitialized();
 
       await db.run('DELETE FROM kv_store WHERE key = ?;', [key]);
       await this.clearStructuredTablesForKey(db, key);
@@ -107,11 +94,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
 
   async clear(): Promise<void> {
     await this.enqueueWrite(async () => {
-      const db = await this.getDbOrFallback();
-      if (!db) {
-        await this.fallback.clear();
-        return;
-      }
+      const db = await this.ensureInitialized();
 
       await db.execute(`
         DELETE FROM kv_store;
@@ -124,7 +107,6 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         DELETE FROM user_profile;
         DELETE FROM storage_meta;
       `);
-      await this.fallback.clear();
       await this.setMeta(db, 'storage_schema_version', String(STORAGE_SCHEMA_VERSION));
       await this.setMeta(db, 'storage_backend', 'encrypted_sqlite');
       await this.setMeta(db, MIGRATION_META_KEY, String(now()));
@@ -136,21 +118,6 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     const result = this.writeTail.then(operation, operation);
     this.writeTail = result.then(() => undefined, () => undefined);
     return result;
-  }
-
-  private async getDbOrFallback(): Promise<SQLiteDBConnection | null> {
-    if (this.sqliteUnavailable) return null;
-
-    try {
-      return await this.ensureInitialized();
-    } catch (error) {
-      this.sqliteUnavailable = true;
-      if (!this.fallbackWarned) {
-        console.warn('Encrypted SQLite storage unavailable; falling back to Capacitor Preferences:', error);
-        this.fallbackWarned = true;
-      }
-      return null;
-    }
   }
 
   private async ensureInitialized(): Promise<SQLiteDBConnection> {

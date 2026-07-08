@@ -3,11 +3,14 @@ import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import type {
   Diary,
   Entry,
+  Note,
   AppSettings,
   GoogleAccountSession,
   LocalSyncAccountState,
   SyncDomainEvent,
   SyncEventOperation,
+  SyncOutboxDriveObject,
+  SyncOutboxOperation,
   SyncObjectMetadata,
   SyncRecordType,
   UserProfile,
@@ -66,8 +69,19 @@ import {
   type ArchiveHydrationPolicyInput,
 } from './partitionHydrationPolicy';
 import { emitSyncTelemetry } from './syncTelemetry';
+import { sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
 
 type SyncPayload = NonNullable<SyncDomainEvent['payload']>;
+
+const sanitizeSyncPayload = (
+  recordType: SyncRecordType,
+  payload: SyncPayload | null,
+): SyncPayload | null => {
+  if (!payload) return payload;
+  if (recordType === 'entry') return sanitizeEntry(payload as Entry);
+  if (recordType === 'note') return sanitizeNote(payload as Note);
+  return payload;
+};
 
 interface PreparedMediaUpload {
   mediaId: string;
@@ -83,6 +97,36 @@ interface PreparedMediaUpload {
     sizeBytes: number;
   };
 }
+
+const outboxMediaObjectsFromPrepared = (
+  preparedMedia: PreparedMediaUpload[],
+  partitionKey: string,
+): SyncOutboxDriveObject[] => preparedMedia.map(media => ({
+  driveFileId: media.driveFileId,
+  objectKind: 'media',
+  sha256: media.sha256,
+  sizeBytes: media.sizeBytes,
+  partitionKey,
+  mediaId: media.mediaId,
+  localUri: media.localUri,
+  reference: media.reference,
+  thumbnail: media.thumbnail,
+}));
+
+const preparedMediaFromOutbox = (objects: SyncOutboxDriveObject[] | undefined): PreparedMediaUpload[] => (
+  (objects || [])
+    .filter(object => object.objectKind === 'media' && object.mediaId && object.localUri && object.reference)
+    .map(object => ({
+      mediaId: object.mediaId!,
+      localUri: object.localUri!,
+      driveFileId: object.driveFileId,
+      mediaKind: 'file',
+      sha256: object.sha256,
+      sizeBytes: object.sizeBytes,
+      reference: object.reference!,
+      thumbnail: object.thumbnail,
+    }))
+);
 
 type SyncThumbnailGenerator = (
   media: { bytes: Uint8Array; mimeType: string },
@@ -563,12 +607,11 @@ export class EventSyncEngine {
     this.requireOnline();
     const runtime = await this.openRuntime();
     await this.assertActiveDevice(runtime.controlPlane, runtime.state.deviceId);
+    await this.resumeUserWriteOutbox(runtime);
     await this.pullWithRuntime(runtime);
 
+    payload = sanitizeSyncPayload(recordType, payload);
     const originalPayload = payload;
-    const preparedMedia: PreparedMediaUpload[] = [];
-    payload = await this.preparePayloadMedia(runtime, recordType, payload, preparedMedia);
-
     const state = await this.repository.getLocalSyncAccountState();
     if (!state) throw new Error('Create or recover your encrypted account before editing.');
     const baseRecordVersion = await this.repository.getSyncRecordVersion(recordType, recordId);
@@ -581,41 +624,194 @@ export class EventSyncEngine {
             baseRecordVersion: await this.repository.getSyncRecordVersion('entry', entry.id),
           })))
       : [];
+    const operationId = crypto.randomUUID();
+    let outboxOperation: SyncOutboxOperation = {
+      operationId,
+      accountId: state.accountId,
+      deviceId: state.deviceId,
+      partitionKey: partitionKeyForRecordPayload(recordType, payload),
+      affectedPartitionKeys: [partitionKeyForRecordPayload(recordType, payload)],
+      recordType,
+      recordId,
+      operation,
+      payload,
+      baseRecordVersion,
+      affectedRecords,
+      state: 'prepared',
+      createdAt: this.now(),
+      updatedAt: this.now(),
+    };
+    await this.repository.saveSyncOutboxOperation(outboxOperation);
+
+    try {
+      return await this.executeUserWriteOutboxOperation(runtime, outboxOperation, affectedRecords);
+    } catch (error: any) {
+      if (
+        error instanceof SupabaseControlPlaneError &&
+        (error.message.includes('stale_sync_sequence') || error.message.includes('stale_record_version'))
+      ) {
+        await this.repository.removeSyncOutboxOperation(operationId).catch(() => undefined);
+        await this.pullWithRuntime(runtime);
+        if (operation === 'upsert' && originalPayload && (recordType === 'entry' || recordType === 'note')) {
+          const recoveredId = `${recordType}-recovered-${crypto.randomUUID()}`;
+          const recoveredPayload = recordType === 'entry'
+            ? {
+                ...(originalPayload as Entry),
+                id: recoveredId,
+                title: `${(originalPayload as Entry).title || 'Untitled entry'} (Recovered copy)`,
+                createdAt: this.now(),
+                updatedAt: this.now(),
+              }
+            : {
+                ...(originalPayload as Extract<SyncPayload, { title: string }>),
+                id: recoveredId,
+                title: `${(originalPayload as Extract<SyncPayload, { title: string }>).title || 'Untitled note'} (Recovered copy)`,
+                createdAt: this.now(),
+                updatedAt: this.now(),
+              };
+          await this.commitMutationUnlocked(recordType, 'upsert', recoveredId, sanitizeSyncPayload(recordType, recoveredPayload as SyncPayload) as SyncPayload);
+          throw new SyncConflictError(
+            `This ${recordType} changed on another device. Your pending version was saved as a recovered copy.`,
+            recoveredId,
+          );
+        }
+        throw new SyncConflictError('This record changed on another device. The latest version is now loaded.');
+      }
+      await this.markOutboxOperationFailed(
+        operationId,
+        error?.message || 'Encrypted sync write failed.',
+      ).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async updateOutboxOperation(
+    operation: SyncOutboxOperation,
+    changes: Partial<SyncOutboxOperation>,
+  ): Promise<SyncOutboxOperation> {
+    const next = {
+      ...operation,
+      ...changes,
+      updatedAt: this.now(),
+    };
+    await this.repository.saveSyncOutboxOperation(next);
+    return next;
+  }
+
+  private async resumeUserWriteOutbox(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+  ): Promise<void> {
+    const operations = await this.repository.listSyncOutboxOperations([
+      'prepared',
+      'media_uploading',
+      'media_uploaded',
+      'event_uploading',
+      'event_uploaded',
+      'metadata_committing',
+      'committed',
+      'applied',
+      'failed',
+    ]);
+    for (const operation of operations) {
+      if (!operation.operation) continue;
+      await this.executeUserWriteOutboxOperation(runtime, operation);
+    }
+  }
+
+  private async markOutboxOperationFailed(operationId: string, error: string): Promise<void> {
+    const latest = (await this.repository.listSyncOutboxOperations())
+      .find(operation => operation.operationId === operationId);
+    if (!latest) return;
+    await this.updateOutboxOperation(latest, {
+      state: 'failed',
+      error,
+      retryCount: (latest.retryCount || 0) + 1,
+      lastErrorAt: this.now(),
+    });
+  }
+
+  private async executeUserWriteOutboxOperation(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+    persistedOperation: SyncOutboxOperation,
+    affectedRecordsOverride?: Array<{ recordType: 'entry'; recordId: string; baseRecordVersion: number }>,
+  ): Promise<SyncDomainEvent> {
+    let outboxOperation = persistedOperation;
+    if (outboxOperation.error) {
+      outboxOperation = await this.updateOutboxOperation(outboxOperation, { error: undefined });
+    }
+    const operation = outboxOperation.operation;
+    if (!operation) throw new Error('Sync outbox operation is missing its mutation type.');
+    let payload = sanitizeSyncPayload(outboxOperation.recordType, outboxOperation.payload as SyncPayload | null);
+    const state = await this.repository.getLocalSyncAccountState();
+    if (!state) throw new Error('Create or recover your encrypted account before editing.');
+    const baseRecordVersion = outboxOperation.baseRecordVersion
+      ?? await this.repository.getSyncRecordVersion(outboxOperation.recordType, outboxOperation.recordId);
+    const affectedRecords = affectedRecordsOverride || outboxOperation.affectedRecords || [];
+    let partitionKey = outboxOperation.partitionKey || partitionKeyForRecordPayload(outboxOperation.recordType, payload);
+    let preparedMedia = preparedMediaFromOutbox(outboxOperation.uploadedObjects);
+
+    if (!outboxOperation.uploadedObjects || outboxOperation.state === 'prepared' || outboxOperation.state === 'media_uploading') {
+      outboxOperation = await this.updateOutboxOperation(outboxOperation, { state: 'media_uploading', error: undefined });
+      preparedMedia = [];
+      payload = await this.preparePayloadMedia(runtime, outboxOperation.recordType, payload, preparedMedia);
+      partitionKey = partitionKeyForRecordPayload(outboxOperation.recordType, payload);
+      outboxOperation = await this.updateOutboxOperation(outboxOperation, {
+        state: 'media_uploaded',
+        payload,
+        partitionKey,
+        affectedPartitionKeys: [partitionKey],
+        uploadedObjects: outboxMediaObjectsFromPrepared(preparedMedia, partitionKey),
+      });
+    }
+
     const event = createSyncDomainEvent({
       accountId: state.accountId,
       deviceId: state.deviceId,
-      recordType,
+      recordType: outboxOperation.recordType,
       operation,
-      recordId,
+      recordId: outboxOperation.recordId,
       baseRecordVersion,
       payload,
+      eventId: outboxOperation.operationId,
+      createdAt: new Date(outboxOperation.createdAt).toISOString(),
       affectedRecords,
     });
-    const partitionKey = partitionKeyForRecordPayload(recordType, payload);
     const activeKeyEpoch = runtime.state.keyEpoch || state.keyEpoch || 1;
     const activeRootKey = getAccountRootKeyForEpoch(runtime.secrets, activeKeyEpoch);
-    const encrypted = await encryptSyncPayload(activeRootKey, 'event', encodeSyncDomainEvent(event), { keyEpoch: activeKeyEpoch });
+    let encrypted: { bytes: Uint8Array; sha256: string } | null = null;
     const preparedObjectCount = preparedMedia.reduce((total, media) => total + 1 + (media.thumbnail ? 1 : 0), 0);
     const expectedSequence = state.currentSyncSequence + preparedObjectCount + 1;
     const eventFolder = partitionKey.startsWith('month:') ? partitionKey.slice('month:'.length) : 'core';
-    const file = await this.upload({
-      session: runtime.googleSession,
-      name: `/events/${eventFolder}/${expectedSequence}-${event.eventId}.ddevent`,
-      objectKind: 'event',
-      bytes: encrypted.bytes,
-      appProperties: {
-        accountId: state.accountId,
-        eventId: event.eventId,
-        recordType,
-        recordId,
-        baseRecordVersion,
-        partitionKey,
-        keyEpoch: activeKeyEpoch,
-      },
-    });
+    if (!outboxOperation.eventDriveFileId || !outboxOperation.eventSha256 || !outboxOperation.eventSizeBytes) {
+      outboxOperation = await this.updateOutboxOperation(outboxOperation, { state: 'event_uploading' });
+      encrypted = await encryptSyncPayload(activeRootKey, 'event', encodeSyncDomainEvent(event), { keyEpoch: activeKeyEpoch });
+      const file = await this.upload({
+        session: runtime.googleSession,
+        name: `/events/${eventFolder}/${expectedSequence}-${event.eventId}.ddevent`,
+        objectKind: 'event',
+        bytes: encrypted.bytes,
+        appProperties: {
+          accountId: state.accountId,
+          eventId: event.eventId,
+          recordType: outboxOperation.recordType,
+          recordId: outboxOperation.recordId,
+          baseRecordVersion,
+          partitionKey,
+          keyEpoch: activeKeyEpoch,
+        },
+      });
+      outboxOperation = await this.updateOutboxOperation(outboxOperation, {
+        state: 'event_uploaded',
+        eventDriveFileId: file.id,
+        eventSha256: encrypted.sha256,
+        eventSizeBytes: encrypted.bytes.byteLength,
+      });
+    }
 
-    try {
-      const committedObjects = preparedMedia.length > 0
+    let committedObjects = outboxOperation.committedObjects || [];
+    if (committedObjects.length === 0) {
+      outboxOperation = await this.updateOutboxOperation(outboxOperation, { state: 'metadata_committing' });
+      committedObjects = preparedMedia.length > 0
         ? await runtime.controlPlane.commitSyncBatch({
             deviceId: state.deviceId,
             operationId: event.eventId,
@@ -637,15 +833,15 @@ export class EventSyncEngine {
                 }] : []),
               ]),
               {
-                driveFileId: file.id,
+                driveFileId: outboxOperation.eventDriveFileId!,
                 objectKind: 'event' as const,
-                sha256: encrypted.sha256,
-                sizeBytes: encrypted.bytes.byteLength,
+                sha256: outboxOperation.eventSha256!,
+                sizeBytes: outboxOperation.eventSizeBytes!,
                 partitionKey,
               },
             ],
-            recordType,
-            recordId,
+            recordType: outboxOperation.recordType,
+            recordId: outboxOperation.recordId,
             baseRecordVersion,
             affectedRecords: event.affectedRecords,
             partitionKey,
@@ -655,12 +851,12 @@ export class EventSyncEngine {
         : [await runtime.controlPlane.commitSyncObject({
             deviceId: state.deviceId,
             afterSequence: state.currentSyncSequence,
-            driveFileId: file.id,
+            driveFileId: outboxOperation.eventDriveFileId!,
             objectKind: 'event',
-            sha256: encrypted.sha256,
-            sizeBytes: encrypted.bytes.byteLength,
-            recordType,
-            recordId,
+            sha256: outboxOperation.eventSha256!,
+            sizeBytes: outboxOperation.eventSizeBytes!,
+            recordType: outboxOperation.recordType,
+            recordId: outboxOperation.recordId,
             baseRecordVersion,
             affectedRecords: event.affectedRecords,
             partitionKey,
@@ -668,97 +864,68 @@ export class EventSyncEngine {
             operationId: event.eventId,
             keyEpoch: activeKeyEpoch,
           })];
-      const committed = committedObjects.find(object => object.objectKind === 'event');
-      if (!committed) throw new Error('Committed sync batch did not include the encrypted event.');
-      for (const media of preparedMedia) {
-        const mediaObject = committedObjects.find(object => object.objectKind === 'media' && object.driveFileId === media.driveFileId);
-        if (!mediaObject) throw new Error('Committed sync batch did not include an encrypted media object.');
-        await this.repository.saveSyncMediaPointer({
-          mediaId: media.mediaId,
-          sequence: mediaObject.sequence,
-          driveFileId: mediaObject.driveFileId,
-          sha256: mediaObject.sha256,
-          sizeBytes: mediaObject.sizeBytes,
-          createdByDeviceId: mediaObject.createdByDeviceId,
-          createdAt: mediaObject.createdAt,
-          localUri: media.localUri,
-          keyEpoch: mediaObject.keyEpoch || activeKeyEpoch,
-          ...(() => {
-            const thumbnailObject = media.thumbnail
-              ? committedObjects.find(object => object.objectKind === 'thumbnail' && object.driveFileId === media.thumbnail?.driveFileId)
-              : null;
-            return thumbnailObject ? {
-              thumbnailSequence: thumbnailObject.sequence,
-              thumbnailDriveFileId: thumbnailObject.driveFileId,
-              thumbnailSha256: thumbnailObject.sha256,
-              thumbnailSizeBytes: thumbnailObject.sizeBytes,
-            } : {};
-          })(),
-        });
-        this.localMediaReferences.set(media.localUri, media.reference);
-        this.resolvedMediaReferences.set(media.reference, media.localUri);
-      }
-      if (committed.recordVersion !== event.recordVersion) {
-        throw new Error('The committed record version does not match the encrypted event.');
-      }
-      if (JSON.stringify(committed.affectedRecords || []) !== JSON.stringify(event.affectedRecords || [])) {
-        throw new Error('Committed affected-record versions do not match the encrypted event.');
-      }
-      await this.repository.applySyncEvent(event, committed.sequence);
-      if (state.partitionedSyncEnabled) {
-        await this.repository.markPartitionHydrated(partitionKey, committed.sequence);
-        await runtime.controlPlane.updatePartitionCursor({
-          deviceId: state.deviceId,
-          partitionKey,
-          lastAppliedSequence: committed.sequence,
-          hydratedAt: new Date(this.now()).toISOString(),
-        });
-      }
-      await runtime.controlPlane.updateDeviceCursor({
-        deviceId: state.deviceId,
-        lastAppliedSequence: committed.sequence,
+      outboxOperation = await this.updateOutboxOperation(outboxOperation, {
+        state: 'committed',
+        committedObjects,
       });
-      await this.compactSnapshotWithRuntime(runtime, false).catch(error => {
-        console.warn('Automatic encrypted snapshot compaction failed:', error);
-      });
-      return event;
-    } catch (error) {
-      preparedMedia.forEach(media => {
-        this.localMediaReferences.delete(media.localUri);
-        this.resolvedMediaReferences.delete(media.reference);
-      });
-      if (
-        error instanceof SupabaseControlPlaneError &&
-        (error.message.includes('stale_sync_sequence') || error.message.includes('stale_record_version'))
-      ) {
-        await this.pullWithRuntime(runtime);
-        if (operation === 'upsert' && originalPayload && (recordType === 'entry' || recordType === 'note')) {
-          const recoveredId = `${recordType}-recovered-${crypto.randomUUID()}`;
-          const recoveredPayload = recordType === 'entry'
-            ? {
-                ...(originalPayload as Entry),
-                id: recoveredId,
-                title: `${(originalPayload as Entry).title || 'Untitled entry'} (Recovered copy)`,
-                createdAt: this.now(),
-                updatedAt: this.now(),
-              }
-            : {
-                ...(originalPayload as Extract<SyncPayload, { title: string }>),
-                id: recoveredId,
-                title: `${(originalPayload as Extract<SyncPayload, { title: string }>).title || 'Untitled note'} (Recovered copy)`,
-                createdAt: this.now(),
-                updatedAt: this.now(),
-              };
-          await this.commitMutationUnlocked(recordType, 'upsert', recoveredId, recoveredPayload as SyncPayload);
-          throw new SyncConflictError(
-            `This ${recordType} changed on another device. Your pending version was saved as a recovered copy.`,
-            recoveredId,
-          );
-        }
-        throw new SyncConflictError('This record changed on another device. The latest version is now loaded.');
-      }
-      throw error;
     }
+
+    const committed = committedObjects.find(object => object.objectKind === 'event');
+    if (!committed) throw new Error('Committed sync batch did not include the encrypted event.');
+    for (const media of preparedMedia) {
+      const mediaObject = committedObjects.find(object => object.objectKind === 'media' && object.driveFileId === media.driveFileId);
+      if (!mediaObject) throw new Error('Committed sync batch did not include an encrypted media object.');
+      await this.repository.saveSyncMediaPointer({
+        mediaId: media.mediaId,
+        sequence: mediaObject.sequence,
+        driveFileId: mediaObject.driveFileId,
+        sha256: mediaObject.sha256,
+        sizeBytes: mediaObject.sizeBytes,
+        createdByDeviceId: mediaObject.createdByDeviceId,
+        createdAt: mediaObject.createdAt,
+        localUri: media.localUri,
+        keyEpoch: mediaObject.keyEpoch || activeKeyEpoch,
+        ...(() => {
+          const thumbnailObject = media.thumbnail
+            ? committedObjects.find(object => object.objectKind === 'thumbnail' && object.driveFileId === media.thumbnail?.driveFileId)
+            : null;
+          return thumbnailObject ? {
+            thumbnailSequence: thumbnailObject.sequence,
+            thumbnailDriveFileId: thumbnailObject.driveFileId,
+            thumbnailSha256: thumbnailObject.sha256,
+            thumbnailSizeBytes: thumbnailObject.sizeBytes,
+          } : {};
+        })(),
+      });
+      this.localMediaReferences.set(media.localUri, media.reference);
+      this.resolvedMediaReferences.set(media.reference, media.localUri);
+    }
+    if (committed.recordVersion !== event.recordVersion) {
+      throw new Error('The committed record version does not match the encrypted event.');
+    }
+    if (JSON.stringify(committed.affectedRecords || []) !== JSON.stringify(event.affectedRecords || [])) {
+      throw new Error('Committed affected-record versions do not match the encrypted event.');
+    }
+    await this.repository.applySyncEvent(event, committed.sequence);
+    outboxOperation = await this.updateOutboxOperation(outboxOperation, { state: 'applied' });
+    if (state.partitionedSyncEnabled) {
+      await this.repository.markPartitionHydrated(partitionKey, committed.sequence);
+      await runtime.controlPlane.updatePartitionCursor({
+        deviceId: state.deviceId,
+        partitionKey,
+        lastAppliedSequence: committed.sequence,
+        hydratedAt: new Date(this.now()).toISOString(),
+      });
+    }
+    await runtime.controlPlane.updateDeviceCursor({
+      deviceId: state.deviceId,
+      lastAppliedSequence: committed.sequence,
+    });
+    await this.repository.removeSyncOutboxOperation(outboxOperation.operationId);
+    await this.compactSnapshotWithRuntime(runtime, false).catch(error => {
+      console.warn('Automatic encrypted snapshot compaction failed:', error);
+    });
+    return event;
   }
 
   private async preparePayloadMedia(
@@ -1189,15 +1356,22 @@ export class EventSyncEngine {
     while (true) {
       const objects = await runtime.controlPlane.listSyncObjectsAfter(state.deviceId, state.currentSyncSequence, 100);
       if (objects.length === 0) break;
-      await this.processKeyPackagesWithRuntime(runtime, objects);
+      const processedKeyPackageSequence = await this.processKeyPackagesWithRuntime(runtime, objects);
       state = await replaySyncObjects({
         repository: this.repository,
         localState: state,
         accountRootKey: runtime.secrets.accountRootKey,
         accountRootKeys: runtime.secrets.accountRootKeys,
         googleSession: runtime.googleSession,
-        objects,
+        objects: objects.filter(object => object.objectKind !== 'key_package'),
       });
+      if (processedKeyPackageSequence > state.currentSyncSequence) {
+        state = {
+          ...state,
+          currentSyncSequence: processedKeyPackageSequence,
+        };
+        await this.repository.saveLocalSyncAccountState(state);
+      }
       if (objects.length < 100) break;
     }
     await runtime.controlPlane.updateDeviceCursor({
@@ -1240,17 +1414,24 @@ export class EventSyncEngine {
           100,
         );
         if (objects.length === 0) break;
-        await this.processKeyPackagesWithRuntime(runtime, objects);
+        const processedKeyPackageSequence = await this.processKeyPackagesWithRuntime(runtime, objects);
         state = await replaySyncObjects({
           repository: this.repository,
           localState: state,
           accountRootKey: runtime.secrets.accountRootKey,
           accountRootKeys: runtime.secrets.accountRootKeys,
           googleSession: runtime.googleSession,
-          objects,
+          objects: objects.filter(object => object.objectKind !== 'key_package'),
           download: this.download,
           allowHistorical: true,
         });
+        if (processedKeyPackageSequence > state.currentSyncSequence) {
+          state = {
+            ...state,
+            currentSyncSequence: processedKeyPackageSequence,
+          };
+          await this.repository.saveLocalSyncAccountState(state);
+        }
         afterSequence = Math.max(afterSequence, ...objects.map(object => object.sequence));
         if (objects.length < 100) break;
       }
@@ -1314,10 +1495,25 @@ export class EventSyncEngine {
       .sort((left, right) => left.sequence - right.sequence);
     if (keyPackages.length === 0) return 0;
 
+    const hasAccountEpochLookup = typeof runtime.controlPlane.lookupCurrentGoogleAccount === 'function';
+    const account = hasAccountEpochLookup
+      ? await runtime.controlPlane.lookupCurrentGoogleAccount().catch(() => null)
+      : null;
+    const currentAccountEpoch = hasAccountEpochLookup
+      ? account?.currentKeyEpoch || runtime.state.keyEpoch || 1
+      : Number.MAX_SAFE_INTEGER;
     let maxProcessedSequence = 0;
     for (const object of keyPackages) {
       if (object.accountId !== runtime.state.accountId) throw new Error('Sync metadata belongs to another account.');
       const objectEpoch = object.keyEpoch || 1;
+      if (objectEpoch > currentAccountEpoch) {
+        emitSyncTelemetry('sync.key_package.future_epoch_deferred', {
+          sequence: object.sequence,
+          keyEpoch: objectEpoch,
+          currentAccountEpoch,
+        }, 'warn');
+        continue;
+      }
       if (runtime.secrets.accountRootKeys?.[objectEpoch]) {
         maxProcessedSequence = Math.max(maxProcessedSequence, object.sequence);
         continue;
@@ -1484,12 +1680,12 @@ export class EventSyncEngine {
 
   private async assertActiveDevice(controlPlane: SupabaseControlPlaneClient, deviceId: string): Promise<void> {
     const device = await controlPlane.getDeviceStatus(deviceId);
-    if (!device || device.revokedAt) {
+    if (!device || device.revokedAt || (device.activationState || 'active') !== 'active') {
       this.stopPolling();
       await clearSyncSecrets();
       await this.repository.clearLocalSyncAccountState();
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('deardiary-device-revoked'));
-      throw new Error('This device has been revoked. Recover or pair it again.');
+      throw new Error('This device is not active. Recover or pair it again.');
     }
   }
 

@@ -107,12 +107,14 @@ export default function CompanionApprovalPanel() {
       const secrets = await loadSyncSecrets();
       if (!state || !secrets) throw new Error('Primary device credentials are unavailable.');
       const controlPlane = createConfiguredSupabaseControlPlaneClient(secrets.supabaseSession.accessToken);
-      await controlPlane.revokeDevice({
+      const googleSession = await restoreGoogleDriveSession(false) || await restoreGoogleDriveSession(true);
+      if (!googleSession) throw new Error('Google Drive authorization is required to distribute the new key epoch.');
+      const rotation = await controlPlane.beginDeviceKeyRotation({
         primaryDeviceId: state.deviceId,
         deviceId: device.id,
         reason: 'revoked_by_primary',
       });
-      const nextKeyEpoch = await controlPlane.rotateAccountKeyEpoch(state.deviceId);
+      const nextKeyEpoch = rotation.nextKeyEpoch;
       const nextRootKey = generateAccountRootKey();
       const updatedSecrets = withAccountRootKeyForEpoch({
         ...secrets,
@@ -121,27 +123,38 @@ export default function CompanionApprovalPanel() {
           [state.keyEpoch || 1]: secrets.accountRootKey,
         },
       }, nextKeyEpoch, nextRootKey);
+      let lastKeyPackageSequence = rotation.startingSequence;
+      try {
+        const remainingDevices = (await controlPlane.listAccountDevices(state.deviceId))
+          .filter(candidate => (
+            candidate.role !== 'primary_mobile' &&
+            candidate.id !== device.id &&
+            !candidate.revokedAt
+          ));
+        const account = await controlPlane.lookupCurrentGoogleAccount();
+        lastKeyPackageSequence = await publishKeyEpochPackages({
+          accountId: state.accountId,
+          primaryDeviceId: state.deviceId,
+          keyEpoch: nextKeyEpoch,
+          accountRootKey: nextRootKey,
+          accountRootKeys: updatedSecrets.accountRootKeys || { [nextKeyEpoch]: nextRootKey },
+          googleSession,
+          devices: remainingDevices,
+          controlPlane,
+          afterSequence: account?.currentSyncSequence ?? rotation.startingSequence,
+        });
+        await controlPlane.finalizeDeviceKeyRotation({
+          primaryDeviceId: state.deviceId,
+          rotationId: rotation.id,
+          keyPackageSequence: lastKeyPackageSequence,
+        });
+      } catch (rotationError) {
+        await controlPlane.abortDeviceKeyRotation(state.deviceId, rotation.id).catch(error => {
+          console.warn('Pending key rotation could not be aborted:', error);
+        });
+        throw rotationError;
+      }
       await saveSyncSecrets(updatedSecrets);
-      const googleSession = await restoreGoogleDriveSession(false) || await restoreGoogleDriveSession(true);
-      if (!googleSession) throw new Error('Google Drive authorization is required to distribute the new key epoch.');
-      const remainingDevices = (await controlPlane.listAccountDevices(state.deviceId))
-        .filter(candidate => (
-          candidate.role !== 'primary_mobile' &&
-          candidate.id !== device.id &&
-          !candidate.revokedAt
-        ));
-      const account = await controlPlane.lookupCurrentGoogleAccount();
-      const lastKeyPackageSequence = await publishKeyEpochPackages({
-        accountId: state.accountId,
-        primaryDeviceId: state.deviceId,
-        keyEpoch: nextKeyEpoch,
-        accountRootKey: nextRootKey,
-        accountRootKeys: updatedSecrets.accountRootKeys || { [nextKeyEpoch]: nextRootKey },
-        googleSession,
-        devices: remainingDevices,
-        controlPlane,
-        afterSequence: account?.currentSyncSequence ?? state.currentSyncSequence,
-      });
       const updatedState = {
         ...state,
         keyEpoch: nextKeyEpoch,

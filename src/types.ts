@@ -219,6 +219,7 @@ export interface BackupFileSummary {
 }
 
 export type SyncDeviceRole = 'primary_mobile' | 'web_companion' | 'desktop_companion';
+export type SyncDeviceActivationState = 'active' | 'pending_recovery' | 'aborted';
 export type SyncObjectKind =
   | 'event'
   | 'media'
@@ -255,6 +256,36 @@ export interface SyncDevice {
   lastSeenAt: string;
   revokedAt: string | null;
   replacedByDeviceId: string | null;
+  activationState?: SyncDeviceActivationState;
+}
+
+export interface PrimaryRecoveryAttempt {
+  id: string;
+  accountId: string;
+  deviceId: string;
+  previousPrimaryDeviceId: string | null;
+  googleUserId: string;
+  googleEmail: string;
+  displayName: string;
+  platform: PairingPlatform | string;
+  status: 'pending' | 'finalized' | 'aborted';
+  startedAt: string;
+  finalizedAt: string | null;
+  restoredSequence: number | null;
+}
+
+export interface KeyEpochRotation {
+  id: string;
+  accountId: string;
+  primaryDeviceId: string;
+  revokedDeviceId: string;
+  reason: string;
+  nextKeyEpoch: number;
+  startingSequence: number;
+  keyPackageSequence: number | null;
+  status: 'pending' | 'finalized' | 'aborted';
+  createdAt: string;
+  finalizedAt: string | null;
 }
 
 export interface SyncObjectMetadata {
@@ -341,10 +372,27 @@ export type SyncOutboxOperationState =
   | 'media_uploading'
   | 'media_uploaded'
   | 'event_uploading'
+  | 'event_uploaded'
   | 'metadata_committing'
   | 'committed'
   | 'applied'
   | 'failed';
+
+export interface SyncOutboxDriveObject {
+  driveFileId: string;
+  objectKind: SyncObjectKind;
+  sha256: string;
+  sizeBytes: number;
+  partitionKey?: SyncPartitionKey | string | null;
+  mediaId?: string;
+  localUri?: string;
+  reference?: string;
+  thumbnail?: {
+    driveFileId: string;
+    sha256: string;
+    sizeBytes: number;
+  };
+}
 
 export interface SyncOutboxOperation {
   operationId: string;
@@ -354,9 +402,21 @@ export interface SyncOutboxOperation {
   affectedPartitionKeys: string[];
   recordType: SyncRecordType;
   recordId: string;
+  operation?: SyncEventOperation;
+  payload?: unknown;
+  baseRecordVersion?: number;
+  affectedRecords?: Array<Omit<SyncAffectedRecordVersion, 'recordVersion'>>;
+  eventDriveFileId?: string;
+  eventSha256?: string;
+  eventSizeBytes?: number;
+  uploadedObjects?: SyncOutboxDriveObject[];
+  committedObjects?: SyncObjectMetadata[];
   state: SyncOutboxOperationState;
   createdAt: number;
   updatedAt: number;
+  retryCount?: number;
+  lastErrorAt?: number;
+  nextRetryAt?: number;
   error?: string;
 }
 

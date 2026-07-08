@@ -1,8 +1,8 @@
 # Dear Diary
 
-Dear Diary is a private, local-first journaling application for the web and Android. It supports multiple journals, rich diary entries, quick notes, photos, voice notes, search, personal analytics, app/diary locks, and portable backups.
+Dear Diary is a private, local-first journaling application for the web and Android. It supports multiple journals, rich diary entries, quick notes, photos, voice notes, search, personal analytics, app/diary locks, portable backups, and optional end-to-end encrypted multi-device sync.
 
-The device is always the source of truth. There is no application database server and no live cloud synchronization. On Android, Google Drive is an optional backup-and-restore destination; on the web, data remains in the current browser profile unless the user exports it.
+The device remains the source of truth for journal content. Optional encrypted sync stores metadata in Supabase and encrypted objects in the user's Google Drive appDataFolder; the service never receives plaintext journal entries or notes.
 
 ## Contents
 
@@ -168,7 +168,7 @@ flowchart TD
     UI[React screens] --> APP[App navigation and session state]
     APP --> REPO[DiaryRepository]
     REPO --> WEB{Runtime platform}
-    WEB -->|Web| LS[Browser localStorage]
+    WEB -->|Web| IDB[Encrypted IndexedDB]
     WEB -->|Android/native| SQL[Encrypted SQLite / SQLCipher]
     UI --> MEDIA[FileStorage and audio/security services]
     MEDIA -->|Web| DATAURI[Data URIs + browser APIs]
@@ -230,10 +230,10 @@ Multi-record native writes use a SQLite transaction. For example, saving an entr
 
 | Concern | Web | Android/native |
 | --- | --- | --- |
-| Journal/settings/security records | Browser `localStorage` JSON | Encrypted SQLite with normalized tables and a compatibility key/value record |
+| Journal/settings/security records | Encrypted IndexedDB with legacy `localStorage` read-migration | Encrypted SQLite with normalized tables and a compatibility key/value record |
 | Photos, covers, audio | Data URIs stored with the record | Files under Capacitor `Directory.Data`; database records store converted file URIs |
 | SQLite encryption secret | Not applicable | Random 32-byte value in OS-backed Capacitor Secure Storage |
-| Legacy fallback | Not applicable | Capacitor Preferences retained after verified migration |
+| Legacy Preferences migration | Not applicable | Preferences are read only as a migration source after encrypted SQLite opens |
 | Backup staging | Not available | Atomic app-private `backups/pending.ddb` file |
 | UI-only diary layout | `localStorage` | Mirrored through Preferences, then hydrated into `localStorage` for the UI |
 
@@ -249,7 +249,7 @@ Native SQLite uses database name `dear_diary_local`, schema version `1`, and SQL
 - `storage_meta`
 - `kv_store` for migration/format compatibility
 
-On the first native launch after upgrading from Preferences, the app copies known legacy keys, populates normalized tables, verifies source and target collection counts, and only then records migration completion. Preferences remain available as a one-release fallback. If encrypted SQLite cannot be opened, the current implementation logs a warning and falls back to Preferences.
+On the first native launch after upgrading from Preferences, the app opens encrypted SQLite, copies known legacy keys, populates normalized tables, verifies source and target collection counts, and only then records migration completion. Runtime native writes fail closed if encrypted SQLite cannot be opened; Preferences are not used as a fallback storage backend.
 
 Legacy native cover/photo/audio data URIs are migrated to app-private files on startup. Incomplete migrations are retried on the next launch.
 
@@ -288,7 +288,7 @@ A fresh data store creates one unlocked diary named **My Diary** and no entries 
 
 - Android journal records are protected by SQLCipher and the database secret is kept in OS-backed secure storage.
 - Android media lives in app-private storage but is not separately encrypted by application code.
-- Web journal data and media are stored in browser `localStorage`; the PIN is an app-level gate and does not encrypt those records at rest.
+- Web journal data and media are stored in encrypted IndexedDB. This protects against casual local disk inspection, but it is still a same-origin browser storage boundary and does not protect against malicious JavaScript running in the app origin.
 - Drive `appDataFolder` hides backups from the normal Drive UI and limits access to the app. Optional end-to-end encryption adds a separate passphrase boundary; Drive timestamps, size, and lineage metadata remain visible to Google.
 - New manual exports use authenticated AES-256-GCM envelopes. Losing the passphrase makes that archive unrecoverable.
 
@@ -347,9 +347,9 @@ sequenceDiagram
 - Manual “Back up now” stages the latest revision and asks WorkManager to run immediately, but Android constraints still apply.
 - Optional Drive encryption uses a random master key protected by a user passphrase. The master key is cached in Android secure storage for background work; the passphrase is never stored.
 
-### Restore and multi-device safety
+### Backup restore and sync safety
 
-Drive remains snapshot backup rather than continuous synchronization. A backup can be applied in two explicit modes:
+Drive backup bundles remain snapshot-based. Encrypted multi-device sync is a separate event/snapshot stream described in [docs/sync-and-supabase.md](docs/sync-and-supabase.md). A backup bundle can be applied in two explicit modes:
 
 - **Replace** swaps portable content after creating a safety snapshot.
 - **Safe Merge** retains local content, imports cloud-only records, and preserves divergent records as recovered copies. Snapshot deletions are never propagated.
@@ -521,6 +521,8 @@ Copy `.env.example` to `.env` when native Google backup is required. Vite expose
 | Variable | Required | Used by |
 | --- | --- | --- |
 | `VITE_GOOGLE_WEB_CLIENT_ID` | Android Drive/Google recovery only | Native Google Sign-In initialization; must be the OAuth **Web application** client ID. |
+| `VITE_SUPABASE_URL` | Encrypted multi-device sync | Supabase project URL for the sync metadata control plane. Apply `docs/supabase/001` through `docs/supabase/014` in order before enabling sync. See [docs/sync-and-supabase.md](docs/sync-and-supabase.md). |
+| `VITE_SUPABASE_ANON_KEY` | Encrypted multi-device sync | Supabase anon key for the sync metadata control plane. |
 | `VITE_APP_VERSION` | Optional | Version recorded in Drive backup manifests; defaults to `0.0.0`. |
 | `CAPACITOR_DEBUG` | Optional build-time setting | Enables native WebView logging/debug inspection when exactly `true`. |
 | `DISABLE_HMR` | Optional development setting | Disables Vite HMR/file watching when exactly `true`. |
@@ -567,7 +569,7 @@ There are no component/end-to-end tests or Android instrumentation tests for app
 │   ├── domain/                   # security, catalog, streak, settings, storage calculations
 │   ├── repositories/             # async domain repository and defaults
 │   ├── platform/
-│   │   ├── storage/              # localStorage, Preferences, encrypted SQLite
+│   │   ├── storage/              # encrypted IndexedDB, Preferences migration, encrypted SQLite
 │   │   ├── filesystem/           # web/native file storage
 │   │   ├── audio/                # recording capability abstraction
 │   │   ├── security/             # WebAuthn/native biometric abstraction
@@ -576,6 +578,7 @@ There are no component/end-to-end tests or Android instrumentation tests for app
 │   └── utils/                    # backup bundles, Drive, Google auth, manual backup, WebAuthn
 ├── android/                      # Android Studio project and custom Drive/WorkManager Java code
 ├── docs/mobile-capacitor.md      # native implementation notes and release checklist
+├── docs/sync-and-supabase.md     # encrypted sync and Supabase migration runbook
 ├── capacitor.config.ts           # app ID, native debug policy, SQLite encryption config
 ├── server.ts                     # Express/Vite development and static production server
 ├── vite.config.ts                # React, Tailwind, alias, HMR configuration
@@ -595,8 +598,8 @@ Important entry points:
 ## Known limitations and operational notes
 
 - Android is the complete native target. iOS lacks the custom Drive bridge/background scheduler.
-- Web data is local to one browser profile and is not encrypted at rest by the app.
-- Drive remains snapshot backup rather than live synchronization. Safe Merge preserves divergent records but cannot propagate deletions because snapshots do not contain tombstones.
+- Web data is local to one browser profile and protected by browser-origin encrypted storage, not a hardware-backed secret store.
+- Scheduled Drive backup remains snapshot-based. Multi-device sync is a separate encrypted event stream. Backup Safe Merge preserves divergent records but cannot propagate deletions because backup snapshots do not contain tombstones.
 - End-to-end encryption is optional. Unencrypted legacy/current backups remain Google-protected, and encrypted-backup metadata such as size, timestamps, and lineage remains visible.
 - Browser speech-recognition availability and network behavior still vary by browser. Android Dictate Text requires installed Android speech services.
 - Media cleanup is eventual for ordinary edits: newly created unreferenced files receive a 24-hour grace period to protect unsaved drafts.

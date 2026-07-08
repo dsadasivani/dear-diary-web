@@ -10,6 +10,7 @@ import { diaryRepository } from '../repositories';
 import { getTagsForSettings } from '../domain/appSettings';
 import OverlayPortal from './OverlayPortal';
 import { SyncConflictError } from '../sync/eventSyncEngine';
+import SanitizedRichText from './SanitizedRichText';
 
 interface NotesScreenProps {
   notes: Note[];
@@ -544,9 +545,9 @@ export default function NotesScreen({
                 <h3 className={`font-serif-diary font-bold text-brand-plum mb-2 text-base ${isErrand ? 'line-through opacity-85' : ''}`}>
                   {note.title}
                 </h3>
-                <div 
+                <SanitizedRichText
                   className={`text-xs text-brand-plum leading-relaxed mb-4 [&_ul]:list-disc [&_ul]:ml-4 ${isErrand ? 'opacity-70 font-mono text-[11px]' : ''}`}
-                  dangerouslySetInnerHTML={{ __html: note.body }}
+                  html={note.body}
                 />
               </div>
 
