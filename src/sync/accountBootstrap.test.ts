@@ -6,6 +6,7 @@ import { bootstrapNewMobileAccount } from './accountBootstrap';
 import { createSyncDomainEvent, encodeSyncDomainEvent } from './domainEvents';
 import { encodeRecoveryKeyPackage, wrapAccountRootKeyForRecovery } from './e2eeKeyPackage';
 import { encryptSyncPayload } from './encryptedSyncObject';
+import { clearSyncSecrets, loadSyncSecrets, saveSyncSecrets } from './syncSecrets';
 import {
   buildPartitionManifest,
   encodePartitionManifestPayload,
@@ -21,6 +22,54 @@ const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
 
 test('primary recovery aborts without finalizing when restore fails', async () => {
   const repository = await createRepository();
+  const originalRootKey = crypto.getRandomValues(new Uint8Array(32));
+  await repository.createNote({
+    title: 'Original local note',
+    body: 'Do not replace me.',
+    isPinned: false,
+    tags: [],
+  });
+  await repository.saveSecurityConfig({
+    isPinCreated: true,
+    pinHash: 'old-pin-hash',
+    pinSalt: 'old-pin-salt',
+    pinLength: 4,
+    isBiometricsEnabled: false,
+    isLocked: false,
+    linkedGoogleUserId: 'old-google',
+    linkedGoogleEmail: 'old@example.com',
+    linkedGoogleBoundAt: 1,
+  });
+  await repository.saveDriveBackupSettings({
+    ...(await repository.getDriveBackupSettings()),
+    linkedGoogleUserId: 'old-google',
+    linkedGoogleEmail: 'old@example.com',
+    linkedGoogleDisplayName: 'Old Writer',
+    linkedAt: 1,
+    cloudWriteBlocked: true,
+  });
+  await repository.saveLocalSyncAccountState({
+    accountId: 'local-account',
+    deviceId: 'local-device',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'old-google',
+    googleEmail: 'old@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'local-key',
+    latestSnapshotDriveFileId: 'local-snapshot',
+    currentSyncSequence: 4,
+    keyEpoch: 1,
+    linkedAt: 1,
+  });
+  await saveSyncSecrets({
+    version: 1,
+    accountId: 'local-account',
+    accountRootKey: originalRootKey,
+    accountRootKeys: { 1: originalRootKey },
+    devicePrivateKeyJwk: '{}',
+    supabaseSession: { accessToken: 'old-supabase-token', refreshToken: 'old-refresh', expiresAt: 2_000_000_000 },
+    googleSession: { userId: 'old-google', email: 'old@example.com', displayName: 'Old Writer', accessToken: 'old-drive-token' },
+  });
   const accountRootKey = crypto.getRandomValues(new Uint8Array(32));
   const recoveryBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
     accountRootKey,
@@ -154,7 +203,12 @@ test('primary recovery aborts without finalizing when restore fails', async () =
 
   assert.equal(finalizeCalls, 0);
   assert.equal(abortCalls, 1);
-  assert.equal(await repository.getLocalSyncAccountState(), null);
+  assert.equal((await repository.listNotes())[0]?.title, 'Original local note');
+  assert.equal((await repository.getSecurityConfig()).linkedGoogleUserId, 'old-google');
+  assert.equal((await repository.getDriveBackupSettings()).linkedGoogleEmail, 'old@example.com');
+  assert.equal((await repository.getLocalSyncAccountState())?.accountId, 'local-account');
+  assert.deepEqual((await loadSyncSecrets())?.accountRootKey, originalRootKey);
+  await clearSyncSecrets();
 });
 
 test('primary recovery finalizes after partition restore and stale tail replay', async () => {

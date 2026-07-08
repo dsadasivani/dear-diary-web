@@ -14,7 +14,7 @@ import {
   downloadDriveSyncObject,
   uploadDriveSyncObject,
 } from './driveSyncObjects';
-import { loadSyncSecrets } from './syncSecrets';
+import { getAccountRootKeyForEpoch, loadSyncSecrets } from './syncSecrets';
 import type { EventSyncEngine } from './eventSyncEngine';
 
 const sha256 = async (bytes: Uint8Array): Promise<string> => {
@@ -60,7 +60,9 @@ export const rotateRecoveryPassphrase = async (input: {
     }
   }
 
-  const keyPackage = await wrapAccountRootKeyForRecovery(secrets.accountRootKey, input.newPassphrase, {
+  const keyEpoch = state.keyEpoch || 1;
+  const activeRootKey = getAccountRootKeyForEpoch(secrets, keyEpoch);
+  const keyPackage = await wrapAccountRootKeyForRecovery(activeRootKey, input.newPassphrase, {
     accountId: state.accountId,
     keyVersion,
   });
@@ -70,7 +72,7 @@ export const rotateRecoveryPassphrase = async (input: {
     name: `/key-packages/root-key-v${keyVersion}.ddkey`,
     objectKind: 'key_package',
     bytes,
-    appProperties: { accountId: state.accountId, keyVersion, purpose: 'recovery' },
+    appProperties: { accountId: state.accountId, keyVersion, keyEpoch, purpose: 'recovery' },
   });
   const committed = await controlPlane.commitSyncObject({
     deviceId: state.deviceId,
@@ -79,6 +81,7 @@ export const rotateRecoveryPassphrase = async (input: {
     objectKind: 'key_package',
     sha256: await sha256(bytes),
     sizeBytes: bytes.byteLength,
+    keyEpoch,
   });
   await input.repository.saveLocalSyncAccountState({
     ...state,

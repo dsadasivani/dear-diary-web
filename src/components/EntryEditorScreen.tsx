@@ -20,6 +20,7 @@ import { VoiceRecorder } from '@independo/capacitor-voice-recorder';
 import { SpeechRecognition as NativeSpeechRecognition } from '@capacitor-community/speech-recognition';
 import { diaryRepository } from '../repositories';
 import { getMoodsForSettings, getTagsForSettings } from '../domain/appSettings';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 
 interface EntryEditorScreenProps {
   diaries: Diary[];
@@ -106,11 +107,7 @@ export default function EntryEditorScreen({
 
   const handleAiEnhance = async () => {
     // Strip HTML formatting
-    const plainText = [...blocks.map(block => block.body), body]
-      .join(' ')
-      .replace(/<[^>]*>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const plainText = richTextHtmlToPlainText([...blocks.map(block => block.body), body].join(' '));
     if (!plainText || plainText.length < 10) {
       setAiError('Please write at least a few sentences (at least 10 characters) before asking for reflection.');
       return;
@@ -1153,10 +1150,10 @@ export default function EntryEditorScreen({
     const previousBlocksWords = blocks
       .filter(b => b.id !== activeBlockId)
       .reduce((acc, b) => {
-        const text = b.body ? b.body.replace(/<[^>]*>?/gm, '').trim() : '';
+        const text = richTextHtmlToPlainText(b.body);
         return acc + (text ? text.split(/\s+/).filter(Boolean).length : 0);
       }, 0);
-    const currentWords = body ? body.replace(/<[^>]*>?/gm, '').trim() : '';
+    const currentWords = richTextHtmlToPlainText(body);
     const currentWordsCount = currentWords ? currentWords.split(/\s+/).filter(Boolean).length : 0;
     return previousBlocksWords + currentWordsCount;
   }, [blocks, body, activeBlockId]);
@@ -1202,12 +1199,12 @@ export default function EntryEditorScreen({
     const finalTitle = title.trim() || 'Untitled entry';
     
     let finalBlocks = [...blocks].filter(b => {
-      const hasText = b.body && b.body.replace(/<[^>]*>?/gm, '').trim() !== '';
+      const hasText = richTextHtmlToPlainText(b.body) !== '';
       return hasText || b.audioUri;
     });
     
     // Add new moment block if drafting area is not empty OR there is an audio note
-    const hasDraftText = body && body.replace(/<[^>]*>?/gm, '').trim() !== '';
+    const hasDraftText = richTextHtmlToPlainText(body) !== '';
     if (hasDraftText || audioUri) {
       const newBlock: EntryBlock = {
         id: `block-${Date.now()}`,

@@ -11,6 +11,7 @@ import { getTagsForSettings } from '../domain/appSettings';
 import OverlayPortal from './OverlayPortal';
 import { SyncConflictError } from '../sync/eventSyncEngine';
 import SanitizedRichText from './SanitizedRichText';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 
 interface NotesScreenProps {
   notes: Note[];
@@ -69,7 +70,7 @@ export default function NotesScreen({
 
   const handleSaveQuickNote = async () => {
     // A quick note might have html from quickThought if it were a rich text, but it's plain text here
-    const plainTextBody = quickThought.replace(/<[^>]*>?/gm, '').trim();
+    const plainTextBody = richTextHtmlToPlainText(quickThought);
     if (!plainTextBody) return;
     
     // Create new quick note
@@ -255,7 +256,7 @@ export default function NotesScreen({
                       {note.isPinned && <Pin className="h-4 w-4 shrink-0 fill-brand-pink text-brand-pink" />}
                     </div>
                     <h2 className="mt-2 font-serif-diary text-lg font-bold text-brand-plum dark:text-brand-text">{note.title}</h2>
-                    <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{note.body.replace(/<[^>]*>/g, ' ')}</p>
+                    <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{richTextHtmlToPlainText(note.body)}</p>
                     <div className="mt-3 flex flex-wrap gap-1.5">
                       {note.tags.slice(0, 3).map(tag => (
                         <span key={tag} className="rounded-full bg-brand-sage-light px-2 py-0.5 text-[10px] font-bold text-brand-sage-dark">
@@ -474,7 +475,7 @@ export default function NotesScreen({
             
             <button 
               onClick={handleSaveQuickNote}
-              disabled={!quickThought.replace(/<[^>]*>?/gm, '').trim()}
+              disabled={!richTextHtmlToPlainText(quickThought)}
               className="bg-brand-sage hover:bg-brand-sage-dark disabled:bg-brand-sage-light/35 disabled:cursor-not-allowed text-white font-bold text-xs px-4 py-2 rounded-full transition-all shadow-sm"
             >
               Save Note

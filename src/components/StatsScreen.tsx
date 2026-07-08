@@ -5,14 +5,16 @@ import {
   Settings, Award, Smile, ShieldAlert, ArrowRight, Image as ImageIcon,
   Sparkles, X, Calendar, Grid, ChevronDown
 } from 'lucide-react';
-import { Diary, Entry, Note, ResponsiveLayout, UserProfile } from '../types';
+import { Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout, UserProfile } from '../types';
 import { calculateStreak } from '../domain/journalCatalog';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 
 interface StatsScreenProps {
   diaries: Diary[];
   entries: Entry[];
   notes: Note[];
   userProfile: UserProfile;
+  archiveMonths?: PartitionHydrationState[];
   layout?: ResponsiveLayout;
   onNavigate: (
     tab: string, 
@@ -30,6 +32,7 @@ export default function StatsScreen({
   entries,
   notes,
   userProfile,
+  archiveMonths = [],
   layout = 'mobile',
   onNavigate
 }: StatsScreenProps) {
@@ -224,6 +227,10 @@ export default function StatsScreen({
   const photos = getPhotoMemories();
   const moodData = getMoodData();
   const moodCorrelations = getMoodTagCorrelations();
+  const hasUnhydratedArchives = archiveMonths.some(month => month.status !== 'hydrated');
+  const entryScopeLabel = hasUnhydratedArchives ? 'Downloaded Entries' : 'Total Entries';
+  const photoScopeLabel = hasUnhydratedArchives ? 'Downloaded Photos' : 'Visual Memories';
+  const scopeHint = 'Stats reflect downloaded memories. Restore older archive months to complete these totals.';
 
   if (layout === 'desktop') {
     const dominantMood = moodData[0];
@@ -259,6 +266,12 @@ export default function StatsScreen({
           </div>
         </header>
 
+        {hasUnhydratedArchives && (
+          <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-sm font-semibold text-brand-sage-dark">
+            {scopeHint}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[210px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)_260px] 2xl:gap-7">
           <aside className="grid grid-cols-3 gap-4 xl:block xl:space-y-5">
             <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 text-center shadow-[0_14px_38px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/70">
@@ -268,11 +281,11 @@ export default function StatsScreen({
               <p className="mt-2 text-sm text-brand-text-muted">Days of mindful writing</p>
             </section>
             <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
-              <p className="text-sm font-bold text-brand-text-muted">Total Entries</p>
+              <p className="text-sm font-bold text-brand-text-muted">{entryScopeLabel}</p>
               <p className="mt-4 font-serif-diary text-4xl font-semibold text-brand-plum dark:text-brand-text">{entries.length}</p>
             </section>
             <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
-              <p className="text-sm font-bold text-brand-text-muted">Visual Memories</p>
+              <p className="text-sm font-bold text-brand-text-muted">{photoScopeLabel}</p>
               <p className="mt-4 font-serif-diary text-4xl font-semibold text-brand-plum dark:text-brand-text">{totalPhotos} Photos</p>
             </section>
           </aside>
@@ -418,6 +431,12 @@ export default function StatsScreen({
       </header>
 
       <div className="flex flex-col gap-6">
+        {hasUnhydratedArchives && (
+          <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-xs font-semibold text-brand-sage-dark">
+            {scopeHint}
+          </div>
+        )}
+
         {/* Grid statistics highlights */}
         <section className="grid grid-cols-3 gap-3">
           <div className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border text-center flex flex-col gap-1 shadow-sm">
@@ -429,13 +448,13 @@ export default function StatsScreen({
           <div className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border text-center flex flex-col gap-1 shadow-sm">
             <BookOpen className="w-5 h-5 text-brand-sage mx-auto" />
             <span className="text-xl font-bold text-brand-plum mt-1">{entries.length}</span>
-            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">Entries</span>
+            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">{hasUnhydratedArchives ? 'Downloaded' : 'Entries'}</span>
           </div>
 
           <div className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border text-center flex flex-col gap-1 shadow-sm">
             <Camera className="w-5 h-5 text-brand-pink mx-auto" />
             <span className="text-xl font-bold text-brand-plum mt-1">{totalPhotos}</span>
-            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">Photos</span>
+            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">{hasUnhydratedArchives ? 'DL Photos' : 'Photos'}</span>
           </div>
         </section>
 
@@ -844,7 +863,7 @@ export default function StatsScreen({
                     </span>
                   </div>
                   <p className="text-xs text-brand-plum/85 line-clamp-3 leading-relaxed font-serif-diary italic">
-                    {selectedPixelEntry.body.replace(/<[^>]*>/g, '')}
+                    {richTextHtmlToPlainText(selectedPixelEntry.body)}
                   </p>
                   <div className="flex justify-between items-center pt-2 border-t border-brand-border/40">
                     <div className="flex gap-1.5">

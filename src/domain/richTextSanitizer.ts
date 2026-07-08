@@ -28,6 +28,16 @@ const escapeHtml = (value: string): string => value
   .replace(/</g, '&lt;')
   .replace(/>/g, '&gt;');
 
+const decodeBasicHtmlEntities = (value: string): string => value
+  .replace(/&nbsp;/g, ' ')
+  .replace(/&amp;/g, '&')
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'");
+
+const normalizePlainText = (value: string): string => value.replace(/\s+/g, ' ').trim();
+
 const sanitizeWithFallback = (html: string): string => {
   let output = '';
   let skipTag = '';
@@ -98,6 +108,32 @@ export const sanitizeRichTextHtml = (html: string | null | undefined): string =>
     KEEP_CONTENT: true,
     RETURN_TRUSTED_TYPE: false,
   });
+};
+
+export const richTextHtmlToPlainText = (html: string | null | undefined): string => {
+  if (!html) return '';
+  const sanitized = sanitizeRichTextHtml(html);
+  const browserWindow = getBrowserWindow();
+  if (browserWindow) {
+    const container = browserWindow.document.createElement('div');
+    container.innerHTML = sanitized
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<\/(p|div|li|blockquote|h2)>/gi, ' </$1>');
+    return normalizePlainText(container.textContent || '');
+  }
+
+  const tokens = sanitized.match(/<\/?[^>]+>|[^<]+/g) || [];
+  let output = '';
+  for (const token of tokens) {
+    if (!token.startsWith('<')) {
+      output += decodeBasicHtmlEntities(token);
+      continue;
+    }
+    if (/^<\s*br\s*\/?>$/i.test(token) || /^<\s*\/\s*(p|div|li|blockquote|h2)\s*>$/i.test(token)) {
+      output += ' ';
+    }
+  }
+  return normalizePlainText(output);
 };
 
 const sanitizeBlock = (block: EntryBlock): EntryBlock => ({

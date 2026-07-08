@@ -20,7 +20,7 @@ import { SupabaseControlPlaneClient } from './supabaseControlPlane';
 import type { RepositorySnapshot } from '../repositories/DiaryRepository';
 import type { SyncAccount, SyncObjectMetadata } from '../types';
 import { replaySyncObjects, type SyncObjectDownloader } from './eventReplay';
-import { clearSyncSecrets, saveSyncSecrets } from './syncSecrets';
+import { clearSyncSecrets, loadSyncSecrets, saveSyncSecrets } from './syncSecrets';
 import {
   encodeRepositorySnapshotPayload,
   findLatestValidSnapshot,
@@ -244,6 +244,9 @@ const recoverExistingMobileAccount = async ({
   download,
   onProgress,
 }: BootstrapNewMobileAccountInput & { existingAccount: SyncAccount }): Promise<BootstrapNewMobileAccountResult> => {
+  const rollbackSnapshot = await repository.exportSnapshot();
+  const rollbackSyncState = await repository.getLocalSyncAccountState();
+  const rollbackSecrets = await loadSyncSecrets().catch(() => null);
   onProgress?.('Finding your recovery key...');
   const recoveryObjects = await controlPlane.listAccountRecoveryObjects();
   onProgress?.('Unlocking your encrypted account...');
@@ -386,7 +389,23 @@ const recoverExistingMobileAccount = async ({
       console.warn('Pending primary recovery could not be aborted:', abortError);
     });
     await repository.clearLocalSyncAccountState().catch(() => undefined);
-    await clearSyncSecrets().catch(() => undefined);
+    await repository.importSnapshot(rollbackSnapshot, 'replace').catch(rollbackError => {
+      console.warn('Local content could not be restored after failed recovery:', rollbackError);
+    });
+    if (rollbackSnapshot.security) {
+      await repository.saveSecurityConfig(rollbackSnapshot.security).catch(() => undefined);
+    }
+    if (rollbackSnapshot.driveBackupSettings) {
+      await repository.saveDriveBackupSettings(rollbackSnapshot.driveBackupSettings).catch(() => undefined);
+    }
+    if (rollbackSyncState) {
+      await repository.saveLocalSyncAccountState(rollbackSyncState).catch(() => undefined);
+    }
+    if (rollbackSecrets) {
+      await saveSyncSecrets(rollbackSecrets).catch(() => undefined);
+    } else {
+      await clearSyncSecrets().catch(() => undefined);
+    }
     throw error;
   }
 };

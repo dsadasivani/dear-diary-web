@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sanitizeEntry, sanitizeNote, sanitizeRichTextHtml } from './richTextSanitizer';
+import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote, sanitizeRichTextHtml } from './richTextSanitizer';
 
 test('preserves editor-supported rich text while removing attributes', () => {
   assert.equal(
@@ -55,4 +55,11 @@ test('sanitizes entry, block, and note bodies', () => {
   assert.equal(entry.body, '<p>Body</p>');
   assert.equal(entry.blocks?.[0].body, '<strong>ok</strong>');
   assert.equal(note.body, '<div>Note</div>');
+});
+
+test('converts rich text to visible plain text for search', () => {
+  const plain = richTextHtmlToPlainText('<p>Hello <strong>visible</strong></p><script>hidden()</script><div>again</div>');
+  assert.equal(plain, 'Hello visible again');
+  assert.equal(plain.toLowerCase().includes('strong'), false);
+  assert.equal(plain.toLowerCase().includes('script'), false);
 });

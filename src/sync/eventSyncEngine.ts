@@ -156,6 +156,23 @@ const timestampForDriveFile = (file: DriveSyncObjectSummary): number => {
   return timestamp ? Date.parse(timestamp) || 0 : 0;
 };
 
+const stableMediaIdForOutboxSlot = async (slot: string): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(slot));
+  const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+};
+
+const findDriveObjectByAppProperties = async (
+  session: GoogleAccountSession,
+  objectKind: SyncObjectMetadata['objectKind'],
+  matches: (appProperties: Record<string, string>) => boolean,
+): Promise<DriveSyncObjectSummary | null> => {
+  const files = await listDriveSyncObjects(session);
+  return files
+    .filter(file => file.appProperties?.objectKind === objectKind && matches(file.appProperties))
+    .sort((left, right) => timestampForDriveFile(right) - timestampForDriveFile(left))[0] || null;
+};
+
 const mediaKindFromMimeType = (mimeType: string): PreparedMediaUpload['mediaKind'] => {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('audio/')) return 'audio';
@@ -749,11 +766,20 @@ export class EventSyncEngine {
     const affectedRecords = affectedRecordsOverride || outboxOperation.affectedRecords || [];
     let partitionKey = outboxOperation.partitionKey || partitionKeyForRecordPayload(outboxOperation.recordType, payload);
     let preparedMedia = preparedMediaFromOutbox(outboxOperation.uploadedObjects);
+    const mayHaveUploadedMedia = persistedOperation.state === 'media_uploading';
+    const mayHaveUploadedEvent = persistedOperation.state === 'event_uploading';
 
     if (!outboxOperation.uploadedObjects || outboxOperation.state === 'prepared' || outboxOperation.state === 'media_uploading') {
       outboxOperation = await this.updateOutboxOperation(outboxOperation, { state: 'media_uploading', error: undefined });
       preparedMedia = [];
-      payload = await this.preparePayloadMedia(runtime, outboxOperation.recordType, payload, preparedMedia);
+      payload = await this.preparePayloadMedia(
+        runtime,
+        outboxOperation.recordType,
+        payload,
+        preparedMedia,
+        outboxOperation.operationId,
+        mayHaveUploadedMedia,
+      );
       partitionKey = partitionKeyForRecordPayload(outboxOperation.recordType, payload);
       outboxOperation = await this.updateOutboxOperation(outboxOperation, {
         state: 'media_uploaded',
@@ -785,24 +811,43 @@ export class EventSyncEngine {
     if (!outboxOperation.eventDriveFileId || !outboxOperation.eventSha256 || !outboxOperation.eventSizeBytes) {
       outboxOperation = await this.updateOutboxOperation(outboxOperation, { state: 'event_uploading' });
       encrypted = await encryptSyncPayload(activeRootKey, 'event', encodeSyncDomainEvent(event), { keyEpoch: activeKeyEpoch });
-      const file = await this.upload({
-        session: runtime.googleSession,
-        name: `/events/${eventFolder}/${expectedSequence}-${event.eventId}.ddevent`,
-        objectKind: 'event',
-        bytes: encrypted.bytes,
-        appProperties: {
-          accountId: state.accountId,
-          eventId: event.eventId,
-          recordType: outboxOperation.recordType,
-          recordId: outboxOperation.recordId,
-          baseRecordVersion,
-          partitionKey,
-          keyEpoch: activeKeyEpoch,
-        },
-      });
+      const existingFile = mayHaveUploadedEvent
+        ? await findDriveObjectByAppProperties(
+            runtime.googleSession,
+            'event',
+            appProperties => (
+              appProperties.accountId === state.accountId &&
+              (appProperties.operationId === event.eventId || appProperties.eventId === event.eventId)
+            ),
+          ).catch(() => null)
+        : null;
+      let file = existingFile ? { id: existingFile.id } : null;
+      if (existingFile) {
+        const existingBytes = this.download
+          ? await this.download(runtime.googleSession, existingFile.id)
+          : await downloadDriveSyncObject(runtime.googleSession, existingFile.id);
+        encrypted = { bytes: existingBytes, sha256: await sha256Hex(existingBytes) };
+      } else {
+        file = await this.upload({
+          session: runtime.googleSession,
+          name: `/events/${eventFolder}/${expectedSequence}-${event.eventId}.ddevent`,
+          objectKind: 'event',
+          bytes: encrypted.bytes,
+          appProperties: {
+            accountId: state.accountId,
+            eventId: event.eventId,
+            operationId: event.eventId,
+            recordType: outboxOperation.recordType,
+            recordId: outboxOperation.recordId,
+            baseRecordVersion,
+            partitionKey,
+            keyEpoch: activeKeyEpoch,
+          },
+        });
+      }
       outboxOperation = await this.updateOutboxOperation(outboxOperation, {
         state: 'event_uploaded',
-        eventDriveFileId: file.id,
+        eventDriveFileId: file!.id,
         eventSha256: encrypted.sha256,
         eventSizeBytes: encrypted.bytes.byteLength,
       });
@@ -933,6 +978,8 @@ export class EventSyncEngine {
     recordType: SyncRecordType,
     payload: SyncPayload | null,
     preparedMedia: PreparedMediaUpload[],
+    operationId: string,
+    reuseUploadedDriveObjects: boolean,
   ): Promise<SyncPayload | null> {
     if (!payload) return null;
     if (recordType === 'diary') {
@@ -940,7 +987,7 @@ export class EventSyncEngine {
       return {
         ...diary,
         coverImage: diary.coverImage
-          ? await this.prepareMediaUri(runtime, diary.coverImage, preparedMedia, 'image')
+          ? await this.prepareMediaUri(runtime, diary.coverImage, preparedMedia, 'image', `${operationId}:diary:cover`, reuseUploadedDriveObjects)
           : undefined,
       };
     }
@@ -949,7 +996,7 @@ export class EventSyncEngine {
       return {
         ...profile,
         avatarUri: profile.avatarUri
-          ? await this.prepareMediaUri(runtime, profile.avatarUri, preparedMedia, 'image')
+          ? await this.prepareMediaUri(runtime, profile.avatarUri, preparedMedia, 'image', `${operationId}:profile:avatar`, reuseUploadedDriveObjects)
           : undefined,
       };
     }
@@ -957,20 +1004,38 @@ export class EventSyncEngine {
     if (recordType !== 'entry') return payload;
     const entry = payload as Entry;
     const photoUris: string[] = [];
-    for (const uri of entry.photoUris) {
-      photoUris.push(await this.prepareMediaUri(runtime, uri, preparedMedia, 'image'));
+    for (const [index, uri] of entry.photoUris.entries()) {
+      photoUris.push(await this.prepareMediaUri(
+        runtime,
+        uri,
+        preparedMedia,
+        'image',
+        `${operationId}:entry:photo:${index}`,
+        reuseUploadedDriveObjects,
+      ));
     }
     const blocks = [];
-    for (const block of entry.blocks || []) {
+    for (const [index, block] of (entry.blocks || []).entries()) {
       blocks.push({
         ...block,
-        audioUri: block.audioUri ? await this.prepareMediaUri(runtime, block.audioUri, preparedMedia, 'audio') : undefined,
+        audioUri: block.audioUri
+          ? await this.prepareMediaUri(
+              runtime,
+              block.audioUri,
+              preparedMedia,
+              'audio',
+              `${operationId}:entry:block-audio:${block.id || index}`,
+              reuseUploadedDriveObjects,
+            )
+          : undefined,
       });
     }
     return {
       ...entry,
       photoUris,
-      audioUri: entry.audioUri ? await this.prepareMediaUri(runtime, entry.audioUri, preparedMedia, 'audio') : undefined,
+      audioUri: entry.audioUri
+        ? await this.prepareMediaUri(runtime, entry.audioUri, preparedMedia, 'audio', `${operationId}:entry:audio`, reuseUploadedDriveObjects)
+        : undefined,
       blocks: entry.blocks ? blocks : undefined,
     };
   }
@@ -980,12 +1045,14 @@ export class EventSyncEngine {
     uri: string,
     preparedMedia: PreparedMediaUpload[],
     mediaKind?: PreparedMediaUpload['mediaKind'],
+    mediaSlot?: string,
+    reuseUploadedDriveObjects = false,
   ): Promise<string> {
     if (parseSyncMediaReference(uri)) return uri;
     const knownReference = this.localMediaReferences.get(uri);
     if (knownReference) return knownReference;
 
-    const mediaId = crypto.randomUUID();
+    const mediaId = mediaSlot ? await stableMediaIdForOutboxSlot(mediaSlot) : crypto.randomUUID();
     const media = await readMediaUri(uri);
     const resolvedMediaKind = mediaKind || mediaKindFromMimeType(media.mimeType);
     const payload = encodeSyncMediaPayload(mediaId, media.mimeType, media.bytes);
@@ -993,37 +1060,88 @@ export class EventSyncEngine {
     if (!state) throw new Error('Encrypted account metadata is unavailable.');
     const activeKeyEpoch = runtime.state.keyEpoch || state.keyEpoch || 1;
     const activeRootKey = getAccountRootKeyForEpoch(runtime.secrets, activeKeyEpoch);
-    const encrypted = await encryptSyncPayload(activeRootKey, 'media', payload, { keyEpoch: activeKeyEpoch });
-    const file = await this.upload({
-      session: runtime.googleSession,
-      name: `/media/${mediaId}.ddmedia`,
-      objectKind: 'media',
-      bytes: encrypted.bytes,
-      appProperties: { accountId: state.accountId, mediaId, mediaKind: resolvedMediaKind, mimeType: media.mimeType },
-    });
-    const thumbnail = await this.createThumbnail(media).catch(() => null);
-    let encryptedThumbnail: { driveFileId: string; sha256: string; sizeBytes: number } | undefined;
-    if (thumbnail) {
-      const thumbnailPayload = encodeSyncThumbnailPayload(mediaId, thumbnail.mimeType, thumbnail.bytes);
-      const thumbnailEncrypted = await encryptSyncPayload(activeRootKey, 'thumbnail', thumbnailPayload, { keyEpoch: activeKeyEpoch });
-      const thumbnailFile = await this.upload({
+    let encrypted: { bytes: Uint8Array; sha256: string } = await encryptSyncPayload(
+      activeRootKey,
+      'media',
+      payload,
+      { keyEpoch: activeKeyEpoch },
+    );
+    const existingMediaFile = reuseUploadedDriveObjects
+      ? await findDriveObjectByAppProperties(
+          runtime.googleSession,
+          'media',
+          appProperties => appProperties.accountId === state.accountId && appProperties.mediaId === mediaId,
+        ).catch(() => null)
+      : null;
+    let file = existingMediaFile ? { id: existingMediaFile.id } : null;
+    if (existingMediaFile) {
+      const existingBytes = this.download
+        ? await this.download(runtime.googleSession, existingMediaFile.id)
+        : await downloadDriveSyncObject(runtime.googleSession, existingMediaFile.id);
+      encrypted = { bytes: existingBytes, sha256: await sha256Hex(existingBytes) };
+    } else {
+      file = await this.upload({
         session: runtime.googleSession,
-        name: `/thumbnails/${mediaId}.ddthumb`,
-        objectKind: 'thumbnail',
-        bytes: thumbnailEncrypted.bytes,
-        appProperties: { accountId: state.accountId, mediaId, mediaKind: 'image', mimeType: thumbnail.mimeType, sourceDriveFileId: file.id },
+        name: `/media/${mediaId}.ddmedia`,
+        objectKind: 'media',
+        bytes: encrypted.bytes,
+        appProperties: {
+          accountId: state.accountId,
+          mediaId,
+          mediaKind: resolvedMediaKind,
+          mimeType: media.mimeType,
+          mediaSlot,
+        },
       });
-      encryptedThumbnail = {
-        driveFileId: thumbnailFile.id,
-        sha256: thumbnailEncrypted.sha256,
-        sizeBytes: thumbnailEncrypted.bytes.byteLength,
-      };
     }
-    const reference = createStableSyncMediaReference(mediaId, file.id);
+    let encryptedThumbnail: { driveFileId: string; sha256: string; sizeBytes: number } | undefined;
+    const existingThumbnailFile = reuseUploadedDriveObjects
+      ? await findDriveObjectByAppProperties(
+          runtime.googleSession,
+          'thumbnail',
+          appProperties => appProperties.accountId === state.accountId && appProperties.mediaId === mediaId,
+        ).catch(() => null)
+      : null;
+    if (existingThumbnailFile) {
+      const existingThumbnailBytes = this.download
+        ? await this.download(runtime.googleSession, existingThumbnailFile.id)
+        : await downloadDriveSyncObject(runtime.googleSession, existingThumbnailFile.id);
+      encryptedThumbnail = {
+        driveFileId: existingThumbnailFile.id,
+        sha256: await sha256Hex(existingThumbnailBytes),
+        sizeBytes: existingThumbnailBytes.byteLength,
+      };
+    } else {
+      const thumbnail = await this.createThumbnail(media).catch(() => null);
+      if (thumbnail) {
+        const thumbnailPayload = encodeSyncThumbnailPayload(mediaId, thumbnail.mimeType, thumbnail.bytes);
+        const thumbnailEncrypted = await encryptSyncPayload(activeRootKey, 'thumbnail', thumbnailPayload, { keyEpoch: activeKeyEpoch });
+        const thumbnailFile = await this.upload({
+          session: runtime.googleSession,
+          name: `/thumbnails/${mediaId}.ddthumb`,
+          objectKind: 'thumbnail',
+          bytes: thumbnailEncrypted.bytes,
+          appProperties: {
+            accountId: state.accountId,
+            mediaId,
+            mediaKind: 'image',
+            mimeType: thumbnail.mimeType,
+            sourceDriveFileId: file!.id,
+            mediaSlot,
+          },
+        });
+        encryptedThumbnail = {
+          driveFileId: thumbnailFile.id,
+          sha256: thumbnailEncrypted.sha256,
+          sizeBytes: thumbnailEncrypted.bytes.byteLength,
+        };
+      }
+    }
+    const reference = createStableSyncMediaReference(mediaId, file!.id);
     preparedMedia.push({
       mediaId,
       localUri: uri,
-      driveFileId: file.id,
+      driveFileId: file!.id,
       mediaKind: resolvedMediaKind,
       sha256: encrypted.sha256,
       sizeBytes: encrypted.bytes.byteLength,
@@ -1179,6 +1297,7 @@ export class EventSyncEngine {
     this.requireOnline();
     const runtime = await this.openRuntime();
     await this.assertActiveDevice(runtime.controlPlane, runtime.state.deviceId);
+    await this.resumeUserWriteOutbox(runtime);
     await this.pullWithRuntime(runtime);
     await this.compactSnapshotWithRuntime(runtime, false).catch(error => {
       console.warn('Automatic encrypted snapshot compaction failed:', error);
@@ -1670,11 +1789,30 @@ export class EventSyncEngine {
       this.notifyAuthorizationRequired('Google Drive authorization is required.');
       throw new Error('Google Drive authorization is required to sync this account.');
     }
+    const controlPlane = this.createControlPlane(secrets.supabaseSession.accessToken);
+    let runtimeState = state;
+    if (state.deviceRole === 'primary_mobile' && typeof controlPlane.lookupCurrentGoogleAccount === 'function') {
+      const account = await controlPlane.lookupCurrentGoogleAccount().catch(() => null);
+      const accountEpoch = account?.currentKeyEpoch || state.keyEpoch || 1;
+      if (accountEpoch > (state.keyEpoch || 1)) {
+        const epochRootKey = secrets.accountRootKeys?.[accountEpoch];
+        if (!epochRootKey) {
+          throw new Error('This device is missing the active account key. Recover the account to continue.');
+        }
+        secrets = withAccountRootKeyForEpoch(secrets, accountEpoch, epochRootKey);
+        await this.saveSecrets(secrets);
+        runtimeState = {
+          ...state,
+          keyEpoch: accountEpoch,
+        };
+        await this.repository.saveLocalSyncAccountState(runtimeState);
+      }
+    }
     return {
-      state,
+      state: runtimeState,
       secrets,
       googleSession,
-      controlPlane: this.createControlPlane(secrets.supabaseSession.accessToken),
+      controlPlane,
     };
   }
 

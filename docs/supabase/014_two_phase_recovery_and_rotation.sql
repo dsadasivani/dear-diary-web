@@ -40,6 +40,10 @@ create table if not exists public.key_epoch_rotations (
   finalized_at timestamptz null
 );
 
+create unique index if not exists key_epoch_rotations_one_pending_per_account
+  on public.key_epoch_rotations(account_id)
+  where status = 'pending';
+
 alter table public.primary_recovery_attempts enable row level security;
 alter table public.key_epoch_rotations enable row level security;
 
@@ -332,8 +336,64 @@ begin
   if v_rotation.status <> 'pending' then raise exception 'key_rotation_not_pending'; end if;
 
   select * into v_account from public.accounts where id = v_primary.account_id for update;
+  if coalesce(v_account.current_key_epoch, 1) + 1 <> v_rotation.next_key_epoch then
+    raise exception 'stale_key_rotation_epoch';
+  end if;
   if p_key_package_sequence < v_rotation.starting_sequence or p_key_package_sequence > v_account.current_sync_sequence then
     raise exception 'invalid_key_package_sequence';
+  end if;
+  if p_key_package_sequence = v_rotation.starting_sequence then
+    raise exception 'missing_key_rotation_packages';
+  end if;
+  if not exists (
+    select 1
+    from public.sync_objects o
+    where o.account_id = v_primary.account_id
+      and o.sequence > v_rotation.starting_sequence
+      and o.sequence <= p_key_package_sequence
+      and o.object_kind = 'key_package'
+      and o.key_epoch = v_rotation.next_key_epoch
+      and o.created_by_device_id = v_primary.id
+      and o.operation_id = concat(
+        'key-epoch-recovery:',
+        v_primary.account_id::text,
+        ':',
+        v_rotation.next_key_epoch::text,
+        ':',
+        v_rotation.id::text
+      )
+  ) then
+    raise exception 'missing_recovery_key_package';
+  end if;
+  if exists (
+    select 1
+    from public.devices d
+    where d.account_id = v_primary.account_id
+      and d.role <> 'primary_mobile'
+      and d.id <> v_rotation.revoked_device_id
+      and d.revoked_at is null
+      and not exists (
+        select 1
+        from public.sync_objects o
+        where o.account_id = v_primary.account_id
+          and o.sequence > v_rotation.starting_sequence
+          and o.sequence <= p_key_package_sequence
+          and o.object_kind = 'key_package'
+          and o.key_epoch = v_rotation.next_key_epoch
+          and o.created_by_device_id = v_primary.id
+          and o.operation_id = concat(
+            'key-epoch:',
+            v_primary.account_id::text,
+            ':',
+            v_rotation.next_key_epoch::text,
+            ':',
+            v_rotation.id::text,
+            ':',
+            d.id::text
+          )
+      )
+  ) then
+    raise exception 'missing_device_key_package';
   end if;
 
   update public.devices

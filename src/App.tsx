@@ -845,6 +845,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             entries={accessibleEntries}
             notes={notes}
             userProfile={userProfile}
+            archiveMonths={archiveMonths}
             layout={layout}
             onNavigate={handleNavigate}
           />

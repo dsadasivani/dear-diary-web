@@ -1,7 +1,7 @@
 import type { AppSettings, Diary, Entry, Note, UserProfile } from '../types';
 import type { DiaryRepository, NewDiary, NewEntry, NewNote } from './DiaryRepository';
 import type { EventSyncEngine } from '../sync/eventSyncEngine';
-import { sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
+import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
 
 const createId = (prefix: string): string => {
   const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -9,7 +9,7 @@ const createId = (prefix: string): string => {
 };
 
 const countWords = (body: string): number => {
-  const plainText = body.replace(/<[^>]*>/g, ' ').trim();
+  const plainText = richTextHtmlToPlainText(body);
   return plainText ? plainText.split(/\s+/).filter(Boolean).length : 0;
 };
 

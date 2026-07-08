@@ -1,19 +1,93 @@
 import { useEffect, useState } from 'react';
 import { Check, Link2, LoaderCircle, Monitor, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
-import type { PairingSession, SyncDevice } from '../types';
+import type { PairingSession, RecoveryKeyPackage, SyncDevice, SyncObjectMetadata } from '../types';
 import { diaryRepository, eventSyncEngine } from '../repositories';
 import type { GoogleAccountSession } from '../types';
 import { encodeCompanionKeyPackage, wrapRootKeyForCompanion } from '../sync/companionKeyPackage';
 import { approveCompanionPairing } from '../sync/companionPairing';
 import { createConfiguredSupabaseControlPlaneClient } from '../sync/config';
 import { uploadDriveSyncObject } from '../sync/driveSyncObjects';
-import { generateAccountRootKey } from '../sync/e2eeKeyPackage';
+import {
+  decodeRecoveryKeyPackage,
+  encodeRecoveryKeyPackage,
+  generateAccountRootKey,
+  unwrapAccountRootKeyFromRecovery,
+  wrapAccountRootKeyForRecovery,
+} from '../sync/e2eeKeyPackage';
+import { downloadVerifiedSyncObject } from '../sync/eventReplay';
 import { loadSyncSecrets, saveSyncSecrets, withAccountRootKeyForEpoch } from '../sync/syncSecrets';
+import type { SyncSecrets } from '../sync/syncSecrets';
 import { restoreGoogleDriveSession } from '../utils/googleAuth';
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+};
+
+const equalBytes = (left: Uint8Array, right: Uint8Array): boolean => {
+  if (left.byteLength !== right.byteLength) return false;
+  let difference = 0;
+  for (let index = 0; index < left.byteLength; index += 1) difference |= left[index] ^ right[index];
+  return difference === 0;
+};
+
+const promptForRecoveryPassphrase = (deviceName: string): string => {
+  if (typeof window === 'undefined' || typeof window.prompt !== 'function') {
+    throw new Error('Recovery passphrase confirmation is required before rotating account keys.');
+  }
+  const passphrase = window.prompt(
+    `Confirm your recovery passphrase to revoke ${deviceName} and rotate your encrypted account key.`,
+  );
+  if (!passphrase) throw new Error('Device revocation was canceled.');
+  return passphrase;
+};
+
+const latestRecoveryPackageForAccount = async ({
+  accountId,
+  objects,
+  googleSession,
+}: {
+  accountId: string;
+  objects: SyncObjectMetadata[];
+  googleSession: GoogleAccountSession;
+}): Promise<{ object: SyncObjectMetadata; keyPackage: RecoveryKeyPackage }> => {
+  const candidates = objects
+    .filter(object => object.objectKind === 'key_package')
+    .sort((left, right) => right.sequence - left.sequence);
+
+  for (const object of candidates) {
+    try {
+      const bytes = await downloadVerifiedSyncObject(googleSession, object);
+      const keyPackage = decodeRecoveryKeyPackage(bytes);
+      if (keyPackage.accountId && keyPackage.accountId !== accountId) continue;
+      return { object, keyPackage };
+    } catch {
+      // Companion packages and damaged recovery packages are not recovery passphrase proof.
+    }
+  }
+  throw new Error('No usable recovery key package was found for this account.');
+};
+
+const verifyRecoveryPassphraseForRotation = async ({
+  accountId,
+  passphrase,
+  secrets,
+  objects,
+  googleSession,
+}: {
+  accountId: string;
+  passphrase: string;
+  secrets: SyncSecrets;
+  objects: SyncObjectMetadata[];
+  googleSession: GoogleAccountSession;
+}): Promise<{ keyPackage: RecoveryKeyPackage }> => {
+  const latest = await latestRecoveryPackageForAccount({ accountId, objects, googleSession });
+  const recoveredRootKey = await unwrapAccountRootKeyFromRecovery(latest.keyPackage, passphrase);
+  const knownRootKeys = [secrets.accountRootKey, ...Object.values(secrets.accountRootKeys || {})];
+  if (!knownRootKeys.some(key => equalBytes(key, recoveredRootKey))) {
+    throw new Error('The recovery package does not match this device account.');
+  }
+  return { keyPackage: latest.keyPackage };
 };
 
 export default function CompanionApprovalPanel() {
@@ -103,12 +177,22 @@ export default function CompanionApprovalPanel() {
     setError('');
     setMessage('');
     try {
+      await eventSyncEngine.pullPending();
       const state = await diaryRepository.getLocalSyncAccountState();
       const secrets = await loadSyncSecrets();
       if (!state || !secrets) throw new Error('Primary device credentials are unavailable.');
       const controlPlane = createConfiguredSupabaseControlPlaneClient(secrets.supabaseSession.accessToken);
       const googleSession = await restoreGoogleDriveSession(false) || await restoreGoogleDriveSession(true);
       if (!googleSession) throw new Error('Google Drive authorization is required to distribute the new key epoch.');
+      const recoveryPassphrase = promptForRecoveryPassphrase(device.displayName);
+      const recoveryObjects = await controlPlane.listAccountRecoveryObjects();
+      const recoveryProof = await verifyRecoveryPassphraseForRotation({
+        accountId: state.accountId,
+        passphrase: recoveryPassphrase,
+        secrets,
+        objects: recoveryObjects,
+        googleSession,
+      });
       const rotation = await controlPlane.beginDeviceKeyRotation({
         primaryDeviceId: state.deviceId,
         deviceId: device.id,
@@ -125,6 +209,18 @@ export default function CompanionApprovalPanel() {
       }, nextKeyEpoch, nextRootKey);
       let lastKeyPackageSequence = rotation.startingSequence;
       try {
+        lastKeyPackageSequence = await publishRecoveryKeyEpochPackage({
+          accountId: state.accountId,
+          primaryDeviceId: state.deviceId,
+          rotationId: rotation.id,
+          keyEpoch: nextKeyEpoch,
+          keyVersion: Math.max(recoveryProof.keyPackage.keyVersion + 1, nextKeyEpoch),
+          accountRootKey: nextRootKey,
+          recoveryPassphrase,
+          googleSession,
+          controlPlane,
+          afterSequence: lastKeyPackageSequence,
+        });
         const remainingDevices = (await controlPlane.listAccountDevices(state.deviceId))
           .filter(candidate => (
             candidate.role !== 'primary_mobile' &&
@@ -135,13 +231,22 @@ export default function CompanionApprovalPanel() {
         lastKeyPackageSequence = await publishKeyEpochPackages({
           accountId: state.accountId,
           primaryDeviceId: state.deviceId,
+          rotationId: rotation.id,
           keyEpoch: nextKeyEpoch,
           accountRootKey: nextRootKey,
           accountRootKeys: updatedSecrets.accountRootKeys || { [nextKeyEpoch]: nextRootKey },
           googleSession,
           devices: remainingDevices,
           controlPlane,
-          afterSequence: account?.currentSyncSequence ?? rotation.startingSequence,
+          afterSequence: Math.max(lastKeyPackageSequence, account?.currentSyncSequence ?? rotation.startingSequence),
+        });
+        await saveSyncSecrets({
+          ...secrets,
+          accountRootKeys: {
+            ...(secrets.accountRootKeys || {}),
+            [state.keyEpoch || 1]: secrets.accountRootKey,
+            [nextKeyEpoch]: nextRootKey,
+          },
         });
         await controlPlane.finalizeDeviceKeyRotation({
           primaryDeviceId: state.deviceId,
@@ -268,6 +373,7 @@ export default function CompanionApprovalPanel() {
 const publishKeyEpochPackages = async ({
   accountId,
   primaryDeviceId,
+  rotationId,
   keyEpoch,
   accountRootKey,
   accountRootKeys,
@@ -278,6 +384,7 @@ const publishKeyEpochPackages = async ({
 }: {
   accountId: string;
   primaryDeviceId: string;
+  rotationId: string;
   keyEpoch: number;
   accountRootKey: Uint8Array;
   accountRootKeys: Record<number, Uint8Array>;
@@ -295,12 +402,13 @@ const publishKeyEpochPackages = async ({
     const bytes = encodeCompanionKeyPackage(keyPackage);
     const file = await uploadDriveSyncObject({
       session: googleSession,
-      name: `/key-packages/root-key-epoch-${keyEpoch}-${device.id}.ddkey`,
+      name: `/key-packages/root-key-epoch-${keyEpoch}-${rotationId}-${device.id}.ddkey`,
       objectKind: 'key_package',
       bytes,
       appProperties: {
         accountId,
         keyEpoch,
+        rotationId,
         targetDeviceId: device.id,
         targetDevicePublicKeySha256: keyPackage.targetDevicePublicKeySha256,
       },
@@ -312,10 +420,64 @@ const publishKeyEpochPackages = async ({
       objectKind: 'key_package',
       sha256: await sha256Hex(bytes),
       sizeBytes: bytes.byteLength,
-      operationId: `key-epoch:${accountId}:${keyEpoch}:${device.id}`,
+      operationId: `key-epoch:${accountId}:${keyEpoch}:${rotationId}:${device.id}`,
       keyEpoch,
     });
     latestSequence = Math.max(latestSequence, committed.sequence);
   }
   return latestSequence;
+};
+
+const publishRecoveryKeyEpochPackage = async ({
+  accountId,
+  primaryDeviceId,
+  rotationId,
+  keyEpoch,
+  keyVersion,
+  accountRootKey,
+  recoveryPassphrase,
+  googleSession,
+  controlPlane,
+  afterSequence,
+}: {
+  accountId: string;
+  primaryDeviceId: string;
+  rotationId: string;
+  keyEpoch: number;
+  keyVersion: number;
+  accountRootKey: Uint8Array;
+  recoveryPassphrase: string;
+  googleSession: GoogleAccountSession;
+  controlPlane: ReturnType<typeof createConfiguredSupabaseControlPlaneClient>;
+  afterSequence: number;
+}): Promise<number> => {
+  const keyPackage = await wrapAccountRootKeyForRecovery(accountRootKey, recoveryPassphrase, {
+    accountId,
+    keyVersion,
+  });
+  const bytes = encodeRecoveryKeyPackage(keyPackage);
+  const file = await uploadDriveSyncObject({
+    session: googleSession,
+    name: `/key-packages/root-key-epoch-${keyEpoch}-${rotationId}-recovery.ddkey`,
+    objectKind: 'key_package',
+    bytes,
+    appProperties: {
+      accountId,
+      keyEpoch,
+      keyVersion,
+      rotationId,
+      purpose: 'recovery',
+    },
+  });
+  const committed = await controlPlane.commitSyncObject({
+    deviceId: primaryDeviceId,
+    afterSequence,
+    driveFileId: file.id,
+    objectKind: 'key_package',
+    sha256: await sha256Hex(bytes),
+    sizeBytes: bytes.byteLength,
+    operationId: `key-epoch-recovery:${accountId}:${keyEpoch}:${rotationId}`,
+    keyEpoch,
+  });
+  return Math.max(afterSequence, committed.sequence);
 };

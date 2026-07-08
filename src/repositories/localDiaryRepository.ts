@@ -35,7 +35,7 @@ import {
 } from './defaults';
 import { normalizeSecurityConfig } from '../domain/security';
 import { buildPortableMergePlan } from '../domain/backupMerge';
-import { sanitizeEntry, sanitizeNote, sanitizeRepositorySnapshot } from '../domain/richTextSanitizer';
+import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote, sanitizeRepositorySnapshot } from '../domain/richTextSanitizer';
 import { CORE_PARTITION_KEY, filterSnapshotForPartition, isMonthPartitionKey, monthFromTimestamp } from '../sync/syncPartitioning';
 
 const STORAGE_KEYS = {
@@ -84,7 +84,7 @@ const createId = (prefix: string): string => {
 };
 
 const countWords = (body: string): number => {
-  const plainText = body.replace(/<[^>]*>/g, ' ').trim();
+  const plainText = richTextHtmlToPlainText(body);
   return plainText ? plainText.split(/\s+/).filter(Boolean).length : 0;
 };
 

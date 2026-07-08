@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 
 interface SearchScreenProps {
   diaries: Diary[];
@@ -91,7 +92,7 @@ export default function SearchScreen({
           type: 'entry',
           id: entry.id,
           title: entry.title,
-          body: entry.body,
+          body: richTextHtmlToPlainText(entry.body),
           date: entry.date,
           tags: entry.tags,
           diaryName: diaryObj ? diaryObj.name : 'Unknown Diary',
@@ -110,7 +111,7 @@ export default function SearchScreen({
           type: 'note',
           id: note.id,
           title: note.title,
-          body: note.body,
+          body: richTextHtmlToPlainText(note.body),
           date: noteDateStr,
           tags: note.tags,
           diaryName: undefined,
@@ -300,7 +301,7 @@ export default function SearchScreen({
                     <span className="text-xs font-bold text-brand-text-muted">{item.date}</span>
                   </div>
                   <h2 className="mt-5 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{item.title}</h2>
-                  <p className="mt-3 line-clamp-4 text-base leading-relaxed text-brand-plum/80 dark:text-brand-text/80">{item.body.replace(/<[^>]*>/g, ' ')}</p>
+                  <p className="mt-3 line-clamp-4 text-base leading-relaxed text-brand-plum/80 dark:text-brand-text/80">{item.body}</p>
                   <div className="mt-4 flex flex-wrap gap-1.5">
                     {item.tags.slice(0, 4).map(tag => (
                       <span key={tag} className="rounded-full bg-brand-bg px-2 py-0.5 text-[10px] font-bold text-brand-sage-dark">
@@ -347,7 +348,7 @@ export default function SearchScreen({
               </div>
 
               <p className="mt-7 whitespace-pre-line text-base leading-relaxed text-brand-plum/90 dark:text-brand-text/90">
-                {selectedResult.body.replace(/<[^>]*>/g, ' ')}
+                {selectedResult.body}
               </p>
 
               <button

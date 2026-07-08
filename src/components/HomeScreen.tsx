@@ -6,6 +6,7 @@ import {
 import { Diary, Entry, Note, ResponsiveLayout, UserProfile } from '../types';
 import { PREDEFINED_TAGS, calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
 import ProfileAvatar from './ProfileAvatar';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 
 interface HomeScreenProps {
   diaries: Diary[];
@@ -199,7 +200,7 @@ export default function HomeScreen({
                   >
                     <p className="text-sm font-bold text-brand-pink-dark">{new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', weekday: 'long' })}</p>
                     <h4 className="mt-1 font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">{entry.title}</h4>
-                    <p className="mt-1 line-clamp-1 text-sm text-brand-text-muted">{entry.body.replace(/<[^>]*>/g, ' ')}</p>
+                    <p className="mt-1 line-clamp-1 text-sm text-brand-text-muted">{richTextHtmlToPlainText(entry.body)}</p>
                   </button>
                 )) : (
                   <div className="px-5 py-10 text-center text-sm font-semibold text-brand-text-muted">Your first fragment will appear after you save an entry.</div>

@@ -10,13 +10,13 @@ Apply every file in `docs/supabase` in numeric order:
 
 ```text
 001_multi_device_sync.sql
-002_add_sync_object_versions.sql
-003_fix_sync_object_ambiguity.sql
-004_account_recovery_objects.sql
-005_affected_record_versions.sql
-006_pairing_provisioning.sql
-007_key_epoch_rotation.sql
-008_pairing_lookup_digest.sql
+002_companion_pairing.sql
+003_portable_state_events.sql
+004_atomic_cascade_events.sql
+005_device_management.sql
+006_key_package_retirement.sql
+007_sync_object_maintenance.sql
+008_safe_primary_recovery.sql
 009_partitioned_latest_first_sync.sql
 010_sync_gc_retention.sql
 011_fix_pairing_digest.sql
@@ -69,11 +69,13 @@ On restore failure, the client calls `abort_primary_mobile_recovery`, clears loc
 Companion revocation is two-phase:
 
 1. Client preflights Google Drive authorization.
-2. `begin_device_key_rotation` reserves the next key epoch.
-3. Client creates the next root key.
-4. Client uploads and commits key packages for remaining active companions.
-5. `finalize_device_key_rotation` revokes the target device and advances `current_key_epoch`.
-6. Local primary secrets/state are updated only after finalize succeeds.
+2. Client verifies the current recovery passphrase against the latest recovery package.
+3. `begin_device_key_rotation` reserves the next key epoch.
+4. Client creates the next root key.
+5. Client uploads and commits a recovery package plus key packages for all remaining active companions.
+6. Client durably stores the new epoch key locally before finalization.
+7. `finalize_device_key_rotation` verifies the recovery package and remaining-device package operations, revokes the target device, and advances `current_key_epoch`.
+8. Local primary state is promoted to the finalized key epoch.
 
 If package upload/commit fails, the client aborts the rotation and the target device remains active on the existing epoch.
 
@@ -108,8 +110,11 @@ Normal local validation:
 ```bash
 npm run lint
 npm run test:storage
+npm run test:supabase
 npm run build
 ```
+
+`npm run test:supabase` requires Docker. It starts a disposable PostgreSQL container, installs a Supabase Auth compatibility shim, applies migrations `001` through `014`, and runs real RLS/RPC/concurrency assertions.
 
 Staging smoke tests should cover:
 

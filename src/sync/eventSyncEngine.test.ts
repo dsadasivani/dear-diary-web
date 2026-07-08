@@ -450,6 +450,75 @@ test('resumes a committed outbox write by applying it idempotently before a new 
   assert.equal((await repository.listSyncOutboxOperations()).length, 0);
 });
 
+test('pullPending resumes a committed outbox write at startup', async () => {
+  const repository = await createRepository();
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
+    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2, linkedAt: 1,
+  });
+  const committedNote = {
+    id: 'note-startup-committed', title: 'Startup committed outbox', body: 'Apply on launch.',
+    isPinned: false, tags: [], createdAt: 1, updatedAt: 1,
+  };
+  await repository.saveSyncOutboxOperation({
+    operationId: 'outbox-startup-committed',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    partitionKey: 'month:1970-01',
+    affectedPartitionKeys: ['month:1970-01'],
+    recordType: 'note',
+    recordId: committedNote.id,
+    operation: 'upsert',
+    payload: committedNote,
+    baseRecordVersion: 0,
+    uploadedObjects: [],
+    eventDriveFileId: 'drive-startup-committed',
+    eventSha256: 'sha',
+    eventSizeBytes: 10,
+    committedObjects: [{
+      id: 'object-3', accountId: 'account-1', sequence: 3, driveFileId: 'drive-startup-committed',
+      objectKind: 'event', sha256: 'sha', sizeBytes: 10, createdByDeviceId: 'device-1',
+      createdAt: '', recordType: 'note', recordId: committedNote.id, baseRecordVersion: 0,
+      recordVersion: 1, affectedRecords: [], partitionKey: 'month:1970-01',
+    }],
+    state: 'committed',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  const device: SyncDevice = {
+    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
+    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
+    revokedAt: null, replacedByDeviceId: null,
+  };
+  const cursorUpdates: number[] = [];
+  const controlPlane = {
+    getDeviceStatus: async () => device,
+    listSyncObjectsAfter: async () => [],
+    updateDeviceCursor: async (input: any) => { cursorUpdates.push(input.lastAppliedSequence); return {}; },
+  } as unknown as SupabaseControlPlaneClient;
+  const engine = new EventSyncEngine(repository, {
+    isOnline: () => true,
+    now: () => 1,
+    loadSecrets: async () => ({
+      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+    }),
+    restoreGoogleSession: async () => ({
+      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+    }),
+    createControlPlane: () => controlPlane,
+  });
+
+  await engine.pullPending();
+
+  assert.equal((await repository.getNote(committedNote.id))?.title, 'Startup committed outbox');
+  assert.equal((await repository.listSyncOutboxOperations()).length, 0);
+  assert.ok(cursorUpdates.includes(3));
+});
+
 test('rejects writes while offline without changing local content', async () => {
   const repository = await createRepository();
   const engine = new EventSyncEngine(repository, { isOnline: () => false });

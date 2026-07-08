@@ -13,6 +13,7 @@ import OverlayPortal from './OverlayPortal';
 import SyncedImage from './SyncedImage';
 import SanitizedRichText from './SanitizedRichText';
 import { resolveEntryIndexForEntryId } from './diaryDetailNavigation';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
@@ -87,7 +88,7 @@ export default function DiaryDetailScreen({
     const query = searchQuery.toLowerCase();
     return diaryEntries.filter(entry => 
       entry.title.toLowerCase().includes(query) ||
-      entry.body.toLowerCase().includes(query) ||
+      richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
       entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
       entry.moodName.toLowerCase().includes(query)
     );
@@ -374,7 +375,7 @@ export default function DiaryDetailScreen({
                 >
                   <p className="text-sm font-bold text-brand-sage">{new Date(entry.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
                   <h2 className="mt-2 font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">{entry.title || 'Untitled reflection'}</h2>
-                  <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{entry.body.replace(/<[^>]*>/g, ' ')}</p>
+                  <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{richTextHtmlToPlainText(entry.body)}</p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {entry.tags.slice(0, 3).map(tag => (
                       <span key={tag} className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold text-brand-sage-dark">
