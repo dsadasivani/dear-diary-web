@@ -42,7 +42,7 @@ import {
 import { recoverAccountRootKey } from './accountRecovery';
 import { restoreLatestPartitions } from './partitionedRestore';
 import { migrateLocalAccountToPartitionedSync } from './partitionedMigration';
-import type { SyncSecretStorage, SyncSecrets } from './syncSecrets';
+import type { SyncSecretStorage } from './syncSecrets';
 import { manualSyncFlowCheckpoint } from '../testing/manualSyncFlowHooks';
 
 interface RecoveryQuestionInput {
@@ -324,122 +324,6 @@ const finalizeRecoveredPrimary = async (input: {
     }
   }
   throw new Error('Account recovery could not catch up to the latest synced sequence.');
-};
-
-const saveRecoveredLocalState = async (
-  repository: DiaryRepository,
-  input: {
-    googleSession: GoogleAccountSession;
-    account: SyncAccount;
-    deviceId: string;
-    devicePublicKey: string;
-    recoveryKeyDriveFileId: string;
-    latestSnapshotDriveFileId: string;
-    latestSnapshotSequence: number;
-    currentSyncSequence: number;
-    localPin: string;
-    recoveryQuestion: RecoveryQuestionInput;
-    snapshot: RepositorySnapshot;
-  },
-): Promise<LocalSyncAccountState> => {
-  const security = createInitialPinWithRecovery(
-    await repository.getSecurityConfig(),
-    input.localPin,
-    input.recoveryQuestion.questionId,
-    input.recoveryQuestion.answer,
-    input.recoveryQuestion.questionText,
-  );
-  await repository.resetContent();
-  await repository.importSnapshot(input.snapshot, 'replace-portable');
-  await repository.saveSecurityConfig({
-    ...security,
-    linkedGoogleUserId: input.googleSession.userId,
-    linkedGoogleEmail: input.googleSession.email,
-    linkedGoogleBoundAt: Date.now(),
-  });
-  const backupDefaults = createDefaultDriveBackupSettings();
-  const currentDriveBackup = await repository.getDriveBackupSettings();
-  await repository.saveDriveBackupSettings({
-    ...backupDefaults,
-    ...currentDriveBackup,
-    linkedGoogleUserId: input.googleSession.userId,
-    linkedGoogleEmail: input.googleSession.email,
-    linkedGoogleDisplayName: input.googleSession.displayName,
-    linkedAt: Date.now(),
-    cloudWriteBlocked: false,
-  });
-
-  const localState: LocalSyncAccountState = {
-    accountId: input.account.id,
-    deviceId: input.deviceId,
-    deviceRole: 'primary_mobile',
-    googleUserId: input.googleSession.userId,
-    googleEmail: input.googleSession.email!,
-    devicePublicKey: input.devicePublicKey,
-    recoveryKeyDriveFileId: input.recoveryKeyDriveFileId,
-    latestSnapshotDriveFileId: input.latestSnapshotDriveFileId,
-    latestSnapshotSequence: input.latestSnapshotSequence,
-    currentSyncSequence: input.currentSyncSequence,
-    linkedAt: Date.now(),
-  };
-  await repository.saveLocalSyncAccountState(localState);
-  return localState;
-};
-
-const saveRecoveredEmptyLocalState = async (
-  repository: DiaryRepository,
-  input: {
-    googleSession: GoogleAccountSession;
-    account: SyncAccount;
-    deviceId: string;
-    devicePublicKey: string;
-    recoveryKeyDriveFileId: string;
-    currentSyncSequence: number;
-    localPin: string;
-    recoveryQuestion: RecoveryQuestionInput;
-  },
-): Promise<LocalSyncAccountState> => {
-  const security = createInitialPinWithRecovery(
-    await repository.getSecurityConfig(),
-    input.localPin,
-    input.recoveryQuestion.questionId,
-    input.recoveryQuestion.answer,
-    input.recoveryQuestion.questionText,
-  );
-  await repository.resetContent();
-  await repository.saveSecurityConfig({
-    ...security,
-    linkedGoogleUserId: input.googleSession.userId,
-    linkedGoogleEmail: input.googleSession.email,
-    linkedGoogleBoundAt: Date.now(),
-  });
-  const backupDefaults = createDefaultDriveBackupSettings();
-  const currentDriveBackup = await repository.getDriveBackupSettings();
-  await repository.saveDriveBackupSettings({
-    ...backupDefaults,
-    ...currentDriveBackup,
-    linkedGoogleUserId: input.googleSession.userId,
-    linkedGoogleEmail: input.googleSession.email,
-    linkedGoogleDisplayName: input.googleSession.displayName,
-    linkedAt: Date.now(),
-    cloudWriteBlocked: false,
-  });
-
-  const localState: LocalSyncAccountState = {
-    accountId: input.account.id,
-    deviceId: input.deviceId,
-    deviceRole: 'primary_mobile',
-    googleUserId: input.googleSession.userId,
-    googleEmail: input.googleSession.email!,
-    devicePublicKey: input.devicePublicKey,
-    recoveryKeyDriveFileId: input.recoveryKeyDriveFileId,
-    latestSnapshotDriveFileId: '',
-    currentSyncSequence: input.currentSyncSequence,
-    keyEpoch: input.account.currentKeyEpoch || 1,
-    linkedAt: Date.now(),
-  };
-  await repository.saveLocalSyncAccountState(localState);
-  return localState;
 };
 
 const savePendingRecoveryEmptyLocalState = async (

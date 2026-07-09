@@ -1,5 +1,5 @@
 {
-  "name": "react-example",
+  "name": "dear-diary-web",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -53,8 +53,6 @@
     "@capgo/capacitor-native-biometric": "^8.4.12",
     "@independo/capacitor-voice-recorder": "^8.3.3",
     "@supabase/supabase-js": "^2.110.0",
-    "@tailwindcss/vite": "^4.1.14",
-    "@vitejs/plugin-react": "^5.0.4",
     "crypto-js": "^4.2.0",
     "dompurify": "^3.4.11",
     "dotenv": "^17.2.3",
@@ -63,8 +61,7 @@
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",
-    "react-dom": "^19.0.1",
-    "vite": "^6.2.3"
+    "react-dom": "^19.0.1"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
@@ -73,10 +70,12 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
+    "@tailwindcss/vite": "^4.1.14",
     "@types/crypto-js": "^4.2.2",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/supertest": "^7.2.0",
+    "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
     "axe-core": "^4.12.1",
     "esbuild": "^0.25.0",

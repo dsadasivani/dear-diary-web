@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  ArrowLeft, Save, Trash2, Calendar, Smile, Tag, Camera, 
-  Plus, X, HelpCircle, Bold, Italic, Underline, List, Lock, LockOpen,
+  ArrowLeft, Trash2, Calendar, Tag, Camera,
+  Plus, X, Bold, Italic, Underline, List,
   Strikethrough, Maximize2, Minimize2, Type, Heading2, Quote,
-  ChevronUp, ChevronDown, Mic, MicOff, Pause, Play, Square, Circle, Sparkles,
+  ChevronUp, ChevronDown, Mic, MicOff, Pause, Play, Square, Sparkles,
   Clock, Edit
 } from 'lucide-react';
 import { AppSettings, Diary, Entry, EntryBlock, ResponsiveLayout } from '../types';
@@ -608,7 +608,7 @@ export default function EntryEditorScreen({
     }
   };
 
-  const startSpeechRecognitionInstance = (isResume: boolean = false) => {
+  const startSpeechRecognitionInstance = () => {
     if (!audioService.getRecordingSupport().speechRecognition) return;
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -703,7 +703,7 @@ export default function EntryEditorScreen({
       if (thisSessionId !== currentSessionIdRef.current) return;
       if (shouldBeRecordingRef.current && shouldRestartSpeechRef.current) {
         // Automatically restart speech recognition in a new clean session instance
-        startSpeechRecognitionInstance(true);
+        startSpeechRecognitionInstance();
       }
     };
 
@@ -748,7 +748,7 @@ export default function EntryEditorScreen({
       shouldRestartSpeechRef.current = true;
       setIsRecording(true);
       setSpeechError(null);
-      startSpeechRecognitionInstance(true);
+      startSpeechRecognitionInstance();
       return;
     }
     
@@ -798,7 +798,7 @@ export default function EntryEditorScreen({
 
 
     if (mode === 'speech-to-text') {
-      startSpeechRecognitionInstance(isResume);
+      startSpeechRecognitionInstance();
       return;
     }
 

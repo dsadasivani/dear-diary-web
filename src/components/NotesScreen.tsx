@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Pin, Edit, Trash2, Tag, Calendar, Plus, BookOpen, 
-  X, Check, HelpCircle, FileText, Share2, ClipboardList, Bold, Italic, Underline
+  Pin, Edit, Trash2, Plus, BookOpen,
+  X, FileText, ClipboardList, Bold, Italic, Underline
 } from 'lucide-react';
 import { AppSettings, Note, ResponsiveLayout } from '../types';
 import RichTextEditor from './RichTextEditor';

@@ -8,7 +8,6 @@ import type {
   SyncAccount,
   SyncDevice,
   SyncDeviceCursor,
-  SyncDeviceRole,
   SyncObjectKind,
   SyncObjectMetadata,
   SyncPartitionCursor,

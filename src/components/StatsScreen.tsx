@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
-  Flame, BookOpen, FileText, Camera, BarChart2, 
-  Settings, Award, Smile, ShieldAlert, ArrowRight, Image as ImageIcon,
+  Flame, BookOpen, Camera, BarChart2,
+  Settings, Award, ArrowRight,
   Sparkles, X, Calendar, Grid, ChevronDown
 } from 'lucide-react';
-import { Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout, UserProfile } from '../types';
+import { Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { calculateStreak } from '../domain/journalCatalog';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 
@@ -13,7 +13,6 @@ interface StatsScreenProps {
   diaries: Diary[];
   entries: Entry[];
   notes: Note[];
-  userProfile: UserProfile;
   archiveMonths?: PartitionHydrationState[];
   layout?: ResponsiveLayout;
   onNavigate: (
@@ -31,7 +30,6 @@ export default function StatsScreen({
   diaries,
   entries,
   notes,
-  userProfile,
   archiveMonths = [],
   layout = 'mobile',
   onNavigate
@@ -953,7 +951,7 @@ export default function StatsScreen({
 
               {/* Heatmap Grid */}
               <div className="grid grid-cols-10 gap-2.5 py-2">
-                {heatmap.map((item, idx) => {
+                {heatmap.map((item) => {
                   const bgClass = 
                     item.weight === 0 ? 'bg-brand-bg border-brand-border/40' :
                     item.weight === 1 ? 'bg-brand-blush-light text-brand-pink/50' :

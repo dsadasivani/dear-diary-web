@@ -1,31 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  ArrowLeft, Lock, Bell, Upload, Trash2, 
-  Check, ShieldCheck, RefreshCw, FileWarning,
-  Plus, Tag, Smile, X, Sun, Moon, Cloud, LogOut, CloudLightning,
+  ArrowLeft, Lock, Bell,
+  Check, ShieldCheck, RefreshCw,
+  Plus, Tag, Smile, X, Sun, Moon, Cloud, CloudLightning,
   Fingerprint, Palette, ChevronLeft, ChevronRight, Eye, EyeOff
 } from 'lucide-react';
 import {
   AppSettings,
-  BackupFileSummary,
-  BackupMergePreview,
-  BackupSchedulePreference,
-  Diary,
-  DriveBackupSettings,
-  Entry,
-  GoogleAccountSession,
   LocalSyncAccountState,
   SecurityConfig,
   Mood,
-  Note,
   ResponsiveLayout,
   UserProfile
 } from '../types';
 import { PREDEFINED_TAGS, PREDEFINED_MOODS, PREDEFINED_COLORS } from '../domain/journalCatalog';
 import {
   createCustomRecoveryQuestionId,
-  bindGoogleRecoveryAccount,
   getRecoveryQuestionText,
   isValidPin,
   SECURITY_RECOVERY_QUESTIONS,
@@ -36,49 +27,23 @@ import type { PinLength } from '../domain/security';
 import { User, Mail } from 'lucide-react';
 import { isNativePlatform } from '../platform';
 import { secureAuthService } from '../platform/security';
-import {
-  getCachedGoogleDriveSession,
-  restoreGoogleDriveSession,
-  signOutGoogleAuth,
-  startGoogleAuth,
-} from '../utils/googleAuth';
-import {
-  connectGoogleDrive,
-  createDriveBackup,
-  getDriveBackupErrorMessage,
-  isDriveAuthorizationError,
-  listDriveBackups
-} from '../utils/driveBackup';
-import { inspectDriveBackupMerge, mergeDriveBackup, restoreDriveBackup } from '../utils/driveBackup';
+import { getCachedGoogleDriveSession } from '../utils/googleAuth';
 import { diaryRepository, eventSyncEngine } from '../repositories';
 import { createDefaultUserProfile } from '../repositories/defaults';
-import { nativeDriveBackupBridge } from '../platform/drive/nativeDriveBackupBridge';
-import { createDefaultBackupSchedule } from '../repositories/defaults';
 import { pruneOrphanedMedia } from '../mobile/mediaGarbageCollector';
-import {
-  BACKUP_PASSPHRASE_MIN_LENGTH,
-  changeDriveEncryptionPassphrase,
-  configureDriveEncryption,
-  disableDriveEncryption,
-} from '../utils/backupEncryption';
 import {
   getReminderCapability,
   normalizeReminderTime,
   requestReminderPermission,
   type ReminderCapability,
 } from '../mobile/reminders';
-import { populateUserProfileFromGoogle } from '../utils/googleProfile';
 import ProfileAvatar from './ProfileAvatar';
 import CompanionApprovalPanel from './CompanionApprovalPanel';
-import OverlayPortal from './OverlayPortal';
 import { RECOVERY_PASSPHRASE_MIN_LENGTH } from '../sync/e2eeKeyPackage';
 import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
 import type { DriveSyncStatus } from '../sync/eventSyncEngine';
 
 interface AppSettingsScreenProps {
-  diaries: Diary[];
-  entries: Entry[];
-  notes: Note[];
   initialSettings: AppSettings;
   initialSecurity: SecurityConfig;
   initialProfile: UserProfile;
@@ -110,24 +75,7 @@ const storagePercentLabel = (value: number): string => `${Math.round(value)}%`;
 
 const CUSTOM_QUESTION_SELECT_VALUE = 'custom';
 
-const formatGoogleAuthError = (err: any): string => {
-  const message = err?.message || '';
-  if (message.includes('VITE_GOOGLE_WEB_CLIENT_ID')) {
-    return 'Mobile Google sign-in needs VITE_GOOGLE_WEB_CLIENT_ID in .env. Use the Google Cloud OAuth Web application client ID, then rebuild and reinstall the APK.';
-  }
-  if (err?.code === 'SIGN_IN_CANCELED' || message.includes('SIGN_IN_CANCELED')) {
-    return 'Google sign-in was cancelled before it completed.';
-  }
-  if (message.includes('Drive access')) {
-    return 'Google did not grant Drive backup access. Reconnect and approve the Google Drive app data permission.';
-  }
-  return err?.message || 'Google sign-in failed.';
-};
-
 export default function AppSettingsScreen({
-  diaries,
-  entries,
-  notes,
   initialSettings,
   initialSecurity,
   initialProfile,
@@ -220,7 +168,6 @@ export default function AppSettingsScreen({
   const [showSecurityAnswer, setShowSecurityAnswer] = useState<boolean>(false);
   const [recoveryError, setRecoveryError] = useState<string>('');
   const [recoverySuccess, setRecoverySuccess] = useState<boolean>(false);
-  const [recoveryAccountError, setRecoveryAccountError] = useState('');
   const [syncAccountState, setSyncAccountState] = useState<LocalSyncAccountState | null>(null);
   const [showSyncRecoveryForm, setShowSyncRecoveryForm] = useState(false);
   const [newRecoveryPassphrase, setNewRecoveryPassphrase] = useState('');
@@ -241,29 +188,16 @@ export default function AppSettingsScreen({
   // Reset confirm state
   const [showConfirmReset, setShowConfirmReset] = useState<boolean>(false);
 
-  // Google Drive backup states
-  const [backupSession, setBackupSession] = useState<GoogleAccountSession | null>(() => getCachedGoogleDriveSession());
-  const [driveBackupSettings, setDriveBackupSettings] = useState<DriveBackupSettings>({});
+  // Encrypted sync authorization/status states
+  const cachedGoogleDriveSession = React.useMemo(() => getCachedGoogleDriveSession(), []);
   const [authError, setAuthError] = useState('');
   const [isAuthLoading, setIsAuthLoading] = useState(false);
-  const [isBackingUp, setIsBackingUp] = useState(false);
-  const [backupStep, setBackupStep] = useState<number>(-1);
-  const [showScheduleModal, setShowScheduleModal] = useState(false);
-  const [scheduleDraft, setScheduleDraft] = useState<BackupSchedulePreference>(() => createDefaultBackupSchedule());
-  const [cloudPreview, setCloudPreview] = useState<{
-    file: BackupFileSummary;
-    preview: BackupMergePreview;
-    passphrase?: string;
-  } | null>(null);
-  const [isCloudRestoreLoading, setIsCloudRestoreLoading] = useState(false);
 
   // WebAuthn Passkey States
   const [isWebAuthnLoading, setIsWebAuthnLoading] = useState<boolean>(false);
   const [webAuthnError, setWebAuthnError] = useState<string>('');
   const [webAuthnSuccess, setWebAuthnSuccess] = useState<string>('');
   const [showSimulateFallback, setShowSimulateFallback] = useState<boolean>(false);
-
-  const isBackupLinked = !!(driveBackupSettings.linkedGoogleUserId && driveBackupSettings.linkedGoogleEmail);
 
   useEffect(() => {
     void getReminderCapability().then(setReminderCapability);
@@ -273,7 +207,6 @@ export default function AppSettingsScreen({
     void diaryRepository.getLocalSyncAccountState().then(setSyncAccountState);
   }, []);
 
-  const lastBackupStr = React.useMemo(() => formatDateTime(driveBackupSettings.lastBackupAt), [driveBackupSettings.lastBackupAt]);
   const googleStorageUsed = driveSyncStatus?.storageQuota?.usage;
   const googleStorageLimit = driveSyncStatus?.storageQuota?.limit;
   const googleStoragePercent = googleStorageUsed && googleStorageLimit
@@ -510,7 +443,7 @@ export default function AppSettingsScreen({
 
     setIsWebAuthnLoading(true);
     try {
-      const result = await secureAuthService.enroll(backupSession?.email || profile.email || 'dear.diary.user');
+      const result = await secureAuthService.enroll(cachedGoogleDriveSession?.email || profile.email || 'dear.diary.user');
       if (result) {
         const newConfig = {
           ...security,
@@ -884,7 +817,7 @@ export default function AppSettingsScreen({
                           type="text"
                           value={profileName}
                           onChange={(e) => setProfileName(e.target.value)}
-                          placeholder={backupSession?.displayName || "Your nickname"}
+                          placeholder={cachedGoogleDriveSession?.displayName || "Your nickname"}
                           className="w-full bg-brand-bg border border-brand-border py-2.5 pl-10 pr-4 rounded-xl text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
                           required
                         />
@@ -899,7 +832,7 @@ export default function AppSettingsScreen({
                           type="email"
                           value={profileEmail}
                           onChange={(e) => setProfileEmail(e.target.value)}
-                          placeholder={backupSession?.email || "Email address"}
+                          placeholder={cachedGoogleDriveSession?.email || "Email address"}
                           className="w-full bg-brand-bg border border-brand-border py-2.5 pl-10 pr-4 rounded-xl text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
                           required
                         />
@@ -1183,9 +1116,6 @@ export default function AppSettingsScreen({
                 <p className="text-[10px] text-brand-text-muted leading-relaxed">
                   This account verifies sync access and forgotten-PIN recovery on this device.
                 </p>
-                {recoveryAccountError && (
-                  <p className="text-[11px] font-bold text-brand-pink-dark">{recoveryAccountError}</p>
-                )}
               </div>
 
               {syncAccountState?.deviceRole === 'primary_mobile' && (
@@ -1696,179 +1626,6 @@ export default function AppSettingsScreen({
           )}
         </AnimatePresence>
       </div>
-
-      {/* DRIVE BACKUP PROGRESS MODAL */}
-      <OverlayPortal>
-        <AnimatePresence>
-          {cloudPreview && (
-            <motion.div className="fixed inset-0 z-[80] bg-black/55 flex items-end sm:items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <motion.div className="w-full max-w-md rounded-3xl bg-brand-card-bg border border-brand-border p-6 flex flex-col gap-4 shadow-2xl" initial={{ y: 30 }} animate={{ y: 0 }} exit={{ y: 30 }}>
-              <div>
-                <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Drive Backup Preview</h3>
-                <p className="text-[10px] text-brand-sage mt-1">Choose replacement, non-destructive merge, or keep this device unchanged.</p>
-              </div>
-              <div className="grid grid-cols-4 gap-2 text-center">
-                {[
-                  ['Diaries', cloudPreview.preview.incoming.diaries],
-                  ['Entries', cloudPreview.preview.incoming.entries],
-                  ['Notes', cloudPreview.preview.incoming.notes],
-                  ['Media', cloudPreview.preview.incoming.media],
-                ].map(([label, value]) => (
-                  <div key={String(label)} className="rounded-xl bg-brand-bg/60 border border-brand-border/40 p-2">
-                    <p className="text-sm font-bold text-brand-plum">{value}</p>
-                    <p className="text-[8px] uppercase font-bold text-brand-sage">{label}</p>
-                  </div>
-                ))}
-              </div>
-              <p className="text-[10px] rounded-xl bg-brand-sage/10 text-brand-sage-dark p-3">
-                Safe merge adds {cloudPreview.preview.add.diaries} diaries, {cloudPreview.preview.add.entries} entries, and {cloudPreview.preview.add.notes} notes. Conflicts preserved as copies: {cloudPreview.preview.conflicts.diaries + cloudPreview.preview.conflicts.entries + cloudPreview.preview.conflicts.notes}.
-              </p>
-              <div className="grid grid-cols-1 gap-2">
-                <button type="button" disabled className="py-3 rounded-xl bg-brand-sage text-white text-xs font-bold opacity-50">Safe Merge — Preserve Both</button>
-                <button type="button" disabled className="py-3 rounded-xl border border-brand-pink text-brand-pink text-xs font-bold opacity-50">Replace Portable Content</button>
-                <button type="button" disabled className="py-3 rounded-xl border border-brand-border text-brand-sage text-xs font-bold opacity-50">Keep Local and Pause Cloud Writes</button>
-                <button type="button" onClick={() => setCloudPreview(null)} className="py-2 text-[10px] text-brand-text-muted">Cancel</button>
-              </div>
-            </motion.div>
-            </motion.div>
-          )}
-          {showScheduleModal && (
-            <motion.div className="fixed inset-0 z-[70] bg-black/45 flex items-end sm:items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowScheduleModal(false)}>
-            <motion.div className="w-full max-w-sm rounded-3xl bg-brand-card-bg border border-brand-border p-5 flex flex-col gap-4 shadow-xl" initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 40, opacity: 0 }} onClick={event => event.stopPropagation()}>
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Automatic Backup</h3>
-                  <p className="text-[10px] text-brand-sage">Android may delay the preferred time for battery or connectivity.</p>
-                </div>
-                <button type="button" onClick={() => setShowScheduleModal(false)} className="w-8 h-8 rounded-full flex items-center justify-center text-brand-sage" title="Close schedule"><X className="w-4 h-4" /></button>
-              </div>
-
-              <div className="grid grid-cols-3 gap-1 rounded-xl bg-brand-bg p-1">
-                {(['off', 'daily', 'weekly'] as const).map(mode => (
-                  <button key={mode} type="button" onClick={() => setScheduleDraft(current => ({ ...current, mode }))} className={`py-2 rounded-lg text-[10px] font-bold uppercase ${scheduleDraft.mode === mode ? 'bg-brand-pink text-white' : 'text-brand-sage'}`}>
-                    {mode}
-                  </button>
-                ))}
-              </div>
-
-              {scheduleDraft.mode !== 'off' && (
-                <div className="flex flex-col gap-3">
-                  {scheduleDraft.mode === 'weekly' && (
-                    <label className="flex items-center justify-between gap-3 text-[10px] font-bold text-brand-sage uppercase tracking-wider">
-                      Day
-                      <select value={scheduleDraft.weeklyDay} onChange={event => setScheduleDraft(current => ({ ...current, weeklyDay: Number(event.target.value) }))} className="rounded-xl border border-brand-border bg-brand-bg px-3 py-2 text-xs text-brand-plum">
-                        {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => <option key={day} value={index}>{day}</option>)}
-                      </select>
-                    </label>
-                  )}
-                  <label className="flex items-center justify-between gap-3 text-[10px] font-bold text-brand-sage uppercase tracking-wider">
-                    Preferred time
-                    <input type="time" value={scheduleDraft.localTime} onChange={event => setScheduleDraft(current => ({ ...current, localTime: event.target.value }))} className="rounded-xl border border-brand-border bg-brand-bg px-3 py-2 text-xs text-brand-plum" />
-                  </label>
-                  <label className="flex items-center justify-between gap-3 text-[10px] font-bold text-brand-sage uppercase tracking-wider">
-                    Network
-                    <select value={scheduleDraft.network} onChange={event => setScheduleDraft(current => ({ ...current, network: event.target.value as 'wifi' | 'any' }))} className="rounded-xl border border-brand-border bg-brand-bg px-3 py-2 text-xs text-brand-plum">
-                      <option value="wifi">Wi-Fi only</option>
-                      <option value="any">Wi-Fi + cellular</option>
-                    </select>
-                  </label>
-                </div>
-              )}
-
-              <button type="button" disabled className="w-full py-3 rounded-xl bg-brand-pink text-white text-xs font-bold opacity-50">Save Schedule</button>
-            </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </OverlayPortal>
-
-      {backupStep >= 0 && activeTab === 'backup' && (
-        <OverlayPortal>
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-sm bg-brand-card-bg rounded-3xl p-6 journal-shadow border border-brand-border flex flex-col gap-5 text-center"
-            >
-            {/* Spinning/pulsing radar animation */}
-            <div className="relative flex items-center justify-center h-24 w-24 mx-auto mt-2">
-              <motion.div 
-                animate={{ scale: [1, 1.15, 1], opacity: [0.2, 0.4, 0.2] }}
-                transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                className="absolute inset-0 bg-brand-pink/10 rounded-full"
-              />
-              <motion.div 
-                animate={{ scale: [1, 1.3, 1], opacity: [0.1, 0.25, 0.1] }}
-                transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut", delay: 0.3 }}
-                className="absolute inset-0 bg-brand-sage/10 rounded-full"
-              />
-              <div className="h-14 w-14 rounded-2xl bg-brand-pink/15 dark:bg-brand-pink/20 flex items-center justify-center text-brand-pink shadow-md relative z-10">
-                <RefreshCw className="w-6 h-6 animate-spin" style={{ animationDuration: '3s' }} />
-              </div>
-            </div>
-
-            <div>
-              <h3 className="font-serif-diary text-base font-bold text-brand-plum dark:text-brand-text">Preparing Drive Backup</h3>
-              <p className="text-[10px] text-brand-sage mt-1">Please keep the application open while the backup finishes.</p>
-            </div>
-
-            {/* Simulated Live Progress Bar */}
-            <div className="w-full h-1.5 bg-brand-bg dark:bg-brand-bg/50 rounded-full overflow-hidden border border-brand-border/30">
-              <motion.div 
-                className="h-full bg-brand-pink"
-                initial={{ width: "0%" }}
-                animate={{ width: `${(backupStep + 1) * 25}%` }}
-                transition={{ duration: 0.3, ease: "easeOut" }}
-              />
-            </div>
-
-            {/* Steps Checklist */}
-            <div className="flex flex-col gap-2.5 text-left mt-1.5 bg-brand-bg/40 dark:bg-white/5 p-3 rounded-2xl border border-brand-border/35">
-              {[
-                "Building local journal snapshot",
-                "Uploading to hidden Drive app data",
-                "Refreshing backup inventory",
-                "Backup operation complete"
-              ].map((stepText, index) => {
-                const isCompleted = backupStep > index;
-                const isCurrent = backupStep === index;
-
-                return (
-                  <div key={index} className={`flex items-center gap-2.5 text-[10.5px] transition-all duration-300 ${
-                    isCompleted 
-                      ? 'text-brand-sage font-bold' 
-                      : isCurrent 
-                      ? 'text-brand-pink font-bold animate-pulse' 
-                      : 'text-brand-sage/40 font-medium'
-                  }`}>
-                    <div className="shrink-0">
-                      {isCompleted ? (
-                        <motion.span 
-                          initial={{ scale: 0 }}
-                          animate={{ scale: 1 }}
-                          className="w-4 h-4 rounded-full bg-brand-sage/15 text-brand-sage flex items-center justify-center text-[9px] border border-brand-sage/35 font-bold"
-                        >
-                          ✓
-                        </motion.span>
-                      ) : isCurrent ? (
-                        <div className="w-4 h-4 flex items-center justify-center relative">
-                          <span className="w-2 h-2 rounded-full bg-brand-pink animate-ping absolute" />
-                          <span className="w-2 h-2 rounded-full bg-brand-pink relative z-10" />
-                        </div>
-                      ) : (
-                        <div className="w-4 h-4 rounded-full border border-brand-border/40 flex items-center justify-center" />
-                      )}
-                    </div>
-                    <span className="truncate">{stepText}</span>
-                  </div>
-                );
-              })}
-            </div>
-            </motion.div>
-          </div>
-        </OverlayPortal>
-      )}
     </div>
   );
 }

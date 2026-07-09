@@ -23,9 +23,13 @@ Apply every file in `docs/supabase` in numeric order:
 012_sync_object_kind_constraint.sql
 013_sync_media_gc.sql
 014_two_phase_recovery_and_rotation.sql
+015_fix_partition_restore_bundle_ambiguity.sql
+016_idempotent_key_rotation_finalize.sql
+017_guard_key_rotation_abort_race.sql
 ```
 
 `014` intentionally blocks legacy direct primary transfer, direct device revocation, and direct key-epoch rotation RPCs. New clients must use the two-phase flows.
+`015` through `017` harden partition restore and two-phase key-rotation retry/race behavior.
 
 ## Data Plane
 
@@ -118,11 +122,11 @@ npm run test:supabase
 npm run build
 ```
 
-`npm run test:supabase` requires Docker. It starts a disposable PostgreSQL container, installs a Supabase Auth compatibility shim, applies migrations `001` through `014`, and runs real RLS/RPC/concurrency assertions.
+`npm run test:supabase` requires Docker. It starts a disposable PostgreSQL container, installs a Supabase Auth compatibility shim, applies migrations `001` through `017`, and runs real RLS/RPC/concurrency assertions.
 
 Staging smoke tests should cover:
 
-- applying migrations `001` through `014` in order;
+- applying migrations `001` through `017` in order;
 - new account setup;
 - companion pairing;
 - partitioned restore;

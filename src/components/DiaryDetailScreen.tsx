@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ArrowLeft, Edit, Download, Settings, ChevronLeft, ChevronRight, 
-  Smile, Tag, Camera, Plus, Trash2, Calendar, X, Maximize2,
+  Plus, Calendar, X, Maximize2,
   Search, List, Clock, HelpCircle,
   MoreVertical, RefreshCw
 } from 'lucide-react';
@@ -191,17 +191,6 @@ export default function DiaryDetailScreen({
     return uris;
   }, [activeEntry]);
 
-  const formatFullDate = (dateStr: string) => {
-    if (!dateStr) return '';
-    const dateObj = new Date(dateStr + 'T12:00:00'); // enforce local timezone parsing
-    return dateObj.toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
-
   const MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June", 
     "July", "August", "September", "October", "November", "December"
@@ -357,7 +346,7 @@ export default function DiaryDetailScreen({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {filteredEntries.map((entry, idx) => {
+            {filteredEntries.map((entry) => {
               const isSelected = activeEntry?.id === entry.id;
               return (
                 <button
@@ -1279,10 +1268,4 @@ export default function DiaryDetailScreen({
       </AnimatePresence>
     </div>
   );
-}
-
-// Fallback safety filter
-function getActiveEntryBody(body: string): string {
-  if (!body) return 'No content written yet.';
-  return body;
 }

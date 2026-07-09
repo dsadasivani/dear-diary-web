@@ -441,7 +441,7 @@ export default function HomeScreen({
 
         {/* Horizontal Book Slider */}
         <div className="flex overflow-x-auto no-scrollbar gap-5 -mx-4 px-4 pb-2 select-none">
-          {recentDiaries.map((diary, index) => {
+          {recentDiaries.map((diary) => {
             return (
               <motion.div 
                 key={diary.id}

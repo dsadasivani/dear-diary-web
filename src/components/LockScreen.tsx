@@ -8,7 +8,6 @@ import { AppSettings, GoogleAccountSession, SecurityConfig } from '../types';
 import {
   createCustomRecoveryQuestionId,
   createInitialPinWithRecovery,
-  bindGoogleRecoveryAccount,
   getRecoveryQuestionText,
   hasRecoveryQuestion,
   isValidPin,

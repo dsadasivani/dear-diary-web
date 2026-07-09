@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, Sparkles, Trash2 } from 'lucide-react';
+import { Play, Pause, Volume2, Trash2 } from 'lucide-react';
 
 interface AudioWaveformPlayerProps {
   src: string; // Base64 raw audio data uri

@@ -213,7 +213,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const resumePendingSyncWorkAfterUnlock = async () => {
-    const syncAccount = await diaryRepository.getLocalSyncAccountState();
     const secrets = await loadSyncSecrets();
     const pendingRecovery = await loadPendingPrimaryRecovery();
     const accessToken = secrets?.supabaseSession.accessToken || pendingRecovery?.supabaseSession.accessToken;
@@ -903,9 +902,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         if (currentScreen === 'appSettings') {
           return (
             <AppSettingsScreen 
-              diaries={diaries}
-              entries={entries}
-              notes={notes}
               initialSettings={settings}
               initialSecurity={security}
               initialProfile={userProfile}
@@ -927,7 +923,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             diaries={diaries}
             entries={accessibleEntries}
             notes={notes}
-            userProfile={userProfile}
             archiveMonths={archiveMonths}
             layout={layout}
             onNavigate={handleNavigate}

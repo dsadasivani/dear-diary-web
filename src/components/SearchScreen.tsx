@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
-  Search, BookOpen, FileText, Image, Calendar, Tag, ArrowRight, X, Filter, Download, RefreshCw
+  Search, BookOpen, FileText, Image, ArrowRight, X, Filter, Download, RefreshCw
 } from 'lucide-react';
 import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
