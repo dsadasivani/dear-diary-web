@@ -1,5 +1,5 @@
 import { App as CapacitorApp } from '@capacitor/app';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { Keyboard, KeyboardResize } from '@capacitor/keyboard';
 import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
@@ -50,6 +50,25 @@ export const syncNativeStatusBar = async (theme: 'light' | 'dark'): Promise<void
 export const addNativeBackListener = (handler: () => void): (() => void) => {
   window.addEventListener(BACK_EVENT, handler);
   return () => window.removeEventListener(BACK_EVENT, handler);
+};
+
+export const addNativeAppStateListener = (
+  handler: (state: { isActive: boolean }) => void,
+): (() => void) => {
+  if (!isCapacitorNative()) return () => undefined;
+  let listener: PluginListenerHandle | null = null;
+  let disposed = false;
+  void CapacitorApp.addListener('appStateChange', handler).then(handle => {
+    if (disposed) {
+      void handle.remove();
+      return;
+    }
+    listener = handle;
+  });
+  return () => {
+    disposed = true;
+    void listener?.remove();
+  };
 };
 
 export const exitNativeApp = async (): Promise<void> => {

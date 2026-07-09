@@ -159,7 +159,25 @@ const applyMigrations = async sql => {
   const migrationFiles = (await readdir(migrationsDir))
     .filter(file => /^\d+_.+\.sql$/.test(file))
     .sort((left, right) => left.localeCompare(right));
-  assert.equal(migrationFiles.length, 14, 'expected all 14 Supabase migrations');
+  assert.deepEqual(migrationFiles, [
+    '001_multi_device_sync.sql',
+    '002_companion_pairing.sql',
+    '003_portable_state_events.sql',
+    '004_atomic_cascade_events.sql',
+    '005_device_management.sql',
+    '006_key_package_retirement.sql',
+    '007_sync_object_maintenance.sql',
+    '008_safe_primary_recovery.sql',
+    '009_partitioned_latest_first_sync.sql',
+    '010_sync_gc_retention.sql',
+    '011_fix_pairing_digest.sql',
+    '012_sync_object_kind_constraint.sql',
+    '013_sync_media_gc.sql',
+    '014_two_phase_recovery_and_rotation.sql',
+    '015_fix_partition_restore_bundle_ambiguity.sql',
+    '016_idempotent_key_rotation_finalize.sql',
+    '017_guard_key_rotation_abort_race.sql',
+  ], 'expected the complete ordered Supabase migration set');
   for (const file of migrationFiles) {
     const sqlText = await readFile(path.join(migrationsDir, file), 'utf8');
     await sql.unsafe(sqlText);
@@ -325,6 +343,17 @@ const testRotationRpcGuards = async (port, adminSql) => {
 
     await expectReject(
       () => sql`
+        select public.abort_device_key_rotation(
+          ${account.primaryDeviceId}::uuid,
+          ${rotation.id}::uuid
+        )
+      `,
+      /key_rotation_has_committed_packages/,
+      'rotation abort is rejected after key packages are committed',
+    );
+
+    await expectReject(
+      () => sql`
         select public.finalize_device_key_rotation(
           ${account.primaryDeviceId}::uuid,
           ${rotation.id}::uuid,
@@ -343,6 +372,12 @@ const testRotationRpcGuards = async (port, adminSql) => {
       keyEpoch: 2,
     });
 
+    await adminSql`
+      update public.key_epoch_rotations
+      set status = 'aborted'
+      where id = ${rotation.id}::uuid
+    `;
+
     const [finalized] = await sql`
       select public.finalize_device_key_rotation(
         ${account.primaryDeviceId}::uuid,
@@ -351,10 +386,26 @@ const testRotationRpcGuards = async (port, adminSql) => {
       ) as result
     `;
     assert.equal(finalized.result.account.current_key_epoch, 2);
+
+    const [retryFinalized] = await sql`
+      select public.finalize_device_key_rotation(
+        ${account.primaryDeviceId}::uuid,
+        ${rotation.id}::uuid,
+        ${survivorObject.sequence}::bigint
+      ) as result
+    `;
+    assert.equal(retryFinalized.result.account.current_key_epoch, 2);
+    assert.equal(retryFinalized.result.rotation.status, 'finalized');
   });
 
   const [revoked] = await adminSql`select revoked_at is not null as revoked from public.devices where id = ${revokedDeviceId}::uuid`;
   assert.equal(revoked.revoked, true);
+  const [revocationCount] = await adminSql`
+    select count(*)::int as count
+    from public.device_revocations
+    where device_id = ${revokedDeviceId}::uuid
+  `;
+  assert.equal(revocationCount.count, 1);
 };
 
 const testConcurrentRotations = async (port, adminSql) => {
@@ -387,6 +438,82 @@ const testConcurrentRotations = async (port, adminSql) => {
   assert.deepEqual(rows.map(row => `${row.status}:${row.next_key_epoch}`), ['pending:2']);
 };
 
+const testConcurrentPrimaryRecoveries = async port => {
+  const userId = '55555555-5555-4555-8555-555555555555';
+  const account = await createAccount(port, userId, 'recovery-concurrency@example.com', 'recovery-concurrency');
+
+  const attempts = await Promise.allSettled([
+    asUser(port, userId, 'recovery-concurrency@example.com', sql => sql`
+      select public.begin_primary_mobile_recovery(
+        'google-recovery-concurrency',
+        'recovery-concurrency@example.com',
+        'Replacement A',
+        'android',
+        'replacement-public-key-a',
+        true,
+        ${account.primaryDeviceId}::uuid
+      ) as result
+    `),
+    asUser(port, userId, 'recovery-concurrency@example.com', sql => sql`
+      select public.begin_primary_mobile_recovery(
+        'google-recovery-concurrency',
+        'recovery-concurrency@example.com',
+        'Replacement B',
+        'android',
+        'replacement-public-key-b',
+        true,
+        ${account.primaryDeviceId}::uuid
+      ) as result
+    `),
+  ]);
+
+  const fulfilled = attempts.filter(result => result.status === 'fulfilled');
+  const rejected = attempts.filter(result => result.status === 'rejected');
+  assert.equal(fulfilled.length, 1, 'exactly one pending recovery should be reserved');
+  assert.equal(rejected.length, 1, 'the competing primary recovery should fail');
+  assert.match(
+    String(rejected[0].reason?.message || rejected[0].reason),
+    /primary_recovery_attempts_one_pending_per_account|duplicate key/i,
+  );
+
+  const recoveryResult = fulfilled[0].value[0].result;
+  await asUser(port, userId, 'recovery-concurrency@example.com', async sql => {
+    await expectReject(
+      () => commitKeyPackage(sql, {
+        primaryDeviceId: recoveryResult.device.id,
+        afterSequence: 0,
+        driveFileId: 'pending-recovery-write',
+        operationId: 'pending-recovery-write',
+        keyEpoch: 1,
+      }),
+      /device_not_active/,
+      'pending recovery devices cannot commit sync objects',
+    );
+
+    const [aborted] = await sql`
+      select *
+      from public.abort_primary_mobile_recovery(
+        ${recoveryResult.attempt.id}::uuid,
+        ${recoveryResult.device.id}::uuid
+      )
+    `;
+    assert.equal(aborted.status, 'aborted');
+
+    const [replacement] = await sql`
+      select public.begin_primary_mobile_recovery(
+        'google-recovery-concurrency',
+        'recovery-concurrency@example.com',
+        'Replacement C',
+        'android',
+        'replacement-public-key-c',
+        true,
+        ${account.primaryDeviceId}::uuid
+      ) as result
+    `;
+    assert.equal(replacement.result.device.activation_state, 'pending_recovery');
+  });
+};
+
 const main = async () => {
   let port;
   let adminSql;
@@ -399,6 +526,7 @@ const main = async () => {
     await testRlsIsolation(port, adminSql);
     await testRotationRpcGuards(port, adminSql);
     await testConcurrentRotations(port, adminSql);
+    await testConcurrentPrimaryRecoveries(port);
     console.log('Supabase integration tests passed.');
   } catch (error) {
     die(error.stack || error.message || String(error));

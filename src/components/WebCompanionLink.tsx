@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Check, Clipboard, Cloud, LoaderCircle, ShieldCheck } from 'lucide-react';
 import { diaryRepository } from '../repositories';
+import type { LocalSyncAccountState } from '../types';
 import {
   completeCompanionPairing,
   createCompanionPairingRequest,
@@ -25,11 +26,12 @@ interface PendingWebCompanion {
 }
 
 interface WebCompanionLinkProps {
-  onLinked: () => void | Promise<void>;
+  onLinked: (syncAccount?: LocalSyncAccountState) => void | Promise<void>;
 }
 
 let pairingInitializationPromise: Promise<PendingWebCompanion | null> | null = null;
 let pairingCompletionPromise: ReturnType<typeof completeCompanionPairing> | null = null;
+const APPROVAL_POLL_INTERVAL_MS = 1_000;
 
 const initializePairing = (): Promise<PendingWebCompanion | null> => {
   if (!pairingInitializationPromise) {
@@ -82,6 +84,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
   const [error, setError] = useState('');
   const [isStarting, setIsStarting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
   const completingRef = useRef(false);
 
   useEffect(() => {
@@ -108,7 +111,25 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       if (completingRef.current) return;
       completingRef.current = true;
       try {
+        const existingLinkedState = await diaryRepository.getLocalSyncAccountState();
+        if (existingLinkedState) {
+          await clearPendingPairingSecret();
+          pairingInitializationPromise = null;
+          setIsRestoring(true);
+          setStatus('Companion approved. Opening your encrypted diary...');
+          await onLinked(existingLinkedState);
+          return;
+        }
         const controlPlane = createConfiguredSupabaseControlPlaneClient(context.auth.supabaseSession.accessToken);
+        const details = await controlPlane.getPairingSession(context.pairing.session.id);
+        if (!details.session.approvedAt) {
+          if (new Date(details.session.expiresAt).getTime() <= Date.now()) throw new Error('Pairing request expired.');
+          return;
+        }
+        if (active) {
+          setIsRestoring(true);
+          setStatus('Companion approved. Restoring your encrypted diary...');
+        }
         if (!pairingCompletionPromise) {
           pairingCompletionPromise = completeCompanionPairing({
             pending: context.pairing,
@@ -121,15 +142,27 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
         const linked = await pairingCompletionPromise;
         if (linked && active) {
           await clearPendingPairingSecret();
+          pairingInitializationPromise = null;
+          setIsRestoring(true);
           setStatus('Companion approved. Opening your encrypted diary...');
-          await onLinked();
+          await onLinked(linked);
         }
       } catch (approvalError: any) {
         if (approvalError?.message?.includes('expired')) {
           await clearPendingPairingSecret();
           pairingInitializationPromise = null;
-          if (active) { setContext(null); setStatus('Pairing expired. Sign in to start a new request.'); }
+          if (active) { setContext(null); setIsRestoring(false); setStatus('Pairing expired. Sign in to start a new request.'); }
         } else if (active) {
+          const linkedState = await diaryRepository.getLocalSyncAccountState().catch(() => null);
+          if (linkedState) {
+            await clearPendingPairingSecret();
+            pairingInitializationPromise = null;
+            setIsRestoring(true);
+            setStatus('Companion approved. Opening your encrypted diary...');
+            await onLinked(linkedState);
+            return;
+          }
+          setIsRestoring(false);
           setError(approvalError?.message || 'Pairing approval could not be completed.');
         }
       } finally {
@@ -137,7 +170,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       }
     };
     void checkApproval();
-    const timer = setInterval(() => void checkApproval(), 3_000);
+    const timer = setInterval(() => void checkApproval(), APPROVAL_POLL_INTERVAL_MS);
     return () => { active = false; clearInterval(timer); };
   }, [context, onLinked]);
 
@@ -187,6 +220,11 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
               {isStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
               <span>{isStarting ? 'Opening Google...' : 'Continue with Google'}</span>
             </button>
+          ) : isRestoring ? (
+            <div className="flex flex-col items-center gap-4 text-center">
+              <LoaderCircle className="h-8 w-8 animate-spin text-brand-pink" />
+              <p className="max-w-xs text-xs font-semibold text-brand-text-muted">{status}</p>
+            </div>
           ) : (
             <div className="flex flex-col items-center gap-5 text-center">
               <div>

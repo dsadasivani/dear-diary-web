@@ -104,6 +104,7 @@ test('resumes an event-uploaded outbox write without reuploading the event', asy
   let failCommit = true;
   let sequence = 2;
   let uploadCount = 0;
+  let currentNow = 1;
   const controlPlane = {
     getDeviceStatus: async () => device,
     listSyncObjectsAfter: async () => [],
@@ -122,7 +123,7 @@ test('resumes an event-uploaded outbox write without reuploading the event', asy
   } as unknown as SupabaseControlPlaneClient;
   const engine = new EventSyncEngine(repository, {
     isOnline: () => true,
-    now: () => 1,
+    now: () => currentNow,
     loadSecrets: async () => ({
       version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
@@ -149,9 +150,12 @@ test('resumes an event-uploaded outbox write without reuploading the event', asy
   const failed = await repository.listSyncOutboxOperations(['failed']);
   assert.equal(failed.length, 1);
   assert.equal(failed[0].eventDriveFileId, 'drive-1');
+  assert.equal(failed[0].retryCount, 1);
+  assert.equal(failed[0].nextRetryAt, 30_001);
   assert.equal(await repository.getNote(pendingNote.id), null);
 
   failCommit = false;
+  currentNow = failed[0].nextRetryAt!;
   const nextNote = {
     id: 'note-next', title: 'Next', body: 'After resume.', isPinned: false,
     tags: [], createdAt: 1, updatedAt: 1,
@@ -180,6 +184,7 @@ test('resumes a failed outbox write that crashed before event upload completed',
   let sequence = 2;
   let uploadCount = 0;
   let failUpload = true;
+  let currentNow = 1;
   const controlPlane = {
     getDeviceStatus: async () => device,
     listSyncObjectsAfter: async () => [],
@@ -197,7 +202,7 @@ test('resumes a failed outbox write that crashed before event upload completed',
   } as unknown as SupabaseControlPlaneClient;
   const engine = new EventSyncEngine(repository, {
     isOnline: () => true,
-    now: () => 1,
+    now: () => currentNow,
     loadSecrets: async () => ({
       version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
@@ -228,9 +233,11 @@ test('resumes a failed outbox write that crashed before event upload completed',
   const failed = await repository.listSyncOutboxOperations(['failed']);
   assert.equal(failed.length, 1);
   assert.equal(failed[0].retryCount, 1);
+  assert.equal(failed[0].nextRetryAt, 30_001);
   assert.equal(failed[0].eventDriveFileId, undefined);
   assert.equal(await repository.getNote(pendingNote.id), null);
 
+  currentNow = failed[0].nextRetryAt!;
   await engine.commitMutation('note', 'upsert', 'note-after-upload-retry', {
     id: 'note-after-upload-retry', title: 'After retry', body: '', isPinned: false,
     tags: [], createdAt: 1, updatedAt: 1,
@@ -239,6 +246,88 @@ test('resumes a failed outbox write that crashed before event upload completed',
   assert.equal(uploadCount, 3);
   assert.equal((await repository.getNote(pendingNote.id))?.title, 'Upload pending');
   assert.equal((await repository.getNote('note-after-upload-retry'))?.title, 'After retry');
+  assert.equal((await repository.listSyncOutboxOperations()).length, 0);
+});
+
+test('failed outbox writes wait for backoff without blocking later operations', async () => {
+  const repository = await createRepository();
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
+    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2, linkedAt: 1,
+  });
+  const device: SyncDevice = {
+    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
+    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
+    revokedAt: null, replacedByDeviceId: null,
+  };
+  let currentNow = 1;
+  let sequence = 2;
+  let failFirstUpload = true;
+  const uploadIds: string[] = [];
+  const controlPlane = {
+    getDeviceStatus: async () => device,
+    listSyncObjectsAfter: async () => [],
+    updateDeviceCursor: async () => ({}),
+    commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
+      sequence += 1;
+      return {
+        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
+        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
+        affectedRecords: input.affectedRecords || [],
+      };
+    },
+  } as unknown as SupabaseControlPlaneClient;
+  const engine = new EventSyncEngine(repository, {
+    isOnline: () => true,
+    now: () => currentNow,
+    loadSecrets: async () => ({
+      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+    }),
+    restoreGoogleSession: async () => ({
+      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+    }),
+    createControlPlane: () => controlPlane,
+    upload: async () => {
+      if (failFirstUpload) {
+        failFirstUpload = false;
+        throw new Error('drive temporarily unavailable');
+      }
+      const id = `drive-${uploadIds.length + 1}`;
+      uploadIds.push(id);
+      return { id };
+    },
+  });
+
+  const delayedNote = {
+    id: 'note-delayed', title: 'Delayed', body: 'Retry after backoff.', isPinned: false,
+    tags: [], createdAt: 1, updatedAt: 1,
+  };
+  await assert.rejects(
+    () => engine.commitMutation('note', 'upsert', delayedNote.id, delayedNote),
+    /drive temporarily unavailable/,
+  );
+  const [failed] = await repository.listSyncOutboxOperations(['failed']);
+  assert.equal(failed.nextRetryAt, 30_001);
+
+  await engine.commitMutation('note', 'upsert', 'note-later', {
+    id: 'note-later', title: 'Later write', body: '', isPinned: false,
+    tags: [], createdAt: 1, updatedAt: 1,
+  });
+
+  assert.equal(await repository.getNote(delayedNote.id), null);
+  assert.equal((await repository.getNote('note-later'))?.title, 'Later write');
+  assert.equal((await repository.listSyncOutboxOperations(['failed'])).length, 1);
+
+  currentNow = 30_001;
+  await engine.pullPending();
+
+  assert.equal((await repository.getNote(delayedNote.id))?.title, 'Delayed');
   assert.equal((await repository.listSyncOutboxOperations()).length, 0);
 });
 

@@ -448,7 +448,7 @@ The APK is written under `android/app/build/outputs/apk/debug/`.
 Capacitor WebView logging and inspection are disabled by default. For a local debug sync:
 
 ```powershell
-$env:CAPACITOR_DEBUG='true'
+$env:CAPACITOR_WEBVIEW_DEBUG='true'
 npm run mobile:sync
 ```
 
@@ -523,8 +523,11 @@ Copy `.env.example` to `.env` when native Google backup is required. Vite expose
 | `VITE_GOOGLE_WEB_CLIENT_ID` | Android Drive/Google recovery only | Native Google Sign-In initialization; must be the OAuth **Web application** client ID. |
 | `VITE_SUPABASE_URL` | Encrypted multi-device sync | Supabase project URL for the sync metadata control plane. Apply `docs/supabase/001` through `docs/supabase/014` in order before enabling sync. See [docs/sync-and-supabase.md](docs/sync-and-supabase.md). |
 | `VITE_SUPABASE_ANON_KEY` | Encrypted multi-device sync | Supabase anon key for the sync metadata control plane. |
+| `VITE_ENABLE_MD_FLOW_HOOKS` | Manual MD-021/MD-022 force-stop test builds only | Enables one-shot localStorage checkpoints documented in [SEEDED_DEVICE_STATE_MD021_MD022.md](docs/testing/SEEDED_DEVICE_STATE_MD021_MD022.md). Never enable in release builds. |
 | `VITE_APP_VERSION` | Optional | Version recorded in Drive backup manifests; defaults to `0.0.0`. |
-| `CAPACITOR_DEBUG` | Optional build-time setting | Enables native WebView logging/debug inspection when exactly `true`. |
+| `CAPACITOR_WEBVIEW_DEBUG` | Optional build-time setting | Enables Android WebView inspection when exactly `true`. Use this for manual device testing. |
+| `CAPACITOR_BRIDGE_LOGGING` | Optional build-time setting | Enables verbose Capacitor bridge logging when exactly `true`. Do not use for sync/recovery tests because native plugin payloads can include sensitive values. |
+| `CAPACITOR_DEBUG` | Optional legacy build-time setting | Also enables Android WebView inspection when exactly `true`; prefer `CAPACITOR_WEBVIEW_DEBUG`. |
 | `DISABLE_HMR` | Optional development setting | Disables Vite HMR/file watching when exactly `true`. |
 | `NODE_ENV` | Production server only | Must be `production` for `dist/server.cjs` to serve static assets instead of creating Vite middleware. |
 

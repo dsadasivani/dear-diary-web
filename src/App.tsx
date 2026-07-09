@@ -1,26 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { Suspense, useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AlertCircle, ArrowLeft, BarChart2, BookOpen, Check, ClipboardList, Eye, EyeOff,
   Fingerprint, Home, LoaderCircle, Lock, Plus, RefreshCw, Search, ShieldCheck, WifiOff, X
 } from 'lucide-react';
 
-// Import our modular screens
-import LockScreen from './components/LockScreen';
-import HomeScreen from './components/HomeScreen';
-import DiariesScreen from './components/DiariesScreen';
-import DiaryDetailScreen from './components/DiaryDetailScreen';
-import DiarySettingsScreen from './components/DiarySettingsScreen';
-import EntryEditorScreen from './components/EntryEditorScreen';
-import NotesScreen from './components/NotesScreen';
-import SearchScreen from './components/SearchScreen';
-import StatsScreen from './components/StatsScreen';
-import AppSettingsScreen from './components/AppSettingsScreen';
 import OverlayPortal from './components/OverlayPortal';
 import ProfileAvatar from './components/ProfileAvatar';
 
 import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
-import { addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
+import { addNativeAppStateListener, addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
 import { isAndroid, isNativePlatform } from './platform';
 
 import { secureAuthService } from './platform/security';
@@ -28,7 +17,24 @@ import { diaryRepository, eventSyncEngine } from './repositories';
 import { isValidPin, unlockWithPin } from './domain/security';
 import useIsDesktop from './hooks/useIsDesktop';
 import { calculateStreak } from './domain/journalCatalog';
+import { shouldLockAfterBackground } from './domain/privacyLock';
+import { loadPendingPrimaryRecovery, resumePendingPrimaryRecovery } from './sync/accountBootstrap';
+import { createConfiguredSupabaseControlPlaneClient } from './sync/config';
+import { resumePendingDeviceKeyRotation } from './sync/deviceKeyRotation';
+import { loadSyncSecrets } from './sync/syncSecrets';
+import { restoreGoogleDriveSession } from './utils/googleAuth';
 import { applyThemePreference, getLocalThemePreference, setLocalThemePreference } from './utils/themePreference';
+
+const LockScreen = React.lazy(() => import('./components/LockScreen'));
+const HomeScreen = React.lazy(() => import('./components/HomeScreen'));
+const DiariesScreen = React.lazy(() => import('./components/DiariesScreen'));
+const DiaryDetailScreen = React.lazy(() => import('./components/DiaryDetailScreen'));
+const DiarySettingsScreen = React.lazy(() => import('./components/DiarySettingsScreen'));
+const EntryEditorScreen = React.lazy(() => import('./components/EntryEditorScreen'));
+const NotesScreen = React.lazy(() => import('./components/NotesScreen'));
+const SearchScreen = React.lazy(() => import('./components/SearchScreen'));
+const StatsScreen = React.lazy(() => import('./components/StatsScreen'));
+const AppSettingsScreen = React.lazy(() => import('./components/AppSettingsScreen'));
 
 interface AppProps {
   initialSettings: AppSettings;
@@ -74,6 +80,12 @@ const GlobalLoaderOverlay = ({ loading }: { loading: GlobalLoadingState | null }
       </OverlayPortal>
     )}
   </AnimatePresence>
+);
+
+const ScreenFallback = () => (
+  <div className="flex min-h-[12rem] w-full items-center justify-center text-brand-sage">
+    <LoaderCircle className="h-6 w-6 animate-spin" />
+  </div>
 );
 
 const isLikelyCellularConnection = (): boolean => {
@@ -200,17 +212,60 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     void syncNativeStatusBar(nextTheme);
   };
 
+  const resumePendingSyncWorkAfterUnlock = async () => {
+    const syncAccount = await diaryRepository.getLocalSyncAccountState();
+    const secrets = await loadSyncSecrets();
+    const pendingRecovery = await loadPendingPrimaryRecovery();
+    const accessToken = secrets?.supabaseSession.accessToken || pendingRecovery?.supabaseSession.accessToken;
+    if (pendingRecovery && !accessToken) {
+      throw new Error('Primary recovery is pending but sync authorization is unavailable. Reconnect Google and Supabase to finish recovery.');
+    }
+    if (pendingRecovery && accessToken) {
+      const controlPlane = createConfiguredSupabaseControlPlaneClient(accessToken);
+      const googleSession = await restoreGoogleDriveSession(false).catch(() => null)
+        || secrets?.googleSession
+        || pendingRecovery.googleSession
+        || null;
+      const result = await resumePendingPrimaryRecovery({
+        repository: diaryRepository,
+        controlPlane,
+        googleSession,
+      });
+      if (result.status === 'completed' || result.status === 'aborted') {
+        showToast(result.message, 'info');
+        await reloadData();
+      }
+    }
+    const refreshedAccount = await diaryRepository.getLocalSyncAccountState();
+    if (!refreshedAccount || refreshedAccount.deviceRole !== 'primary_mobile') return refreshedAccount;
+    const refreshedSecrets = await loadSyncSecrets();
+    if (!refreshedSecrets) return refreshedAccount;
+    const controlPlane = createConfiguredSupabaseControlPlaneClient(refreshedSecrets.supabaseSession.accessToken);
+    const googleSession = await restoreGoogleDriveSession(false).catch(() => null) || refreshedSecrets.googleSession || null;
+    const result = await resumePendingDeviceKeyRotation({
+      repository: diaryRepository,
+      controlPlane,
+      googleSession,
+    });
+    if (result.status === 'completed' || result.status === 'aborted') {
+      showToast(result.message, 'info');
+      await reloadData();
+    }
+    return diaryRepository.getLocalSyncAccountState();
+  };
+
   const handleUnlock = async () => {
     await runWithGlobalLoader('Unlocking your diary', async () => {
       await reloadData();
       setUnlockedDiaryIds(new Set());
       setIsAuthenticated(true);
     }, 'Loading your latest local data.');
-    void diaryRepository.getLocalSyncAccountState()
+    void resumePendingSyncWorkAfterUnlock()
       .then(syncAccount => {
         if (syncAccount) eventSyncEngine.startPolling();
       })
       .catch(err => {
+        showToast(err?.message || 'Encrypted sync could not resume after unlock.', 'warning');
         console.warn('Unable to start sync polling after unlock:', err);
       });
   };
@@ -221,6 +276,18 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setIsAuthenticated(false);
     return () => eventSyncEngine.stopPolling();
   }, []);
+
+  useEffect(() => {
+    if (isAuthenticated || isNativePlatform()) return;
+    let cancelled = false;
+    void diaryRepository.getLocalSyncAccountState().then(syncAccount => {
+      if (cancelled || syncAccount?.deviceRole !== 'web_companion') return;
+      eventSyncEngine.startPolling();
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
 
   useEffect(() => {
     const handleAuthorizationRequired = (event: Event) => {
@@ -454,6 +521,22 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setUnlockedDiaryIds(new Set());
     setIsAuthenticated(false);
   };
+
+  useEffect(() => {
+    if (!isNativePlatform()) return undefined;
+    let backgroundedAt: number | null = null;
+    return addNativeAppStateListener(({ isActive }) => {
+      if (!isActive) {
+        backgroundedAt = Date.now();
+        return;
+      }
+      if (isAuthenticated && shouldLockAfterBackground({ backgroundedAt, resumedAt: Date.now() })) {
+        showToast('Dear Diary locked after being in the background.', 'info');
+        handleLockApp();
+      }
+      backgroundedAt = null;
+    });
+  }, [isAuthenticated]);
 
   useEffect(() => {
     const handleRevokedDevice = () => {
@@ -856,6 +939,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     }
   };
 
+  const renderSuspendedContent = () => (
+    <Suspense fallback={<ScreenFallback />}>
+      {renderContent()}
+    </Suspense>
+  );
+
   const renderSyncAuthorizationBanner = () => syncAuthorizationMessage ? (
     <div className="fixed inset-x-3 top-3 z-[91] mx-auto flex max-w-sm items-center gap-3 rounded-lg bg-brand-plum px-3 py-2 text-white shadow-lg">
       <p className="min-w-0 flex-1 text-xs font-semibold">{syncAuthorizationMessage}</p>
@@ -1044,7 +1133,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                   transition={{ duration: 0.22 }}
                   className="mx-auto w-full max-w-[1280px] 2xl:max-w-[1460px]"
                 >
-                  {renderContent()}
+                  {renderSuspendedContent()}
                 </motion.div>
               </AnimatePresence>
             </main>
@@ -1067,7 +1156,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         </div>
       )}
       <main className="relative z-10 mx-auto min-h-screen w-full max-w-[1500px] px-5 py-5 xl:px-8 xl:py-8">
-        {renderContent()}
+        {renderSuspendedContent()}
       </main>
       {renderToast()}
     </div>
@@ -1077,13 +1166,15 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   if (!isAuthenticated) {
     return (
       <>
-        <LockScreen
-          initialSecurity={security}
-          initialSettings={settings}
-          onSecurityChange={setSecurity}
-          onThemeChange={handleLocalThemeChange}
-          onUnlock={handleUnlock}
-        />
+        <Suspense fallback={<ScreenFallback />}>
+          <LockScreen
+            initialSecurity={security}
+            initialSettings={settings}
+            onSecurityChange={setSecurity}
+            onThemeChange={handleLocalThemeChange}
+            onUnlock={handleUnlock}
+          />
+        </Suspense>
         <GlobalLoaderOverlay loading={globalLoading} />
       </>
     );
@@ -1107,7 +1198,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-brand-sage-light blur-[100px]" />
         </div>
         <div className="z-10 flex-grow flex flex-col">
-          {renderContent()}
+          {renderSuspendedContent()}
         </div>
         {renderToast()}
       </div>
@@ -1150,7 +1241,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             transition={{ duration: 0.25 }}
             className="flex-grow flex flex-col justify-start"
           >
-            {renderContent()}
+            {renderSuspendedContent()}
           </motion.div>
         </AnimatePresence>
       </main>

@@ -44,6 +44,10 @@ create unique index if not exists key_epoch_rotations_one_pending_per_account
   on public.key_epoch_rotations(account_id)
   where status = 'pending';
 
+create unique index if not exists primary_recovery_attempts_one_pending_per_account
+  on public.primary_recovery_attempts(account_id)
+  where status = 'pending';
+
 alter table public.primary_recovery_attempts enable row level security;
 alter table public.key_epoch_rotations enable row level security;
 
@@ -333,9 +337,23 @@ begin
     and primary_device_id = v_primary.id
   for update;
   if not found then raise exception 'key_rotation_not_found'; end if;
-  if v_rotation.status <> 'pending' then raise exception 'key_rotation_not_pending'; end if;
 
   select * into v_account from public.accounts where id = v_primary.account_id for update;
+  if v_rotation.status = 'finalized' then
+    select * into v_revocation
+    from public.device_revocations
+    where account_id = v_primary.account_id
+      and device_id = v_rotation.revoked_device_id
+    order by created_at desc
+    limit 1;
+    return jsonb_build_object(
+      'account', to_jsonb(v_account),
+      'rotation', to_jsonb(v_rotation),
+      'revocation', case when v_revocation.account_id is null then null else to_jsonb(v_revocation) end
+    );
+  end if;
+  if v_rotation.status not in ('pending', 'aborted') then raise exception 'key_rotation_not_pending'; end if;
+
   if coalesce(v_account.current_key_epoch, 1) + 1 <> v_rotation.next_key_epoch then
     raise exception 'stale_key_rotation_epoch';
   end if;
@@ -403,8 +421,20 @@ begin
   if not found then raise exception 'device_not_found'; end if;
 
   insert into public.device_revocations (account_id, device_id, reason)
-  values (v_primary.account_id, v_rotation.revoked_device_id, v_rotation.reason)
-  returning * into v_revocation;
+  select v_primary.account_id, v_rotation.revoked_device_id, v_rotation.reason
+  where not exists (
+    select 1
+    from public.device_revocations existing
+    where existing.account_id = v_primary.account_id
+      and existing.device_id = v_rotation.revoked_device_id
+  );
+
+  select * into v_revocation
+  from public.device_revocations
+  where account_id = v_primary.account_id
+    and device_id = v_rotation.revoked_device_id
+  order by created_at desc
+  limit 1;
 
   update public.accounts
   set current_key_epoch = v_rotation.next_key_epoch
@@ -439,13 +469,48 @@ declare
   v_primary public.devices%rowtype := public.assert_active_primary_device(p_primary_device_id);
   v_rotation public.key_epoch_rotations%rowtype;
 begin
-  update public.key_epoch_rotations
-  set status = 'aborted'
+  select * into v_rotation
+  from public.key_epoch_rotations
   where id = p_rotation_id
     and account_id = v_primary.account_id
-    and status = 'pending'
-  returning * into v_rotation;
+  for update;
   if not found then raise exception 'key_rotation_not_found'; end if;
+  if v_rotation.status <> 'pending' then raise exception 'key_rotation_not_pending'; end if;
+  if exists (
+    select 1
+    from public.sync_objects o
+    where o.account_id = v_primary.account_id
+      and o.sequence > v_rotation.starting_sequence
+      and o.object_kind = 'key_package'
+      and o.key_epoch = v_rotation.next_key_epoch
+      and o.created_by_device_id = v_primary.id
+      and (
+        o.operation_id = concat(
+          'key-epoch-recovery:',
+          v_primary.account_id::text,
+          ':',
+          v_rotation.next_key_epoch::text,
+          ':',
+          v_rotation.id::text
+        )
+        or o.operation_id like concat(
+          'key-epoch:',
+          v_primary.account_id::text,
+          ':',
+          v_rotation.next_key_epoch::text,
+          ':',
+          v_rotation.id::text,
+          ':%'
+        )
+      )
+  ) then
+    raise exception 'key_rotation_has_committed_packages';
+  end if;
+
+  update public.key_epoch_rotations
+  set status = 'aborted'
+  where id = v_rotation.id
+  returning * into v_rotation;
   return v_rotation;
 end;
 $$;
@@ -532,21 +597,21 @@ declare
 begin
   return query
     with requested as (
-      select unnest(coalesce(p_partition_keys, array[]::text[])) as partition_key
+      select unnest(coalesce(p_partition_keys, array[]::text[])) as requested_partition_key
     ),
     latest_snapshots as (
       select distinct on (o.partition_key)
-        o.partition_key,
+        o.partition_key as snapshot_partition_key,
         o.*
       from public.sync_objects o
-      join requested r on r.partition_key = o.partition_key
+      join requested r on r.requested_partition_key = o.partition_key
       where o.account_id = v_device.account_id
         and o.object_kind = 'partition_snapshot'
         and o.retired_at is null
       order by o.partition_key, o.sequence desc
     )
     select
-      r.partition_key,
+      r.requested_partition_key as partition_key,
       case when s.id is null then null else to_jsonb(s) end as snapshot_object,
       coalesce((
         select jsonb_agg(to_jsonb(o) order by o.sequence asc)
@@ -555,13 +620,13 @@ begin
           and o.retired_at is null
           and o.sequence > coalesce(s.sequence, 0)
           and (
-            o.partition_key = r.partition_key
-            or r.partition_key = any(o.affected_partition_keys)
+            o.partition_key = r.requested_partition_key
+            or r.requested_partition_key = any(o.affected_partition_keys)
             or o.object_kind = 'manifest'
           )
       ), '[]'::jsonb) as tail_objects
     from requested r
-    left join latest_snapshots s on s.partition_key = r.partition_key;
+    left join latest_snapshots s on s.snapshot_partition_key = r.requested_partition_key;
 end;
 $$;
 

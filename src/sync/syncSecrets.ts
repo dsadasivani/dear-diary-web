@@ -10,6 +10,8 @@ import {
 const SECURE_STORAGE_PREFIX = 'deardiary_';
 const SYNC_SECRETS_KEY = 'multi_device_sync_secrets_v1';
 const PENDING_PAIRING_KEY = 'pending_companion_pairing_v1';
+const PENDING_DEVICE_KEY_ROTATION_KEY = 'pending_device_key_rotation_v1';
+const PENDING_PRIMARY_RECOVERY_KEY = 'pending_primary_recovery_v1';
 
 export interface SyncSecrets {
   version: 1;
@@ -68,6 +70,9 @@ const webSecretStorage: SyncSecretStorage = encryptedWebStorage;
 const defaultSecretStorage = (): SyncSecretStorage => (
   isNativePlatform() ? capacitorSecretStorage : webSecretStorage
 );
+
+export const encodeSyncSecretBytes = bytesToBase64;
+export const decodeSyncSecretBytes = base64ToBytes;
 
 export const saveSyncSecrets = async (
   secrets: SyncSecrets,
@@ -156,4 +161,46 @@ export const loadPendingPairingSecret = async <T>(): Promise<T | null> => {
 
 export const clearPendingPairingSecret = async (): Promise<void> => {
   await defaultSecretStorage().removeItem(PENDING_PAIRING_KEY);
+};
+
+export const savePendingDeviceKeyRotationSecret = async <T>(
+  value: T,
+  storage: SyncSecretStorage = defaultSecretStorage(),
+): Promise<void> => {
+  await storage.setItem(PENDING_DEVICE_KEY_ROTATION_KEY, JSON.stringify(value));
+};
+
+export const loadPendingDeviceKeyRotationSecret = async <T>(
+  storage: SyncSecretStorage = defaultSecretStorage(),
+): Promise<T | null> => {
+  const value = await storage.getItem(PENDING_DEVICE_KEY_ROTATION_KEY);
+  if (!value) return null;
+  try { return JSON.parse(value) as T; } catch { return null; }
+};
+
+export const clearPendingDeviceKeyRotationSecret = async (
+  storage: SyncSecretStorage = defaultSecretStorage(),
+): Promise<void> => {
+  await storage.removeItem(PENDING_DEVICE_KEY_ROTATION_KEY);
+};
+
+export const savePendingPrimaryRecoverySecret = async <T>(
+  value: T,
+  storage: SyncSecretStorage = defaultSecretStorage(),
+): Promise<void> => {
+  await storage.setItem(PENDING_PRIMARY_RECOVERY_KEY, JSON.stringify(value));
+};
+
+export const loadPendingPrimaryRecoverySecret = async <T>(
+  storage: SyncSecretStorage = defaultSecretStorage(),
+): Promise<T | null> => {
+  const value = await storage.getItem(PENDING_PRIMARY_RECOVERY_KEY);
+  if (!value) return null;
+  try { return JSON.parse(value) as T; } catch { return null; }
+};
+
+export const clearPendingPrimaryRecoverySecret = async (
+  storage: SyncSecretStorage = defaultSecretStorage(),
+): Promise<void> => {
+  await storage.removeItem(PENDING_PRIMARY_RECOVERY_KEY);
 };

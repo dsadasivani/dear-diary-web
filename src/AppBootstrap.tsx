@@ -44,14 +44,15 @@ export default function AppBootstrap() {
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
 
-  const handleCompanionLinked = useCallback(async () => {
+  const handleCompanionLinked = useCallback(async (linkedSyncAccount?: LocalSyncAccountState) => {
+    bootstrapPromise = null;
     const [settings, security, userProfile, syncAccount] = await Promise.all([
       diaryRepository.getSettings(),
       diaryRepository.getSecurityConfig(),
       diaryRepository.getUserProfile(),
       diaryRepository.getLocalSyncAccountState(),
     ]);
-    setData({ settings, security, userProfile, syncAccount });
+    setData({ settings, security, userProfile, syncAccount: syncAccount || linkedSyncAccount || null });
   }, []);
 
   useEffect(() => {

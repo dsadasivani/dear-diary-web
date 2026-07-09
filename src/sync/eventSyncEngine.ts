@@ -150,6 +150,16 @@ export interface EventSyncEngineDependencies {
 }
 
 export const DEFAULT_SNAPSHOT_INTERVAL_EVENTS = 100;
+const OUTBOX_RETRY_BASE_MS = 30_000;
+const OUTBOX_RETRY_MAX_MS = 30 * 60 * 1000;
+
+const nextOutboxRetryAt = (now: number, retryCount: number): number => {
+  const delay = Math.min(
+    OUTBOX_RETRY_MAX_MS,
+    OUTBOX_RETRY_BASE_MS * (2 ** Math.min(Math.max(retryCount - 1, 0), 10)),
+  );
+  return now + delay;
+};
 
 const timestampForDriveFile = (file: DriveSyncObjectSummary): number => {
   const timestamp = file.modifiedTime || file.createdTime;
@@ -731,6 +741,9 @@ export class EventSyncEngine {
     ]);
     for (const operation of operations) {
       if (!operation.operation) continue;
+      if (operation.state === 'failed' && operation.nextRetryAt && operation.nextRetryAt > this.now()) {
+        continue;
+      }
       await this.executeUserWriteOutboxOperation(runtime, operation);
     }
   }
@@ -739,11 +752,13 @@ export class EventSyncEngine {
     const latest = (await this.repository.listSyncOutboxOperations())
       .find(operation => operation.operationId === operationId);
     if (!latest) return;
+    const retryCount = (latest.retryCount || 0) + 1;
     await this.updateOutboxOperation(latest, {
       state: 'failed',
       error,
-      retryCount: (latest.retryCount || 0) + 1,
+      retryCount,
       lastErrorAt: this.now(),
+      nextRetryAt: nextOutboxRetryAt(this.now(), retryCount),
     });
   }
 
@@ -754,7 +769,10 @@ export class EventSyncEngine {
   ): Promise<SyncDomainEvent> {
     let outboxOperation = persistedOperation;
     if (outboxOperation.error) {
-      outboxOperation = await this.updateOutboxOperation(outboxOperation, { error: undefined });
+      outboxOperation = await this.updateOutboxOperation(outboxOperation, {
+        error: undefined,
+        nextRetryAt: undefined,
+      });
     }
     const operation = outboxOperation.operation;
     if (!operation) throw new Error('Sync outbox operation is missing its mutation type.');

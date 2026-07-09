@@ -1,0 +1,99 @@
+{
+  "purpose": "Manual force-stop checkpoints for MD-021 primary recovery and MD-022 key rotation.",
+  "packageName": "com.deardiary.app",
+  "buildFlag": "VITE_ENABLE_MD_FLOW_HOOKS=true",
+  "debugFlag": "CAPACITOR_DEBUG=true",
+  "pauseAtLocalStorageKey": "deardiary.manualTest.pauseAt",
+  "lastCheckpointLocalStorageKey": "deardiary.manualTest.lastCheckpoint",
+  "checkpoints": [
+    {
+      "id": "md021:after-recovery-registered",
+      "scenario": "Primary recovery pending device registered.",
+      "seedState": "Existing synced account on old primary; new mobile device starts account recovery.",
+      "forceStopWhen": "The recovery UI pauses after registering this device.",
+      "expectedResume": "Relaunch resumes from the pending-primary-recovery journal; old primary remains active until finalize succeeds.",
+      "serverVerification": "primary_recovery_attempts.status moves from pending to finalized; accounts.active_primary_device_id becomes the new device only after resume completes."
+    },
+    {
+      "id": "md021:after-local-empty-state",
+      "scenario": "Primary recovery local empty state written.",
+      "seedState": "Same as MD-021 baseline.",
+      "forceStopWhen": "The recovery UI pauses after local security, Drive settings, and pending primary local sync state are saved.",
+      "expectedResume": "Relaunch keeps the pending device and continues secret save plus data restore.",
+      "serverVerification": "Pending recovery attempt remains pending until resume completes."
+    },
+    {
+      "id": "md021:after-sync-secrets-saved",
+      "scenario": "Primary recovery sync secrets staged.",
+      "seedState": "Same as MD-021 baseline.",
+      "forceStopWhen": "The recovery UI pauses after recovered root key and device private key are saved to encrypted sync secret storage.",
+      "expectedResume": "Relaunch restores encrypted data without asking for the recovery passphrase again.",
+      "serverVerification": "New pending device cursor advances after restore; no old primary revocation before finalize."
+    },
+    {
+      "id": "md021:after-restore-completed",
+      "scenario": "Primary recovery partition or snapshot restore completed.",
+      "seedState": "Same as MD-021 baseline; optionally add a new note on old primary before relaunch to create a stale tail.",
+      "forceStopWhen": "The recovery UI pauses after data restore and before cursor/finalize.",
+      "expectedResume": "Relaunch updates cursor, replays any stale tail, finalizes, and clears the journal.",
+      "serverVerification": "device_cursors.last_applied_sequence catches up to accounts.current_sync_sequence."
+    },
+    {
+      "id": "md021:after-cursor-updated",
+      "scenario": "Primary recovery cursor updated.",
+      "seedState": "Same as MD-021 baseline; add a new note on old primary while the new device is paused to force stale finalize.",
+      "forceStopWhen": "The recovery UI pauses after update_device_cursor and before finalize.",
+      "expectedResume": "Relaunch retries finalize, replays stale tail if needed, updates cursor again, and finalizes.",
+      "serverVerification": "Final primary_recovery_attempts.restored_sequence equals final accounts.current_sync_sequence."
+    },
+    {
+      "id": "md021:after-server-finalized",
+      "scenario": "Primary recovery server finalized before local cleanup.",
+      "seedState": "Same as MD-021 baseline.",
+      "forceStopWhen": "The recovery UI pauses immediately after finalize_primary_mobile_recovery succeeds.",
+      "expectedResume": "Relaunch treats already-finalized recovery as completed, promotes local state, and clears the journal.",
+      "serverVerification": "Old primary devices are revoked and new primary device activation_state is active."
+    },
+    {
+      "id": "md022:after-rotation-begun",
+      "scenario": "Key rotation reserved before recovery package commit.",
+      "seedState": "Primary account with at least one active companion target device and current recovery passphrase.",
+      "forceStopWhen": "The revocation flow pauses after begin_device_key_rotation.",
+      "expectedResume": "Relaunch aborts the pending rotation because no recovery package was committed; target remains active.",
+      "serverVerification": "key_epoch_rotations.status becomes aborted; accounts.current_key_epoch is unchanged."
+    },
+    {
+      "id": "md022:after-recovery-package-committed",
+      "scenario": "New recovery package committed.",
+      "seedState": "Same as MD-022 baseline.",
+      "forceStopWhen": "The revocation flow pauses after the next-epoch recovery key package metadata commits.",
+      "expectedResume": "Relaunch continues companion packages, stages future key, finalizes, revokes target, and clears journal.",
+      "serverVerification": "sync_objects contains key-epoch-recovery operation; key_epoch_rotations.status becomes finalized."
+    },
+    {
+      "id": "md022:after-companion-packages-committed",
+      "scenario": "Surviving companion packages committed.",
+      "seedState": "Same as MD-022 baseline, with at least one surviving companion if possible.",
+      "forceStopWhen": "The revocation flow pauses after all remaining active companions receive next-epoch packages.",
+      "expectedResume": "Relaunch stages the future key locally, finalizes, revokes target, and clears journal.",
+      "serverVerification": "sync_objects contains key-epoch packages for each non-revoked companion."
+    },
+    {
+      "id": "md022:after-future-key-staged",
+      "scenario": "Future root key staged locally.",
+      "seedState": "Same as MD-022 baseline.",
+      "forceStopWhen": "The revocation flow pauses after local sync secrets contain the next epoch key.",
+      "expectedResume": "Relaunch finalizes server rotation and promotes local key epoch.",
+      "serverVerification": "accounts.current_key_epoch advances after resume and target device is revoked."
+    },
+    {
+      "id": "md022:after-server-finalized",
+      "scenario": "Key rotation server finalized before local promotion cleanup.",
+      "seedState": "Same as MD-022 baseline.",
+      "forceStopWhen": "The revocation flow pauses immediately after finalize_device_key_rotation succeeds.",
+      "expectedResume": "Relaunch promotes the finalized epoch locally, updates cursor if needed, and clears journal.",
+      "serverVerification": "key_epoch_rotations.status is finalized and device_revocations has the target device."
+    }
+  ]
+}
+

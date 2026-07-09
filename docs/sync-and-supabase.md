@@ -64,6 +64,8 @@ Primary replacement is two-phase:
 
 On restore failure, the client calls `abort_primary_mobile_recovery`, clears local pending state, and does not revoke the old primary.
 
+After `begin_primary_mobile_recovery` succeeds, the client stores a pending-primary-recovery journal in encrypted sync secret storage. The journal stores derived local security config, device key material, Supabase/Google sessions, and the recovered account root key, but never the recovery passphrase, local PIN, or recovery-answer plaintext. On app unlock or account-link retry, the client resumes restore, cursor update, stale-tail replay, or cleanup of an already-finalized recovery before normal sync polling starts.
+
 ## Device Revocation and Key Rotation
 
 Companion revocation is two-phase:
@@ -77,7 +79,9 @@ Companion revocation is two-phase:
 7. `finalize_device_key_rotation` verifies the recovery package and remaining-device package operations, revokes the target device, and advances `current_key_epoch`.
 8. Local primary state is promoted to the finalized key epoch.
 
-If package upload/commit fails, the client aborts the rotation and the target device remains active on the existing epoch.
+The primary stores a pending-rotation journal in encrypted sync secret storage as soon as `begin_device_key_rotation` succeeds. The journal stores the future root key and package progress, but not the recovery passphrase. On app unlock or companion-device refresh, the client resumes missing package commits, promotes a rotation that already finalized server-side, or aborts a begun rotation if no recovery package was committed.
+
+If package upload/commit fails before a recovery package commit, the client can abort the rotation and the target device remains active on the existing epoch. Once a recovery package is committed, resume continues the rotation instead of discarding the pending future key.
 
 ## Durable User-Write Outbox
 
@@ -122,7 +126,7 @@ Staging smoke tests should cover:
 - new account setup;
 - companion pairing;
 - partitioned restore;
-- primary recovery success and restore failure;
+- primary recovery success, restore failure, and crash-resume;
 - stale recovery finalize followed by tail replay;
-- companion revocation with package failure and success;
+- companion revocation with package failure, crash-resume, and success;
 - old direct RPCs rejecting with the expected two-phase errors.
