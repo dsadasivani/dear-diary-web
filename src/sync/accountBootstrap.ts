@@ -475,16 +475,23 @@ const continuePendingPrimaryRecovery = async (input: {
     input.onProgress?.('Restoring diary data...');
     const localState = (await input.repository.getLocalSyncAccountState())
       || await savePendingRecoveryEmptyLocalState(input.repository, pending);
-    const partitioned = await restoreLatestPartitions({
-      repository: input.repository,
-      controlPlane: input.controlPlane,
-      localState,
-      accountRootKey,
-      accountRootKeys,
-      googleSession,
-      download: input.download,
-    });
-    if (partitioned.mode === 'partitioned') {
+    let partitioned: Awaited<ReturnType<typeof restoreLatestPartitions>> | null = null;
+    let partitionedFailure: unknown = null;
+    try {
+      partitioned = await restoreLatestPartitions({
+        repository: input.repository,
+        controlPlane: input.controlPlane,
+        localState,
+        accountRootKey,
+        accountRootKeys,
+        googleSession,
+        download: input.download,
+      });
+    } catch (error) {
+      partitionedFailure = error;
+      console.warn('Partitioned primary recovery restore failed; trying legacy snapshot restore:', error);
+    }
+    if (partitioned?.mode === 'partitioned') {
       const restoredState = (await input.repository.getLocalSyncAccountState()) || localState;
       pending = await updatePendingPrimaryRecovery(pending, {
         phase: 'partition_restore_completed',
@@ -494,39 +501,51 @@ const continuePendingPrimaryRecovery = async (input: {
       }, input.secretStorage);
       await manualSyncFlowCheckpoint('md021:after-restore-completed');
     } else {
-      const recoveryObjects = await input.controlPlane.listAccountRecoveryObjects();
-      const validSnapshot = await findLatestValidSnapshot({
-        objects: recoveryObjects,
-        accountId: pending.account.id,
-        accountRootKey,
-        accountRootKeys,
-        googleSession,
-        download: input.download,
-      });
-      const latestSnapshot = validSnapshot.object;
-      const allObjects = await listAllSyncObjects(input.controlPlane, pending.device.id);
-      let replayedState = await savePendingRecoverySnapshotLocalState(
-        input.repository,
-        pending,
-        validSnapshot.snapshot,
-        latestSnapshot,
-      );
-      replayedState = await replaySyncObjects({
-        repository: input.repository,
-        localState: replayedState,
-        accountRootKey,
-        accountRootKeys,
-        googleSession,
-        download: input.download,
-        objects: allObjects.filter(object => object.sequence > latestSnapshot.sequence),
-      });
-      pending = await updatePendingPrimaryRecovery(pending, {
-        phase: 'legacy_snapshot_restored',
-        latestSnapshotDriveFileId: latestSnapshot.driveFileId,
-        latestSnapshotSequence: latestSnapshot.sequence,
-        currentSyncSequence: replayedState.currentSyncSequence,
-      }, input.secretStorage);
-      await manualSyncFlowCheckpoint('md021:after-restore-completed');
+      try {
+        const recoveryObjects = await input.controlPlane.listAccountRecoveryObjects();
+        const validSnapshot = await findLatestValidSnapshot({
+          objects: recoveryObjects,
+          accountId: pending.account.id,
+          accountRootKey,
+          accountRootKeys,
+          googleSession,
+          download: input.download,
+        });
+        const latestSnapshot = validSnapshot.object;
+        const allObjects = await listAllSyncObjects(input.controlPlane, pending.device.id);
+        let replayedState = await savePendingRecoverySnapshotLocalState(
+          input.repository,
+          pending,
+          validSnapshot.snapshot,
+          latestSnapshot,
+        );
+        replayedState = await replaySyncObjects({
+          repository: input.repository,
+          localState: replayedState,
+          accountRootKey,
+          accountRootKeys,
+          googleSession,
+          download: input.download,
+          objects: allObjects.filter(object => object.sequence > latestSnapshot.sequence),
+        });
+        pending = await updatePendingPrimaryRecovery(pending, {
+          phase: 'legacy_snapshot_restored',
+          latestSnapshotDriveFileId: latestSnapshot.driveFileId,
+          latestSnapshotSequence: latestSnapshot.sequence,
+          currentSyncSequence: replayedState.currentSyncSequence,
+        }, input.secretStorage);
+        await manualSyncFlowCheckpoint('md021:after-restore-completed');
+      } catch (legacyError) {
+        if (partitionedFailure) {
+          throw new AggregateError(
+            [partitionedFailure, legacyError],
+            `Partitioned restore failed and no legacy encrypted snapshot could be restored. `
+            + `${String((partitionedFailure as { message?: string })?.message || partitionedFailure)}; `
+            + `${String((legacyError as { message?: string })?.message || legacyError)}`,
+          );
+        }
+        throw legacyError;
+      }
     }
   }
 
@@ -630,9 +649,16 @@ const recoverExistingMobileAccount = async ({
     download,
   });
   const latestKeyPackage = recoveredKey.object;
-  const accountRootKey = recoveredKey.accountRootKey;
   const recoveredKeyEpoch = latestKeyPackage.keyEpoch || existingAccount.currentKeyEpoch || 1;
-  const recoveredRootKeys = { [recoveredKeyEpoch]: accountRootKey };
+  const currentKeyEpoch = existingAccount.currentKeyEpoch || recoveredKeyEpoch || 1;
+  const recoveredRootKeys = {
+    ...recoveredKey.accountRootKeys,
+    [recoveredKeyEpoch]: recoveredKey.accountRootKeys[recoveredKeyEpoch] || recoveredKey.accountRootKey,
+  };
+  const accountRootKey = recoveredRootKeys[currentKeyEpoch] || recoveredKey.accountRootKey;
+  if (!recoveredRootKeys[currentKeyEpoch]) {
+    throw new Error('Recovery key material for the current encrypted account epoch was not found. Try the current recovery passphrase from the active primary device.');
+  }
   const securityConfig = await createRecoveredSecurityConfig(repository, googleSession, localPin, recoveryQuestion);
   const driveBackupSettings = await createRecoveredDriveBackupSettings(repository, googleSession);
 
@@ -658,7 +684,7 @@ const recoverExistingMobileAccount = async ({
     accountRootKeyBase64: encodeSyncSecretBytes(accountRootKey),
     accountRootKeysBase64: encodeRootKeys(recoveredRootKeys),
     recoveryKeyDriveFileId: latestKeyPackage.driveFileId,
-    recoveryKeyEpoch: recoveredKeyEpoch,
+    recoveryKeyEpoch: currentKeyEpoch,
     recoveryKeySequence: latestKeyPackage.sequence,
     currentSyncSequence: 0,
     securityConfig,
@@ -783,9 +809,12 @@ export const bootstrapNewMobileAccount = async ({
   });
 
   onProgress?.('Encrypting recovery key...');
+  const initialKeyEpoch = created.account.currentKeyEpoch || 1;
   const recoveryKeyPackage = await wrapAccountRootKeyForRecovery(accountRootKey, recoveryPassphrase, {
     accountId: created.account.id,
+    keyEpoch: initialKeyEpoch,
     keyVersion: 1,
+    accountRootKeys: { [initialKeyEpoch]: accountRootKey },
   });
   const recoveryKeyBytes = encodeRecoveryKeyPackage(recoveryKeyPackage);
   onProgress?.('Saving recovery key to Drive...');
@@ -811,13 +840,13 @@ export const bootstrapNewMobileAccount = async ({
     objectKind: 'key_package',
     sha256: recoveryKeySha256,
     sizeBytes: recoveryKeyBytes.byteLength,
-    keyEpoch: created.account.currentKeyEpoch || 1,
+    keyEpoch: initialKeyEpoch,
   });
 
   onProgress?.('Encrypting diary snapshot...');
   const localSnapshot = await repository.exportSnapshot();
   const snapshotPayload = encodeRepositorySnapshotPayload(localSnapshot, created.account.id, keyObject.sequence);
-  const snapshot = await encryptSyncPayload(accountRootKey, 'snapshot', snapshotPayload, { keyEpoch: created.account.currentKeyEpoch || 1 });
+  const snapshot = await encryptSyncPayload(accountRootKey, 'snapshot', snapshotPayload, { keyEpoch: initialKeyEpoch });
   onProgress?.('Saving diary snapshot to Drive...');
   const snapshotFile = await uploadDriveSyncObject({
     session: googleSession,
@@ -836,7 +865,7 @@ export const bootstrapNewMobileAccount = async ({
     objectKind: 'snapshot',
     sha256: snapshot.sha256,
     sizeBytes: snapshot.bytes.byteLength,
-    keyEpoch: created.account.currentKeyEpoch || 1,
+    keyEpoch: initialKeyEpoch,
   });
 
   onProgress?.('Saving account on this device...');
@@ -876,7 +905,7 @@ export const bootstrapNewMobileAccount = async ({
     latestSnapshotDriveFileId: snapshotFile.id,
     latestSnapshotSequence: snapshotObject.sequence,
     currentSyncSequence: snapshotObject.sequence,
-    keyEpoch: created.account.currentKeyEpoch || 1,
+    keyEpoch: initialKeyEpoch,
     linkedAt: Date.now(),
   };
   await repository.saveLocalSyncAccountState(localState);
@@ -885,7 +914,7 @@ export const bootstrapNewMobileAccount = async ({
     version: 1,
     accountId: created.account.id,
     accountRootKey,
-    accountRootKeys: { [created.account.currentKeyEpoch || 1]: accountRootKey },
+    accountRootKeys: { [initialKeyEpoch]: accountRootKey },
     devicePrivateKeyJwk: deviceKeys.privateKeyJwk,
     supabaseSession,
     googleSession,

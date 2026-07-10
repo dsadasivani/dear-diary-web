@@ -25,6 +25,7 @@ import {
   encodePartitionManifestPayload,
   encodePartitionSnapshotPayload,
 } from './syncPartitioning';
+import { encodeRepositorySnapshotPayload } from './syncSnapshot';
 import type { SupabaseControlPlaneClient } from './supabaseControlPlane';
 import { createRepository } from './testSupport';
 
@@ -492,28 +493,36 @@ test('primary recovery aborts without finalizing when restore fails', async () =
     ['drive-recovery', recoveryBytes],
     ['drive-bad-manifest', badManifestBytes],
   ]);
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(String(args[0])); };
 
-  await assert.rejects(
-    () => bootstrapNewMobileAccount({
-      googleSession: {
-        userId: 'google-1',
-        email: 'writer@example.com',
-        displayName: 'Writer',
-        accessToken: 'drive-token',
-      },
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
-      recoveryPassphrase: 'a sufficiently long passphrase',
-      localPin: '1234',
-      recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
-      repository,
-      controlPlane,
-      displayName: 'Phone',
-      platform: 'android',
-      download: async (_session, fileId) => files.get(fileId)!,
-    }),
-    /authentication failed|manifest|invalid|checksum|unexpected token|json/i,
-  );
+  try {
+    await assert.rejects(
+      () => bootstrapNewMobileAccount({
+        googleSession: {
+          userId: 'google-1',
+          email: 'writer@example.com',
+          displayName: 'Writer',
+          accessToken: 'drive-token',
+        },
+        supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+        recoveryPassphrase: 'a sufficiently long passphrase',
+        localPin: '1234',
+        recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+        repository,
+        controlPlane,
+        displayName: 'Phone',
+        platform: 'android',
+        download: async (_session, fileId) => files.get(fileId)!,
+      }),
+      /authentication failed|manifest|invalid|checksum|unexpected token|json/i,
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
 
+  assert.match(warnings[0] || '', /Partitioned primary recovery restore failed/);
   assert.equal(finalizeCalls, 0);
   assert.equal(abortCalls, 1);
   assert.equal((await repository.listNotes())[0]?.title, 'Original local note');
@@ -522,6 +531,179 @@ test('primary recovery aborts without finalizing when restore fails', async () =
   assert.equal((await repository.getLocalSyncAccountState())?.accountId, 'local-account');
   assert.deepEqual((await loadSyncSecrets())?.accountRootKey, originalRootKey);
   await clearSyncSecrets();
+});
+
+test('primary recovery falls back to legacy snapshot when partitioned manifest restore fails', async () => {
+  const repository = await createRepository();
+  const accountRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const recoveryBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
+    accountRootKey,
+    'a sufficiently long passphrase',
+    { accountId: 'account-1' },
+  ));
+  const snapshot = {
+    diaries: [{
+      id: 'diary-default',
+      name: 'Diary',
+      emoji: 'D',
+      color: '#000',
+      isLocked: false,
+      entryCount: 0,
+      lastUpdated: 'No entries yet',
+    }],
+    entries: [],
+    notes: [{
+      id: 'note-legacy',
+      title: 'Legacy note',
+      body: 'Restored after manifest failure.',
+      isPinned: false,
+      tags: [],
+      createdAt: 1,
+      updatedAt: 1,
+    }],
+    syncRecordVersions: {},
+    syncMediaPointers: {},
+  };
+  const encryptedSnapshot = await encryptSyncPayload(
+    accountRootKey,
+    'snapshot',
+    encodeRepositorySnapshotPayload(snapshot, 'account-1', 7),
+    { keyEpoch: 1 },
+  );
+  const badManifestBytes = new TextEncoder().encode('not an encrypted manifest');
+  const recoveryObject: SyncObjectMetadata = {
+    id: 'recovery-object',
+    accountId: 'account-1',
+    sequence: 1,
+    driveFileId: 'drive-recovery',
+    objectKind: 'key_package',
+    sha256: await sha256Hex(recoveryBytes),
+    sizeBytes: recoveryBytes.byteLength,
+    createdByDeviceId: 'old-primary',
+    createdAt: '2026-07-08T00:00:00.000Z',
+    keyEpoch: 1,
+  };
+  const snapshotObject: SyncObjectMetadata = {
+    id: 'snapshot-object',
+    accountId: 'account-1',
+    sequence: 8,
+    driveFileId: 'drive-snapshot',
+    objectKind: 'snapshot',
+    sha256: encryptedSnapshot.sha256,
+    sizeBytes: encryptedSnapshot.bytes.byteLength,
+    createdByDeviceId: 'old-primary',
+    createdAt: '2026-07-08T00:00:01.000Z',
+    keyEpoch: 1,
+  };
+  const manifestObject: SyncObjectMetadata = {
+    id: 'manifest-object',
+    accountId: 'account-1',
+    sequence: 10,
+    driveFileId: 'drive-bad-manifest',
+    objectKind: 'manifest',
+    sha256: await sha256Hex(badManifestBytes),
+    sizeBytes: badManifestBytes.byteLength,
+    createdByDeviceId: 'old-primary',
+    createdAt: '2026-07-08T00:00:02.000Z',
+    keyEpoch: 1,
+  };
+  const existingAccount: SyncAccount = {
+    id: 'account-1',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    createdAt: '',
+    activePrimaryDeviceId: 'old-primary',
+    currentSyncSequence: 10,
+    currentSnapshotSequence: 8,
+    currentKeyEpoch: 1,
+    recoveryConfigured: true,
+  };
+  const finalizeSequences: number[] = [];
+  let abortCalls = 0;
+  const controlPlane = {
+    lookupCurrentGoogleAccount: async () => existingAccount,
+    listAccountRecoveryObjects: async () => [recoveryObject, snapshotObject],
+    beginPrimaryMobileRecovery: async (input: { publicKey: string }) => ({
+      account: existingAccount,
+      device: {
+        id: 'new-primary',
+        accountId: 'account-1',
+        role: 'primary_mobile',
+        publicKey: input.publicKey,
+        displayName: 'Phone',
+        platform: 'android',
+        createdAt: '',
+        lastSeenAt: '',
+        revokedAt: null,
+        replacedByDeviceId: null,
+        activationState: 'pending_recovery',
+      },
+      attempt: {
+        id: 'attempt-1',
+        accountId: 'account-1',
+        deviceId: 'new-primary',
+        previousPrimaryDeviceId: 'old-primary',
+        googleUserId: 'google-1',
+        googleEmail: 'writer@example.com',
+        displayName: 'Phone',
+        platform: 'android',
+        status: 'pending',
+        startedAt: '',
+        finalizedAt: null,
+        restoredSequence: null,
+      },
+    }),
+    getLatestRestoreManifest: async () => ({
+      manifestObject,
+      coreSnapshotObject: null,
+      currentSyncSequence: 10,
+      keyEpoch: 1,
+    }),
+    updateDeviceCursor: async () => ({}),
+    listSyncObjectsAfter: async () => [],
+    finalizePrimaryMobileRecovery: async (input: { restoredSequence: number }) => {
+      finalizeSequences.push(input.restoredSequence);
+      existingAccount.activePrimaryDeviceId = 'new-primary';
+      return {};
+    },
+    abortPrimaryMobileRecovery: async () => {
+      abortCalls += 1;
+      throw new Error('abort should not be called');
+    },
+  } as unknown as SupabaseControlPlaneClient;
+  const files = new Map<string, Uint8Array>([
+    ['drive-recovery', recoveryBytes],
+    ['drive-snapshot', encryptedSnapshot.bytes],
+    ['drive-bad-manifest', badManifestBytes],
+  ]);
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(String(args[0])); };
+
+  try {
+    const result = await bootstrapNewMobileAccount({
+      googleSession,
+      supabaseSession,
+      recoveryPassphrase: 'a sufficiently long passphrase',
+      localPin: '1234',
+      recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+      repository,
+      controlPlane,
+      displayName: 'Phone',
+      platform: 'android',
+      download: async (_session, fileId) => files.get(fileId)!,
+    });
+
+    assert.equal(result.mode, 'recovered');
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.match(warnings[0] || '', /Partitioned primary recovery restore failed/);
+  assert.deepEqual(finalizeSequences, [8]);
+  assert.equal(abortCalls, 0);
+  assert.equal((await repository.getNote('note-legacy'))?.title, 'Legacy note');
+  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 8);
 });
 
 test('primary recovery finalizes after partition restore and stale tail replay', async () => {
@@ -759,6 +941,208 @@ test('primary recovery finalizes after partition restore and stale tail replay',
   assert.deepEqual(callOrder, ['cursor:5', 'finalize:5', 'cursor:6', 'finalize:6']);
   assert.equal((await repository.getNote(tailNote.id))?.title, 'Tail note');
   assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 6);
+});
+
+test('primary recovery restores partition snapshots encrypted with older key epochs', async () => {
+  const repository = await createRepository();
+  const secretStorage = new MemorySecretStorage();
+  const epochOneRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const epochTwoRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const recoveryOneBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
+    epochOneRootKey,
+    'a sufficiently long passphrase',
+    { accountId: 'account-1', keyEpoch: 1, keyVersion: 1 },
+  ));
+  const recoveryTwoBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
+    epochTwoRootKey,
+    'a sufficiently long passphrase',
+    { accountId: 'account-1', keyEpoch: 2, keyVersion: 2 },
+  ));
+  const snapshot = {
+    diaries: [{
+      id: 'diary-default',
+      name: 'Diary',
+      emoji: 'D',
+      color: '#000',
+      isLocked: false,
+      entryCount: 0,
+      lastUpdated: 'No entries yet',
+    }],
+    entries: [],
+    notes: [],
+    syncRecordVersions: {},
+    syncMediaPointers: {},
+  };
+  const encryptedCore = await encryptSyncPayload(
+    epochOneRootKey,
+    'partition_snapshot',
+    encodePartitionSnapshotPayload(snapshot, 'account-1', 'core', 4),
+    { keyEpoch: 1 },
+  );
+  const manifest = buildPartitionManifest({
+    accountId: 'account-1',
+    keyEpoch: 2,
+    snapshot,
+    snapshotMetadata: {
+      core: {
+        latestSnapshotSequence: 4,
+        latestSnapshotDriveFileId: 'drive-core',
+        latestSnapshotSha256: encryptedCore.sha256,
+        latestSnapshotSizeBytes: encryptedCore.bytes.byteLength,
+        headSequence: 5,
+      },
+    },
+    now: new Date('2026-07-08T00:00:00.000Z'),
+  });
+  const encryptedManifest = await encryptSyncPayload(
+    epochTwoRootKey,
+    'manifest',
+    encodePartitionManifestPayload(manifest),
+    { keyEpoch: 2 },
+  );
+  const recoveryOneObject: SyncObjectMetadata = {
+    id: 'recovery-object-1',
+    accountId: 'account-1',
+    sequence: 1,
+    driveFileId: 'drive-recovery-1',
+    objectKind: 'key_package',
+    sha256: await sha256Hex(recoveryOneBytes),
+    sizeBytes: recoveryOneBytes.byteLength,
+    createdByDeviceId: 'old-primary',
+    createdAt: '2026-07-08T00:00:00.000Z',
+    keyEpoch: 1,
+  };
+  const recoveryTwoObject: SyncObjectMetadata = {
+    id: 'recovery-object-2',
+    accountId: 'account-1',
+    sequence: 2,
+    driveFileId: 'drive-recovery-2',
+    objectKind: 'key_package',
+    sha256: await sha256Hex(recoveryTwoBytes),
+    sizeBytes: recoveryTwoBytes.byteLength,
+    createdByDeviceId: 'old-primary',
+    createdAt: '2026-07-08T00:00:01.000Z',
+    keyEpoch: 2,
+  };
+  const coreObject: SyncObjectMetadata = {
+    id: 'core-object',
+    accountId: 'account-1',
+    sequence: 4,
+    driveFileId: 'drive-core',
+    objectKind: 'partition_snapshot',
+    sha256: encryptedCore.sha256,
+    sizeBytes: encryptedCore.bytes.byteLength,
+    createdByDeviceId: 'old-primary',
+    createdAt: '2026-07-08T00:00:02.000Z',
+    partitionKey: 'core',
+    keyEpoch: 1,
+  };
+  const manifestObject: SyncObjectMetadata = {
+    id: 'manifest-object',
+    accountId: 'account-1',
+    sequence: 5,
+    driveFileId: 'drive-manifest',
+    objectKind: 'manifest',
+    sha256: encryptedManifest.sha256,
+    sizeBytes: encryptedManifest.bytes.byteLength,
+    createdByDeviceId: 'old-primary',
+    createdAt: '2026-07-08T00:00:03.000Z',
+    keyEpoch: 2,
+  };
+  const existingAccount: SyncAccount = {
+    id: 'account-1',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    createdAt: '',
+    activePrimaryDeviceId: 'old-primary',
+    currentSyncSequence: 5,
+    currentSnapshotSequence: 4,
+    currentKeyEpoch: 2,
+    recoveryConfigured: true,
+  };
+  const finalizeSequences: number[] = [];
+  const controlPlane = {
+    lookupCurrentGoogleAccount: async () => existingAccount,
+    listAccountRecoveryObjects: async () => [recoveryOneObject, recoveryTwoObject],
+    beginPrimaryMobileRecovery: async (input: { publicKey: string }) => ({
+      account: existingAccount,
+      device: {
+        id: 'new-primary',
+        accountId: 'account-1',
+        role: 'primary_mobile',
+        publicKey: input.publicKey,
+        displayName: 'Phone',
+        platform: 'android',
+        createdAt: '',
+        lastSeenAt: '',
+        revokedAt: null,
+        replacedByDeviceId: null,
+        activationState: 'pending_recovery',
+      },
+      attempt: {
+        id: 'attempt-1',
+        accountId: 'account-1',
+        deviceId: 'new-primary',
+        previousPrimaryDeviceId: 'old-primary',
+        googleUserId: 'google-1',
+        googleEmail: 'writer@example.com',
+        displayName: 'Phone',
+        platform: 'android',
+        status: 'pending',
+        startedAt: '',
+        finalizedAt: null,
+        restoredSequence: null,
+      },
+    }),
+    getLatestRestoreManifest: async () => ({
+      manifestObject,
+      coreSnapshotObject: coreObject,
+      currentSyncSequence: 5,
+      keyEpoch: 2,
+    }),
+    getPartitionRestoreBundle: async (_deviceId: string, partitionKeys: string[]) => {
+      assert.deepEqual(partitionKeys, ['core']);
+      return [{ partitionKey: 'core', snapshotObject: coreObject, tailObjects: [] }];
+    },
+    updateDeviceCursor: async () => ({}),
+    listSyncObjectsAfter: async () => [],
+    finalizePrimaryMobileRecovery: async (input: { restoredSequence: number }) => {
+      finalizeSequences.push(input.restoredSequence);
+      return {};
+    },
+    abortPrimaryMobileRecovery: async () => {
+      throw new Error('abort should not be called');
+    },
+  } as unknown as SupabaseControlPlaneClient;
+  const files = new Map<string, Uint8Array>([
+    ['drive-recovery-1', recoveryOneBytes],
+    ['drive-recovery-2', recoveryTwoBytes],
+    ['drive-manifest', encryptedManifest.bytes],
+    ['drive-core', encryptedCore.bytes],
+  ]);
+
+  const result = await bootstrapNewMobileAccount({
+    googleSession,
+    supabaseSession,
+    recoveryPassphrase: 'a sufficiently long passphrase',
+    localPin: '1234',
+    recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+    repository,
+    controlPlane,
+    displayName: 'Phone',
+    platform: 'android',
+    download: async (_session, fileId) => files.get(fileId)!,
+    secretStorage,
+  });
+
+  const secrets = await loadSyncSecrets(secretStorage);
+  assert.equal(result.mode, 'recovered');
+  assert.deepEqual(finalizeSequences, [5]);
+  assert.equal((await repository.listDiaries())[0]?.name, 'Diary');
+  assert.equal((await repository.getLocalSyncAccountState())?.keyEpoch, 2);
+  assert.deepEqual(secrets?.accountRootKey, epochTwoRootKey);
+  assert.deepEqual(secrets?.accountRootKeys?.[1], epochOneRootKey);
+  assert.deepEqual(secrets?.accountRootKeys?.[2], epochTwoRootKey);
 });
 
 test('primary recovery keeps its journal when final cleanup fails after server finalize', async () => {

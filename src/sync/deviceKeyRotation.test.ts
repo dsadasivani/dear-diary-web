@@ -13,8 +13,10 @@ import { createRepository } from './testSupport';
 import type { DriveSyncObjectSummary, UploadDriveSyncObjectInput } from './driveSyncObjects';
 import { generateDeviceKeyPair } from './deviceKeys';
 import {
+  decodeRecoveryKeyPackage,
   encodeRecoveryKeyPackage,
   generateAccountRootKey,
+  unwrapAccountRootKeysFromRecovery,
   wrapAccountRootKeyForRecovery,
 } from './e2eeKeyPackage';
 import {
@@ -373,6 +375,10 @@ test('resume completes rotation after recovery package was committed', async () 
   const pendingAfterCrash = await loadPendingDeviceKeyRotation(fixture.secretStorage);
   assert.equal(pendingAfterCrash?.phase, 'recovery_package_committed');
   assert.equal(pendingAfterCrash?.recoveryPackageDriveFileId, 'drive-recovery-1');
+  const recoveryPackage = decodeRecoveryKeyPackage(uploads.get('drive-recovery-1')!);
+  const recoveryKeys = await unwrapAccountRootKeysFromRecovery(recoveryPackage, 'a durable recovery passphrase');
+  assert.deepEqual(recoveryKeys.accountRootKeys[1], fixture.rootKey);
+  assert.equal(recoveryKeys.accountRootKeys[2].byteLength, 32);
 
   const result = await resumePendingDeviceKeyRotation({
     repository: fixture.repository,

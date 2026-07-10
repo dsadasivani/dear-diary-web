@@ -6,7 +6,7 @@ import type {
   SyncPartitionKey,
   SyncPartitionManifest,
 } from '../types';
-import { decryptSyncPayload } from './encryptedSyncObject';
+import { decryptSyncPayloadWithKnownKeys } from './encryptedSyncObject';
 import { downloadVerifiedSyncObject, replaySyncObjects, type SyncObjectDownloader } from './eventReplay';
 import type { SupabaseControlPlaneClient } from './supabaseControlPlane';
 import {
@@ -36,6 +36,21 @@ export interface PartitionedRestoreResult {
   currentSyncSequence: number;
 }
 
+const restoreObjectDescription = (object: SyncObjectMetadata): string => (
+  `${object.objectKind} sequence ${object.sequence}, metadata epoch ${object.keyEpoch ?? 'unknown'}`
+);
+
+const withRestoreObjectContext = (
+  message: string,
+  object: SyncObjectMetadata,
+  error: unknown,
+): Error => {
+  const detail = String((error as { message?: string })?.message || error || 'unknown error');
+  const wrapped = new Error(`${message} (${restoreObjectDescription(object)}): ${detail}`);
+  (wrapped as Error & { cause?: unknown }).cause = error;
+  return wrapped;
+};
+
 const decryptManifest = async (
   googleSession: GoogleAccountSession,
   object: SyncObjectMetadata,
@@ -45,7 +60,12 @@ const decryptManifest = async (
   download?: SyncObjectDownloader,
 ): Promise<SyncPartitionManifest> => {
   const bytes = await downloadVerifiedSyncObject(googleSession, object, download);
-  const decrypted = await decryptSyncPayload(accountRootKeys?.[object.keyEpoch || 1] || accountRootKey, bytes);
+  let decrypted: Awaited<ReturnType<typeof decryptSyncPayloadWithKnownKeys>>;
+  try {
+    decrypted = await decryptSyncPayloadWithKnownKeys(bytes, accountRootKey, accountRootKeys, object.keyEpoch);
+  } catch (error) {
+    throw withRestoreObjectContext('Restore manifest could not be decrypted', object, error);
+  }
   if (decrypted.objectKind !== 'manifest') throw new Error('Restore manifest object kind is invalid.');
   return parsePartitionManifestPayload(decrypted.payload, accountId);
 };
@@ -56,7 +76,17 @@ const restorePartitionSnapshot = async (
   partitionKey: string,
 ): Promise<void> => {
   const bytes = await downloadVerifiedSyncObject(input.googleSession, object, input.download);
-  const decrypted = await decryptSyncPayload(input.accountRootKeys?.[object.keyEpoch || 1] || input.accountRootKey, bytes);
+  let decrypted: Awaited<ReturnType<typeof decryptSyncPayloadWithKnownKeys>>;
+  try {
+    decrypted = await decryptSyncPayloadWithKnownKeys(
+      bytes,
+      input.accountRootKey,
+      input.accountRootKeys,
+      object.keyEpoch,
+    );
+  } catch (error) {
+    throw withRestoreObjectContext(`Partition snapshot could not be decrypted for ${partitionKey}`, object, error);
+  }
   if (decrypted.objectKind !== 'partition_snapshot') {
     throw new Error('Partition restore object kind is invalid.');
   }

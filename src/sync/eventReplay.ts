@@ -2,7 +2,7 @@ import type { DiaryRepository } from '../repositories';
 import type { GoogleAccountSession, LocalSyncAccountState, SyncMediaPointer, SyncObjectMetadata } from '../types';
 import { decodeSyncDomainEvent } from './domainEvents';
 import { downloadDriveSyncObject } from './driveSyncObjects';
-import { decryptSyncPayload } from './encryptedSyncObject';
+import { decryptSyncPayloadWithKnownKeys } from './encryptedSyncObject';
 
 export type SyncObjectDownloader = (
   session: GoogleAccountSession,
@@ -37,12 +37,6 @@ export interface ReplaySyncObjectsInput {
   allowHistorical?: boolean;
 }
 
-const keyForObject = (
-  accountRootKey: Uint8Array,
-  accountRootKeys: Record<number, Uint8Array> | undefined,
-  object: SyncObjectMetadata,
-): Uint8Array => accountRootKeys?.[object.keyEpoch || 1] || accountRootKey;
-
 export const replaySyncObjects = async ({
   repository,
   localState,
@@ -62,7 +56,12 @@ export const replaySyncObjects = async ({
 
     if (object.objectKind === 'event') {
       const encrypted = await downloadVerifiedSyncObject(googleSession, object, download);
-      const decrypted = await decryptSyncPayload(keyForObject(accountRootKey, accountRootKeys, object), encrypted);
+      const decrypted = await decryptSyncPayloadWithKnownKeys(
+        encrypted,
+        accountRootKey,
+        accountRootKeys,
+        object.keyEpoch,
+      );
       if (decrypted.objectKind !== 'event') throw new Error('Sync object metadata does not match its encrypted payload.');
       const event = decodeSyncDomainEvent(decrypted.payload);
       if (

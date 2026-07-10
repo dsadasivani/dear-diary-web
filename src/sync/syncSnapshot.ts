@@ -1,6 +1,6 @@
 import type { DiaryRepository, RepositorySnapshot } from '../repositories/DiaryRepository';
 import type { GoogleAccountSession, SyncObjectMetadata } from '../types';
-import { decryptSyncPayload } from './encryptedSyncObject';
+import { decryptSyncPayloadWithKnownKeys } from './encryptedSyncObject';
 import {
   downloadVerifiedSyncObject,
   type SyncObjectDownloader,
@@ -127,9 +127,11 @@ export const findLatestValidSnapshot = async (input: {
   for (const object of candidates) {
     try {
       const encrypted = await downloadVerifiedSyncObject(input.googleSession, object, input.download);
-      const decrypted = await decryptSyncPayload(
-        input.accountRootKeys?.[object.keyEpoch || 1] || input.accountRootKey,
+      const decrypted = await decryptSyncPayloadWithKnownKeys(
         encrypted,
+        input.accountRootKey,
+        input.accountRootKeys,
+        object.keyEpoch,
       );
       if (decrypted.objectKind !== 'snapshot') throw new Error('Snapshot metadata does not match its payload.');
       const parsed = parseRepositorySnapshotPayload(decrypted.payload, input.accountId);

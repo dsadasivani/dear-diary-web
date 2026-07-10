@@ -112,3 +112,62 @@ export const decryptSyncPayload = async (
     throw new Error('Encrypted sync object authentication failed.');
   }
 };
+
+export const readEncryptedSyncObjectHeader = (bytes: Uint8Array): EncryptedSyncObjectHeader | null => {
+  try {
+    return (JSON.parse(decoder.decode(bytes)) as { header?: EncryptedSyncObjectHeader }).header || null;
+  } catch {
+    return null;
+  }
+};
+
+const keyFingerprint = (key: Uint8Array): string => Array.from(key).join(',');
+
+const addKnownKey = (
+  keys: Uint8Array[],
+  seen: Set<string>,
+  key: Uint8Array | undefined,
+): void => {
+  if (!key) return;
+  const fingerprint = keyFingerprint(key);
+  if (seen.has(fingerprint)) return;
+  seen.add(fingerprint);
+  keys.push(key);
+};
+
+export const decryptSyncPayloadWithKnownKeys = async (
+  bytes: Uint8Array,
+  accountRootKey: Uint8Array,
+  accountRootKeys: Record<number, Uint8Array> | undefined,
+  preferredKeyEpoch?: number | null,
+): Promise<{ objectKind: SyncObjectKind; payload: Uint8Array }> => {
+  const keys: Uint8Array[] = [];
+  const seen = new Set<string>();
+  const header = readEncryptedSyncObjectHeader(bytes);
+  const headerKeyEpoch = header?.keyEpoch;
+
+  addKnownKey(keys, seen, headerKeyEpoch ? accountRootKeys?.[headerKeyEpoch] : undefined);
+  addKnownKey(keys, seen, preferredKeyEpoch ? accountRootKeys?.[preferredKeyEpoch] : undefined);
+  addKnownKey(keys, seen, accountRootKey);
+  Object.entries(accountRootKeys || {})
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .forEach(([, key]) => addKnownKey(keys, seen, key));
+
+  let lastError: unknown;
+  for (const key of keys) {
+    try {
+      return await decryptSyncPayload(key, bytes);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (String((lastError as { message?: string })?.message || lastError).includes('Encrypted sync object authentication failed')) {
+    const knownEpochs = Object.keys(accountRootKeys || {}).sort((left, right) => Number(left) - Number(right));
+    throw new Error(
+      `Encrypted sync object authentication failed for ${header?.objectKind || 'unknown object'} `
+      + `(header epoch ${headerKeyEpoch ?? 'unknown'}, metadata epoch ${preferredKeyEpoch ?? 'unknown'}, `
+      + `known epochs ${knownEpochs.length ? knownEpochs.join(',') : 'none'}, tried keys ${keys.length}).`,
+    );
+  }
+  throw lastError || new Error('Encrypted sync object authentication failed.');
+};

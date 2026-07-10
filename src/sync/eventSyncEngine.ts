@@ -28,7 +28,7 @@ import {
   type DriveSyncObjectSummary,
   type UploadDriveSyncObjectInput,
 } from './driveSyncObjects';
-import { decryptSyncPayload, encryptSyncPayload } from './encryptedSyncObject';
+import { decryptSyncPayload, decryptSyncPayloadWithKnownKeys, encryptSyncPayload } from './encryptedSyncObject';
 import { replaySyncObjects } from './eventReplay';
 import { decodeCompanionKeyPackage, unwrapRootKeysForCompanion } from './companionKeyPackage';
 import { refreshSupabaseSession } from './supabaseAuth';
@@ -1207,9 +1207,11 @@ export class EventSyncEngine {
       createdByDeviceId: pointer.createdByDeviceId,
       createdAt: pointer.createdAt,
     }, this.download);
-    const decrypted = await decryptSyncPayload(
-      getAccountRootKeyForEpoch(runtime.secrets, pointer.keyEpoch || 1),
+    const decrypted = await decryptSyncPayloadWithKnownKeys(
       encrypted,
+      getAccountRootKeyForEpoch(runtime.secrets, pointer.keyEpoch || 1),
+      runtime.secrets.accountRootKeys,
+      pointer.keyEpoch,
     );
     if (decrypted.objectKind !== 'media') throw new Error('Synced media object metadata is invalid.');
     const media = decodeSyncMediaPayload(decrypted.payload);

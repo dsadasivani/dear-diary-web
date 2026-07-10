@@ -126,6 +126,92 @@ test('recent-first restore imports core and recent monthly partitions from manif
   assert.equal((await repository.getLocalSyncAccountState())?.partitionedSyncEnabled, true);
 });
 
+test('restore uses encrypted header epoch when restore metadata is missing key epoch', async () => {
+  const repository = await createRepository();
+  const localState = {
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 0,
+    linkedAt: 1,
+  };
+  await repository.saveLocalSyncAccountState(localState);
+  const epochOneRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const epochTwoRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const fullSnapshot: RepositorySnapshot = {
+    diaries: [{ id: 'diary-epoch', name: 'Epoch Diary', emoji: 'D', color: '#000', isLocked: false, entryCount: 0, lastUpdated: '' }],
+    entries: [],
+    notes: [],
+    syncRecordVersions: {},
+  };
+  const core = await encryptSyncPayload(
+    epochTwoRootKey,
+    'partition_snapshot',
+    encodePartitionSnapshotPayload(fullSnapshot, 'account-1', 'core', 4),
+    { keyEpoch: 2 },
+  );
+  const manifestPayload = buildPartitionManifest({
+    accountId: 'account-1',
+    keyEpoch: 2,
+    snapshot: fullSnapshot,
+    snapshotMetadata: {
+      core: {
+        latestSnapshotSequence: 4,
+        latestSnapshotDriveFileId: 'drive-core',
+        latestSnapshotSha256: core.sha256,
+        latestSnapshotSizeBytes: core.bytes.byteLength,
+        headSequence: 4,
+      },
+    },
+    now: new Date('2026-07-06T00:00:00.000Z'),
+  });
+  const manifest = await encryptSyncPayload(
+    epochTwoRootKey,
+    'manifest',
+    encodePartitionManifestPayload(manifestPayload),
+    { keyEpoch: 2 },
+  );
+  const files = new Map<string, Uint8Array>([
+    ['drive-manifest', manifest.bytes],
+    ['drive-core', core.bytes],
+  ]);
+  const manifestObject = metadata(7, 'drive-manifest', 'manifest', manifest.sha256, manifest.bytes.byteLength);
+  const coreObject = metadata(4, 'drive-core', 'partition_snapshot', core.sha256, core.bytes.byteLength, 'core');
+  const controlPlane = {
+    getLatestRestoreManifest: async () => ({
+      manifestObject,
+      coreSnapshotObject: coreObject,
+      currentSyncSequence: 7,
+      keyEpoch: 2,
+    }),
+    getPartitionRestoreBundle: async (_deviceId: string, partitionKeys: string[]) => partitionKeys.map(partitionKey => ({
+      partitionKey,
+      snapshotObject: partitionKey === 'core' ? coreObject : null,
+      tailObjects: [],
+    })),
+  };
+
+  const result = await restoreLatestPartitions({
+    repository,
+    controlPlane: controlPlane as any,
+    localState,
+    accountRootKey: epochOneRootKey,
+    accountRootKeys: { 1: epochOneRootKey, 2: epochTwoRootKey },
+    googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive' },
+    now: new Date('2026-07-06T00:00:00.000Z'),
+    download: async (_session, fileId) => files.get(fileId)!,
+  });
+
+  assert.equal(result.mode, 'partitioned');
+  assert.equal((await repository.listDiaries())[0]?.name, 'Epoch Diary');
+  assert.equal((await repository.getLocalSyncAccountState())?.keyEpoch, 2);
+});
+
 test('restore reports legacy fallback when no manifest exists', async () => {
   const repository = await createRepository();
   const localState = {

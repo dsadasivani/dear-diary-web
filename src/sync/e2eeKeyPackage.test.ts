@@ -6,6 +6,7 @@ import {
   encodeRecoveryKeyPackage,
   generateAccountRootKey,
   unwrapAccountRootKeyFromRecovery,
+  unwrapAccountRootKeysFromRecovery,
   validateRecoveryPassphrase,
   wrapAccountRootKeyForRecovery,
 } from './e2eeKeyPackage';
@@ -48,4 +49,25 @@ test('rejects wrong passphrases and modified root-key packages', async () => {
     () => unwrapAccountRootKeyFromRecovery(modified, passphrase),
     /incorrect|damaged/i,
   );
+});
+
+test('wraps and unwraps historical epoch root keys for recovery', async () => {
+  const epochOneRootKey = generateAccountRootKey();
+  const epochTwoRootKey = generateAccountRootKey();
+
+  const keyPackage = await wrapAccountRootKeyForRecovery(epochTwoRootKey, passphrase, {
+    accountId: 'account-1',
+    keyEpoch: 2,
+    keyVersion: 2,
+    createdAt: '2026-07-05T00:00:00.000Z',
+    accountRootKeys: {
+      1: epochOneRootKey,
+      2: epochTwoRootKey,
+    },
+  });
+
+  const unwrapped = await unwrapAccountRootKeysFromRecovery(keyPackage, passphrase);
+  assert.deepEqual(unwrapped.accountRootKey, epochTwoRootKey);
+  assert.deepEqual(unwrapped.accountRootKeys[1], epochOneRootKey);
+  assert.deepEqual(unwrapped.accountRootKeys[2], epochTwoRootKey);
 });

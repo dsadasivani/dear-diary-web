@@ -32,14 +32,31 @@ const randomBytes = (length: number): Uint8Array => {
   return bytes;
 };
 
-const recoveryAdditionalData = (keyPackage: Pick<RecoveryKeyPackage, 'accountId' | 'createdAt' | 'keyVersion' | 'packageKind' | 'version'>): Uint8Array => (
-  encoder.encode([
+const recoveryAdditionalData = (keyPackage: Pick<RecoveryKeyPackage, 'accountId' | 'createdAt' | 'keyEpoch' | 'keyVersion' | 'packageKind' | 'version'>): Uint8Array => {
+  const fields: Array<string | number> = [
     'DDKEY',
     keyPackage.version,
     keyPackage.packageKind,
     keyPackage.accountId || '',
     keyPackage.keyVersion,
     keyPackage.createdAt,
+  ];
+  if (keyPackage.keyEpoch !== undefined) fields.push(keyPackage.keyEpoch);
+  return encoder.encode(fields.join(':'));
+};
+
+const recoveryEpochAdditionalData = (
+  keyPackage: Pick<RecoveryKeyPackage, 'accountId' | 'createdAt' | 'keyVersion' | 'packageKind' | 'version'>,
+  keyEpoch: number,
+): Uint8Array => (
+  encoder.encode([
+    'DDKEY-EPOCH',
+    keyPackage.version,
+    keyPackage.packageKind,
+    keyPackage.accountId || '',
+    keyPackage.keyVersion,
+    keyPackage.createdAt,
+    keyEpoch,
   ].join(':'))
 );
 
@@ -69,12 +86,23 @@ export const generateAccountRootKey = (): Uint8Array => randomBytes(ACCOUNT_ROOT
 export const wrapAccountRootKeyForRecovery = async (
   accountRootKey: Uint8Array,
   passphrase: string,
-  options: { accountId?: string; keyVersion?: number; createdAt?: string } = {},
+  options: {
+    accountId?: string;
+    keyEpoch?: number;
+    keyVersion?: number;
+    createdAt?: string;
+    accountRootKeys?: Record<number, Uint8Array>;
+  } = {},
 ): Promise<RecoveryKeyPackage> => {
   validateRecoveryPassphrase(passphrase);
   if (accountRootKey.length !== ACCOUNT_ROOT_KEY_BYTES) {
     throw new Error(`Account root key must be ${ACCOUNT_ROOT_KEY_BYTES} bytes.`);
   }
+  Object.entries(options.accountRootKeys || {}).forEach(([epoch, key]) => {
+    if (!Number.isInteger(Number(epoch)) || Number(epoch) < 1 || key.byteLength !== ACCOUNT_ROOT_KEY_BYTES) {
+      throw new Error('Epoch root key metadata is invalid.');
+    }
+  });
 
   const salt = randomBytes(16);
   const nonce = randomBytes(12);
@@ -85,6 +113,7 @@ export const wrapAccountRootKeyForRecovery = async (
     kdf: 'PBKDF2-SHA-256',
     iterations: RECOVERY_KDF_ITERATIONS,
     keyVersion: options.keyVersion || 1,
+    keyEpoch: options.keyEpoch,
     accountId: options.accountId,
     createdAt: options.createdAt || new Date().toISOString(),
   };
@@ -94,19 +123,46 @@ export const wrapAccountRootKeyForRecovery = async (
     wrappingKey,
     accountRootKey,
   ));
+  const epochRootKeys = Object.entries({
+    ...(options.accountRootKeys || {}),
+    ...(options.keyEpoch ? { [options.keyEpoch]: accountRootKey } : {}),
+  })
+    .map(([epoch, key]) => ({ keyEpoch: Number(epoch), rootKey: key }))
+    .filter(entry => Number.isInteger(entry.keyEpoch) && entry.keyEpoch > 0)
+    .sort((left, right) => left.keyEpoch - right.keyEpoch);
+  const wrappedEpochRootKeys = options.accountRootKeys
+    ? await Promise.all(epochRootKeys.map(async entry => {
+        const epochNonce = randomBytes(12);
+        const epochWrappedRootKey = new Uint8Array(await crypto.subtle.encrypt(
+          {
+            name: 'AES-GCM',
+            iv: epochNonce,
+            additionalData: recoveryEpochAdditionalData(keyPackage, entry.keyEpoch),
+          },
+          wrappingKey,
+          entry.rootKey,
+        ));
+        return {
+          keyEpoch: entry.keyEpoch,
+          nonce: bytesToBase64(epochNonce),
+          wrappedRootKey: bytesToBase64(epochWrappedRootKey),
+        };
+      }))
+    : undefined;
 
   return {
     ...keyPackage,
     salt: bytesToBase64(salt),
     nonce: bytesToBase64(nonce),
     wrappedRootKey: bytesToBase64(wrappedRootKey),
+    wrappedEpochRootKeys,
   };
 };
 
-export const unwrapAccountRootKeyFromRecovery = async (
+export const unwrapAccountRootKeysFromRecovery = async (
   keyPackage: RecoveryKeyPackage,
   passphrase: string,
-): Promise<Uint8Array> => {
+): Promise<{ accountRootKey: Uint8Array; accountRootKeys: Record<number, Uint8Array> }> => {
   validateRecoveryPassphrase(passphrase);
   if (
     keyPackage.version !== 1 ||
@@ -123,7 +179,7 @@ export const unwrapAccountRootKeyFromRecovery = async (
       base64ToBytes(keyPackage.salt),
       keyPackage.iterations,
     );
-    return new Uint8Array(await crypto.subtle.decrypt(
+    const accountRootKey = new Uint8Array(await crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
         iv: base64ToBytes(keyPackage.nonce),
@@ -132,10 +188,37 @@ export const unwrapAccountRootKeyFromRecovery = async (
       wrappingKey,
       base64ToBytes(keyPackage.wrappedRootKey),
     ));
+    if (accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Invalid root key length.');
+    const keyEpoch = keyPackage.keyEpoch || 1;
+    const accountRootKeys: Record<number, Uint8Array> = { [keyEpoch]: accountRootKey };
+    for (const wrapped of keyPackage.wrappedEpochRootKeys || []) {
+      if (!Number.isInteger(wrapped.keyEpoch) || wrapped.keyEpoch < 1) {
+        throw new Error('Recovery key package epoch is invalid.');
+      }
+      const epochRootKey = new Uint8Array(await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: base64ToBytes(wrapped.nonce),
+          additionalData: recoveryEpochAdditionalData(keyPackage, wrapped.keyEpoch),
+        },
+        wrappingKey,
+        base64ToBytes(wrapped.wrappedRootKey),
+      ));
+      if (epochRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Invalid root key length.');
+      accountRootKeys[wrapped.keyEpoch] = epochRootKey;
+    }
+    return { accountRootKey: accountRootKeys[keyEpoch] || accountRootKey, accountRootKeys };
   } catch {
     throw new Error('Recovery passphrase is incorrect or the root-key package is damaged.');
   }
 };
+
+export const unwrapAccountRootKeyFromRecovery = async (
+  keyPackage: RecoveryKeyPackage,
+  passphrase: string,
+): Promise<Uint8Array> => (
+  (await unwrapAccountRootKeysFromRecovery(keyPackage, passphrase)).accountRootKey
+);
 
 export const encodeRecoveryKeyPackage = (keyPackage: RecoveryKeyPackage): Uint8Array => (
   encoder.encode(JSON.stringify(keyPackage))

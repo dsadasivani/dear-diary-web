@@ -115,6 +115,42 @@ test('replays events encrypted with a non-current epoch key', async () => {
   assert.equal((await repository.getNote(note.id))?.title, 'Epoch two');
 });
 
+test('replays events using encrypted header epoch when metadata defaults to epoch one', async () => {
+  const repository = await createRepository(new MemoryDataStore());
+  const localState = {
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2, linkedAt: 1,
+  };
+  await repository.saveLocalSyncAccountState(localState);
+  const epoch1 = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+  const epoch2 = Uint8Array.from({ length: 32 }, (_, index) => index + 41);
+  const note = { id: 'note-header-epoch', title: 'Header epoch', body: '', isPinned: false, tags: [], createdAt: 1, updatedAt: 1 };
+  const event = createSyncDomainEvent({
+    accountId: localState.accountId, deviceId: 'device-2', recordType: 'note', operation: 'upsert',
+    recordId: note.id, baseRecordVersion: 0, payload: note,
+  });
+  const encrypted = await encryptSyncPayload(epoch2, 'event', encodeSyncDomainEvent(event), { keyEpoch: 2 });
+
+  await replaySyncObjects({
+    repository,
+    localState,
+    accountRootKey: epoch1,
+    accountRootKeys: { 1: epoch1, 2: epoch2 },
+    googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'token' },
+    objects: [{
+      id: 'object-header-epoch', accountId: localState.accountId, sequence: 3, driveFileId: 'drive-header-epoch',
+      objectKind: 'event', sha256: encrypted.sha256, sizeBytes: encrypted.bytes.byteLength,
+      createdByDeviceId: 'device-2', createdAt: '2026-07-05T00:00:00.000Z',
+      recordType: 'note', recordId: note.id, baseRecordVersion: 0, recordVersion: 1,
+    }],
+    download: async () => encrypted.bytes,
+  });
+
+  assert.equal((await repository.getNote(note.id))?.title, 'Header epoch');
+});
+
 test('hydrates replayed stable media references from another device', async () => {
   const repository = await createRepository(new MemoryDataStore());
   const localState = {

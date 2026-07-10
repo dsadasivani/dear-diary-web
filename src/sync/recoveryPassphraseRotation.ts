@@ -64,7 +64,12 @@ export const rotateRecoveryPassphrase = async (input: {
   const activeRootKey = getAccountRootKeyForEpoch(secrets, keyEpoch);
   const keyPackage = await wrapAccountRootKeyForRecovery(activeRootKey, input.newPassphrase, {
     accountId: state.accountId,
+    keyEpoch,
     keyVersion,
+    accountRootKeys: {
+      ...(secrets.accountRootKeys || {}),
+      [keyEpoch]: activeRootKey,
+    },
   });
   const bytes = encodeRecoveryKeyPackage(keyPackage);
   const file = await uploadDriveSyncObject({

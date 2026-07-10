@@ -58,3 +58,31 @@ test('falls back to the newest older snapshot that passes integrity and decrypti
   assert.equal(restored.object.sequence, 5);
   assert.equal(restored.baseSequence, 4);
 });
+
+test('restores snapshots using encrypted header epoch when metadata is missing key epoch', async () => {
+  const epochOneRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const epochTwoRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const snapshot = await encryptSyncPayload(
+    epochTwoRootKey,
+    'snapshot',
+    encodeRepositorySnapshotPayload({
+      diaries: [{ id: 'diary-epoch', name: 'Epoch Diary', emoji: 'D', color: '#000', isLocked: false, entryCount: 0, lastUpdated: '' }],
+      entries: [],
+      notes: [],
+      syncRecordVersions: {},
+    }, 'account-1', 4),
+    { keyEpoch: 2 },
+  );
+
+  const restored = await findLatestValidSnapshot({
+    objects: [metadata(5, 'snapshot-epoch-2', snapshot.sha256, snapshot.bytes.byteLength)],
+    accountId: 'account-1',
+    accountRootKey: epochOneRootKey,
+    accountRootKeys: { 1: epochOneRootKey, 2: epochTwoRootKey },
+    googleSession: { userId: 'google-1', email: null, displayName: null, accessToken: 'token' },
+    download: async () => snapshot.bytes,
+  });
+
+  assert.equal(restored.object.sequence, 5);
+  assert.equal(restored.snapshot.diaries[0]?.name, 'Epoch Diary');
+});

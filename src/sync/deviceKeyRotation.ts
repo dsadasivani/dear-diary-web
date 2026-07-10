@@ -379,10 +379,19 @@ const publishRecoveryKeyEpochPackage = async (
   input: DeviceKeyRotationDependencies,
 ): Promise<PendingDeviceKeyRotation> => {
   const googleSession = requireGoogleSession(input.googleSession);
+  const { state, secrets } = await loadPrimaryStateAndSecrets(input);
+  const primary = requirePrimaryStateAndSecrets(state, secrets, pending.accountId);
   const nextRootKey = requirePendingRootKey(pending);
+  const currentRootKey = getAccountRootKeyForEpoch(primary.secrets, pending.currentKeyEpoch);
   const keyPackage = await wrapAccountRootKeyForRecovery(nextRootKey, recoveryPassphrase, {
     accountId: pending.accountId,
+    keyEpoch: pending.nextKeyEpoch,
     keyVersion: pending.keyVersion,
+    accountRootKeys: {
+      [pending.currentKeyEpoch]: currentRootKey,
+      ...(primary.secrets.accountRootKeys || {}),
+      [pending.nextKeyEpoch]: nextRootKey,
+    },
   });
   const bytes = encodeRecoveryKeyPackage(keyPackage);
   const file = await (input.upload || uploadDriveSyncObject)({

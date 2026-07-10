@@ -541,11 +541,17 @@ export interface RecoveryKeyPackage {
   kdf: 'PBKDF2-SHA-256';
   iterations: number;
   keyVersion: number;
+  keyEpoch?: number;
   accountId?: string;
   createdAt: string;
   salt: string;
   nonce: string;
   wrappedRootKey: string;
+  wrappedEpochRootKeys?: Array<{
+    keyEpoch: number;
+    nonce: string;
+    wrappedRootKey: string;
+  }>;
 }
 
 export interface LocalSyncAccountState {

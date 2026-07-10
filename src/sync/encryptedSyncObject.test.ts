@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { generateAccountRootKey } from './e2eeKeyPackage';
-import { decryptSyncPayload, encryptSyncPayload } from './encryptedSyncObject';
+import { decryptSyncPayload, decryptSyncPayloadWithKnownKeys, encryptSyncPayload } from './encryptedSyncObject';
 
 test('encrypts sync payloads with the account root key and records a digest', async () => {
   const rootKey = generateAccountRootKey();
@@ -27,4 +27,21 @@ test('rejects modified sync ciphertext', async () => {
     () => decryptSyncPayload(rootKey, modified),
     /authentication failed/i,
   );
+});
+
+test('decrypts with recovered epoch keys when metadata points at the wrong epoch', async () => {
+  const epochOneRootKey = generateAccountRootKey();
+  const epochTwoRootKey = generateAccountRootKey();
+  const payload = new TextEncoder().encode('epoch two payload');
+  const encrypted = await encryptSyncPayload(epochTwoRootKey, 'manifest', payload, { keyEpoch: 2 });
+
+  const decrypted = await decryptSyncPayloadWithKnownKeys(
+    encrypted.bytes,
+    epochOneRootKey,
+    { 1: epochOneRootKey, 2: epochTwoRootKey },
+    1,
+  );
+
+  assert.equal(decrypted.objectKind, 'manifest');
+  assert.deepEqual(decrypted.payload, payload);
 });

@@ -41,3 +41,53 @@ test('skips newer companion packages when recovering with a passphrase package',
   assert.deepEqual(recovered.accountRootKey, rootKey);
   assert.equal(recovered.object.driveFileId, 'recovery');
 });
+
+test('collects passphrase recovery keys across key epochs', async () => {
+  const epochOneRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const epochTwoRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const recoveryOneBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(epochOneRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+      keyEpoch: 1,
+      keyVersion: 1,
+    }),
+  );
+  const recoveryTwoBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(epochTwoRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+      keyEpoch: 2,
+      keyVersion: 2,
+    }),
+  );
+  const makeObject = async (
+    sequence: number,
+    id: string,
+    bytes: Uint8Array,
+    keyEpoch: number,
+  ): Promise<SyncObjectMetadata> => ({
+    id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: id,
+    objectKind: 'key_package', sha256: await sha256(bytes), sizeBytes: bytes.byteLength,
+    createdByDeviceId: 'device-1', createdAt: '', keyEpoch,
+  });
+  const objects = [
+    await makeObject(1, 'recovery-1', recoveryOneBytes, 1),
+    await makeObject(9, 'recovery-2', recoveryTwoBytes, 2),
+  ];
+  const files = new Map<string, Uint8Array>([
+    ['recovery-1', recoveryOneBytes],
+    ['recovery-2', recoveryTwoBytes],
+  ]);
+
+  const recovered = await recoverAccountRootKey({
+    objects,
+    accountId: 'account-1',
+    recoveryPassphrase: 'a sufficiently long passphrase',
+    googleSession: { userId: 'google-1', email: null, displayName: null, accessToken: 'token' },
+    download: async (_session, id) => files.get(id)!,
+  });
+
+  assert.equal(recovered.object.driveFileId, 'recovery-2');
+  assert.deepEqual(recovered.accountRootKey, epochTwoRootKey);
+  assert.deepEqual(recovered.accountRootKeys[1], epochOneRootKey);
+  assert.deepEqual(recovered.accountRootKeys[2], epochTwoRootKey);
+});
