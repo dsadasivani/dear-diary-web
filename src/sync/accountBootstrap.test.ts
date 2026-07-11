@@ -416,7 +416,7 @@ test('new account setup populates the local profile from Google', async () => {
         imageUrl: 'https://example.com/avatar.jpg',
       },
       supabaseSession,
-      recoveryPassphrase: 'a sufficiently long passphrase',
+      recoveryPassphrase: '12345678',
       localPin: '1234',
       recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
       repository,
@@ -439,6 +439,74 @@ test('new account setup populates the local profile from Google', async () => {
   assert.equal(profile.email, 'writer@example.com');
   assert.equal(profile.avatarUri, 'file:///google-avatar.jpg');
   assert.deepEqual(uploadedNames, ['/key-packages/root-key-v1.ddkey', '/snapshots/2.ddsnapshot']);
+});
+
+test('explicit create mode refuses to recover an existing account', async () => {
+  const repository = await createRepository();
+  const existingAccount: SyncAccount = {
+    id: 'account-1',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    createdAt: '',
+    activePrimaryDeviceId: 'primary-1',
+    currentSyncSequence: 2,
+    currentSnapshotSequence: 2,
+    currentKeyEpoch: 1,
+    recoveryConfigured: true,
+  };
+  const controlPlane = {
+    lookupCurrentGoogleAccount: async () => {
+      throw new Error('preflight account should be used');
+    },
+    createPrimaryMobileAccount: async () => {
+      throw new Error('create should not be called for an existing account');
+    },
+    beginPrimaryMobileRecovery: async () => {
+      throw new Error('recover should not be called in explicit create mode');
+    },
+  } as unknown as SupabaseControlPlaneClient;
+
+  await assert.rejects(
+    () => bootstrapNewMobileAccount({
+      googleSession,
+      supabaseSession,
+      recoveryPassphrase: '12345678',
+      localPin: '1234',
+      recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+      repository,
+      controlPlane,
+      accountMode: 'create',
+      preflightAccount: existingAccount,
+    }),
+    /already exists/i,
+  );
+});
+
+test('explicit recover mode refuses to create when no account exists', async () => {
+  const repository = await createRepository();
+  const controlPlane = {
+    lookupCurrentGoogleAccount: async () => {
+      throw new Error('preflight account should be used');
+    },
+    createPrimaryMobileAccount: async () => {
+      throw new Error('create should not be called in explicit recover mode');
+    },
+  } as unknown as SupabaseControlPlaneClient;
+
+  await assert.rejects(
+    () => bootstrapNewMobileAccount({
+      googleSession,
+      supabaseSession,
+      recoveryPassphrase: 'legacy recovery passphrase',
+      localPin: '1234',
+      recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+      repository,
+      controlPlane,
+      accountMode: 'recover',
+      preflightAccount: null,
+    }),
+    /no existing encrypted/i,
+  );
 });
 
 test('primary recovery aborts without finalizing when restore fails', async () => {

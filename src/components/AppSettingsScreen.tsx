@@ -39,7 +39,10 @@ import {
 } from '../mobile/reminders';
 import ProfileAvatar from './ProfileAvatar';
 import CompanionApprovalPanel from './CompanionApprovalPanel';
-import { RECOVERY_PASSPHRASE_MIN_LENGTH } from '../sync/e2eeKeyPackage';
+import {
+  isValidNewRecoveryPassphrase,
+  RECOVERY_PASSPHRASE_DIGIT_LENGTH,
+} from '../sync/e2eeKeyPackage';
 import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
 import type { DriveSyncStatus } from '../sync/eventSyncEngine';
 import type { SyncStatusSummary } from '../repositories';
@@ -1199,22 +1202,26 @@ export default function AppSettingsScreen({
                   {showSyncRecoveryForm && (
                     <form onSubmit={handleRotateRecoveryPassphrase} className="mt-2 pt-3 border-t border-brand-border flex flex-col gap-3">
                       <label className="flex flex-col gap-1">
-                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">New Passphrase</span>
+                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">New 8-Digit Passphrase</span>
                         <input
                           type="password"
+                          inputMode="numeric"
                           autoComplete="new-password"
+                          maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
                           value={newRecoveryPassphrase}
-                          onChange={event => setNewRecoveryPassphrase(event.target.value)}
+                          onChange={event => setNewRecoveryPassphrase(event.target.value.replace(/\D/g, '').slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH))}
                           className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
                         />
                       </label>
                       <label className="flex flex-col gap-1">
-                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Confirm Passphrase</span>
+                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Confirm 8-Digit Passphrase</span>
                         <input
                           type="password"
+                          inputMode="numeric"
                           autoComplete="new-password"
+                          maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
                           value={confirmNewRecoveryPassphrase}
-                          onChange={event => setConfirmNewRecoveryPassphrase(event.target.value)}
+                          onChange={event => setConfirmNewRecoveryPassphrase(event.target.value.replace(/\D/g, '').slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH))}
                           className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
                         />
                       </label>
@@ -1225,7 +1232,7 @@ export default function AppSettingsScreen({
                         type="submit"
                         disabled={
                           isRotatingRecoveryPassphrase ||
-                          newRecoveryPassphrase.length < RECOVERY_PASSPHRASE_MIN_LENGTH ||
+                          !isValidNewRecoveryPassphrase(newRecoveryPassphrase) ||
                           newRecoveryPassphrase !== confirmNewRecoveryPassphrase
                         }
                         className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"

@@ -4,7 +4,7 @@ import {
   AlertCircle, ArrowLeft, BookOpen, CalendarDays, Check, Delete,
   Cloud, Eye, EyeOff, LoaderCircle, Lock, Moon, ShieldCheck, Sparkles, Sun
 } from 'lucide-react';
-import { AppSettings, GoogleAccountSession, SecurityConfig } from '../types';
+import { AppSettings, GoogleAccountSession, SecurityConfig, SupabaseAuthSession, SyncAccount } from '../types';
 import {
   createCustomRecoveryQuestionId,
   createInitialPinWithRecovery,
@@ -28,7 +28,11 @@ import {
   getConfiguredSupabaseUrl,
 } from '../sync/config';
 import { exchangeGoogleIdTokenForSupabaseSession } from '../sync/supabaseAuth';
-import { RECOVERY_PASSPHRASE_MIN_LENGTH, validateRecoveryPassphrase } from '../sync/e2eeKeyPackage';
+import {
+  isValidNewRecoveryPassphrase,
+  RECOVERY_PASSPHRASE_DIGIT_LENGTH,
+  validateRecoveryPassphrase,
+} from '../sync/e2eeKeyPackage';
 
 interface LockScreenProps {
   initialSecurity: SecurityConfig;
@@ -69,6 +73,14 @@ const formatGoogleAuthError = (err: any): string => {
 type SetupStep = 'pin' | 'confirm' | 'recovery';
 type RecoveryMode = 'choosing' | 'question' | 'newPin' | null;
 type SyncSetupProgressKey = 'connect' | 'verify' | 'prepare' | 'restore' | 'finish';
+type SyncSetupAccountMode = 'create' | 'recover';
+
+interface SyncSetupSelection {
+  googleSession: GoogleAccountSession;
+  supabaseSession: SupabaseAuthSession;
+  existingAccount: SyncAccount | null;
+  accountMode: SyncSetupAccountMode;
+}
 
 const SYNC_SETUP_PROGRESS_STEPS: Array<{ key: SyncSetupProgressKey; label: string }> = [
   { key: 'connect', label: 'Connect' },
@@ -153,6 +165,7 @@ export default function LockScreen({
   const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
   const [confirmRecoveryPassphrase, setConfirmRecoveryPassphrase] = useState('');
   const [showRecoveryPassphrase, setShowRecoveryPassphrase] = useState(false);
+  const [syncSetupSelection, setSyncSetupSelection] = useState<SyncSetupSelection | null>(null);
 
   useEffect(() => {
     const updateTime = () => {
@@ -328,23 +341,30 @@ export default function LockScreen({
         await completeUnlock(updated);
         return;
       }
-      setSuccessMsg('Local PIN recovery is ready. Create your encrypted account next.');
+      setSuccessMsg('Local PIN recovery is ready. Connect Google to create or restore your encrypted account.');
+      setSyncSetupSelection(null);
+      setRecoveryPassphrase('');
+      setConfirmRecoveryPassphrase('');
       setShowBackupChoice(true);
     } catch (err: any) {
       fail(err?.message || 'Could not save recovery question.');
     }
   };
 
-  const handleInitialGoogleLink = async () => {
+  const resetGoogleSetupSelection = () => {
+    setSyncSetupSelection(null);
+    setRecoveryPassphrase('');
+    setConfirmRecoveryPassphrase('');
+    setShowRecoveryPassphrase(false);
+    setError('');
+    setSuccessMsg('Connect the Google account you want to use for encrypted sync.');
+  };
+
+  const handleConnectGoogleAccount = async () => {
     setIsLinkingBackup(true);
     setError('');
     setSuccessMsg('Opening Google account...');
     try {
-      validateRecoveryPassphrase(recoveryPassphrase);
-      if (recoveryPassphrase !== confirmRecoveryPassphrase) {
-        throw new Error('Recovery passphrases do not match.');
-      }
-      setSuccessMsg('Opening Google account...');
       const session = await startGoogleAuth('sync');
       if (!session.idToken) throw new Error('Google did not return an ID token for Supabase sign-in.');
       setSuccessMsg('Signing in to sync service...');
@@ -353,12 +373,65 @@ export default function LockScreen({
         anonKey: getConfiguredSupabaseAnonKey(),
         googleIdToken: session.idToken,
       });
+      setSuccessMsg('Checking Dear Diary account...');
       const controlPlane = createConfiguredSupabaseControlPlaneClient(supabaseSession.accessToken);
-      const question = getRecoveryQuestionPayload();
-      setSuccessMsg('Preparing encrypted account...');
-      const result = await bootstrapNewMobileAccount({
+      const existingAccount = await controlPlane.lookupCurrentGoogleAccount();
+      const accountMode: SyncSetupAccountMode = existingAccount ? 'recover' : 'create';
+      setSyncSetupSelection({
         googleSession: session,
         supabaseSession,
+        existingAccount,
+        accountMode,
+      });
+      setRecoveryPassphrase('');
+      setConfirmRecoveryPassphrase('');
+      setShowRecoveryPassphrase(false);
+      setSuccessMsg(existingAccount
+        ? 'Encrypted account found. Enter its recovery passphrase to restore this diary.'
+        : 'No encrypted account found. Create an 8-digit recovery passphrase for this account.');
+    } catch (err: any) {
+      const message = err?.message || '';
+      if (
+        message.includes('Supabase Auth') ||
+        message.includes('Supabase sign-in') ||
+        message.includes('Supabase control-plane') ||
+        message.includes('Missing VITE_SUPABASE')
+      ) {
+        fail(message);
+      } else {
+        fail(formatGoogleAuthError(err));
+      }
+    } finally {
+      setIsLinkingBackup(false);
+    }
+  };
+
+  const handleCompleteGoogleSetup = async () => {
+    if (!syncSetupSelection) {
+      await handleConnectGoogleAccount();
+      return;
+    }
+
+    setIsLinkingBackup(true);
+    setError('');
+    try {
+      if (syncSetupSelection.accountMode === 'create') {
+        validateRecoveryPassphrase(recoveryPassphrase);
+        if (recoveryPassphrase !== confirmRecoveryPassphrase) {
+          throw new Error('Recovery passphrases do not match.');
+        }
+      } else if (!recoveryPassphrase) {
+        throw new Error('Enter the recovery passphrase for this account.');
+      }
+
+      setSuccessMsg(syncSetupSelection.accountMode === 'recover'
+        ? 'Preparing account recovery...'
+        : 'Preparing encrypted account...');
+      const controlPlane = createConfiguredSupabaseControlPlaneClient(syncSetupSelection.supabaseSession.accessToken);
+      const question = getRecoveryQuestionPayload();
+      const result = await bootstrapNewMobileAccount({
+        googleSession: syncSetupSelection.googleSession,
+        supabaseSession: syncSetupSelection.supabaseSession,
         recoveryPassphrase,
         localPin: pendingSetupPin,
         recoveryQuestion: {
@@ -368,6 +441,8 @@ export default function LockScreen({
         },
         repository: diaryRepository,
         controlPlane,
+        accountMode: syncSetupSelection.accountMode,
+        preflightAccount: syncSetupSelection.existingAccount,
         onProgress: setSuccessMsg,
       });
       const updatedSecurity = await diaryRepository.getSecurityConfig();
@@ -485,8 +560,21 @@ export default function LockScreen({
     triggerHaptic(15);
   };
 
+  const syncSetupMode = syncSetupSelection?.accountMode;
+  const isCreatingSyncAccount = syncSetupMode === 'create';
+  const isRecoveringSyncAccount = syncSetupMode === 'recover';
+  const canSubmitSyncSetup = syncSetupSelection
+    ? isRecoveringSyncAccount
+      ? recoveryPassphrase.length > 0
+      : isValidNewRecoveryPassphrase(recoveryPassphrase) && recoveryPassphrase === confirmRecoveryPassphrase
+    : true;
+
   const setupTitle = showBackupChoice
-    ? 'Create Encrypted Account'
+    ? !syncSetupSelection
+      ? 'Connect Google Account'
+      : isRecoveringSyncAccount
+        ? 'Restore Encrypted Account'
+        : 'Create Recovery Passphrase'
     : requiresRecoverySetup
     ? 'Add Recovery Question'
     : setupStep === 'recovery'
@@ -498,7 +586,11 @@ export default function LockScreen({
           : 'Setup Security PIN';
 
   const setupCopy = showBackupChoice
-    ? `Sign in with Google and choose a ${RECOVERY_PASSPHRASE_MIN_LENGTH}+ character recovery passphrase. It cannot be reset.`
+    ? !syncSetupSelection
+      ? 'Connect Google first so Dear Diary can check whether this account already has encrypted data.'
+      : isRecoveringSyncAccount
+        ? `Encrypted data was found for ${syncSetupSelection.googleSession.email || 'this Google account'}. Enter the recovery passphrase you created earlier.`
+        : `No encrypted data was found for ${syncSetupSelection.googleSession.email || 'this Google account'}. Create an ${RECOVERY_PASSPHRASE_DIGIT_LENGTH}-digit recovery passphrase.`
     : requiresRecoverySetup
     ? 'Your PIN is verified. Add a security question before continuing.'
     : setupStep === 'recovery'
@@ -655,36 +747,81 @@ export default function LockScreen({
 
                 {showBackupChoice ? (
                   <div className="flex flex-col gap-3">
-                    <label className="flex flex-col gap-1 text-left">
-                      <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Recovery Passphrase</span>
-                      <div className="relative">
-                        <input
-                          type={showRecoveryPassphrase ? 'text' : 'password'}
-                          value={recoveryPassphrase}
-                          onChange={(e) => { setRecoveryPassphrase(e.target.value); setError(''); }}
-                          disabled={isLinkingBackup}
-                          className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink disabled:opacity-60"
-                          placeholder={`${RECOVERY_PASSPHRASE_MIN_LENGTH}+ characters`}
-                        />
-                        <button type="button" onClick={() => setShowRecoveryPassphrase(prev => !prev)} disabled={isLinkingBackup} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink disabled:opacity-50" title={showRecoveryPassphrase ? 'Hide passphrase' : 'Show passphrase'}>
-                          {showRecoveryPassphrase ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
+                    {!syncSetupSelection ? (
+                      <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage/8 p-3 text-left text-[10px] leading-relaxed text-brand-text-muted">
+                        Dear Diary will use Google to check for existing encrypted data before asking for a recovery passphrase.
                       </div>
-                    </label>
-                    <label className="flex flex-col gap-1 text-left">
-                      <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Confirm Passphrase</span>
-                      <input
-                        type={showRecoveryPassphrase ? 'text' : 'password'}
-                        value={confirmRecoveryPassphrase}
-                        onChange={(e) => { setConfirmRecoveryPassphrase(e.target.value); setError(''); }}
-                        disabled={isLinkingBackup}
-                        className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink disabled:opacity-60"
-                        placeholder="Type it again"
-                      />
-                    </label>
-                    <div className="rounded-2xl border border-brand-pink/15 bg-brand-pink/5 p-3 text-left text-[10px] leading-relaxed text-brand-text-muted">
-                      This passphrase protects your account root key. If all trusted devices are lost and this passphrase is forgotten, synced diary data cannot be decrypted.
-                    </div>
+                    ) : (
+                      <>
+                        <div className="rounded-2xl border border-brand-sage/20 bg-white/50 p-3 text-left dark:bg-white/[0.04]">
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-brand-sage">
+                            Google Account
+                          </p>
+                          <p className="mt-1 truncate text-xs font-bold text-brand-plum dark:text-brand-text">
+                            {syncSetupSelection.googleSession.email || 'Connected Google account'}
+                          </p>
+                          {!isLinkingBackup && (
+                            <button
+                              type="button"
+                              onClick={resetGoogleSetupSelection}
+                              className="mt-2 text-[10px] font-bold text-brand-pink hover:text-brand-pink-dark"
+                            >
+                              Use a different Google account
+                            </button>
+                          )}
+                        </div>
+                        <label className="flex flex-col gap-1 text-left">
+                          <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">
+                            {isRecoveringSyncAccount ? 'Existing Recovery Passphrase' : 'New 8-Digit Recovery Passphrase'}
+                          </span>
+                          <div className="relative">
+                            <input
+                              type={showRecoveryPassphrase ? 'text' : 'password'}
+                              inputMode={isCreatingSyncAccount ? 'numeric' : undefined}
+                              autoComplete={isRecoveringSyncAccount ? 'current-password' : 'new-password'}
+                              maxLength={isCreatingSyncAccount ? RECOVERY_PASSPHRASE_DIGIT_LENGTH : undefined}
+                              value={recoveryPassphrase}
+                              onChange={(event) => {
+                                setRecoveryPassphrase(isCreatingSyncAccount
+                                  ? event.target.value.replace(/\D/g, '').slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH)
+                                  : event.target.value);
+                                setError('');
+                              }}
+                              disabled={isLinkingBackup}
+                              className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink disabled:opacity-60"
+                              placeholder={isRecoveringSyncAccount ? 'Passphrase from earlier setup' : `${RECOVERY_PASSPHRASE_DIGIT_LENGTH} digits`}
+                            />
+                            <button type="button" onClick={() => setShowRecoveryPassphrase(prev => !prev)} disabled={isLinkingBackup} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink disabled:opacity-50" title={showRecoveryPassphrase ? 'Hide passphrase' : 'Show passphrase'}>
+                              {showRecoveryPassphrase ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </label>
+                        {isCreatingSyncAccount && (
+                          <label className="flex flex-col gap-1 text-left">
+                            <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Confirm 8-Digit Passphrase</span>
+                            <input
+                              type={showRecoveryPassphrase ? 'text' : 'password'}
+                              inputMode="numeric"
+                              autoComplete="new-password"
+                              maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
+                              value={confirmRecoveryPassphrase}
+                              onChange={(event) => {
+                                setConfirmRecoveryPassphrase(event.target.value.replace(/\D/g, '').slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH));
+                                setError('');
+                              }}
+                              disabled={isLinkingBackup}
+                              className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink disabled:opacity-60"
+                              placeholder="Type it again"
+                            />
+                          </label>
+                        )}
+                        <div className="rounded-2xl border border-brand-pink/15 bg-brand-pink/5 p-3 text-left text-[10px] leading-relaxed text-brand-text-muted">
+                          {isRecoveringSyncAccount
+                            ? 'Use the recovery passphrase you created when this encrypted account was first set up.'
+                            : 'This 8-digit recovery passphrase protects your account root key. Keep it somewhere safe.'}
+                        </div>
+                      </>
+                    )}
                     <AnimatePresence initial={false}>
                       {isLinkingBackup && (
                         <motion.div
@@ -728,13 +865,15 @@ export default function LockScreen({
                       )}
                     </AnimatePresence>
                     <button
-                      onClick={handleInitialGoogleLink}
-                      disabled={isLinkingBackup || recoveryPassphrase.length < RECOVERY_PASSPHRASE_MIN_LENGTH || recoveryPassphrase !== confirmRecoveryPassphrase}
+                      onClick={syncSetupSelection ? handleCompleteGoogleSetup : handleConnectGoogleAccount}
+                      disabled={isLinkingBackup || !canSubmitSyncSetup}
                       aria-busy={isLinkingBackup}
                       className="w-full py-3.5 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
                     >
                       {isLinkingBackup ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
-                      {isLinkingBackup ? 'Setting Up...' : 'Create Encrypted Account'}
+                      {isLinkingBackup
+                        ? syncSetupSelection ? 'Setting Up...' : 'Connecting...'
+                        : !syncSetupSelection ? 'Connect Google Account' : isRecoveringSyncAccount ? 'Restore Encrypted Account' : 'Create Encrypted Account'}
                     </button>
                     {error && (
                       <p className="text-[11px] font-bold text-brand-rose flex justify-center items-center gap-1">

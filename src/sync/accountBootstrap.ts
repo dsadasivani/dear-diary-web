@@ -17,6 +17,7 @@ import {
   ACCOUNT_ROOT_KEY_BYTES,
   encodeRecoveryKeyPackage,
   generateAccountRootKey,
+  validateRecoveryPassphrase,
   wrapAccountRootKeyForRecovery,
 } from './e2eeKeyPackage';
 import { encryptSyncPayload } from './encryptedSyncObject';
@@ -65,6 +66,8 @@ export interface BootstrapNewMobileAccountInput {
   download?: SyncObjectDownloader;
   secretStorage?: SyncSecretStorage;
   cacheGoogleAvatar?: AvatarCache;
+  accountMode?: 'auto' | 'create' | 'recover';
+  preflightAccount?: SyncAccount | null;
   onProgress?: (message: string) => void;
 }
 
@@ -775,6 +778,8 @@ export const bootstrapNewMobileAccount = async ({
   download,
   secretStorage,
   cacheGoogleAvatar,
+  accountMode = 'auto',
+  preflightAccount,
   onProgress,
 }: BootstrapNewMobileAccountInput): Promise<BootstrapNewMobileAccountResult> => {
   if (!googleSession.email) throw new Error('Google must return an email address to create a Dear Diary account.');
@@ -802,7 +807,15 @@ export const bootstrapNewMobileAccount = async ({
   }
 
   onProgress?.('Checking account status...');
-  const existingAccount = await controlPlane.lookupCurrentGoogleAccount();
+  const existingAccount = preflightAccount === undefined
+    ? await controlPlane.lookupCurrentGoogleAccount()
+    : preflightAccount;
+  if (accountMode === 'recover' && !existingAccount) {
+    throw new Error('No existing encrypted Dear Diary account was found for this Google account.');
+  }
+  if (accountMode === 'create' && existingAccount) {
+    throw new Error('An encrypted Dear Diary account already exists for this Google account. Enter its recovery passphrase to restore it.');
+  }
   if (existingAccount) {
     return recoverExistingMobileAccount({
       googleSession,
@@ -821,6 +834,7 @@ export const bootstrapNewMobileAccount = async ({
     });
   }
 
+  validateRecoveryPassphrase(recoveryPassphrase);
   onProgress?.('Personalizing your profile...');
   await populateLocalProfileFromGoogle(repository, googleSession, cacheGoogleAvatar);
 

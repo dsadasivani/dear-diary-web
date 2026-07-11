@@ -2,16 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ACCOUNT_ROOT_KEY_BYTES,
+  RECOVERY_PASSPHRASE_DIGIT_LENGTH,
   decodeRecoveryKeyPackage,
   encodeRecoveryKeyPackage,
   generateAccountRootKey,
+  isValidNewRecoveryPassphrase,
   unwrapAccountRootKeyFromRecovery,
   unwrapAccountRootKeysFromRecovery,
   validateRecoveryPassphrase,
   wrapAccountRootKeyForRecovery,
 } from './e2eeKeyPackage';
 
-const passphrase = 'correct horse diary staple';
+const passphrase = '12345678';
+const legacyPassphrase = 'correct horse diary staple';
 
 test('wraps and unwraps the account root key with the recovery passphrase', async () => {
   const rootKey = generateAccountRootKey();
@@ -27,12 +30,24 @@ test('wraps and unwraps the account root key with the recovery passphrase', asyn
   assert.deepEqual(await unwrapAccountRootKeyFromRecovery(decoded, passphrase), rootKey);
 });
 
-test('requires a 12+ character recovery passphrase', async () => {
-  assert.throws(() => validateRecoveryPassphrase('too-short'), /12 characters/i);
-  await assert.rejects(
-    () => wrapAccountRootKeyForRecovery(generateAccountRootKey(), 'too-short'),
-    /12 characters/i,
-  );
+test('requires a new recovery passphrase to be exactly 8 digits', () => {
+  assert.equal(RECOVERY_PASSPHRASE_DIGIT_LENGTH, 8);
+  assert.equal(isValidNewRecoveryPassphrase('12345678'), true);
+  assert.equal(isValidNewRecoveryPassphrase('1234567'), false);
+  assert.equal(isValidNewRecoveryPassphrase('123456789'), false);
+  assert.equal(isValidNewRecoveryPassphrase('abcd5678'), false);
+  assert.throws(() => validateRecoveryPassphrase('too-short'), /exactly 8 digits/i);
+  assert.throws(() => validateRecoveryPassphrase('1234567a'), /exactly 8 digits/i);
+});
+
+test('still unwraps legacy recovery passphrases created before the 8 digit rule', async () => {
+  const rootKey = generateAccountRootKey();
+  const keyPackage = await wrapAccountRootKeyForRecovery(rootKey, legacyPassphrase, {
+    accountId: 'account-1',
+    createdAt: '2026-07-05T00:00:00.000Z',
+  });
+
+  assert.deepEqual(await unwrapAccountRootKeyFromRecovery(keyPackage, legacyPassphrase), rootKey);
 });
 
 test('rejects wrong passphrases and modified root-key packages', async () => {

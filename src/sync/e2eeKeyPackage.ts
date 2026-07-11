@@ -1,7 +1,8 @@
 import type { RecoveryKeyPackage } from '../types';
 
 export const ACCOUNT_ROOT_KEY_BYTES = 32;
-export const RECOVERY_PASSPHRASE_MIN_LENGTH = 12;
+export const RECOVERY_PASSPHRASE_DIGIT_LENGTH = 8;
+export const RECOVERY_PASSPHRASE_MIN_LENGTH = RECOVERY_PASSPHRASE_DIGIT_LENGTH;
 export const RECOVERY_KDF_ITERATIONS = 600_000;
 
 const encoder = new TextEncoder();
@@ -75,9 +76,19 @@ const deriveRecoveryWrappingKey = async (
   );
 };
 
+export const isValidNewRecoveryPassphrase = (passphrase: string): boolean => (
+  new RegExp(`^\\d{${RECOVERY_PASSPHRASE_DIGIT_LENGTH}}$`).test(passphrase)
+);
+
 export const validateRecoveryPassphrase = (passphrase: string): void => {
-  if (passphrase.length < RECOVERY_PASSPHRASE_MIN_LENGTH) {
-    throw new Error(`Recovery passphrase must contain at least ${RECOVERY_PASSPHRASE_MIN_LENGTH} characters.`);
+  if (!isValidNewRecoveryPassphrase(passphrase)) {
+    throw new Error(`Recovery passphrase must be exactly ${RECOVERY_PASSPHRASE_DIGIT_LENGTH} digits.`);
+  }
+};
+
+export const validateExistingRecoveryPassphrase = (passphrase: string): void => {
+  if (!passphrase) {
+    throw new Error('Enter your recovery passphrase.');
   }
 };
 
@@ -94,7 +105,7 @@ export const wrapAccountRootKeyForRecovery = async (
     accountRootKeys?: Record<number, Uint8Array>;
   } = {},
 ): Promise<RecoveryKeyPackage> => {
-  validateRecoveryPassphrase(passphrase);
+  validateExistingRecoveryPassphrase(passphrase);
   if (accountRootKey.length !== ACCOUNT_ROOT_KEY_BYTES) {
     throw new Error(`Account root key must be ${ACCOUNT_ROOT_KEY_BYTES} bytes.`);
   }
@@ -163,7 +174,7 @@ export const unwrapAccountRootKeysFromRecovery = async (
   keyPackage: RecoveryKeyPackage,
   passphrase: string,
 ): Promise<{ accountRootKey: Uint8Array; accountRootKeys: Record<number, Uint8Array> }> => {
-  validateRecoveryPassphrase(passphrase);
+  validateExistingRecoveryPassphrase(passphrase);
   if (
     keyPackage.version !== 1 ||
     keyPackage.packageKind !== 'root_key' ||
