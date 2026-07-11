@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle, ArrowLeft, BookOpen, CalendarDays, Check, Delete,
-  Cloud, Eye, EyeOff, Lock, Moon, ShieldCheck, Sparkles, Sun
+  Cloud, Eye, EyeOff, LoaderCircle, Lock, Moon, ShieldCheck, Sparkles, Sun
 } from 'lucide-react';
 import { AppSettings, GoogleAccountSession, SecurityConfig } from '../types';
 import {
@@ -68,6 +68,50 @@ const formatGoogleAuthError = (err: any): string => {
 
 type SetupStep = 'pin' | 'confirm' | 'recovery';
 type RecoveryMode = 'choosing' | 'question' | 'newPin' | null;
+type SyncSetupProgressKey = 'connect' | 'verify' | 'prepare' | 'restore' | 'finish';
+
+const SYNC_SETUP_PROGRESS_STEPS: Array<{ key: SyncSetupProgressKey; label: string }> = [
+  { key: 'connect', label: 'Connect' },
+  { key: 'verify', label: 'Verify' },
+  { key: 'prepare', label: 'Prepare' },
+  { key: 'restore', label: 'Restore' },
+  { key: 'finish', label: 'Finish' },
+];
+
+const syncSetupProgressKeyForMessage = (message: string): SyncSetupProgressKey => {
+  const normalized = message.toLowerCase();
+  if (normalized.includes('finding your recovery key') || normalized.includes('unlocking your encrypted account')) {
+    return 'verify';
+  }
+  if (
+    normalized.includes('restoring diary data') ||
+    normalized.includes('encrypting diary snapshot') ||
+    normalized.includes('saving diary snapshot')
+  ) {
+    return 'restore';
+  }
+  if (
+    normalized.includes('personalizing your profile') ||
+    normalized.includes('creating encryption keys') ||
+    normalized.includes('creating account metadata') ||
+    normalized.includes('encrypting recovery key') ||
+    normalized.includes('saving recovery key') ||
+    normalized.includes('registering this device') ||
+    normalized.includes('restoring local recovery state') ||
+    normalized.includes('securing recovered account keys')
+  ) {
+    return 'prepare';
+  }
+  if (
+    normalized.includes('finishing account recovery') ||
+    normalized.includes('saving account on this device') ||
+    normalized.includes('securing account keys') ||
+    normalized.includes('encrypted account')
+  ) {
+    return 'finish';
+  }
+  return 'connect';
+};
 
 export default function LockScreen({
   initialSecurity,
@@ -473,6 +517,15 @@ export default function LockScreen({
   const isCustomRecoveryQuestion = questionId === CUSTOM_QUESTION_SELECT_VALUE;
   const canSaveRecoveryQuestion = !!recoveryAnswer.trim() && (!isCustomRecoveryQuestion || !!customRecoveryQuestion.trim());
   const visiblePinLength = security.isPinCreated ? (security.pinLength || (pin.length > 4 ? 8 : 4)) : selectedPinLength;
+  const accountSetupProgressMessage = successMsg || 'Opening Google account...';
+  const accountSetupProgressKey = syncSetupProgressKeyForMessage(accountSetupProgressMessage);
+  const accountSetupProgressIndex = Math.max(
+    0,
+    SYNC_SETUP_PROGRESS_STEPS.findIndex(step => step.key === accountSetupProgressKey),
+  );
+  const accountSetupProgressDetail = accountSetupProgressKey === 'restore'
+    ? 'Large diaries can take a little while to decrypt and import.'
+    : 'Keep this screen open while setup finishes.';
 
   return (
     <div className={`min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-all duration-700 lg:justify-center lg:px-8 lg:py-8`}>
@@ -609,10 +662,11 @@ export default function LockScreen({
                           type={showRecoveryPassphrase ? 'text' : 'password'}
                           value={recoveryPassphrase}
                           onChange={(e) => { setRecoveryPassphrase(e.target.value); setError(''); }}
-                          className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
+                          disabled={isLinkingBackup}
+                          className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink disabled:opacity-60"
                           placeholder={`${RECOVERY_PASSPHRASE_MIN_LENGTH}+ characters`}
                         />
-                        <button type="button" onClick={() => setShowRecoveryPassphrase(prev => !prev)} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink" title={showRecoveryPassphrase ? 'Hide passphrase' : 'Show passphrase'}>
+                        <button type="button" onClick={() => setShowRecoveryPassphrase(prev => !prev)} disabled={isLinkingBackup} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink disabled:opacity-50" title={showRecoveryPassphrase ? 'Hide passphrase' : 'Show passphrase'}>
                           {showRecoveryPassphrase ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
@@ -623,20 +677,64 @@ export default function LockScreen({
                         type={showRecoveryPassphrase ? 'text' : 'password'}
                         value={confirmRecoveryPassphrase}
                         onChange={(e) => { setConfirmRecoveryPassphrase(e.target.value); setError(''); }}
-                        className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
+                        disabled={isLinkingBackup}
+                        className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink disabled:opacity-60"
                         placeholder="Type it again"
                       />
                     </label>
                     <div className="rounded-2xl border border-brand-pink/15 bg-brand-pink/5 p-3 text-left text-[10px] leading-relaxed text-brand-text-muted">
                       This passphrase protects your account root key. If all trusted devices are lost and this passphrase is forgotten, synced diary data cannot be decrypted.
                     </div>
+                    <AnimatePresence initial={false}>
+                      {isLinkingBackup && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -6 }}
+                          className="rounded-2xl border border-brand-sage/25 bg-white/58 p-3 text-left shadow-sm backdrop-blur-md dark:bg-white/[0.04]"
+                        >
+                          <div className="flex items-start gap-2.5">
+                            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-sage/12 text-brand-sage">
+                              <LoaderCircle className="h-4 w-4 animate-spin" />
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-extrabold text-brand-plum dark:text-brand-text">{accountSetupProgressMessage}</p>
+                              <p className="mt-0.5 text-[10px] font-semibold leading-relaxed text-brand-text-muted">{accountSetupProgressDetail}</p>
+                            </div>
+                          </div>
+                          <div className="mt-3 grid grid-cols-5 gap-1.5">
+                            {SYNC_SETUP_PROGRESS_STEPS.map((step, index) => {
+                              const isComplete = index < accountSetupProgressIndex;
+                              const isActive = index === accountSetupProgressIndex;
+                              return (
+                                <div key={step.key} className="min-w-0">
+                                  <div className={`mx-auto flex h-6 w-6 items-center justify-center rounded-full border text-[9px] font-black transition-colors ${
+                                    isComplete
+                                      ? 'border-brand-sage bg-brand-sage text-white'
+                                      : isActive
+                                        ? 'border-brand-pink bg-brand-pink/10 text-brand-pink'
+                                        : 'border-brand-border bg-white/45 text-brand-text-muted dark:bg-white/[0.03]'
+                                  }`}>
+                                    {isComplete ? <Check className="h-3 w-3" /> : isActive ? <LoaderCircle className="h-3 w-3 animate-spin" /> : index + 1}
+                                  </div>
+                                  <p className={`mt-1 truncate text-center text-[8px] font-black uppercase tracking-[0.08em] ${
+                                    isComplete || isActive ? 'text-brand-sage' : 'text-brand-text-muted/70'
+                                  }`}>{step.label}</p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                     <button
                       onClick={handleInitialGoogleLink}
                       disabled={isLinkingBackup || recoveryPassphrase.length < RECOVERY_PASSPHRASE_MIN_LENGTH || recoveryPassphrase !== confirmRecoveryPassphrase}
+                      aria-busy={isLinkingBackup}
                       className="w-full py-3.5 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
                     >
-                      <Cloud className="w-4 h-4" />
-                      {isLinkingBackup ? 'Creating Account...' : 'Create Encrypted Account'}
+                      {isLinkingBackup ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
+                      {isLinkingBackup ? 'Setting Up...' : 'Create Encrypted Account'}
                     </button>
                     {error && (
                       <p className="text-[11px] font-bold text-brand-rose flex justify-center items-center gap-1">
@@ -644,7 +742,7 @@ export default function LockScreen({
                         <span>{error}</span>
                       </p>
                     )}
-                    {successMsg && !error && (
+                    {successMsg && !error && !isLinkingBackup && (
                       <p className="text-[11px] font-bold text-brand-sage flex justify-center items-center gap-1">
                         <Check className="w-3 h-3" />
                         <span>{successMsg}</span>
