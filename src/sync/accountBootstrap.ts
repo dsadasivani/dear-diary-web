@@ -41,7 +41,6 @@ import {
 } from './syncSnapshot';
 import { recoverAccountRootKey } from './accountRecovery';
 import { restoreLatestPartitions } from './partitionedRestore';
-import { migrateLocalAccountToPartitionedSync } from './partitionedMigration';
 import type { SyncSecretStorage } from './syncSecrets';
 import { manualSyncFlowCheckpoint } from '../testing/manualSyncFlowHooks';
 
@@ -647,6 +646,7 @@ const recoverExistingMobileAccount = async ({
     recoveryPassphrase,
     googleSession,
     download,
+    requiredKeyEpoch: existingAccount.currentKeyEpoch || 1,
   });
   const latestKeyPackage = recoveredKey.object;
   const recoveredKeyEpoch = latestKeyPackage.keyEpoch || existingAccount.currentKeyEpoch || 1;
@@ -919,16 +919,6 @@ export const bootstrapNewMobileAccount = async ({
     supabaseSession,
     googleSession,
   }, secretStorage);
-  onProgress?.('Preparing first sync...');
-  await migrateLocalAccountToPartitionedSync({
-    repository,
-    controlPlane,
-    localState,
-    accountRootKey,
-    googleSession,
-  }).catch(error => {
-    console.warn('Initial partitioned sync migration will be retried:', error);
-  });
   return {
     localState: (await repository.getLocalSyncAccountState()) || localState,
     supabaseAccountId: created.account.id,

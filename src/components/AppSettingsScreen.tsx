@@ -42,6 +42,8 @@ import CompanionApprovalPanel from './CompanionApprovalPanel';
 import { RECOVERY_PASSPHRASE_MIN_LENGTH } from '../sync/e2eeKeyPackage';
 import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
 import type { DriveSyncStatus } from '../sync/eventSyncEngine';
+import type { SyncStatusSummary } from '../repositories';
+import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface AppSettingsScreenProps {
   initialSettings: AppSettings;
@@ -86,6 +88,7 @@ export default function AppSettingsScreen({
   onShowToast,
   onThemeChange
 }: AppSettingsScreenProps) {
+  useScreenPerformance('settings');
   const isDesktop = layout === 'desktop';
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
@@ -177,6 +180,9 @@ export default function AppSettingsScreen({
   const [driveSyncStatus, setDriveSyncStatus] = useState<DriveSyncStatus | null>(null);
   const [isDriveSyncStatusLoading, setIsDriveSyncStatusLoading] = useState(false);
   const [driveSyncStatusError, setDriveSyncStatusError] = useState('');
+  const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
+  const [syncStatusError, setSyncStatusError] = useState('');
+  const [isRetryingSync, setIsRetryingSync] = useState(false);
 
   // Reminders preference states
   const [reminderTime, setReminderTime] = useState<string>(() => normalizeReminderTime(settings.reminderTime || '20:00'));
@@ -216,6 +222,9 @@ export default function AppSettingsScreen({
   const journalDataPercent = driveSyncStatus ? percentOf(driveSyncStatus.storageBreakdown.journalDataBytes, appStorageBytes) : 0;
   const imageStoragePercent = driveSyncStatus ? percentOf(driveSyncStatus.storageBreakdown.imageBytes, appStorageBytes) : 0;
   const audioStoragePercent = driveSyncStatus ? percentOf(driveSyncStatus.storageBreakdown.audioBytes, appStorageBytes) : 0;
+  const pendingSyncCount = syncStatus?.pendingOutboxCount || 0;
+  const failedSyncCount = syncStatus?.failedOperationCount || 0;
+  const conflictSyncCount = syncStatus?.conflictCount || 0;
 
   const reconnectSyncAccount = async (): Promise<void> => {
     setAuthError('');
@@ -246,11 +255,55 @@ export default function AppSettingsScreen({
     }
   };
 
+  const refreshLocalSyncStatus = async (): Promise<void> => {
+    if (!syncAccountState) {
+      setSyncStatus(null);
+      return;
+    }
+    setSyncStatusError('');
+    try {
+      setSyncStatus(await diaryRepository.getSyncStatusSummary());
+    } catch (error: any) {
+      setSyncStatusError(error?.message || 'Local sync status could not be loaded.');
+    }
+  };
+
+  const retryLocalSync = async (): Promise<void> => {
+    if (!syncAccountState) return;
+    setIsRetryingSync(true);
+    setSyncStatusError('');
+    try {
+      await eventSyncEngine.flushPendingOutbox();
+      await Promise.all([
+        refreshLocalSyncStatus(),
+        refreshDriveSyncStatus(),
+      ]);
+      onShowToast?.('Sync retry completed.', 'success');
+    } catch (error: any) {
+      const message = error?.message || 'Sync retry could not finish.';
+      setSyncStatusError(message);
+      onShowToast?.(message, 'warning');
+      await refreshLocalSyncStatus().catch(() => undefined);
+    } finally {
+      setIsRetryingSync(false);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'backup' && syncAccountState && !driveSyncStatus && !isDriveSyncStatusLoading) {
       void refreshDriveSyncStatus();
     }
   }, [activeTab, syncAccountState?.accountId]);
+
+  useEffect(() => {
+    if (activeTab === 'backup' && syncAccountState) {
+      void refreshLocalSyncStatus();
+    }
+  }, [activeTab, syncAccountState?.accountId]);
+
+  useEffect(() => diaryRepository.subscribeChanges(() => {
+    if (activeTab === 'backup') void refreshLocalSyncStatus();
+  }), [activeTab, syncAccountState?.accountId]);
 
   const persistSettings = async (updatedSettings: AppSettings): Promise<void> => {
     await diaryRepository.saveSettings(updatedSettings);
@@ -1320,6 +1373,58 @@ export default function AppSettingsScreen({
                         )}
                       </div>
                     )}
+
+                    <div className="rounded-2xl border border-brand-border/40 bg-brand-bg/35 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-brand-sage">Local sync queue</p>
+                          <p className="mt-1 text-sm font-bold text-brand-plum dark:text-brand-text">
+                            {syncStatus
+                              ? failedSyncCount > 0
+                                ? 'Needs retry'
+                                : pendingSyncCount > 0
+                                  ? 'Pending upload'
+                                  : 'Caught up'
+                              : syncAccountState ? 'Checking...' : 'Unavailable'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void retryLocalSync()}
+                          disabled={!syncAccountState || isRetryingSync}
+                          className="h-9 w-9 shrink-0 rounded-full border border-brand-border text-brand-sage flex items-center justify-center disabled:opacity-40"
+                          title="Retry encrypted sync"
+                          aria-label="Retry encrypted sync"
+                        >
+                          <RefreshCw className={`h-4 w-4 ${isRetryingSync ? 'animate-spin' : ''}`} />
+                        </button>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+                        <div className="rounded-xl bg-brand-card-bg/70 border border-brand-border/40 p-3">
+                          <p className="font-bold uppercase tracking-wider text-brand-sage">Pending</p>
+                          <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">{pendingSyncCount}</p>
+                        </div>
+                        <div className="rounded-xl bg-brand-card-bg/70 border border-brand-border/40 p-3">
+                          <p className="font-bold uppercase tracking-wider text-brand-sage">Failed</p>
+                          <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">{failedSyncCount}</p>
+                        </div>
+                        <div className="rounded-xl bg-brand-card-bg/70 border border-brand-border/40 p-3">
+                          <p className="font-bold uppercase tracking-wider text-brand-sage">Network</p>
+                          <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">
+                            {syncStatus ? syncStatus.isOffline ? 'Offline' : 'Online' : 'Checking'}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-brand-card-bg/70 border border-brand-border/40 p-3">
+                          <p className="font-bold uppercase tracking-wider text-brand-sage">Conflicts</p>
+                          <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">{conflictSyncCount}</p>
+                        </div>
+                      </div>
+                      {syncStatusError && (
+                        <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] font-bold leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
+                          {syncStatusError}
+                        </p>
+                      )}
+                    </div>
 
                     <div className="rounded-2xl border border-brand-border/40 bg-brand-bg/35 p-4">
                       <div className="flex items-start justify-between gap-3">

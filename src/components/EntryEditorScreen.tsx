@@ -21,6 +21,7 @@ import { SpeechRecognition as NativeSpeechRecognition } from '@capacitor-communi
 import { diaryRepository } from '../repositories';
 import { getMoodsForSettings, getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import { measureAsync } from '../utils/performance';
 
 interface EntryEditorScreenProps {
   diaries: Diary[];
@@ -52,7 +53,6 @@ export default function EntryEditorScreen({
   initialDate,
   initialPrompt,
   onShowToast,
-  onRunWithLoader,
   showDiarySelector = false
 }: EntryEditorScreenProps) {
   // Find current entry if editing
@@ -1268,18 +1268,15 @@ export default function EntryEditorScreen({
           });
         }
 
-        await onRefreshEntries();
         onBack();
+        onShowToast('Saved to this device', 'success');
       };
 
-      const loaderDetail = photoUris.length > 0
-        ? 'Encrypting your entry and photo before sync.'
-        : 'Encrypting your entry before sync.';
-      if (onRunWithLoader) {
-        await onRunWithLoader('Saving entry', saveOperation, loaderDetail);
-      } else {
-        await saveOperation();
-      }
+      await measureAsync('app.entrySaveToNavigation', saveOperation, {
+        isEditing,
+        hasMedia: photoUris.length > 0,
+        blockCount: finalBlocks.length,
+      });
     } catch (saveError: any) {
       onShowToast(saveError?.message || 'Entry could not be saved.', saveError instanceof SyncConflictError ? 'warning' : 'error');
       if (saveError instanceof SyncConflictError) {
@@ -1294,8 +1291,8 @@ export default function EntryEditorScreen({
   const handleDeleteEntry = async () => {
     if (entryId) {
       await diaryRepository.deleteEntry(entryId);
-      await onRefreshEntries();
       onBack();
+      onShowToast('Deleted on this device', 'success');
     }
   };
 

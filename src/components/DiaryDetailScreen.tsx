@@ -14,6 +14,7 @@ import SyncedImage from './SyncedImage';
 import SanitizedRichText from './SanitizedRichText';
 import { resolveEntryIndexForEntryId } from './diaryDetailNavigation';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
@@ -50,6 +51,7 @@ export default function DiaryDetailScreen({
   archiveMonths = [],
   onHydrateArchiveMonth,
 }: DiaryDetailScreenProps) {
+  useScreenPerformance('diaryDetail');
   // Filter entries for this specific diary (newest first)
   const diaryEntries = useMemo(() => {
     return entries

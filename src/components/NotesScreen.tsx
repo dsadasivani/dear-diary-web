@@ -12,6 +12,7 @@ import OverlayPortal from './OverlayPortal';
 import { SyncConflictError } from '../sync/eventSyncEngine';
 import SanitizedRichText from './SanitizedRichText';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface NotesScreenProps {
   notes: Note[];
@@ -32,6 +33,7 @@ export default function NotesScreen({
   initialNoteId,
   onClearInitialNoteId
 }: NotesScreenProps) {
+  useScreenPerformance('notes');
   const availableTags = getTagsForSettings(settings);
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'pinned' | 'tagged' | 'untagged'>('all');

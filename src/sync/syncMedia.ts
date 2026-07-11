@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { fileStorageService } from '../platform/filesystem';
 import { isNativePlatform } from '../platform';
+import { measureAsync } from '../utils/performance';
 
 export interface DecodedSyncMediaPayload {
   mediaId: string;
@@ -108,78 +109,82 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
 };
 
 export const readMediaUri = async (uri: string): Promise<{ bytes: Uint8Array; mimeType: string }> => {
-  if (uri.startsWith('data:')) {
-    const commaIndex = uri.indexOf(',');
-    if (commaIndex < 0) throw new Error('Media data URI is invalid.');
-    const metadata = uri.slice('data:'.length, commaIndex);
-    const data = uri.slice(commaIndex + 1);
-    const metadataParts = metadata.split(';').filter(Boolean);
-    const isBase64 = metadataParts.some(part => part.toLowerCase() === 'base64');
-    const mediaType = metadataParts
-      .filter(part => part.toLowerCase() !== 'base64')
-      .join(';');
+  return measureAsync('sync.media.read', async () => {
+    if (uri.startsWith('data:')) {
+      const commaIndex = uri.indexOf(',');
+      if (commaIndex < 0) throw new Error('Media data URI is invalid.');
+      const metadata = uri.slice('data:'.length, commaIndex);
+      const data = uri.slice(commaIndex + 1);
+      const metadataParts = metadata.split(';').filter(Boolean);
+      const isBase64 = metadataParts.some(part => part.toLowerCase() === 'base64');
+      const mediaType = metadataParts
+        .filter(part => part.toLowerCase() !== 'base64')
+        .join(';');
+      return {
+        mimeType: mediaType || 'application/octet-stream',
+        bytes: isBase64
+          ? base64ToBytes(data)
+          : encoder.encode(decodeURIComponent(data)),
+      };
+    }
+    const response = await fetch(uri);
+    if (!response.ok) throw new Error(`Local media could not be read (${response.status}).`);
+    const blob = await response.blob();
     return {
-      mimeType: mediaType || 'application/octet-stream',
-      bytes: isBase64
-        ? base64ToBytes(data)
-        : encoder.encode(decodeURIComponent(data)),
+      mimeType: blob.type || 'application/octet-stream',
+      bytes: new Uint8Array(await blob.arrayBuffer()),
     };
-  }
-  const response = await fetch(uri);
-  if (!response.ok) throw new Error(`Local media could not be read (${response.status}).`);
-  const blob = await response.blob();
-  return {
-    mimeType: blob.type || 'application/octet-stream',
-    bytes: new Uint8Array(await blob.arrayBuffer()),
-  };
+  }, { sourceType: uri.startsWith('data:') ? 'data' : 'url' });
 };
 
 export const createImageThumbnail = async (
   media: { bytes: Uint8Array; mimeType: string },
   options: { maxDimension?: number; quality?: number } = {},
 ): Promise<{ bytes: Uint8Array; mimeType: string } | null> => {
-  if (!media.mimeType.startsWith('image/')) return null;
-  if (
-    typeof document === 'undefined'
-    || typeof Blob === 'undefined'
-    || typeof URL === 'undefined'
-    || typeof Image === 'undefined'
-  ) {
-    return null;
-  }
-  const maxDimension = options.maxDimension || 320;
-  const quality = options.quality || 0.72;
-  const blob = new Blob([media.bytes], { type: media.mimeType });
-  const url = URL.createObjectURL(blob);
-  try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('Image thumbnail decoding failed.'));
-      img.src = url;
-    });
-    const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
-    const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
-    const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext('2d');
-    if (!context) return null;
-    context.drawImage(image, 0, 0, width, height);
-    const thumbnailBlob = await new Promise<Blob | null>(resolve => (
-      canvas.toBlob(resolve, 'image/jpeg', quality)
-    ));
-    if (!thumbnailBlob) return null;
-    return {
-      mimeType: thumbnailBlob.type || 'image/jpeg',
-      bytes: new Uint8Array(await thumbnailBlob.arrayBuffer()),
-    };
-  } catch {
-    return null;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  return measureAsync('sync.media.thumbnail', async () => {
+    if (!media.mimeType.startsWith('image/')) return null;
+    if (
+      typeof document === 'undefined'
+      || typeof Blob === 'undefined'
+      || typeof URL === 'undefined'
+      || typeof Image === 'undefined'
+    ) {
+      return null;
+    }
+    const maxDimension = options.maxDimension || 320;
+    const quality = options.quality || 0.72;
+    const blob = new Blob([media.bytes], { type: media.mimeType });
+    const url = URL.createObjectURL(blob);
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Image thumbnail decoding failed.'));
+        img.src = url;
+      });
+      const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+      const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+      const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) return null;
+      context.drawImage(image, 0, 0, width, height);
+      const thumbnailBlob = await new Promise<Blob | null>(resolve => (
+        canvas.toBlob(resolve, 'image/jpeg', quality)
+      ));
+      if (!thumbnailBlob) return null;
+      return {
+        mimeType: thumbnailBlob.type || 'image/jpeg',
+        bytes: new Uint8Array(await thumbnailBlob.arrayBuffer()),
+      };
+    } catch {
+      return null;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }, { mimeType: media.mimeType, sizeBytes: media.bytes.byteLength });
 };
 
 const extensionFromMime = (mimeType: string): string => {
@@ -192,9 +197,11 @@ export const cacheSyncMedia = async (
   mimeType: string,
   bytes: Uint8Array,
 ): Promise<string> => {
-  const dataUri = `data:${mimeType};base64,${bytesToBase64(bytes)}`;
-  if (!isNativePlatform()) return dataUri;
-  const path = `media/sync-${mediaId}.${extensionFromMime(mimeType)}`;
-  const stored = await fileStorageService.writeBase64Atomic(path, bytesToBase64(bytes));
-  return Capacitor.convertFileSrc(stored.uri);
+  return measureAsync('sync.media.cache', async () => {
+    const dataUri = `data:${mimeType};base64,${bytesToBase64(bytes)}`;
+    if (!isNativePlatform()) return dataUri;
+    const path = `media/sync-${mediaId}.${extensionFromMime(mimeType)}`;
+    const stored = await fileStorageService.writeBase64Atomic(path, bytesToBase64(bytes));
+    return Capacitor.convertFileSrc(stored.uri);
+  }, { mimeType, sizeBytes: bytes.byteLength });
 };

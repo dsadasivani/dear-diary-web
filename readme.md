@@ -9,6 +9,7 @@ Android is the primary standalone target. The web app currently opens as a compa
 - [Current Functionality](#current-functionality)
 - [Core Flows](#core-flows)
 - [Architecture](#architecture)
+- [Performance and Local-First Data Flow](#performance-and-local-first-data-flow)
 - [Storage and Privacy](#storage-and-privacy)
 - [Encrypted Sync](#encrypted-sync)
 - [Local Development](#local-development)
@@ -31,9 +32,9 @@ Android is the primary standalone target. The web app currently opens as a compa
 
 ### Reading, Search, and Reflections
 
-- Browse entries newest-first with page navigation and swipe gestures.
+- Browse entries newest-first with page navigation and swipe gestures. Common entry and note page queries use storage-backed filtering/paging where available.
 - Open diary entries from table of contents or calendar views.
-- Search entries and notes by title/body, source, tags, date range, and photo presence.
+- Search entries and notes by title/body, tags, date range, mood, and photo presence.
 - Keep locked-diary content out of Home, Search, and Reflections until that diary is unlocked for the current app session.
 - View streaks, entry counts, mood distribution, tag usage, 30-day writing heatmap, photo memories, and year/month mood calendars.
 - Restore older encrypted archive months on demand from diary calendar/search flows when a linked account has partitioned archive data that is not downloaded locally yet.
@@ -51,7 +52,7 @@ The Settings screen has four tabs:
 | --- | --- |
 | Profile | Reconnect encrypted sync, approve pending web companions, revoke linked companions, and edit profile/avatar/daily target. |
 | Security | Change the 4- or 8-digit app PIN, update the recovery question, inspect Google recovery identity, rotate the encrypted account recovery passphrase, and enable Android biometric unlock when available. |
-| Backup | Inspect encrypted cloud storage usage, sync health, last cloud save time, recovery readiness, and reset local journal content while keeping local security/account configuration. |
+| Backup | Inspect encrypted cloud storage usage, sync queue counts, failed/conflict state, network state, last cloud save time, recovery readiness, manually retry encrypted sync, and reset local journal content while keeping local security/account configuration. |
 | Customize | Configure Android reminder preference/time, switch light/dark theme, and manage custom tags and moods. |
 
 The old Settings controls for manual Drive backup scheduling and "Back up now" are no longer exposed in the React UI. The active cloud path is encrypted multi-device sync. Portable backup bundle utilities remain in code and tests, but the current user-facing Settings screen does not provide a manual local export/import flow.
@@ -116,7 +117,9 @@ flowchart TD
 
 `App.tsx` owns in-memory navigation instead of React Router. Top-level tabs are Home, Diaries, Notes, Search, Reflections, and Settings. Nested screens include diary detail, diary settings, entry editor, app settings, and lock state.
 
-All application writes go through the async `DiaryRepository`. Local writes are serialized to avoid overlapping update loss. When encrypted sync is configured, `syncingDiaryRepository` wraps repository mutations and commits encrypted domain events through `EventSyncEngine`.
+All application writes go through the async `DiaryRepository`. Local writes are serialized to avoid overlapping update loss. When encrypted sync is configured, `syncingDiaryRepository` applies normal diary, entry, note, settings, and profile changes locally first, enqueues a durable sync outbox operation in the same local batch, emits typed repository change events, returns to the UI, and then requests background sync.
+
+`App.tsx` still owns global auth/navigation/theme/toast/sync state, but normal navigation no longer triggers a full repository reload. Screens use targeted repository queries and typed change events to patch or requery the affected diary, entry, note, or settings data.
 
 The Express server is intentionally small:
 
@@ -125,11 +128,46 @@ The Express server is intentionally small:
 - `GET /api/health` returns `{ "status": "ok", "offline": true }`.
 - There are no journal CRUD, auth, AI, or backup APIs on the server.
 
+## Performance and Local-First Data Flow
+
+Dear Diary is being refactored toward local-first performance while preserving the existing encrypted sync and recovery model.
+
+Current local-first behavior:
+
+- Normal synced writes commit to encrypted local storage plus a durable outbox row before returning to the UI.
+- Cloud work runs in background flush/pull/ack flows. Local save paths do not wait for Supabase, Google Drive, remote pulls, snapshot compaction, media upload, or online checks.
+- Successful remote acknowledgement updates local record versions, cursors, media pointers, and sync status without rewriting the already-applied user record.
+- Conflict recovery preserves the original outbox payload, pulls the latest remote state, creates recovered entry/note copies when needed, queues those copies as local-first operations, and surfaces non-blocking warnings.
+- Entry lists no longer eagerly hydrate every encrypted sync media reference. `SyncedImage` and rendered audio controls resolve media lazily, dedupe in-flight work, and use bounded memory caches.
+
+Structured local storage:
+
+- Android mirrors diary, entry, block, note, media, settings/profile, sync account, record version, media pointer, partition hydration, and outbox data into typed encrypted SQLite tables. Common diary/entry/note reads and simple entry/note page queries can use SQL rows instead of rebuilding whole arrays.
+- Web writes diaries, entries, notes, settings/profile/security metadata, sync account metadata, record versions, media pointers, partition hydration state, and outbox rows into dedicated encrypted IndexedDB record stores. Compatibility key-value rows are still written for rollback/import/export, but structured stores are preferred once ready.
+- Full-text/tag entry and note search still materializes local encrypted records so sanitizer-aware plain-text matching remains unchanged.
+
+Development-only instrumentation is available through `measureAsync` and `measureSync`. In a development browser session, inspect:
+
+```js
+window.dearDiaryPerformance.aggregates()
+window.dearDiaryPerformance.samples()
+```
+
+Use `window.dearDiaryPerformance.reset()` between scenarios. Measurement metadata must stay redacted: never pass diary body text, note text, titles, tokens, keys, PINs, passphrases, recovery answers, raw media bytes, or raw media URIs.
+
+Generate benchmark-scale local data with:
+
+```bash
+npm run benchmark:seed
+```
+
+See [docs/performance.md](docs/performance.md) and [docs/local-first-performance.md](docs/local-first-performance.md) for measurement workflow, current implementation notes, rollback notes, and remaining risks.
+
 ## Storage and Privacy
 
 | Concern | Web companion | Android |
 | --- | --- | --- |
-| Journal/settings/security records | Encrypted IndexedDB | Encrypted SQLite / SQLCipher |
+| Journal/settings/security records | Encrypted IndexedDB with record-level repository stores | Encrypted SQLite / SQLCipher with typed repository tables |
 | Photos, covers, audio | Browser storage/data references | App-private files under Capacitor `Directory.Data` |
 | SQLite secret | Not applicable | Random secret in OS-backed Capacitor Secure Storage |
 | Legacy Preferences | Not applicable | Migration input only; SQLite is authoritative after migration |
@@ -149,7 +187,8 @@ Encrypted sync uses:
 
 Important sync behavior:
 
-- User writes are staged locally first, then uploaded as encrypted events and media.
+- User writes are staged locally first with durable outbox operations, then uploaded as encrypted events and media by background sync.
+- Background fallback polling runs periodically, while local saves, reconnect, unlock, realtime, and manual retry request immediate/coalesced outbox flushes.
 - Drive object bytes are checked against Supabase SHA-256 metadata before decrypting/applying.
 - Latest-first restore loads core data and recent months first, then marks older monthly partitions as available for on-demand hydration.
 - Primary mobile recovery and companion revocation are two-phase flows so old devices are not revoked until restore/package distribution succeeds.
@@ -191,6 +230,7 @@ Useful commands:
 | `npm run test:supabase` | Run Docker-backed Supabase/RPC integration tests. |
 | `npm run test:e2e` | Run Playwright end-to-end tests. |
 | `npm run scan:secrets` | Scan for committed secrets/generated artifacts. |
+| `npm run benchmark:seed` | Generate a large local benchmark fixture for timing captures. |
 | `npm run build` | Build the Vite client and bundled Node server. |
 | `npm run start` | Start `dist/server.cjs`; set `NODE_ENV=production` for static serving. |
 
@@ -274,8 +314,9 @@ Additional suites:
 - `npm run test:supabase` requires Docker and applies every SQL migration in `docs/supabase` in numeric order.
 - `npm run test:e2e` and `npm run test:accessibility` require Playwright browser setup.
 - `npm run android:test` and `npm run android:lint` require the Android toolchain.
+- `npm run benchmark:seed` creates `benchmarks/dear-diary-seed.json` by default for repeatable performance captures.
 
-The automated suite covers repository semantics, security hashing/recovery, rich-text sanitization, encrypted sync events, snapshots, partitioned restore, companion pairing, key rotation/revocation, media handling, backup utility validation, component behavior, and server API boundaries.
+The automated suite covers repository semantics, local-first mutation/outbox atomicity, storage-backed query behavior, security hashing/recovery, rich-text sanitization, encrypted sync events, snapshots, partitioned restore, companion pairing, key rotation/revocation, media handling, backup utility validation, component behavior, and server API boundaries.
 
 Physical-device QA remains necessary for Google consent, Android biometrics, microphone behavior, notification permission, SQLite/legacy-media migration, app background privacy lock, Android clear-storage recovery, and real multi-device sync conflict/recovery scenarios.
 
@@ -300,6 +341,8 @@ Physical-device QA remains necessary for Google consent, Android biometrics, mic
 |   `-- utils/                        # backup bundle utilities, Google auth/profile, WebAuthn helpers
 |-- android/                          # Android Studio project and native Drive/biometric/storage integration
 |-- docs/
+|   |-- performance.md               # performance measurement and benchmark fixture workflow
+|   |-- local-first-performance.md   # current local-first refactor notes and remaining risks
 |   |-- mobile-capacitor.md           # native implementation notes
 |   |-- sync-and-supabase.md          # encrypted sync runbook
 |   `-- supabase/                     # ordered SQL migrations 001-017
@@ -314,10 +357,13 @@ Important entry points:
 - `src/main.tsx` renders React and starts Capacitor bootstrap behavior.
 - `src/AppBootstrap.tsx` prevents the UI from opening before local state is usable.
 - `src/repositories/localDiaryRepository.ts` owns local CRUD, snapshots, migrations, and reset behavior.
+- `src/repositories/syncingDiaryRepository.ts` wraps normal writes with local-first durable outbox behavior.
 - `src/sync/eventSyncEngine.ts` owns encrypted event upload, pull, restore, archive hydration, and maintenance.
 - `src/sync/accountBootstrap.ts` owns encrypted account creation and primary mobile recovery.
 - `src/components/CompanionApprovalPanel.tsx` owns companion approval and revocation UI.
 - `src/platform/storage/nativeSQLiteDataStore.ts` owns native encrypted SQLite schema and Preferences migration.
+- `src/platform/storage/webLocalDataStore.ts` owns encrypted IndexedDB record stores and web compatibility rows.
+- `src/utils/performance.ts` owns redacted development timing instrumentation.
 
 ## Known Limitations
 
@@ -326,6 +372,10 @@ Important entry points:
 - The Settings UI currently exposes encrypted sync status and recovery readiness, not manual Drive backup scheduling/export controls.
 - Legacy Android Drive backup worker/plugin code still exists, but the current React app path uses encrypted event sync as the user-facing cloud feature.
 - Web storage is protected by browser-origin encrypted storage, not by a hardware-backed OS secret.
+- Compatibility key-value rows are still written for rollback/import/export while record-level storage continues to mature.
+- Native write-side mutation logic still serializes collection payloads before mirroring into typed SQL tables; a fully native CRUD repository is remaining work.
+- Full-text/tag search still scans local encrypted records in memory to preserve sanitizer-aware matching.
+- Diary cover images still hydrate eagerly in book-cover backgrounds; visible-image lazy loading is already used for entry/media images.
 - Browser speech recognition varies by browser and may depend on browser-provided services. Android dictation requires an installed speech-recognition service.
 - Media cleanup is eventual; newly unreferenced files get a grace period to protect unsaved drafts.
 - Android Settings > Apps > Dear Diary > Clear storage is destructive. Recovery depends on another trusted synced device or successful encrypted account recovery.

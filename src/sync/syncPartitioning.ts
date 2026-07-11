@@ -120,6 +120,16 @@ export const filterSnapshotForPartition = (
   };
 };
 
+const stripLocalMediaUris = (snapshot: RepositorySnapshot): RepositorySnapshot => ({
+  ...snapshot,
+  syncMediaPointers: Object.fromEntries(
+    Object.entries(snapshot.syncMediaPointers || {}).map(([sequence, pointer]) => [sequence, {
+      ...pointer,
+      localUri: undefined,
+    }]),
+  ),
+});
+
 export const listPartitionKeysInSnapshot = (snapshot: RepositorySnapshot): SyncPartitionKey[] => {
   const keys = new Set<SyncPartitionKey>([CORE_PARTITION_KEY]);
   snapshot.entries.forEach(entry => keys.add(partitionKeyForEntry(entry)));
@@ -147,7 +157,7 @@ export const encodePartitionSnapshotPayload = (
     partitionKey,
     baseSequence,
     exportedAt: new Date().toISOString(),
-    snapshot: filterSnapshotForPartition(snapshot, partitionKey),
+    snapshot: stripLocalMediaUris(filterSnapshotForPartition(snapshot, partitionKey)),
   }));
 };
 
@@ -180,7 +190,7 @@ export const parsePartitionSnapshotPayload = (
     partitionKey: payload.partitionKey,
     baseSequence: payload.baseSequence,
     exportedAt: payload.exportedAt,
-    snapshot: payload.snapshot,
+    snapshot: stripLocalMediaUris(payload.snapshot),
   };
 };
 

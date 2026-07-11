@@ -18,6 +18,16 @@ const toSyncedSettingsPayload = (settings: AppSettings): AppSettings => {
   return syncedSettings;
 };
 
+const requestBackgroundFlush = (syncEngine: EventSyncEngine): void => {
+  if (typeof syncEngine.requestOutboxFlush === 'function') {
+    syncEngine.requestOutboxFlush();
+    return;
+  }
+  void syncEngine.pullPending().catch(error => {
+    console.warn('Background encrypted sync flush failed:', error);
+  });
+};
+
 export const createSyncingDiaryRepository = (
   localRepository: DiaryRepository,
   syncEngine: EventSyncEngine,
@@ -30,9 +40,7 @@ export const createSyncingDiaryRepository = (
       const diary = await localRepository.getDiary(id);
       return diary ? syncEngine.hydrateDiary(diary) : null;
     };
-    if (property === 'listEntries') return async (): Promise<Entry[]> => (
-      syncEngine.hydrateEntries(await localRepository.listEntries())
-    );
+    if (property === 'listEntries') return async (): Promise<Entry[]> => localRepository.listEntries();
     if (property === 'getEntry') return async (id: string): Promise<Entry | null> => {
       const entry = await localRepository.getEntry(id);
       return entry ? (await syncEngine.hydrateEntries([entry]))[0] : null;
@@ -41,36 +49,87 @@ export const createSyncingDiaryRepository = (
       syncEngine.hydrateProfile(await localRepository.getUserProfile())
     );
     if (property === 'saveSettings') return async (settings: AppSettings): Promise<void> => {
-      if (!await localRepository.getLocalSyncAccountState()) {
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) {
         await localRepository.saveSettings(settings);
         return;
       }
-      await syncEngine.commitMutation('settings', 'upsert', 'settings', toSyncedSettingsPayload(settings));
+      await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'settings',
+        recordId: 'settings',
+        operation: 'upsert',
+        account,
+        localPayload: settings,
+        syncPayload: toSyncedSettingsPayload(settings),
+      });
+      requestBackgroundFlush(syncEngine);
     };
     if (property === 'saveUserProfile') return async (profile: UserProfile): Promise<void> => {
-      if (!await localRepository.getLocalSyncAccountState()) {
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) {
         await localRepository.saveUserProfile(profile);
         return;
       }
-      await syncEngine.commitMutation('profile', 'upsert', 'profile', profile);
+      await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'profile',
+        recordId: 'profile',
+        operation: 'upsert',
+        account,
+        localPayload: profile,
+      });
+      requestBackgroundFlush(syncEngine);
     };
     if (property === 'createDiary') return async (input: NewDiary): Promise<Diary> => {
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) return localRepository.createDiary(input);
       const diary: Diary = { ...input, id: createId('diary'), entryCount: 0, lastUpdated: 'No entries yet' };
-      await syncEngine.commitMutation('diary', 'upsert', diary.id, diary);
-      return diary;
+      const saved = await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'diary',
+        recordId: diary.id,
+        operation: 'upsert',
+        account,
+        localPayload: diary,
+      });
+      requestBackgroundFlush(syncEngine);
+      return saved as Diary;
     };
     if (property === 'updateDiary') return async (diary: Diary): Promise<Diary | null> => {
       if (!await localRepository.getDiary(diary.id)) return null;
-      await syncEngine.commitMutation('diary', 'upsert', diary.id, diary);
-      const stored = await localRepository.getDiary(diary.id);
-      return stored ? syncEngine.hydrateDiary(stored) : null;
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) return localRepository.updateDiary(diary);
+      const saved = await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'diary',
+        recordId: diary.id,
+        operation: 'upsert',
+        account,
+        localPayload: diary,
+      });
+      requestBackgroundFlush(syncEngine);
+      return saved ? syncEngine.hydrateDiary(saved as Diary) : null;
     };
     if (property === 'deleteDiary') return async (id: string): Promise<boolean> => {
       if (!await localRepository.getDiary(id)) return false;
-      await syncEngine.commitMutation('diary', 'delete', id, null);
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) return localRepository.deleteDiary(id);
+      await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'diary',
+        recordId: id,
+        operation: 'delete',
+        account,
+        localPayload: null,
+        syncPayload: null,
+      });
+      requestBackgroundFlush(syncEngine);
       return true;
     };
     if (property === 'createEntry') return async (input: NewEntry): Promise<Entry> => {
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) return localRepository.createEntry(input);
       const timestamp = Date.now();
       const entry: Entry = sanitizeEntry({
         ...input,
@@ -81,11 +140,21 @@ export const createSyncingDiaryRepository = (
         updatedAt: timestamp,
       });
       entry.wordCount = countWords(entry.body || '');
-      await syncEngine.commitMutation('entry', 'upsert', entry.id, entry);
-      return entry;
+      const saved = await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'entry',
+        recordId: entry.id,
+        operation: 'upsert',
+        account,
+        localPayload: entry,
+      });
+      requestBackgroundFlush(syncEngine);
+      return saved as Entry;
     };
     if (property === 'updateEntry') return async (entry: Entry): Promise<Entry | null> => {
       if (!await localRepository.getEntry(entry.id)) return null;
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) return localRepository.updateEntry(entry);
       const updated = sanitizeEntry({
         ...entry,
         wordCount: countWords(entry.body || ''),
@@ -93,30 +162,79 @@ export const createSyncingDiaryRepository = (
         updatedAt: Date.now(),
       });
       updated.wordCount = countWords(updated.body || '');
-      await syncEngine.commitMutation('entry', 'upsert', updated.id, updated);
-      const stored = await localRepository.getEntry(updated.id);
-      return stored ? (await syncEngine.hydrateEntries([stored]))[0] : null;
+      const saved = await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'entry',
+        recordId: updated.id,
+        operation: 'upsert',
+        account,
+        localPayload: updated,
+      });
+      requestBackgroundFlush(syncEngine);
+      return saved ? (await syncEngine.hydrateEntries([saved as Entry]))[0] : null;
     };
     if (property === 'deleteEntry') return async (id: string): Promise<boolean> => {
       if (!await localRepository.getEntry(id)) return false;
-      await syncEngine.commitMutation('entry', 'delete', id, null);
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) return localRepository.deleteEntry(id);
+      await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'entry',
+        recordId: id,
+        operation: 'delete',
+        account,
+        localPayload: null,
+        syncPayload: null,
+      });
+      requestBackgroundFlush(syncEngine);
       return true;
     };
     if (property === 'createNote') return async (input: NewNote): Promise<Note> => {
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) return localRepository.createNote(input);
       const timestamp = Date.now();
       const note: Note = sanitizeNote({ ...input, id: createId('note'), createdAt: timestamp, updatedAt: timestamp });
-      await syncEngine.commitMutation('note', 'upsert', note.id, note);
-      return note;
+      const saved = await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'note',
+        recordId: note.id,
+        operation: 'upsert',
+        account,
+        localPayload: note,
+      });
+      requestBackgroundFlush(syncEngine);
+      return saved as Note;
     };
     if (property === 'updateNote') return async (note: Note): Promise<Note | null> => {
       if (!await localRepository.getNote(note.id)) return null;
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) return localRepository.updateNote(note);
       const updated = sanitizeNote({ ...note, updatedAt: Date.now() });
-      await syncEngine.commitMutation('note', 'upsert', updated.id, updated);
-      return localRepository.getNote(updated.id);
+      const saved = await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'note',
+        recordId: updated.id,
+        operation: 'upsert',
+        account,
+        localPayload: updated,
+      });
+      requestBackgroundFlush(syncEngine);
+      return saved as Note;
     };
     if (property === 'deleteNote') return async (id: string): Promise<boolean> => {
       if (!await localRepository.getNote(id)) return false;
-      await syncEngine.commitMutation('note', 'delete', id, null);
+      const account = await localRepository.getLocalSyncAccountState();
+      if (!account) return localRepository.deleteNote(id);
+      await localRepository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'note',
+        recordId: id,
+        operation: 'delete',
+        account,
+        localPayload: null,
+        syncPayload: null,
+      });
+      requestBackgroundFlush(syncEngine);
       return true;
     };
 

@@ -70,6 +70,7 @@ import {
 } from './partitionHydrationPolicy';
 import { emitSyncTelemetry } from './syncTelemetry';
 import { sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
+import { measureAsync } from '../utils/performance';
 
 type SyncPayload = NonNullable<SyncDomainEvent['payload']>;
 
@@ -303,6 +304,10 @@ const collectLiveMediaDriveFileIds = (snapshot: RepositorySnapshot): Set<string>
   return live;
 };
 
+const isUsableCachedMediaUri = (uri: string): boolean => (
+  isNativePlatform() || uri.startsWith('data:') || uri.startsWith('blob:')
+);
+
 export class SyncConflictError extends Error {
   constructor(message: string, readonly recoveredRecordId?: string) {
     super(message);
@@ -313,6 +318,7 @@ export class SyncConflictError extends Error {
 export class EventSyncEngine {
   private operationTail: Promise<void> = Promise.resolve();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private outboxFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private realtimeClient: SupabaseClient | null = null;
   private realtimeChannel: RealtimeChannel | null = null;
   private readonly isOnline: () => boolean;
@@ -366,11 +372,29 @@ export class EventSyncEngine {
     recordId: string,
     payload: SyncPayload | null,
   ): Promise<SyncDomainEvent> {
-    return this.enqueue(() => this.commitMutationUnlocked(recordType, operation, recordId, payload));
+    return this.enqueue(() => measureAsync('sync.commitMutation', () => this.commitMutationUnlocked(recordType, operation, recordId, payload), {
+      recordType,
+      operation,
+      hasPayload: Boolean(payload),
+    }));
   }
 
   pullPending(): Promise<void> {
-    return this.enqueue(() => this.pullPendingUnlocked());
+    return this.enqueue(() => measureAsync('sync.pullPending', () => this.pullPendingUnlocked()));
+  }
+
+  requestOutboxFlush(delayMs = 0): void {
+    if (this.outboxFlushTimer) return;
+    this.outboxFlushTimer = setTimeout(() => {
+      this.outboxFlushTimer = null;
+      void this.flushPendingOutbox().catch(error => {
+        console.warn('Background encrypted sync flush failed:', error);
+      });
+    }, delayMs);
+  }
+
+  flushPendingOutbox(): Promise<void> {
+    return this.enqueue(() => measureAsync('sync.outbox.flush', () => this.flushPendingOutboxUnlocked()));
   }
 
   createSnapshot(): Promise<SyncObjectMetadata | null> {
@@ -379,6 +403,10 @@ export class EventSyncEngine {
       const runtime = await this.openRuntime();
       await this.assertActiveDevice(runtime.controlPlane, runtime.state.deviceId);
       await this.pullWithRuntime(runtime);
+      const state = await this.repository.getLocalSyncAccountState();
+      if (state?.partitionedSyncEnabled) {
+        return this.compactPartitionedRestorePointWithRuntime(runtime, true);
+      }
       return this.compactSnapshotWithRuntime(runtime, true);
     });
   }
@@ -568,7 +596,7 @@ export class EventSyncEngine {
     return this.resolveMediaReferenceBestEffort(reference, label);
   }
 
-  startPolling(intervalMs = 15_000): void {
+  startPolling(intervalMs = 90_000): void {
     if (this.pollTimer) return;
     void this.pullPending().catch(error => console.warn('Initial encrypted sync pull failed:', error));
     void this.ensurePartitionedSync().catch(error => console.warn('Partitioned sync migration will be retried:', error));
@@ -739,12 +767,87 @@ export class EventSyncEngine {
       'applied',
       'failed',
     ]);
-    for (const operation of operations) {
-      if (!operation.operation) continue;
-      if (operation.state === 'failed' && operation.nextRetryAt && operation.nextRetryAt > this.now()) {
-        continue;
+    await measureAsync('sync.outbox.resume', async () => {
+      for (const operation of operations) {
+        if (!operation.operation) continue;
+        if (operation.state === 'failed' && operation.nextRetryAt && operation.nextRetryAt > this.now()) {
+          continue;
+        }
+        try {
+          await this.executeUserWriteOutboxOperation(runtime, operation);
+        } catch (error: any) {
+          if (
+            operation.localApplied &&
+            error instanceof SupabaseControlPlaneError &&
+            (error.message.includes('stale_sync_sequence') || error.message.includes('stale_record_version'))
+          ) {
+            await this.preserveLocalFirstConflict(runtime, operation, error);
+            continue;
+          }
+          throw error;
+        }
       }
-      await this.executeUserWriteOutboxOperation(runtime, operation);
+    }, { operationCount: operations.length });
+  }
+
+  private async preserveLocalFirstConflict(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+    operation: SyncOutboxOperation,
+    error: SupabaseControlPlaneError,
+  ): Promise<void> {
+    const latestOperation = (await this.repository.listSyncOutboxOperations())
+      .find(candidate => candidate.operationId === operation.operationId) || operation;
+    await this.updateOutboxOperation(latestOperation, {
+      state: 'failed',
+      error: error.message || 'Remote version conflict.',
+      retryCount: (latestOperation.retryCount || 0) + 1,
+      lastErrorAt: this.now(),
+      nextRetryAt: Number.MAX_SAFE_INTEGER,
+    });
+    await this.pullWithRuntime(runtime);
+    if (latestOperation.operation !== 'upsert' || !latestOperation.payload || !['entry', 'note'].includes(latestOperation.recordType)) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('deardiary-sync-conflict', {
+          detail: { message: 'This record changed on another device. The latest version is now loaded.' },
+        }));
+      }
+      return;
+    }
+
+    const recoveredId = `${latestOperation.recordType}-recovered-${crypto.randomUUID()}`;
+    const recoveredPayload = latestOperation.recordType === 'entry'
+      ? sanitizeSyncPayload('entry', {
+          ...(latestOperation.payload as Entry),
+          id: recoveredId,
+          title: `${(latestOperation.payload as Entry).title || 'Untitled entry'} (Recovered copy)`,
+          createdAt: this.now(),
+          updatedAt: this.now(),
+        }) as Entry
+      : sanitizeSyncPayload('note', {
+          ...(latestOperation.payload as Note),
+          id: recoveredId,
+          title: `${(latestOperation.payload as Note).title || 'Untitled note'} (Recovered copy)`,
+          createdAt: this.now(),
+          updatedAt: this.now(),
+        }) as Note;
+    const account = await this.repository.getLocalSyncAccountState();
+    if (!account) throw new Error('Encrypted account metadata is unavailable.');
+    await this.repository.applyLocalMutationWithOutbox({
+      operationId: crypto.randomUUID(),
+      recordType: latestOperation.recordType,
+      recordId: recoveredId,
+      operation: 'upsert',
+      account,
+      localPayload: recoveredPayload,
+    });
+    this.requestOutboxFlush(1_000);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('deardiary-sync-conflict', {
+        detail: {
+          message: `This ${latestOperation.recordType} changed on another device. Your pending version was saved as a recovered copy.`,
+          recoveredRecordId: recoveredId,
+        },
+      }));
     }
   }
 
@@ -763,6 +866,23 @@ export class EventSyncEngine {
   }
 
   private async executeUserWriteOutboxOperation(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+    persistedOperation: SyncOutboxOperation,
+    affectedRecordsOverride?: Array<{ recordType: 'entry'; recordId: string; baseRecordVersion: number }>,
+  ): Promise<SyncDomainEvent> {
+    return measureAsync('sync.outbox.operation', () => this.executeUserWriteOutboxOperationUnlocked(
+      runtime,
+      persistedOperation,
+      affectedRecordsOverride,
+    ), {
+      recordType: persistedOperation.recordType,
+      operation: persistedOperation.operation,
+      state: persistedOperation.state,
+      localApplied: Boolean(persistedOperation.localApplied),
+    });
+  }
+
+  private async executeUserWriteOutboxOperationUnlocked(
     runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
     persistedOperation: SyncOutboxOperation,
     affectedRecordsOverride?: Array<{ recordType: 'entry'; recordId: string; baseRecordVersion: number }>,
@@ -790,13 +910,20 @@ export class EventSyncEngine {
     if (!outboxOperation.uploadedObjects || outboxOperation.state === 'prepared' || outboxOperation.state === 'media_uploading') {
       outboxOperation = await this.updateOutboxOperation(outboxOperation, { state: 'media_uploading', error: undefined });
       preparedMedia = [];
-      payload = await this.preparePayloadMedia(
-        runtime,
-        outboxOperation.recordType,
-        payload,
-        preparedMedia,
-        outboxOperation.operationId,
-        mayHaveUploadedMedia,
+      payload = await measureAsync(
+        'sync.media.preparePayload',
+        () => this.preparePayloadMedia(
+          runtime,
+          outboxOperation.recordType,
+          payload,
+          preparedMedia,
+          outboxOperation.operationId,
+          mayHaveUploadedMedia,
+        ),
+        {
+          recordType: outboxOperation.recordType,
+          operation: outboxOperation.operation,
+        },
       );
       partitionKey = partitionKeyForRecordPayload(outboxOperation.recordType, payload);
       outboxOperation = await this.updateOutboxOperation(outboxOperation, {
@@ -969,7 +1096,11 @@ export class EventSyncEngine {
     if (JSON.stringify(committed.affectedRecords || []) !== JSON.stringify(event.affectedRecords || [])) {
       throw new Error('Committed affected-record versions do not match the encrypted event.');
     }
-    await this.repository.applySyncEvent(event, committed.sequence);
+    if (outboxOperation.localApplied) {
+      await this.repository.acknowledgeLocalMutation({ event, sequence: committed.sequence });
+    } else {
+      await this.repository.applySyncEvent(event, committed.sequence);
+    }
     outboxOperation = await this.updateOutboxOperation(outboxOperation, { state: 'applied' });
     if (state.partitionedSyncEnabled) {
       await this.repository.markPartitionHydrated(partitionKey, committed.sequence);
@@ -985,7 +1116,7 @@ export class EventSyncEngine {
       lastAppliedSequence: committed.sequence,
     });
     await this.repository.removeSyncOutboxOperation(outboxOperation.operationId);
-    await this.compactSnapshotWithRuntime(runtime, false).catch(error => {
+    void this.compactSnapshotWithRuntime(runtime, false).catch(error => {
       console.warn('Automatic encrypted snapshot compaction failed:', error);
     });
     return event;
@@ -1059,6 +1190,28 @@ export class EventSyncEngine {
   }
 
   private async prepareMediaUri(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+    uri: string,
+    preparedMedia: PreparedMediaUpload[],
+    mediaKind?: PreparedMediaUpload['mediaKind'],
+    mediaSlot?: string,
+    reuseUploadedDriveObjects = false,
+  ): Promise<string> {
+    return measureAsync('sync.media.prepareUri', () => this.prepareMediaUriUnlocked(
+      runtime,
+      uri,
+      preparedMedia,
+      mediaKind,
+      mediaSlot,
+      reuseUploadedDriveObjects,
+    ), {
+      mediaKind: mediaKind || 'unknown',
+      reusableUpload: reuseUploadedDriveObjects,
+      hasStableReference: Boolean(parseSyncMediaReference(uri)),
+    });
+  }
+
+  private async prepareMediaUriUnlocked(
     runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
     uri: string,
     preparedMedia: PreparedMediaUpload[],
@@ -1187,10 +1340,14 @@ export class EventSyncEngine {
       await this.repository.saveSyncMediaPointer({ ...pointer, mediaId: parsed.mediaId });
       pointer.mediaId = parsed.mediaId;
     }
-    if (pointer.localUri) {
+    if (pointer.localUri && isUsableCachedMediaUri(pointer.localUri)) {
       this.resolvedMediaReferences.set(reference, pointer.localUri);
       this.localMediaReferences.set(pointer.localUri, reference);
       return pointer.localUri;
+    }
+    if (pointer.localUri) {
+      pointer = { ...pointer, localUri: undefined };
+      await this.repository.saveSyncMediaPointer(pointer);
     }
 
     const runtime = await this.openRuntime();
@@ -1325,6 +1482,48 @@ export class EventSyncEngine {
     await this.runMaintenanceWithRuntime(runtime, false).catch(error => {
       console.warn('Encrypted sync maintenance will be retried:', error);
     });
+  }
+
+  private async flushPendingOutboxUnlocked(): Promise<void> {
+    if (!this.isOnline()) {
+      emitSyncTelemetry('sync.outbox.flush.skipped', { reason: 'offline' });
+      return;
+    }
+    const runtime = await this.openRuntime();
+    await this.assertActiveDevice(runtime.controlPlane, runtime.state.deviceId);
+    await this.resumeUserWriteOutbox(runtime);
+    await this.pullWithRuntime(runtime);
+  }
+
+  private async compactPartitionedRestorePointWithRuntime(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+    force: boolean,
+  ): Promise<SyncObjectMetadata | null> {
+    const state = await this.repository.getLocalSyncAccountState();
+    if (!force || !state || state.deviceRole !== 'primary_mobile' || !state.partitionedSyncEnabled) return null;
+
+    const activeKeyEpoch = runtime.state.keyEpoch || state.keyEpoch || 1;
+    const activeRootKey = getAccountRootKeyForEpoch(runtime.secrets, activeKeyEpoch);
+    const refreshId = crypto.randomUUID?.() || `${this.now()}-${Math.random().toString(36).slice(2)}`;
+    const result = await migrateLocalAccountToPartitionedSync({
+      repository: this.repository,
+      controlPlane: runtime.controlPlane,
+      localState: { ...state, keyEpoch: activeKeyEpoch },
+      accountRootKey: activeRootKey,
+      googleSession: runtime.googleSession,
+      upload: this.upload,
+      now: new Date(this.now()),
+      operationIdPrefix: `partition-refresh:${state.accountId}:${activeKeyEpoch}:${refreshId}`,
+    });
+
+    await runtime.controlPlane.updateDeviceCursor({
+      deviceId: state.deviceId,
+      lastAppliedSequence: result.manifestObject.sequence,
+    });
+    await this.runMaintenanceWithRuntime(runtime, true).catch(error => {
+      console.warn('Encrypted sync maintenance will be retried:', error);
+    });
+    return result.manifestObject;
   }
 
   private async compactSnapshotWithRuntime(
@@ -1487,6 +1686,12 @@ export class EventSyncEngine {
   }
 
   private async pullWithRuntime(runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>): Promise<void> {
+    return measureAsync('sync.pull.remote', () => this.pullWithRuntimeUnlocked(runtime), {
+      partitioned: Boolean(runtime.state.partitionedSyncEnabled),
+    });
+  }
+
+  private async pullWithRuntimeUnlocked(runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>): Promise<void> {
     let state = (await this.repository.getLocalSyncAccountState()) || runtime.state;
     if (state.partitionedSyncEnabled) {
       await this.pullPartitionedWithRuntime(runtime);
@@ -1520,6 +1725,12 @@ export class EventSyncEngine {
   }
 
   private async pullPartitionedWithRuntime(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+  ): Promise<void> {
+    return measureAsync('sync.pull.partitioned', () => this.pullPartitionedWithRuntimeUnlocked(runtime));
+  }
+
+  private async pullPartitionedWithRuntimeUnlocked(
     runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
   ): Promise<void> {
     let state = (await this.repository.getLocalSyncAccountState()) || runtime.state;

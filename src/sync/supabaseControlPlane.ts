@@ -15,6 +15,7 @@ import type {
   SyncRecordType,
   SyncAffectedRecordVersion,
 } from '../types';
+import { measureAsync } from '../utils/performance';
 
 export interface SupabaseControlPlaneConfig {
   url: string;
@@ -682,45 +683,47 @@ export class SupabaseControlPlaneClient {
   }
 
   private async rpc<T>(functionName: string, payload: Record<string, unknown>): Promise<T> {
-    const accessToken = typeof this.config.accessToken === 'function'
-      ? await this.config.accessToken()
-      : this.config.accessToken;
-    const timeoutMs = this.config.timeoutMs || DEFAULT_RPC_TIMEOUT_MS;
-    const timeout = createTimeoutSignal(timeoutMs);
-    let response: Response;
-    try {
-      response = await withTimeout(
-        this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/${functionName}`, {
-          method: 'POST',
-          headers: {
-            apikey: this.config.anonKey,
-            Authorization: `Bearer ${accessToken || this.config.anonKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-          signal: timeout.signal,
-        }),
-        timeoutMs,
-        `Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`,
-      );
-    } catch (error: any) {
-      if (error?.name === 'AbortError') {
-        throw new Error(`Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`);
+    return measureAsync('sync.supabase.rpc', async () => {
+      const accessToken = typeof this.config.accessToken === 'function'
+        ? await this.config.accessToken()
+        : this.config.accessToken;
+      const timeoutMs = this.config.timeoutMs || DEFAULT_RPC_TIMEOUT_MS;
+      const timeout = createTimeoutSignal(timeoutMs);
+      let response: Response;
+      try {
+        response = await withTimeout(
+          this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/${functionName}`, {
+            method: 'POST',
+            headers: {
+              apikey: this.config.anonKey,
+              Authorization: `Bearer ${accessToken || this.config.anonKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+            signal: timeout.signal,
+          }),
+          timeoutMs,
+          `Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`,
+        );
+      } catch (error: any) {
+        if (error?.name === 'AbortError') {
+          throw new Error(`Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`);
+        }
+        throw error;
+      } finally {
+        timeout.cancel();
       }
-      throw error;
-    } finally {
-      timeout.cancel();
-    }
 
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      const message = typeof detail?.message === 'string'
-        ? detail.message
-        : `Supabase control-plane request failed (${response.status}).`;
-      throw new SupabaseControlPlaneError(message, response.status, detail);
-    }
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        const message = typeof detail?.message === 'string'
+          ? detail.message
+          : `Supabase control-plane request failed (${response.status}).`;
+        throw new SupabaseControlPlaneError(message, response.status, detail);
+      }
 
-    return response.json() as Promise<T>;
+      return response.json() as Promise<T>;
+    }, { functionName, payloadKeys: Object.keys(payload).sort() });
   }
 }
 

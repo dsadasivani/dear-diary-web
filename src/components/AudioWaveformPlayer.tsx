@@ -1,5 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Play, Pause, Volume2, Trash2 } from 'lucide-react';
+import { eventSyncEngine } from '../repositories';
+import { parseSyncMediaReference } from '../sync/syncMedia';
 
 interface AudioWaveformPlayerProps {
   src: string; // Base64 raw audio data uri
@@ -8,6 +10,39 @@ interface AudioWaveformPlayerProps {
   variant?: 'default' | 'minimal';
 }
 
+const resolvedAudioCache = new Map<string, string>();
+const inFlightAudio = new Map<string, Promise<string>>();
+const MAX_AUDIO_CACHE_SIZE = 50;
+
+const rememberResolvedAudio = (reference: string, resolved: string): void => {
+  if (resolvedAudioCache.has(reference)) resolvedAudioCache.delete(reference);
+  resolvedAudioCache.set(reference, resolved);
+  while (resolvedAudioCache.size > MAX_AUDIO_CACHE_SIZE) {
+    const oldest = resolvedAudioCache.keys().next().value;
+    if (!oldest) break;
+    resolvedAudioCache.delete(oldest);
+  }
+};
+
+const hydrateAudioReference = (reference: string, label: string): Promise<string> => {
+  const cached = resolvedAudioCache.get(reference);
+  if (cached) return Promise.resolve(cached);
+  const existing = inFlightAudio.get(reference);
+  if (existing) return existing;
+  const pending = eventSyncEngine.hydrateMediaReference(reference, label)
+    .then(resolved => {
+      rememberResolvedAudio(reference, resolved);
+      inFlightAudio.delete(reference);
+      return resolved;
+    })
+    .catch(error => {
+      inFlightAudio.delete(reference);
+      throw error;
+    });
+  inFlightAudio.set(reference, pending);
+  return pending;
+};
+
 export default function AudioWaveformPlayer({ 
   src, 
   title = "Voice Note Sanctuary", 
@@ -15,9 +50,13 @@ export default function AudioWaveformPlayer({
   variant = 'default'
 }: AudioWaveformPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [resolvedSrc, setResolvedSrc] = useState<string>(src);
+  const [resolveError, setResolveError] = useState('');
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
+  const isResolvingAudio = Boolean(parseSyncMediaReference(src)) && resolvedSrc === src && !resolveError;
+  const playableSrc = parseSyncMediaReference(resolvedSrc) ? undefined : resolvedSrc;
 
   // Generate deterministic bar heights for the visual waveform
   const numBars = 35;
@@ -26,6 +65,24 @@ export default function AudioWaveformPlayer({
     30, 45, 55, 75, 85, 60, 45, 30, 40, 65, 80, 55, 45, 35, 50, 60,
     45, 30, 20
   ];
+
+  useEffect(() => {
+    let cancelled = false;
+    setResolvedSrc(src);
+    setResolveError('');
+    if (!parseSyncMediaReference(src)) return undefined;
+    void hydrateAudioReference(src, title)
+      .then(resolved => {
+        if (!cancelled) setResolvedSrc(resolved);
+      })
+      .catch(error => {
+        console.warn('Synced audio could not be prepared yet:', error);
+        if (!cancelled) setResolveError(error?.message || 'Audio could not be prepared.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [src, title]);
 
   useEffect(() => {
     // Reset play state if source changes
@@ -81,10 +138,10 @@ export default function AudioWaveformPlayer({
         clearInterval(interval);
       };
     }
-  }, [src]);
+  }, [resolvedSrc]);
 
   const togglePlay = () => {
-    if (!audioRef.current) return;
+    if (!audioRef.current || isResolvingAudio || resolveError) return;
     if (isPlaying) {
       audioRef.current.pause();
     } else {
@@ -145,8 +202,8 @@ export default function AudioWaveformPlayer({
       <div className="bg-brand-card-bg/80 px-3 py-2 rounded-2xl border border-brand-border/60 flex items-center gap-3 w-full max-w-sm select-none animate-fade-in relative">
         <audio
           ref={audioRef}
-          src={src}
-          preload="auto"
+          src={playableSrc}
+          preload="metadata"
           onTimeUpdate={handleTimeUpdate}
           onEnded={handleAudioEnded}
           onPlay={() => setIsPlaying(true)}
@@ -157,7 +214,8 @@ export default function AudioWaveformPlayer({
         <button
           type="button"
           onClick={togglePlay}
-          className="w-7 h-7 flex-shrink-0 bg-brand-pink hover:bg-brand-pink-dark text-white rounded-full flex items-center justify-center shadow-sm active:scale-95 transition-transform"
+          disabled={isResolvingAudio || Boolean(resolveError)}
+          className="w-7 h-7 flex-shrink-0 bg-brand-pink hover:bg-brand-pink-dark text-white rounded-full flex items-center justify-center shadow-sm active:scale-95 transition-transform disabled:opacity-45"
         >
           {isPlaying ? (
             <Pause className="w-3 h-3 fill-white" />
@@ -197,8 +255,8 @@ export default function AudioWaveformPlayer({
       
       <audio
         ref={audioRef}
-        src={src}
-        preload="auto"
+        src={playableSrc}
+        preload="metadata"
         onTimeUpdate={handleTimeUpdate}
         onEnded={handleAudioEnded}
         onPlay={() => setIsPlaying(true)}
@@ -234,7 +292,8 @@ export default function AudioWaveformPlayer({
         <button
           type="button"
           onClick={togglePlay}
-          className="w-10 h-10 flex-shrink-0 bg-brand-pink hover:bg-brand-pink-dark text-white rounded-full flex items-center justify-center shadow-md active:scale-95 transition-transform"
+          disabled={isResolvingAudio || Boolean(resolveError)}
+          className="w-10 h-10 flex-shrink-0 bg-brand-pink hover:bg-brand-pink-dark text-white rounded-full flex items-center justify-center shadow-md active:scale-95 transition-transform disabled:opacity-45"
         >
           {isPlaying ? (
             <Pause className="w-4.5 h-4.5 fill-white" />

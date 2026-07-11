@@ -6,6 +6,7 @@ import {
 import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface SearchScreenProps {
   diaries: Diary[];
@@ -42,6 +43,7 @@ export default function SearchScreen({
   onNavigate,
   onEditNote
 }: SearchScreenProps) {
+  useScreenPerformance('search');
   const availableTags = getTagsForSettings(settings);
   const [query, setQuery] = useState<string>('');
   const [selectedResultId, setSelectedResultId] = useState<string>('');

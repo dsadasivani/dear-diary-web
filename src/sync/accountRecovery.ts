@@ -14,6 +14,7 @@ export const recoverAccountRootKey = async (input: {
   recoveryPassphrase: string;
   googleSession: GoogleAccountSession;
   download?: SyncObjectDownloader;
+  requiredKeyEpoch?: number;
 }): Promise<{
   accountRootKey: Uint8Array;
   accountRootKeys: Record<number, Uint8Array>;
@@ -26,6 +27,15 @@ export const recoverAccountRootKey = async (input: {
 
   let latest: { accountRootKey: Uint8Array; object: SyncObjectMetadata } | null = null;
   const accountRootKeys: Record<number, Uint8Array> = {};
+  const hasRequiredEpochKeys = (): boolean => {
+    if (input.requiredKeyEpoch === undefined) return false;
+    const requiredEpoch = input.requiredKeyEpoch || 0;
+    if (requiredEpoch <= 1) return true;
+    for (let epoch = 1; epoch <= requiredEpoch; epoch += 1) {
+      if (!accountRootKeys[epoch]) return false;
+    }
+    return true;
+  };
   for (const object of candidates) {
     try {
       const bytes = await downloadVerifiedSyncObject(input.googleSession, object, input.download);
@@ -41,6 +51,7 @@ export const recoverAccountRootKey = async (input: {
         accountRootKey: accountRootKeys[packageEpoch] || unwrapped.accountRootKey,
         object,
       };
+      if (latest && hasRequiredEpochKeys()) break;
     } catch {
       // Companion packages and damaged/obsolete recovery packages are skipped.
     }

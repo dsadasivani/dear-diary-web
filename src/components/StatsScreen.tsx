@@ -8,6 +8,8 @@ import {
 import { Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { calculateStreak } from '../domain/journalCatalog';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import SyncedImage from './SyncedImage';
+import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface StatsScreenProps {
   diaries: Diary[];
@@ -34,6 +36,7 @@ export default function StatsScreen({
   layout = 'mobile',
   onNavigate
 }: StatsScreenProps) {
+  useScreenPerformance('stats');
   const [streak, setStreak] = useState<number>(0);
   const [totalPhotos, setTotalPhotos] = useState<number>(0);
   const [selectedPixelYear, setSelectedPixelYear] = useState<number>(() => new Date().getFullYear());
@@ -398,7 +401,13 @@ export default function StatsScreen({
                 <div className="mt-5 grid grid-cols-2 gap-3">
                   {photos.slice(0, 4).map((photo, index) => (
                     <button key={`${photo.src}-${index}`} type="button" onClick={() => onNavigate('diaries', 'diaryDetail', photo.diaryId, photo.entryId)} className="aspect-square overflow-hidden rounded-xl border border-brand-border">
-                      <img src={photo.src} alt="" className="h-full w-full object-cover" />
+                      <SyncedImage
+                        src={photo.src}
+                        alt=""
+                        className="h-full w-full object-cover"
+                        fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                        label="recent memory"
+                      />
                     </button>
                   ))}
                 </div>
@@ -1029,13 +1038,12 @@ export default function StatsScreen({
                       onClick={() => onNavigate('diaries', 'diaryDetail', photo.diaryId, photo.entryId)}
                       className="aspect-square rounded-2xl overflow-hidden relative shadow-sm border border-brand-border cursor-pointer group hover:shadow-md transition-all"
                     >
-                      <img 
-                        src={photo.src} 
-                        alt="" 
+                      <SyncedImage
+                        src={photo.src}
+                        alt=""
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1517842645767-c639042777db?w=600";
-                        }}
+                        fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                        label="photo memory"
                       />
                       <div className="absolute inset-x-2 bottom-2 bg-brand-card-bg/95 backdrop-blur-md px-2.5 py-1 rounded-xl text-[9px] font-bold text-brand-plum truncate flex justify-between shadow-sm border border-brand-border/20">
                         <span>{photo.date}</span>

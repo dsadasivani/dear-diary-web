@@ -18,13 +18,31 @@ import type {
 } from '../types';
 import type { LocalDataStore } from '../platform/storage';
 import type {
+  AcknowledgeLocalMutationInput,
+  ApplyLocalMutationWithOutboxInput,
+  DiaryStatistics,
   DiaryRepository,
+  DistributionRow,
+  EntryListOptions,
+  EntrySummary,
+  GlobalStatistics,
+  HomeSummary,
   NewDiary,
   NewEntry,
   NewNote,
+  NoteListOptions,
+  NoteSummary,
+  PageOptions,
+  PageResult,
+  RepositoryChange,
   RepositoryChangeListener,
   RepositoryImportMode,
   RepositorySnapshot,
+  SearchFilters,
+  StatisticsFilters,
+  SyncStatusSummary,
+  TypedRepositoryChangeListener,
+  WritingHeatmapRow,
 } from './DiaryRepository';
 import { syncReminderNotification } from '../mobile/reminders';
 import {
@@ -36,7 +54,9 @@ import {
 import { normalizeSecurityConfig } from '../domain/security';
 import { buildPortableMergePlan } from '../domain/backupMerge';
 import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote, sanitizeRepositorySnapshot } from '../domain/richTextSanitizer';
-import { CORE_PARTITION_KEY, filterSnapshotForPartition, isMonthPartitionKey, monthFromTimestamp } from '../sync/syncPartitioning';
+import { calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
+import { CORE_PARTITION_KEY, filterSnapshotForPartition, isMonthPartitionKey, monthFromTimestamp, partitionKeyForRecordPayload } from '../sync/syncPartitioning';
+import { measureAsync } from '../utils/performance';
 
 const STORAGE_KEYS = {
   diaries: 'deardiary_diaries',
@@ -97,9 +117,71 @@ const getLastUpdatedLabel = (entries: Entry[]): string => {
   return `${diffDays} days ago`;
 };
 
+const entrySummary = (entry: Entry): EntrySummary => ({
+  id: entry.id,
+  diaryId: entry.diaryId,
+  date: entry.date,
+  time: entry.time,
+  title: entry.title,
+  moodName: entry.moodName,
+  moodEmoji: entry.moodEmoji,
+  tags: [...entry.tags],
+  photoCount: entry.photoCount,
+  wordCount: entry.wordCount,
+  createdAt: entry.createdAt,
+  updatedAt: entry.updatedAt,
+});
+
+const noteSummary = (note: Note): NoteSummary => ({
+  id: note.id,
+  title: note.title,
+  isPinned: note.isPinned,
+  tags: [...note.tags],
+  createdAt: note.createdAt,
+  updatedAt: note.updatedAt,
+});
+
+const paginate = <T>(items: T[], options: PageOptions = {}): PageResult<T> => {
+  const limit = Math.max(1, Math.min(options.limit || 50, 200));
+  const start = Math.max(0, options.cursor ? Number(options.cursor) || 0 : options.offset || 0);
+  const page = items.slice(start, start + limit);
+  const nextOffset = start + page.length;
+  return {
+    items: clone(page),
+    nextCursor: nextOffset < items.length ? String(nextOffset) : undefined,
+    total: items.length,
+  };
+};
+
+const filterEntriesByDiaryAccess = (
+  entries: Entry[],
+  options: Pick<EntryListOptions | SearchFilters | StatisticsFilters, 'allowedDiaryIds' | 'excludeDiaryIds'> = {},
+): Entry[] => {
+  const allowed = options.allowedDiaryIds ? new Set(options.allowedDiaryIds) : null;
+  const excluded = options.excludeDiaryIds ? new Set(options.excludeDiaryIds) : null;
+  return entries.filter(entry => (
+    (!allowed || allowed.has(entry.diaryId)) &&
+    (!excluded || !excluded.has(entry.diaryId))
+  ));
+};
+
+const sortEntries = (entries: Entry[], sort: EntryListOptions['sort'] = 'date-desc'): Entry[] => {
+  const sorted = [...entries];
+  if (sort === 'date-asc') return sorted.sort((left, right) => left.date.localeCompare(right.date) || left.createdAt - right.createdAt);
+  if (sort === 'updated-desc') return sorted.sort((left, right) => right.updatedAt - left.updatedAt);
+  if (sort === 'created-desc') return sorted.sort((left, right) => right.createdAt - left.createdAt);
+  return sorted.sort((left, right) => right.date.localeCompare(left.date) || right.updatedAt - left.updatedAt);
+};
+
+const matchesDateRange = (entry: Entry, filters: Pick<SearchFilters | StatisticsFilters, 'fromDate' | 'toDate'>): boolean => (
+  (!filters.fromDate || entry.date >= filters.fromDate) &&
+  (!filters.toDate || entry.date <= filters.toDate)
+);
+
 export class LocalDiaryRepository implements DiaryRepository {
   private writeTail: Promise<void> = Promise.resolve();
   private changeListeners = new Set<RepositoryChangeListener>();
+  private typedChangeListeners = new Set<TypedRepositoryChangeListener>();
 
   constructor(private readonly store: LocalDataStore) {}
 
@@ -108,8 +190,13 @@ export class LocalDiaryRepository implements DiaryRepository {
     return () => this.changeListeners.delete(listener);
   }
 
+  subscribeRepositoryChanges(listener: TypedRepositoryChangeListener): () => void {
+    this.typedChangeListeners.add(listener);
+    return () => this.typedChangeListeners.delete(listener);
+  }
+
   async initialize(): Promise<void> {
-    await this.enqueueWrite(async () => {
+    await measureAsync('repository.initialize', () => this.enqueueWrite(async () => {
       const [diaries, entries, notes, settings, profile, security, driveBackup] = await Promise.all([
         this.store.getItem(STORAGE_KEYS.diaries),
         this.store.getItem(STORAGE_KEYS.entries),
@@ -142,21 +229,26 @@ export class LocalDiaryRepository implements DiaryRepository {
         missingItems[STORAGE_KEYS.userProfile] = createDefaultUserProfile(backupSettings.linkedGoogleEmail);
       }
       if (Object.keys(missingItems).length > 0) await this.writeManyJson(missingItems);
-    });
+    }));
   }
 
   async listDiaries(): Promise<Diary[]> {
     await this.waitForWrites();
-    return this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+    return measureAsync('repository.query.diaries.list', () => this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES)));
+  }
+
+  async listDiarySummaries(): Promise<Diary[]> {
+    return this.listDiaries();
   }
 
   async getDiary(id: string): Promise<Diary | null> {
-    return (await this.listDiaries()).find(diary => diary.id === id) || null;
+    await this.waitForWrites();
+    return measureAsync('repository.query.diaries.get', () => this.readRecord(STORAGE_KEYS.diaries, id, clone(INITIAL_DIARIES)));
   }
 
   createDiary(input: NewDiary): Promise<Diary> {
-    return this.enqueueWrite(async () => {
-      const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+    return measureAsync('repository.local.diary.create', () => this.enqueueWrite(async () => {
+      const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
       const diary: Diary = {
         ...clone(input),
         id: createId('diary'),
@@ -164,49 +256,105 @@ export class LocalDiaryRepository implements DiaryRepository {
         lastUpdated: 'No entries yet',
       };
       diaries.push(diary);
-      await this.writePortableItems({ [STORAGE_KEYS.diaries]: diaries });
+      await this.writePortableItems(
+        { [STORAGE_KEYS.diaries]: diaries },
+        contentRevision => ({ type: 'diary-created', diary: clone(diary), contentRevision }),
+      );
       return clone(diary);
-    });
+    }));
   }
 
   updateDiary(updatedDiary: Diary): Promise<Diary | null> {
-    return this.enqueueWrite(async () => {
-      const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+    return measureAsync('repository.local.diary.update', () => this.enqueueWrite(async () => {
+      const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
       const index = diaries.findIndex(diary => diary.id === updatedDiary.id);
       if (index < 0) return null;
       diaries[index] = clone(updatedDiary);
-      await this.writePortableItems({ [STORAGE_KEYS.diaries]: diaries });
+      await this.writePortableItems(
+        { [STORAGE_KEYS.diaries]: diaries },
+        contentRevision => ({ type: 'diary-updated', diary: clone(diaries[index]), contentRevision }),
+      );
       return clone(diaries[index]);
-    });
+    }));
   }
 
   deleteDiary(id: string): Promise<boolean> {
-    return this.enqueueWrite(async () => {
-      const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
-      const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
+    return measureAsync('repository.local.diary.delete', () => this.enqueueWrite(async () => {
+      const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+      const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
       const nextDiaries = diaries.filter(diary => diary.id !== id);
       if (nextDiaries.length === diaries.length) return false;
 
       await this.writePortableItems({
         [STORAGE_KEYS.entries]: entries.filter(entry => entry.diaryId !== id),
         [STORAGE_KEYS.diaries]: nextDiaries,
-      });
+      }, contentRevision => ({ type: 'diary-deleted', diaryId: id, contentRevision }));
       return true;
-    });
+    }));
   }
 
   async listEntries(): Promise<Entry[]> {
     await this.waitForWrites();
-    return this.readJson(STORAGE_KEYS.entries, []);
+    return measureAsync('repository.query.entries.list', () => this.readCollection<Entry>(STORAGE_KEYS.entries, []));
+  }
+
+  async listRecentEntries(
+    limit = 10,
+    options: Pick<EntryListOptions, 'allowedDiaryIds' | 'excludeDiaryIds'> = {},
+  ): Promise<EntrySummary[]> {
+    await this.waitForWrites();
+    const storedPage = await this.store.queryEntries?.({
+      ...options,
+      sort: 'updated-desc',
+      limit,
+    });
+    if (storedPage) return storedPage.items.map(entrySummary);
+
+    const entries = filterEntriesByDiaryAccess(await this.listEntries(), options);
+    return sortEntries(entries, 'updated-desc').slice(0, limit).map(entrySummary);
+  }
+
+  async listEntriesByDiary(diaryId: string, options: EntryListOptions = {}): Promise<PageResult<Entry | EntrySummary>> {
+    await this.waitForWrites();
+    const storedPage = await this.store.queryEntries?.({
+      ...options,
+      diaryId,
+    });
+    if (storedPage) return this.entryPageForOptions(storedPage, options);
+
+    const entries = sortEntries(
+      filterEntriesByDiaryAccess(await this.listEntries(), options)
+        .filter(entry => entry.diaryId === diaryId),
+      options.sort,
+    );
+    return paginate(options.includeBody ? entries : entries.map(entrySummary), options);
+  }
+
+  async listEntriesByMonth(diaryId: string, yearMonth: string, options: EntryListOptions = {}): Promise<PageResult<Entry | EntrySummary>> {
+    await this.waitForWrites();
+    const storedPage = await this.store.queryEntries?.({
+      ...options,
+      diaryId,
+      yearMonth,
+    });
+    if (storedPage) return this.entryPageForOptions(storedPage, options);
+
+    const entries = sortEntries(
+      filterEntriesByDiaryAccess(await this.listEntries(), options)
+        .filter(entry => entry.diaryId === diaryId && entry.date.startsWith(yearMonth)),
+      options.sort,
+    );
+    return paginate(options.includeBody ? entries : entries.map(entrySummary), options);
   }
 
   async getEntry(id: string): Promise<Entry | null> {
-    return (await this.listEntries()).find(entry => entry.id === id) || null;
+    await this.waitForWrites();
+    return measureAsync('repository.query.entries.get', () => this.readRecord<Entry>(STORAGE_KEYS.entries, id, []));
   }
 
   createEntry(input: NewEntry): Promise<Entry> {
-    return this.enqueueWrite(async () => {
-      const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
+    return measureAsync('repository.local.entry.create', () => this.enqueueWrite(async () => {
+      const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
       const timestamp = Date.now();
       const entry: Entry = sanitizeEntry({
         ...clone(input),
@@ -218,14 +366,17 @@ export class LocalDiaryRepository implements DiaryRepository {
       });
       entry.wordCount = countWords(entry.body || '');
       entries.push(entry);
-      await this.writeEntriesAndDiaryStats(entries);
+      await this.writeEntriesAndDiaryStats(
+        entries,
+        contentRevision => ({ type: 'entry-created', entry: clone(entry), contentRevision }),
+      );
       return clone(entry);
-    });
+    }));
   }
 
   updateEntry(updatedEntry: Entry): Promise<Entry | null> {
-    return this.enqueueWrite(async () => {
-      const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
+    return measureAsync('repository.local.entry.update', () => this.enqueueWrite(async () => {
+      const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
       const index = entries.findIndex(entry => entry.id === updatedEntry.id);
       if (index < 0) return null;
 
@@ -237,60 +388,279 @@ export class LocalDiaryRepository implements DiaryRepository {
       });
       entry.wordCount = countWords(entry.body || '');
       entries[index] = entry;
-      await this.writeEntriesAndDiaryStats(entries);
+      await this.writeEntriesAndDiaryStats(
+        entries,
+        contentRevision => ({ type: 'entry-updated', entry: clone(entry), contentRevision }),
+      );
       return clone(entry);
-    });
+    }));
   }
 
   deleteEntry(id: string): Promise<boolean> {
-    return this.enqueueWrite(async () => {
-      const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
+    return measureAsync('repository.local.entry.delete', () => this.enqueueWrite(async () => {
+      const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
+      const deleted = entries.find(entry => entry.id === id);
       const nextEntries = entries.filter(entry => entry.id !== id);
       if (nextEntries.length === entries.length) return false;
-      await this.writeEntriesAndDiaryStats(nextEntries);
+      await this.writeEntriesAndDiaryStats(
+        nextEntries,
+        contentRevision => ({ type: 'entry-deleted', entryId: id, diaryId: deleted?.diaryId || '', contentRevision }),
+      );
       return true;
-    });
+    }));
   }
 
-  async listNotes(): Promise<Note[]> {
+  async listNotes(): Promise<Note[]>;
+  async listNotes(options: NoteListOptions): Promise<PageResult<Note | NoteSummary>>;
+  async listNotes(options?: NoteListOptions): Promise<Note[] | PageResult<Note | NoteSummary>> {
     await this.waitForWrites();
-    return this.readJson(STORAGE_KEYS.notes, []);
+    if (options && !options.query) {
+      const storedPage = await this.store.queryNotes?.({
+        ...options,
+        sort: 'pinned-updated-desc',
+      });
+      if (storedPage) return this.notePageForOptions(storedPage, options);
+    }
+
+    const notes = await measureAsync('repository.query.notes.list', () => this.readCollection<Note>(STORAGE_KEYS.notes, []));
+    if (!options) return notes;
+    const query = options.query?.trim().toLowerCase();
+    const filtered = notes
+      .filter(note => {
+        if (options.filter === 'pinned') return note.isPinned;
+        if (options.filter === 'tagged') return note.tags.length > 0;
+        if (options.filter === 'untagged') return note.tags.length === 0;
+        return true;
+      })
+      .filter(note => !query || (
+        note.title.toLowerCase().includes(query) ||
+        richTextHtmlToPlainText(note.body).toLowerCase().includes(query) ||
+        note.tags.some(tag => tag.toLowerCase().includes(query))
+      ))
+      .sort((left, right) => {
+        if (left.isPinned && !right.isPinned) return -1;
+        if (!left.isPinned && right.isPinned) return 1;
+        return right.updatedAt - left.updatedAt;
+      });
+    return paginate(options.includeBody ? filtered : filtered.map(noteSummary), options);
   }
 
   async getNote(id: string): Promise<Note | null> {
-    return (await this.listNotes()).find(note => note.id === id) || null;
+    await this.waitForWrites();
+    return measureAsync('repository.query.notes.get', () => this.readRecord<Note>(STORAGE_KEYS.notes, id, []));
   }
 
   createNote(input: NewNote): Promise<Note> {
-    return this.enqueueWrite(async () => {
-      const notes = await this.readJson<Note[]>(STORAGE_KEYS.notes, []);
+    return measureAsync('repository.local.note.create', () => this.enqueueWrite(async () => {
+      const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
       const timestamp = Date.now();
       const note: Note = sanitizeNote({ ...clone(input), id: createId('note'), createdAt: timestamp, updatedAt: timestamp });
       notes.push(note);
-      await this.writePortableItems({ [STORAGE_KEYS.notes]: notes });
+      await this.writePortableItems(
+        { [STORAGE_KEYS.notes]: notes },
+        contentRevision => ({ type: 'note-created', note: clone(note), contentRevision }),
+      );
       return clone(note);
-    });
+    }));
   }
 
   updateNote(updatedNote: Note): Promise<Note | null> {
-    return this.enqueueWrite(async () => {
-      const notes = await this.readJson<Note[]>(STORAGE_KEYS.notes, []);
+    return measureAsync('repository.local.note.update', () => this.enqueueWrite(async () => {
+      const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
       const index = notes.findIndex(note => note.id === updatedNote.id);
       if (index < 0) return null;
       notes[index] = sanitizeNote({ ...clone(updatedNote), updatedAt: Date.now() });
-      await this.writePortableItems({ [STORAGE_KEYS.notes]: notes });
+      await this.writePortableItems(
+        { [STORAGE_KEYS.notes]: notes },
+        contentRevision => ({ type: 'note-updated', note: clone(notes[index]), contentRevision }),
+      );
       return clone(notes[index]);
-    });
+    }));
   }
 
   deleteNote(id: string): Promise<boolean> {
-    return this.enqueueWrite(async () => {
-      const notes = await this.readJson<Note[]>(STORAGE_KEYS.notes, []);
+    return measureAsync('repository.local.note.delete', () => this.enqueueWrite(async () => {
+      const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
       const nextNotes = notes.filter(note => note.id !== id);
       if (nextNotes.length === notes.length) return false;
-      await this.writePortableItems({ [STORAGE_KEYS.notes]: nextNotes });
+      await this.writePortableItems(
+        { [STORAGE_KEYS.notes]: nextNotes },
+        contentRevision => ({ type: 'note-deleted', noteId: id, contentRevision }),
+      );
       return true;
+    }));
+  }
+
+  async searchEntries(filters: SearchFilters): Promise<PageResult<Entry>> {
+    await this.waitForWrites();
+    return measureAsync('repository.query.entries.search', async () => {
+      const query = filters.query?.trim().toLowerCase();
+      const tags = filters.tags?.map(tag => tag.toLowerCase()) || [];
+      if (!query && tags.length === 0) {
+        const storedPage = await this.store.queryEntries?.({
+          diaryId: filters.diaryId,
+          fromDate: filters.fromDate,
+          toDate: filters.toDate,
+          mood: filters.mood,
+          hasPhotos: filters.hasPhotos,
+          allowedDiaryIds: filters.allowedDiaryIds,
+          excludeDiaryIds: filters.excludeDiaryIds,
+          limit: filters.limit,
+          cursor: filters.cursor,
+          offset: filters.offset,
+          sort: 'updated-desc',
+        });
+        if (storedPage) return clone(storedPage);
+      }
+
+      const entries = filterEntriesByDiaryAccess(await this.listEntries(), filters)
+        .filter(entry => !filters.diaryId || entry.diaryId === filters.diaryId)
+        .filter(entry => matchesDateRange(entry, filters))
+        .filter(entry => !filters.mood || entry.moodName === filters.mood)
+        .filter(entry => filters.hasPhotos === undefined || (entry.photoCount > 0) === filters.hasPhotos)
+        .filter(entry => tags.length === 0 || tags.every(tag => entry.tags.some(entryTag => entryTag.toLowerCase() === tag)))
+        .filter(entry => !query || (
+          entry.title.toLowerCase().includes(query) ||
+          richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
+          entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
+          entry.moodName.toLowerCase().includes(query)
+        ));
+      return paginate(sortEntries(entries, 'updated-desc'), filters);
     });
+  }
+
+  async searchNotes(filters: SearchFilters): Promise<PageResult<Note>> {
+    await this.waitForWrites();
+    return measureAsync('repository.query.notes.search', async () => {
+      const query = filters.query?.trim().toLowerCase();
+      const tags = filters.tags?.map(tag => tag.toLowerCase()) || [];
+      if (!query && tags.length === 0) {
+        const storedPage = await this.store.queryNotes?.({
+          fromDate: filters.fromDate,
+          toDate: filters.toDate,
+          limit: filters.limit,
+          cursor: filters.cursor,
+          offset: filters.offset,
+          sort: 'updated-desc',
+        });
+        if (storedPage) return clone(storedPage);
+      }
+
+      const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
+      const filtered = notes
+        .filter(note => {
+          const date = new Date(note.updatedAt).toISOString().slice(0, 10);
+          return (!filters.fromDate || date >= filters.fromDate) && (!filters.toDate || date <= filters.toDate);
+        })
+        .filter(note => tags.length === 0 || tags.every(tag => note.tags.some(noteTag => noteTag.toLowerCase() === tag)))
+        .filter(note => !query || (
+          note.title.toLowerCase().includes(query) ||
+          richTextHtmlToPlainText(note.body).toLowerCase().includes(query) ||
+          note.tags.some(tag => tag.toLowerCase().includes(query))
+        ))
+        .sort((left, right) => right.updatedAt - left.updatedAt);
+      return paginate(filtered, filters);
+    });
+  }
+
+  async getHomeSummary(
+    options: Pick<EntryListOptions, 'allowedDiaryIds' | 'excludeDiaryIds'> = {},
+  ): Promise<HomeSummary> {
+    return measureAsync('repository.query.homeSummary', async () => {
+      const [diaries, entries, notes, profile] = await Promise.all([
+        this.listDiaries(),
+        this.listEntries(),
+        this.readCollection<Note>(STORAGE_KEYS.notes, []),
+        this.getUserProfile(),
+      ]);
+      const visibleEntries = filterEntriesByDiaryAccess(entries, options);
+      const commonTags = await this.getTagDistribution(options);
+      return {
+        profile,
+        recentDiaries: clone(diaries).sort((left, right) => String(right.lastUpdated).localeCompare(String(left.lastUpdated))).slice(0, 8),
+        recentEntries: sortEntries(visibleEntries, 'updated-desc').slice(0, 8).map(entrySummary),
+        pinnedNotes: notes.filter(note => note.isPinned).sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 5).map(noteSummary),
+        entryCount: visibleEntries.length,
+        noteCount: notes.length,
+        diaryCount: diaries.length,
+        todayWordCount: getTodayWordCount(visibleEntries),
+        currentStreak: calculateStreak(visibleEntries),
+        commonTags: commonTags.slice(0, 12),
+      };
+    });
+  }
+
+  async getDiaryStatistics(diaryId: string): Promise<DiaryStatistics> {
+    const entries = (await this.listEntries()).filter(entry => entry.diaryId === diaryId);
+    return {
+      diaryId,
+      entryCount: entries.length,
+      wordCount: entries.reduce((sum, entry) => sum + (entry.wordCount || 0), 0),
+      photoCount: entries.reduce((sum, entry) => sum + (entry.photoCount || 0), 0),
+      lastEntryDate: (() => {
+        const dates = entries.map(entry => entry.date).sort();
+        return dates.length > 0 ? dates[dates.length - 1] : undefined;
+      })(),
+      lastUpdated: entries.reduce((latest, entry) => Math.max(latest, entry.updatedAt), 0) || undefined,
+    };
+  }
+
+  async getGlobalStatistics(filters: StatisticsFilters = {}): Promise<GlobalStatistics> {
+    const [diaries, entries, notes] = await Promise.all([
+      this.listDiaries(),
+      this.listEntries(),
+      this.readCollection<Note>(STORAGE_KEYS.notes, []),
+    ]);
+    const filteredEntries = filterEntriesByDiaryAccess(entries, filters).filter(entry => matchesDateRange(entry, filters));
+    return {
+      entryCount: filteredEntries.length,
+      noteCount: notes.length,
+      diaryCount: diaries.length,
+      wordCount: filteredEntries.reduce((sum, entry) => sum + (entry.wordCount || 0), 0),
+      photoCount: filteredEntries.reduce((sum, entry) => sum + (entry.photoCount || 0), 0),
+    };
+  }
+
+  async getMoodDistribution(filters: StatisticsFilters = {}): Promise<DistributionRow[]> {
+    const counts = new Map<string, DistributionRow>();
+    filterEntriesByDiaryAccess(await this.listEntries(), filters)
+      .filter(entry => matchesDateRange(entry, filters))
+      .forEach(entry => {
+        const key = entry.moodName || 'Reflective';
+        const row = counts.get(key) || { key, label: key, count: 0, emoji: entry.moodEmoji };
+        row.count += 1;
+        if (!row.emoji && entry.moodEmoji) row.emoji = entry.moodEmoji;
+        counts.set(key, row);
+      });
+    return [...counts.values()].sort((left, right) => right.count - left.count);
+  }
+
+  async getTagDistribution(filters: StatisticsFilters = {}): Promise<DistributionRow[]> {
+    const counts = new Map<string, DistributionRow>();
+    filterEntriesByDiaryAccess(await this.listEntries(), filters)
+      .filter(entry => matchesDateRange(entry, filters))
+      .forEach(entry => {
+        entry.tags.forEach(tag => {
+          const key = tag.toLowerCase();
+          const row = counts.get(key) || { key, label: tag, count: 0 };
+          row.count += 1;
+          counts.set(key, row);
+        });
+      });
+    return [...counts.values()].sort((left, right) => right.count - left.count);
+  }
+
+  async getWritingHeatmap(filters: StatisticsFilters = {}): Promise<WritingHeatmapRow[]> {
+    const rows = new Map<string, WritingHeatmapRow>();
+    filterEntriesByDiaryAccess(await this.listEntries(), filters)
+      .filter(entry => matchesDateRange(entry, filters))
+      .forEach(entry => {
+        const row = rows.get(entry.date) || { date: entry.date, count: 0, wordCount: 0 };
+        row.count += 1;
+        row.wordCount += entry.wordCount || 0;
+        rows.set(entry.date, row);
+      });
+    return [...rows.values()].sort((left, right) => left.date.localeCompare(right.date));
   }
 
   async getSettings(): Promise<AppSettings> {
@@ -300,7 +670,10 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   saveSettings(settings: AppSettings): Promise<void> {
     return this.enqueueWrite(async () => {
-      await this.writePortableItems({ [STORAGE_KEYS.settings]: settings });
+      await this.writePortableItems(
+        { [STORAGE_KEYS.settings]: settings },
+        contentRevision => ({ type: 'settings-updated', settings: clone(settings), contentRevision }),
+      );
       await syncReminderNotification(settings);
     });
   }
@@ -313,7 +686,10 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   saveUserProfile(profile: UserProfile): Promise<void> {
     return this.enqueueWrite(async () => {
-      await this.writePortableItems({ [STORAGE_KEYS.userProfile]: profile });
+      await this.writePortableItems(
+        { [STORAGE_KEYS.userProfile]: profile },
+        contentRevision => ({ type: 'profile-updated', profile: clone(profile), contentRevision }),
+      );
     });
   }
 
@@ -421,8 +797,8 @@ export class LocalDiaryRepository implements DiaryRepository {
 
       const items: Record<string, unknown> = {};
       if (event.recordType === 'diary') {
-        const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
-        const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
+        const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+        const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
         const nextDiaries = event.operation === 'delete'
           ? diaries.filter(diary => diary.id !== event.recordId)
           : this.upsertRecord(diaries, event.payload as Diary);
@@ -432,15 +808,15 @@ export class LocalDiaryRepository implements DiaryRepository {
         items[STORAGE_KEYS.entries] = nextEntries;
         items[STORAGE_KEYS.diaries] = this.withDiaryStats(nextDiaries, nextEntries);
       } else if (event.recordType === 'entry') {
-        const entries = await this.readJson<Entry[]>(STORAGE_KEYS.entries, []);
+        const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
         const nextEntries = event.operation === 'delete'
           ? entries.filter(entry => entry.id !== event.recordId)
           : this.upsertRecord(entries, sanitizeEntry(event.payload as Entry));
-        const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+        const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
         items[STORAGE_KEYS.entries] = nextEntries;
         items[STORAGE_KEYS.diaries] = this.withDiaryStats(diaries, nextEntries);
       } else if (event.recordType === 'note') {
-        const notes = await this.readJson<Note[]>(STORAGE_KEYS.notes, []);
+        const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
         items[STORAGE_KEYS.notes] = event.operation === 'delete'
           ? notes.filter(note => note.id !== event.recordId)
           : this.upsertRecord(notes, sanitizeNote(event.payload as Note));
@@ -467,7 +843,20 @@ export class LocalDiaryRepository implements DiaryRepository {
         ...syncState,
         currentSyncSequence: Math.max(syncState.currentSyncSequence, sequence),
       };
-      await this.writePortableItems(items);
+      await this.writePortableItems(
+        items,
+        contentRevision => ({
+          type: 'remote-batch-applied',
+          affectedRecords: [
+            { recordType: event.recordType, recordId: event.recordId },
+            ...(event.affectedRecords || []).map(affected => ({
+              recordType: affected.recordType,
+              recordId: affected.recordId,
+            })),
+          ],
+          contentRevision,
+        }),
+      );
       if (event.recordType === 'settings') {
         await syncReminderNotification(await this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS)));
       }
@@ -661,6 +1050,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {});
       outbox[operation.operationId] = clone({ ...operation, updatedAt: Date.now() });
       await this.writeJson(STORAGE_KEYS.syncOutbox, outbox);
+      await this.emitSyncStatusChange(outbox, operation.operationId);
     });
   }
 
@@ -677,7 +1067,183 @@ export class LocalDiaryRepository implements DiaryRepository {
       const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {});
       delete outbox[operationId];
       await this.writeJson(STORAGE_KEYS.syncOutbox, outbox);
+      await this.emitSyncStatusChange(outbox, operationId);
     });
+  }
+
+  async getSyncStatusSummary(): Promise<SyncStatusSummary> {
+    const outbox = await this.listSyncOutboxOperations();
+    return this.createSyncStatusSummary(outbox);
+  }
+
+  applyLocalMutationWithOutbox(input: ApplyLocalMutationWithOutboxInput): Promise<Diary | Entry | Note | AppSettings | UserProfile | null> {
+    return measureAsync('repository.local.mutationWithOutbox', () => this.enqueueWrite(async () => {
+      const versions = await this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {});
+      const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {});
+      const recordKey = `${input.recordType}:${input.recordId}`;
+      const existingPreparedOperation = Object.values(outbox).find(operation => (
+        operation.localApplied &&
+        operation.recordType === input.recordType &&
+        operation.recordId === input.recordId &&
+        (operation.state === 'prepared' || operation.state === 'failed') &&
+        !operation.uploadedObjects &&
+        !operation.eventDriveFileId &&
+        !operation.committedObjects
+      ));
+      const operationId = existingPreparedOperation?.operationId || input.operationId;
+      const baseRecordVersion = existingPreparedOperation?.baseRecordVersion ?? versions[recordKey] ?? 0;
+      const nowMs = input.createdAt || Date.now();
+      const syncPayload = input.syncPayload === undefined ? input.localPayload : input.syncPayload;
+      const affectedRecords: SyncOutboxOperation['affectedRecords'] = [];
+      const items: Record<string, unknown> = {};
+      let result: Diary | Entry | Note | AppSettings | UserProfile | null = input.operation === 'delete' ? null : clone(input.localPayload);
+      let changeFactory: ((contentRevision: number) => RepositoryChange) | undefined;
+
+      if (input.recordType === 'diary') {
+        const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+        const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
+        if (input.operation === 'delete') {
+          entries
+            .filter(entry => entry.diaryId === input.recordId)
+            .forEach(entry => affectedRecords.push({
+              recordType: 'entry',
+              recordId: entry.id,
+              baseRecordVersion: versions[`entry:${entry.id}`] || 0,
+            }));
+          items[STORAGE_KEYS.entries] = entries.filter(entry => entry.diaryId !== input.recordId);
+          items[STORAGE_KEYS.diaries] = diaries.filter(diary => diary.id !== input.recordId);
+          changeFactory = contentRevision => ({ type: 'diary-deleted', diaryId: input.recordId, contentRevision });
+        } else {
+          const diary = clone(input.localPayload as Diary);
+          const nextDiaries = this.upsertRecord(diaries, diary);
+          items[STORAGE_KEYS.diaries] = this.withDiaryStats(nextDiaries, entries);
+          result = diary;
+          changeFactory = contentRevision => ({
+            type: diaries.some(existing => existing.id === diary.id) ? 'diary-updated' : 'diary-created',
+            diary: clone(diary),
+            contentRevision,
+          } as RepositoryChange);
+        }
+      } else if (input.recordType === 'entry') {
+        const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
+        const existing = entries.find(entry => entry.id === input.recordId);
+        const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+        if (input.operation === 'delete') {
+          items[STORAGE_KEYS.entries] = entries.filter(entry => entry.id !== input.recordId);
+          items[STORAGE_KEYS.diaries] = this.withDiaryStats(diaries, items[STORAGE_KEYS.entries] as Entry[]);
+          changeFactory = contentRevision => ({
+            type: 'entry-deleted',
+            entryId: input.recordId,
+            diaryId: existing?.diaryId || '',
+            contentRevision,
+          });
+        } else {
+          const entry = sanitizeEntry(clone(input.localPayload as Entry));
+          const nextEntries = this.upsertRecord(entries, entry);
+          items[STORAGE_KEYS.entries] = nextEntries;
+          items[STORAGE_KEYS.diaries] = this.withDiaryStats(diaries, nextEntries);
+          result = clone(entry);
+          changeFactory = contentRevision => ({
+            type: existing ? 'entry-updated' : 'entry-created',
+            entry: clone(entry),
+            contentRevision,
+          } as RepositoryChange);
+        }
+      } else if (input.recordType === 'note') {
+        const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
+        const existing = notes.find(note => note.id === input.recordId);
+        if (input.operation === 'delete') {
+          items[STORAGE_KEYS.notes] = notes.filter(note => note.id !== input.recordId);
+          changeFactory = contentRevision => ({ type: 'note-deleted', noteId: input.recordId, contentRevision });
+        } else {
+          const note = sanitizeNote(clone(input.localPayload as Note));
+          items[STORAGE_KEYS.notes] = this.upsertRecord(notes, note);
+          result = clone(note);
+          changeFactory = contentRevision => ({
+            type: existing ? 'note-updated' : 'note-created',
+            note: clone(note),
+            contentRevision,
+          } as RepositoryChange);
+        }
+      } else if (input.recordType === 'settings') {
+        const settings = clone(input.localPayload as AppSettings);
+        items[STORAGE_KEYS.settings] = settings;
+        result = settings;
+        changeFactory = contentRevision => ({ type: 'settings-updated', settings: clone(settings), contentRevision });
+      } else {
+        const profile = clone(input.localPayload as UserProfile);
+        items[STORAGE_KEYS.userProfile] = profile;
+        result = profile;
+        changeFactory = contentRevision => ({ type: 'profile-updated', profile: clone(profile), contentRevision });
+      }
+
+      outbox[operationId] = {
+        ...existingPreparedOperation,
+        operationId,
+        accountId: input.account.accountId,
+        deviceId: input.account.deviceId,
+        partitionKey: partitionKeyForRecordPayload(input.recordType, syncPayload as any),
+        affectedPartitionKeys: [partitionKeyForRecordPayload(input.recordType, syncPayload as any)],
+        recordType: input.recordType,
+        recordId: input.recordId,
+        operation: input.operation,
+        payload: clone(syncPayload),
+        baseRecordVersion,
+        affectedRecords,
+        state: 'prepared',
+        localApplied: true,
+        createdAt: existingPreparedOperation?.createdAt || nowMs,
+        updatedAt: nowMs,
+        retryCount: undefined,
+        lastErrorAt: undefined,
+        nextRetryAt: undefined,
+        error: undefined,
+      };
+      items[STORAGE_KEYS.syncOutbox] = outbox;
+
+      const contentRevision = await this.writePortableItems(items, changeFactory);
+      await this.emitSyncStatusChange(outbox, operationId, contentRevision);
+      if (input.recordType === 'settings' && input.localPayload) {
+        await syncReminderNotification(input.localPayload as AppSettings);
+      }
+      return clone(result);
+    }));
+  }
+
+  acknowledgeLocalMutation(input: AcknowledgeLocalMutationInput): Promise<void> {
+    return measureAsync('repository.sync.acknowledgeLocalMutation', () => this.enqueueWrite(async () => {
+      const syncState = await this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount);
+      if (!syncState || syncState.accountId !== input.event.accountId) {
+        throw new Error('The sync acknowledgement does not belong to the local account.');
+      }
+      const versions = await this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {});
+      const recordKey = `${input.event.recordType}:${input.event.recordId}`;
+      const currentVersion = versions[recordKey] || 0;
+      if (currentVersion > input.event.recordVersion) return;
+      if (currentVersion !== input.event.baseRecordVersion && currentVersion !== input.event.recordVersion) {
+        throw new Error(`Sync record version mismatch while acknowledging ${recordKey}.`);
+      }
+      versions[recordKey] = Math.max(currentVersion, input.event.recordVersion);
+      for (const affected of input.event.affectedRecords || []) {
+        const key = `${affected.recordType}:${affected.recordId}`;
+        versions[key] = Math.max(versions[key] || 0, affected.recordVersion);
+      }
+      await this.writeManyJson({
+        [STORAGE_KEYS.syncRecordVersions]: versions,
+        [STORAGE_KEYS.syncAccount]: {
+          ...syncState,
+          currentSyncSequence: Math.max(syncState.currentSyncSequence, input.sequence),
+        },
+      });
+      const backup = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, createDefaultDriveBackupSettings());
+      const outbox = Object.values(await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {}));
+      this.emitChange(backup.contentRevision || 0, {
+        type: 'sync-status-updated',
+        operationId: input.event.eventId,
+        status: this.createSyncStatusSummary(outbox),
+        contentRevision: backup.contentRevision || 0,
+      });
+    }));
   }
 
   resetContent(): Promise<void> {
@@ -767,12 +1333,15 @@ export class LocalDiaryRepository implements DiaryRepository {
     });
   }
 
-  private async writeEntriesAndDiaryStats(entries: Entry[]): Promise<void> {
-    const diaries = await this.readJson(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+  private async writeEntriesAndDiaryStats(
+    entries: Entry[],
+    createChange?: (contentRevision: number) => RepositoryChange,
+  ): Promise<void> {
+    const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
     await this.writePortableItems({
       [STORAGE_KEYS.entries]: entries,
       [STORAGE_KEYS.diaries]: this.withDiaryStats(diaries, entries),
-    });
+    }, createChange);
   }
 
   private withDiaryStats(diaries: Diary[], entries: Entry[]): Diary[] {
@@ -790,6 +1359,34 @@ export class LocalDiaryRepository implements DiaryRepository {
     const next = records.map(item => item.id === record.id ? clone(record) : item);
     if (!records.some(item => item.id === record.id)) next.push(clone(record));
     return next;
+  }
+
+  private entryPageForOptions(page: PageResult<Entry>, options: Pick<EntryListOptions, 'includeBody'>): PageResult<Entry | EntrySummary> {
+    return {
+      items: options.includeBody ? clone(page.items) : page.items.map(entrySummary),
+      nextCursor: page.nextCursor,
+      total: page.total,
+    };
+  }
+
+  private notePageForOptions(page: PageResult<Note>, options: Pick<NoteListOptions, 'includeBody'>): PageResult<Note | NoteSummary> {
+    return {
+      items: options.includeBody ? clone(page.items) : page.items.map(noteSummary),
+      nextCursor: page.nextCursor,
+      total: page.total,
+    };
+  }
+
+  private async readCollection<T>(key: string, fallback: T[]): Promise<T[]> {
+    const structured = await this.store.getStructuredCollection?.<T>(key);
+    if (structured !== undefined) return clone(structured);
+    return this.readJson<T[]>(key, clone(fallback));
+  }
+
+  private async readRecord<T extends { id: string }>(key: string, id: string, fallback: T[]): Promise<T | null> {
+    const structured = await this.store.getStructuredRecord?.<T>(key, id);
+    if (structured !== undefined) return structured === null ? null : clone(structured);
+    return (await this.readCollection<T>(key, fallback)).find(record => record.id === id) || null;
   }
 
   private async readJson<T>(key: string, fallback: T): Promise<T> {
@@ -812,7 +1409,10 @@ export class LocalDiaryRepository implements DiaryRepository {
     await this.store.setItems(serializedItems);
   }
 
-  private async writePortableItems(items: Record<string, unknown>): Promise<number> {
+  private async writePortableItems(
+    items: Record<string, unknown>,
+    createChange?: (contentRevision: number) => RepositoryChange,
+  ): Promise<number> {
     const backup = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, createDefaultDriveBackupSettings());
     const contentRevision = (backup.contentRevision || 0) + 1;
     await this.writeManyJson({
@@ -822,8 +1422,37 @@ export class LocalDiaryRepository implements DiaryRepository {
         contentRevision,
       },
     });
-    this.changeListeners.forEach(listener => listener(contentRevision));
+    this.emitChange(contentRevision, createChange?.(contentRevision));
     return contentRevision;
+  }
+
+  private emitChange(contentRevision: number, change?: RepositoryChange): void {
+    this.changeListeners.forEach(listener => listener(contentRevision, change));
+    if (change) this.typedChangeListeners.forEach(listener => listener(change));
+  }
+
+  private async emitSyncStatusChange(
+    outbox: Record<string, SyncOutboxOperation>,
+    operationId?: string,
+    contentRevision?: number,
+  ): Promise<void> {
+    const backup = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, createDefaultDriveBackupSettings());
+    const revision = contentRevision ?? backup.contentRevision ?? 0;
+    this.emitChange(revision, {
+      type: 'sync-status-updated',
+      operationId,
+      status: this.createSyncStatusSummary(Object.values(outbox)),
+      contentRevision: revision,
+    });
+  }
+
+  private createSyncStatusSummary(outbox: SyncOutboxOperation[]): SyncStatusSummary {
+    return {
+      pendingOutboxCount: outbox.filter(operation => operation.state !== 'applied').length,
+      failedOperationCount: outbox.filter(operation => operation.state === 'failed').length,
+      isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
+      conflictCount: outbox.filter(operation => String(operation.error || '').toLowerCase().includes('stale')).length,
+    };
   }
 
   private async waitForWrites(): Promise<void> {

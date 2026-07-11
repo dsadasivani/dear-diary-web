@@ -89,7 +89,7 @@ If package upload/commit fails before a recovery package commit, the client can 
 
 ## Durable User-Write Outbox
 
-User writes are staged locally before Drive/Supabase work:
+User writes are local-first. The repository sanitizes and validates payloads, applies the local encrypted database mutation, and records the durable outbox operation in the same local transaction/batch before returning to the UI. Background sync then flushes pending operations:
 
 - `prepared`
 - `media_uploading`
@@ -101,7 +101,11 @@ User writes are staged locally before Drive/Supabase work:
 - `applied`
 - `failed`
 
-Startup and new writes resume pending/failed user-write operations before accepting the next mutation. Snapshots, partition migration, key packages, and maintenance remain best-effort maintenance paths rather than durable user-write outbox operations.
+Normal saves do not require network availability and do not wait for Drive upload, Supabase metadata commit, remote pulls, media processing, snapshot compaction, or archive hydration. Successful remote commits acknowledge the local event by updating versions, cursors, media pointers, and outbox state without replaying the full mutation onto the local record.
+
+Startup, unlock, foreground/resume, reconnect, realtime signals, manual retry, and fallback polling request pending outbox flushes. Fallback polling is intentionally coarse, currently 90 seconds, because local-first saves schedule immediate/coalesced flushes themselves. Snapshots, partition migration, key packages, and maintenance remain best-effort maintenance paths rather than durable user-write outbox operations.
+
+The Backup settings tab exposes local sync queue health as counts only: pending operations, failed operations, conflict count, and online/offline state. Manual retry flushes the outbox and refreshes Drive status without showing record IDs, operation payloads, media URIs, keys, or tokens.
 
 ## Security Boundaries
 

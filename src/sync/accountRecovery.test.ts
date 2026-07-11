@@ -91,3 +91,63 @@ test('collects passphrase recovery keys across key epochs', async () => {
   assert.deepEqual(recovered.accountRootKeys[1], epochOneRootKey);
   assert.deepEqual(recovered.accountRootKeys[2], epochTwoRootKey);
 });
+
+test('stops scanning recovery packages when newest package contains required epochs', async () => {
+  const epochOneRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const epochTwoRootKey = crypto.getRandomValues(new Uint8Array(32));
+  const oldRecoveryBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(epochOneRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+      keyEpoch: 1,
+      keyVersion: 1,
+    }),
+  );
+  const latestRecoveryBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(epochTwoRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+      keyEpoch: 2,
+      keyVersion: 2,
+      accountRootKeys: {
+        1: epochOneRootKey,
+        2: epochTwoRootKey,
+      },
+    }),
+  );
+  const makeObject = async (
+    sequence: number,
+    id: string,
+    bytes: Uint8Array,
+    keyEpoch: number,
+  ): Promise<SyncObjectMetadata> => ({
+    id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: id,
+    objectKind: 'key_package', sha256: await sha256(bytes), sizeBytes: bytes.byteLength,
+    createdByDeviceId: 'device-1', createdAt: '', keyEpoch,
+  });
+  const objects = [
+    await makeObject(1, 'recovery-1', oldRecoveryBytes, 1),
+    await makeObject(9, 'recovery-2', latestRecoveryBytes, 2),
+  ];
+  const downloadedFileIds: string[] = [];
+  const files = new Map<string, Uint8Array>([
+    ['recovery-1', oldRecoveryBytes],
+    ['recovery-2', latestRecoveryBytes],
+  ]);
+
+  const recovered = await recoverAccountRootKey({
+    objects,
+    accountId: 'account-1',
+    recoveryPassphrase: 'a sufficiently long passphrase',
+    googleSession: { userId: 'google-1', email: null, displayName: null, accessToken: 'token' },
+    download: async (_session, id) => {
+      downloadedFileIds.push(id);
+      return files.get(id)!;
+    },
+    requiredKeyEpoch: 2,
+  });
+
+  assert.deepEqual(downloadedFileIds, ['recovery-2']);
+  assert.equal(recovered.object.driveFileId, 'recovery-2');
+  assert.deepEqual(recovered.accountRootKey, epochTwoRootKey);
+  assert.deepEqual(recovered.accountRootKeys[1], epochOneRootKey);
+  assert.deepEqual(recovered.accountRootKeys[2], epochTwoRootKey);
+});

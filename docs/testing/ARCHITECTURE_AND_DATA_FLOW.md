@@ -12,17 +12,19 @@ Locked individual diaries are protected by session-only `unlockedDiaryIds`. Home
 
 ## Web And Native Storage Boundaries
 
-Web storage uses encrypted IndexedDB through `WebEncryptedKeyValueStore`. `WebLocalDataStore` migrates legacy plaintext localStorage records into encrypted IndexedDB and removes the plaintext keys. Native storage uses encrypted SQLite through `nativeSQLiteDataStore` and native file storage for media.
+Web storage uses encrypted IndexedDB through `WebEncryptedKeyValueStore`. `WebLocalDataStore` migrates legacy plaintext localStorage records into encrypted IndexedDB and removes the plaintext keys. Native storage uses encrypted SQLite through `nativeSQLiteDataStore` and native file storage for media. Native diary, entry, and note list/get reads prefer typed SQL rows when the migration mirror is available.
+
+Web repository collection data is also mirrored into encrypted record stores for diaries, entries, notes, sync versions, media pointers, partition hydration, and outbox operations. Repository list/get methods prefer those structured stores when ready; direct diary, entry, and note lookups can read one record while compatibility key-value rows remain available for rollback and import/export. Entry and note screen page queries use optional storage-backed query methods when available, falling back to repository filtering for full-text/tag search and unsupported stores.
 
 Allowed localStorage use remains limited to UI preferences, sync debug flags, transient Google auth intent, and test fallback when no browser storage exists.
 
 ## Repository Write Flow
 
-UI components call `diaryRepository`, which wraps `LocalDiaryRepository` with sync-aware behavior. Local repository writes sanitize rich text, serialize writes through a tail promise, update diary statistics, bump content revision for portable data changes, and notify repository listeners.
+UI components call `diaryRepository`, which wraps `LocalDiaryRepository` with sync-aware behavior. Normal synced writes are local-first: rich text is sanitized, the local encrypted record change and durable outbox operation are written in one serialized local batch, diary statistics are updated, typed repository change events are emitted, and the saved object is returned to the UI before cloud work starts.
 
 ## Sync Write Flow
 
-Synced writes enter `EventSyncEngine.commitMutation`. The engine verifies online state, opens sync runtime, asserts active device status, resumes pending outbox operations, pulls remote changes, sanitizes payloads, creates a versioned domain event, encrypts it with the active epoch root key, commits Drive object metadata to Supabase, applies the event locally, updates cursors, and optionally compacts snapshots.
+Background sync enters `EventSyncEngine.flushPendingOutbox` or polling/realtime pull paths. The engine opens sync runtime when online, asserts active device status, resumes pending outbox operations, encrypts media/events with the active epoch root key, commits Drive object metadata to Supabase, acknowledges already-local mutations by updating versions/cursors/media pointers, and schedules snapshot compaction as best-effort work. The legacy `commitMutation` path remains for explicit sync internals and tests during the migration.
 
 ## Outbox Stages
 

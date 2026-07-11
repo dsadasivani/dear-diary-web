@@ -7,6 +7,8 @@ import { Diary, Entry, Note, ResponsiveLayout, UserProfile } from '../types';
 import { PREDEFINED_TAGS, calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
 import ProfileAvatar from './ProfileAvatar';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import SyncedImage from './SyncedImage';
+import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface HomeScreenProps {
   diaries: Diary[];
@@ -39,6 +41,7 @@ export default function HomeScreen({
   onOpenQuickNote,
   onOpenNewEntryWithPrompt
 }: HomeScreenProps) {
+  useScreenPerformance('home');
   const [promptIndex, setPromptIndex] = useState<number>(0);
   const [quickThought, setQuickThought] = useState<string>('');
   const [streak, setStreak] = useState<number>(0);
@@ -269,13 +272,12 @@ export default function HomeScreen({
                   onClick={() => onNavigate('diaries', 'diaryDetail', entry.diaryId, entry.id)}
                   className="aspect-square overflow-hidden rounded-xl border border-brand-border bg-white shadow-sm"
                 >
-                  <img
+                  <SyncedImage
                     src={src}
                     alt=""
                     className="h-full w-full object-cover transition-transform duration-500 hover:scale-105"
-                    onError={(event) => {
-                      (event.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1517842645767-c639042777db?w=600';
-                    }}
+                    fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                    label="recent memory"
                   />
                 </button>
               )) : (

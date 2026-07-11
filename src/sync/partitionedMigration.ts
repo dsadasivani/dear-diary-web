@@ -20,6 +20,7 @@ export interface PartitionedMigrationInput {
   googleSession: GoogleAccountSession;
   upload?: (input: UploadDriveSyncObjectInput) => Promise<{ id: string }>;
   now?: Date;
+  operationIdPrefix?: string;
 }
 
 export interface PartitionedMigrationResult {
@@ -35,6 +36,7 @@ export const migrateLocalAccountToPartitionedSync = async ({
   googleSession,
   upload = uploadDriveSyncObject,
   now = new Date(),
+  operationIdPrefix,
 }: PartitionedMigrationInput): Promise<PartitionedMigrationResult> => {
   if (localState.deviceRole !== 'primary_mobile') {
     throw new Error('Only the active primary mobile can migrate an account to partitioned sync.');
@@ -42,6 +44,7 @@ export const migrateLocalAccountToPartitionedSync = async ({
 
   const snapshot = await repository.exportSnapshot();
   const keyEpoch = localState.keyEpoch || 1;
+  const operationPrefix = operationIdPrefix || `partition-migration:${localState.accountId}:${keyEpoch}`;
   const partitionObjects: SyncObjectMetadata[] = [];
   const snapshotMetadata: Partial<Record<string, Partial<SyncPartitionManifestEntry>>> = {};
 
@@ -76,7 +79,7 @@ export const migrateLocalAccountToPartitionedSync = async ({
       sizeBytes: encrypted.bytes.byteLength,
       partitionKey,
       affectedPartitionKeys: [partitionKey],
-      operationId: `partition-migration:${localState.accountId}:${keyEpoch}:${partitionKey}`,
+      operationId: `${operationPrefix}:${partitionKey}`,
       keyEpoch,
     });
     partitionObjects.push(committed);
@@ -118,7 +121,7 @@ export const migrateLocalAccountToPartitionedSync = async ({
     sizeBytes: encryptedManifest.bytes.byteLength,
     partitionKey: 'core',
     affectedPartitionKeys: manifest.partitions.map(partition => partition.partitionKey),
-    operationId: `partition-migration:${localState.accountId}:${keyEpoch}:manifest`,
+    operationId: `${operationPrefix}:manifest`,
     keyEpoch,
   });
 

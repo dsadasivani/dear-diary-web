@@ -33,6 +33,17 @@ const validateRecordVersions = (value: unknown): Record<string, number> => {
   return versions as Record<string, number>;
 };
 
+const stripLocalMediaUris = (
+  pointers: RepositorySnapshot['syncMediaPointers'] | undefined,
+): NonNullable<RepositorySnapshot['syncMediaPointers']> => (
+  Object.fromEntries(
+    Object.entries(pointers || {}).map(([sequence, pointer]) => [sequence, {
+      ...pointer,
+      localUri: undefined,
+    }]),
+  )
+);
+
 export const encodeRepositorySnapshotPayload = (
   snapshot: RepositorySnapshot,
   accountId: string,
@@ -53,12 +64,7 @@ export const encodeRepositorySnapshotPayload = (
     settings: snapshot.settings || null,
     userProfile: snapshot.userProfile || null,
     syncRecordVersions: snapshot.syncRecordVersions || {},
-    syncMediaPointers: Object.fromEntries(
-      Object.entries(snapshot.syncMediaPointers || {}).map(([sequence, pointer]) => [sequence, {
-        ...pointer,
-        localUri: undefined,
-      }]),
-    ),
+    syncMediaPointers: stripLocalMediaUris(snapshot.syncMediaPointers),
   }));
 };
 
@@ -95,7 +101,7 @@ export const parseRepositorySnapshotPayload = (
       settings: payload.settings || undefined,
       userProfile: payload.userProfile || undefined,
       syncRecordVersions: validateRecordVersions(payload.syncRecordVersions),
-      syncMediaPointers: payload.syncMediaPointers || {},
+      syncMediaPointers: stripLocalMediaUris(payload.syncMediaPointers),
     },
   };
 };

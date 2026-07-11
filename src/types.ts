@@ -411,6 +411,7 @@ export interface SyncOutboxOperation {
   eventSizeBytes?: number;
   uploadedObjects?: SyncOutboxDriveObject[];
   committedObjects?: SyncObjectMetadata[];
+  localApplied?: boolean;
   state: SyncOutboxOperationState;
   createdAt: number;
   updatedAt: number;

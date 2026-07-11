@@ -8,6 +8,7 @@ import { initializeMediaGarbageCollection } from './mobile/mediaGarbageCollector
 import App from './App';
 import { isWeb } from './platform';
 import WebCompanionLink from './components/WebCompanionLink';
+import { measureAsync } from './utils/performance';
 
 interface BootstrapData {
   settings: AppSettings;
@@ -20,7 +21,7 @@ let bootstrapPromise: Promise<BootstrapData> | null = null;
 
 const loadBootstrapData = (): Promise<BootstrapData> => {
   if (!bootstrapPromise) {
-    bootstrapPromise = (async () => {
+    bootstrapPromise = measureAsync('app.bootstrap', async () => {
       await hydrateNativeUiPreferences();
       await diaryRepository.initialize();
       await migrateLegacyDataUriMedia().catch(error => {
@@ -34,7 +35,7 @@ const loadBootstrapData = (): Promise<BootstrapData> => {
         diaryRepository.getLocalSyncAccountState(),
       ]);
       return { settings, security, userProfile, syncAccount };
-    })();
+    });
   }
   return bootstrapPromise;
 };

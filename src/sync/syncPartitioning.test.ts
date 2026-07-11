@@ -31,6 +31,19 @@ const snapshot: RepositorySnapshot = {
   ],
   notes: [{ id: 'note-1', title: 'Note', body: '', isPinned: false, tags: [], createdAt: Date.parse('2026-07-02T00:00:00.000Z'), updatedAt: 0 }],
   syncRecordVersions: { 'entry:entry-1': 2, 'note:note-1': 1 },
+  syncMediaPointers: {
+    '7': {
+      mediaId: 'media-1',
+      sequence: 7,
+      driveFileId: 'drive-photo-1',
+      sha256: 'sha',
+      sizeBytes: 123,
+      createdByDeviceId: 'mobile-1',
+      createdAt: '2026-07-05T00:00:00.000Z',
+      localUri: 'http://localhost/_capacitor_file_/photo.jpg',
+      keyEpoch: 1,
+    },
+  },
 };
 
 test('derives core and monthly partition keys', () => {
@@ -60,6 +73,7 @@ test('round-trips partition snapshot payloads', () => {
   assert.equal(parsed.partitionKey, 'month:2026-07');
   assert.equal(parsed.baseSequence, 42);
   assert.deepEqual(parsed.snapshot.entries.map(entry => entry.id), ['entry-1']);
+  assert.equal(parsed.snapshot.syncMediaPointers?.['7']?.localUri, undefined);
 });
 
 test('builds and round-trips encrypted-manifest payload input', () => {
