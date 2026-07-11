@@ -52,10 +52,12 @@ export default function AudioWaveformPlayer({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [resolvedSrc, setResolvedSrc] = useState<string>(src);
   const [resolveError, setResolveError] = useState('');
+  const [isHydratingAudio, setIsHydratingAudio] = useState(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
-  const isResolvingAudio = Boolean(parseSyncMediaReference(src)) && resolvedSrc === src && !resolveError;
+  const needsAudioHydration = Boolean(parseSyncMediaReference(src)) && resolvedSrc === src;
+  const isResolvingAudio = isHydratingAudio;
   const playableSrc = parseSyncMediaReference(resolvedSrc) ? undefined : resolvedSrc;
 
   // Generate deterministic bar heights for the visual waveform
@@ -67,22 +69,28 @@ export default function AudioWaveformPlayer({
   ];
 
   useEffect(() => {
-    let cancelled = false;
-    setResolvedSrc(src);
+    setResolvedSrc(parseSyncMediaReference(src) ? resolvedAudioCache.get(src) || src : src);
     setResolveError('');
-    if (!parseSyncMediaReference(src)) return undefined;
-    void hydrateAudioReference(src, title)
-      .then(resolved => {
-        if (!cancelled) setResolvedSrc(resolved);
-      })
-      .catch(error => {
-        console.warn('Synced audio could not be prepared yet:', error);
-        if (!cancelled) setResolveError(error?.message || 'Audio could not be prepared.');
-      });
-    return () => {
-      cancelled = true;
-    };
+    setIsHydratingAudio(false);
   }, [src, title]);
+
+  const ensurePlayableSource = async (): Promise<string | null> => {
+    if (!parseSyncMediaReference(src)) return resolvedSrc;
+    if (!needsAudioHydration) return resolvedSrc;
+    setIsHydratingAudio(true);
+    setResolveError('');
+    try {
+      const resolved = await hydrateAudioReference(src, title);
+      setResolvedSrc(resolved);
+      return resolved;
+    } catch (error: any) {
+      console.warn('Synced audio could not be prepared yet:', error);
+      setResolveError(error?.message || 'Audio could not be prepared.');
+      return null;
+    } finally {
+      setIsHydratingAudio(false);
+    }
+  };
 
   useEffect(() => {
     // Reset play state if source changes
@@ -114,10 +122,12 @@ export default function AudioWaveformPlayer({
         }
       };
 
-      audio.addEventListener('loadedmetadata', () => {
+      const handleLoadedMetadata = () => {
         updateDuration();
         forceDurationDiscovery();
-      });
+      };
+
+      audio.addEventListener('loadedmetadata', handleLoadedMetadata);
       audio.addEventListener('durationchange', updateDuration);
       audio.addEventListener('canplaythrough', updateDuration);
       
@@ -132,7 +142,7 @@ export default function AudioWaveformPlayer({
       }, 300);
 
       return () => {
-        audio.removeEventListener('loadedmetadata', updateDuration);
+        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
         audio.removeEventListener('durationchange', updateDuration);
         audio.removeEventListener('canplaythrough', updateDuration);
         clearInterval(interval);
@@ -140,11 +150,17 @@ export default function AudioWaveformPlayer({
     }
   }, [resolvedSrc]);
 
-  const togglePlay = () => {
+  const togglePlay = async () => {
     if (!audioRef.current || isResolvingAudio || resolveError) return;
     if (isPlaying) {
       audioRef.current.pause();
     } else {
+      const resolved = await ensurePlayableSource();
+      if (!resolved || !audioRef.current) return;
+      if (audioRef.current.src !== resolved) {
+        audioRef.current.src = resolved;
+        audioRef.current.load();
+      }
       // If duration is still not loaded, try to force it by seeking
       if (!isFinite(audioRef.current.duration) || audioRef.current.duration === 0) {
         audioRef.current.currentTime = 1e101;

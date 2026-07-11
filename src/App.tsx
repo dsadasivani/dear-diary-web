@@ -174,17 +174,23 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
   const [archiveMonths, setArchiveMonths] = useState<PartitionHydrationState[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
+  const [homeStreak, setHomeStreak] = useState(0);
+
+  const lockedDiaryIds = React.useMemo(() => (
+    diaries
+      .filter(diary => diary.isLocked && !unlockedDiaryIds.has(diary.id))
+      .map(diary => diary.id)
+  ), [diaries, unlockedDiaryIds]);
 
   const accessibleEntries = React.useMemo(() => {
-    const lockedDiaryIds = new Set(
-      diaries
-        .filter(diary => diary.isLocked && !unlockedDiaryIds.has(diary.id))
-        .map(diary => diary.id)
-    );
-    return entries.filter(entry => !lockedDiaryIds.has(entry.diaryId));
-  }, [diaries, entries, unlockedDiaryIds]);
+    const lockedDiaryIdSet = new Set(lockedDiaryIds);
+    return entries.filter(entry => !lockedDiaryIdSet.has(entry.diaryId));
+  }, [entries, lockedDiaryIds]);
 
-  const visibleStreak = React.useMemo(() => calculateStreak(accessibleEntries), [accessibleEntries]);
+  const visibleStreak = React.useMemo(
+    () => accessibleEntries.length > 0 ? calculateStreak(accessibleEntries) : homeStreak,
+    [accessibleEntries, homeStreak],
+  );
 
   // Reload data from the async repository. SQLite is authoritative on native.
   const reloadData = async () => {
@@ -203,6 +209,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setEntries(storedEntries);
     setNotes(storedNotes);
     setUserProfile(storedProfile);
+    setHomeStreak(calculateStreak(storedEntries));
     const currentTheme = getLocalThemePreference(storedSettings.theme || 'light');
     setSettings({ ...storedSettings, theme: currentTheme });
     setSecurity(storedSecurity);
@@ -210,6 +217,30 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setSyncStatus(storedSyncStatus);
     applyThemePreference(currentTheme);
     void syncNativeStatusBar(currentTheme);
+    });
+  };
+
+  const reloadShellData = async () => {
+    await measureAsync('app.reloadShellData', async () => {
+      const [storedDiaries, storedProfile, storedSettings, storedSecurity, storedArchiveMonths, storedSyncStatus, storedHomeSummary] = await Promise.all([
+        diaryRepository.listDiaries(),
+        diaryRepository.getUserProfile(),
+        diaryRepository.getSettings(),
+        diaryRepository.getSecurityConfig(),
+        diaryRepository.listAvailableArchiveMonths(),
+        diaryRepository.getSyncStatusSummary(),
+        diaryRepository.getHomeSummary(),
+      ]);
+      setDiaries(storedDiaries);
+      setUserProfile(storedProfile);
+      setHomeStreak(storedHomeSummary.currentStreak);
+      const currentTheme = getLocalThemePreference(storedSettings.theme || 'light');
+      setSettings({ ...storedSettings, theme: currentTheme });
+      setSecurity(storedSecurity);
+      setArchiveMonths(storedArchiveMonths);
+      setSyncStatus(storedSyncStatus);
+      applyThemePreference(currentTheme);
+      void syncNativeStatusBar(currentTheme);
     });
   };
 
@@ -266,7 +297,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         setSyncStatus(change.status);
         break;
       case 'remote-batch-applied':
-        void reloadData();
+        void reloadShellData();
         break;
       default:
         break;
@@ -284,10 +315,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     ]);
     setEntries(storedEntries);
     setDiaries(storedDiaries);
-  };
-
-  const refreshNotes = async () => {
-    setNotes(await diaryRepository.listNotes());
   };
 
   const resumePendingSyncWorkAfterUnlock = async () => {
@@ -310,7 +337,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       });
       if (result.status === 'completed' || result.status === 'aborted') {
         showToast(result.message, 'info');
-        await reloadData();
+        await reloadShellData();
       }
     }
     const refreshedAccount = await diaryRepository.getLocalSyncAccountState();
@@ -326,14 +353,14 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     });
     if (result.status === 'completed' || result.status === 'aborted') {
       showToast(result.message, 'info');
-      await reloadData();
+      await reloadShellData();
     }
     return diaryRepository.getLocalSyncAccountState();
   };
 
   const handleUnlock = async () => {
     await runWithGlobalLoader('Unlocking your diary', async () => {
-      await measureAsync('app.pinUnlock', () => reloadData());
+      await measureAsync('app.pinUnlock', () => reloadShellData());
       setUnlockedDiaryIds(new Set());
       setIsAuthenticated(true);
     }, 'Loading your latest local data.');
@@ -352,7 +379,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   // On mount: load initial state
   useEffect(() => {
-    void reloadData();
+    void reloadShellData();
     setIsAuthenticated(false);
     return () => eventSyncEngine.stopPolling();
   }, []);
@@ -376,6 +403,15 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     };
     window.addEventListener('deardiary-sync-auth-required', handleAuthorizationRequired);
     return () => window.removeEventListener('deardiary-sync-auth-required', handleAuthorizationRequired);
+  }, []);
+
+  useEffect(() => {
+    const handleMediaStorageWarning = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      showToast(detail?.message || 'Media storage failed; keeping an inline copy for now.', 'warning');
+    };
+    window.addEventListener('deardiary-media-storage-warning', handleMediaStorageWarning);
+    return () => window.removeEventListener('deardiary-media-storage-warning', handleMediaStorageWarning);
   }, []);
 
   useEffect(() => {
@@ -409,12 +445,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       showToast('Restoring that archive month…', 'info');
       await runWithGlobalLoader('Restoring archive month', async () => {
         await eventSyncEngine.hydrateArchivePartition(partitionKey);
-        await reloadData();
+        await reloadShellData();
       }, 'Downloading older encrypted entries.');
       showToast('Archive month restored.', 'success');
     } catch (archiveError: any) {
       const message = archiveError?.message || 'Could not restore that archive month yet.';
-      await reloadData();
+      await reloadShellData();
       showToast(message, 'error');
       throw archiveError;
     }
@@ -441,12 +477,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         try {
           await eventSyncEngine.hydrateArchivePartition(String(candidate.partitionKey));
           restoredCount += 1;
-          await reloadData();
+          await reloadShellData();
         } catch {
           failedCount += 1;
         }
       }
-      await reloadData();
+      await reloadShellData();
     }, 'Keep the app open while older entries come back.');
     if (failedCount > 0) {
       const message = `Restored ${restoredCount} archive month${restoredCount === 1 ? '' : 's'}. ${failedCount} need retry later.`;
@@ -477,7 +513,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       applyRepositoryChange(change);
       return;
     }
-    void reloadData();
+    void reloadShellData();
   }), [applyRepositoryChange, isAuthenticated]);
 
   useEffect(() => {
@@ -631,6 +667,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       if (isAuthenticated && shouldLockAfterBackground({ backgroundedAt, resumedAt: Date.now() })) {
         showToast('Dear Diary locked after being in the background.', 'info');
         handleLockApp();
+      } else if (isAuthenticated) {
+        eventSyncEngine.requestOutboxFlush();
       }
       backgroundedAt = null;
     });
@@ -870,11 +908,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       case 'home':
         return (
           <HomeScreen 
-            diaries={diaries}
-            entries={accessibleEntries}
-            notes={notes}
             userProfile={userProfile}
             layout={layout}
+            excludeDiaryIds={lockedDiaryIds}
             onNavigate={handleNavigate}
             onOpenQuickNote={handleOpenQuickNote}
             onOpenNewEntryWithPrompt={handleOpenNewEntryWithPrompt}
@@ -896,7 +932,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             return (
               <DiaryDetailScreen 
                 diary={selectedDiary}
-                entries={accessibleEntries}
                 entryId={selectedEntryId}
                 layout={layout}
                 onBack={() => handleNavigate('diaries', 'list')}
@@ -957,7 +992,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         return (
           <DiariesScreen 
             diaries={diaries}
-            entries={entries}
             layout={layout}
             onNavigate={handleNavigate}
             onRefreshDiaries={refreshDiaries}
@@ -967,10 +1001,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       case 'notes':
         return (
           <NotesScreen 
-            notes={notes}
             settings={settings}
             layout={layout}
-            onRefreshNotes={refreshNotes}
             onConvertToDiaryEntry={handleConvertToDiaryEntry}
             initialNoteId={selectedNoteId}
             onClearInitialNoteId={() => setSelectedNoteId('')}
@@ -980,12 +1012,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       case 'search':
         return (
           <SearchScreen 
-            diaries={diaries}
-            entries={accessibleEntries}
-            notes={notes}
             settings={settings}
             layout={layout}
             initialQuery={searchInitialQuery}
+            excludeDiaryIds={lockedDiaryIds}
             archiveMonths={archiveMonths}
             onHydrateArchiveMonth={handleHydrateArchiveMonth}
             onHydrateAllArchiveMonths={handleHydrateAllArchiveMonths}
@@ -1020,8 +1050,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         return (
           <StatsScreen 
             diaries={diaries}
-            entries={accessibleEntries}
-            notes={notes}
+            initialEntries={accessibleEntries}
+            initialNotes={notes}
+            excludeDiaryIds={lockedDiaryIds}
             archiveMonths={archiveMonths}
             layout={layout}
             onNavigate={handleNavigate}

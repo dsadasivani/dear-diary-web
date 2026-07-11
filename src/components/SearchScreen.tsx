@@ -3,24 +3,35 @@ import { motion } from 'motion/react';
 import { 
   Search, BookOpen, FileText, Image, ArrowRight, X, Filter, Download, RefreshCw
 } from 'lucide-react';
-import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
+import { AppSettings, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import { diaryRepository } from '../repositories';
 
 interface SearchScreenProps {
-  diaries: Diary[];
-  entries: Entry[];
-  notes: Note[];
   settings: AppSettings;
   layout?: ResponsiveLayout;
   initialQuery?: string;
+  excludeDiaryIds?: string[];
   archiveMonths?: PartitionHydrationState[];
   onHydrateArchiveMonth?: (partitionKey: string) => void | Promise<void>;
   onHydrateAllArchiveMonths?: () => void | Promise<void>;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onEditNote: (note: Note) => void;
 }
+
+type SearchResultItem = {
+  type: 'entry' | 'note';
+  id: string;
+  title: string;
+  body: string;
+  date: string;
+  tags: string[];
+  diaryName?: string;
+  photoCount?: number;
+  rawObj: any;
+};
 
 const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): string => {
   if (!archiveState || archiveState.status !== 'failed') return '';
@@ -31,12 +42,10 @@ const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): strin
 };
 
 export default function SearchScreen({
-  diaries,
-  entries,
-  notes,
   settings,
   layout = 'mobile',
   initialQuery,
+  excludeDiaryIds = [],
   archiveMonths = [],
   onHydrateArchiveMonth,
   onHydrateAllArchiveMonths,
@@ -55,6 +64,7 @@ export default function SearchScreen({
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
   const [showFilters, setShowFilters] = useState<boolean>(false);
+  const [diaryNamesById, setDiaryNamesById] = useState<Record<string, string>>({});
   const [restoringArchiveKey, setRestoringArchiveKey] = useState<string>('');
   const [restoringAllArchives, setRestoringAllArchives] = useState<boolean>(false);
   const [archiveRestoreError, setArchiveRestoreError] = useState<string>('');
@@ -64,17 +74,8 @@ export default function SearchScreen({
   const nextRestorableArchiveStatus = formatArchiveRetryStatus(nextRestorableArchiveMonth);
   const restorableArchiveMonths = unloadedArchiveMonths.filter(month => month.status !== 'hydrating');
 
-  const [results, setResults] = useState<{
-    type: 'entry' | 'note';
-    id: string;
-    title: string;
-    body: string;
-    date: string;
-    tags: string[];
-    diaryName?: string;
-    photoCount?: number;
-    rawObj: any;
-  }[]>([]);
+  const [results, setResults] = useState<SearchResultItem[]>([]);
+  const excludeDiaryKey = excludeDiaryIds.join('|');
 
   useEffect(() => {
     if (initialQuery !== undefined) {
@@ -82,81 +83,84 @@ export default function SearchScreen({
     }
   }, [initialQuery]);
 
-  // Real-time search filter triggers
   useEffect(() => {
-    let list: typeof results = [];
+    let cancelled = false;
+    const loadDiaryNames = async () => {
+      const summaries = await diaryRepository.listDiarySummaries();
+      if (cancelled) return;
+      setDiaryNamesById(Object.fromEntries(summaries.map(diary => [diary.id, diary.name])));
+    };
+    void loadDiaryNames();
+    const unsubscribe = diaryRepository.subscribeChanges((_revision, change) => {
+      if (!change || change.type.startsWith('diary-') || change.type === 'remote-batch-applied') {
+        void loadDiaryNames();
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
-    // 1. Process diary entries
-    if (selectedSource === 'all' || selectedSource === 'diaries') {
-      entries.forEach(entry => {
-        const diaryObj = diaries.find(d => d.id === entry.diaryId);
-        list.push({
-          type: 'entry',
-          id: entry.id,
-          title: entry.title,
-          body: richTextHtmlToPlainText(entry.body),
-          date: entry.date,
-          tags: entry.tags,
-          diaryName: diaryObj ? diaryObj.name : 'Unknown Diary',
-          photoCount: entry.photoCount,
-          rawObj: entry
-        });
-      });
-    }
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const filters = {
+          query: query.trim() || undefined,
+          tags: selectedTags,
+          fromDate: fromDate || undefined,
+          toDate: toDate || undefined,
+          hasPhotos: hasPhotos ? true : undefined,
+          excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [],
+          limit: 100,
+        };
+        const nextResults: SearchResultItem[] = [];
 
-    // 2. Process quick notes
-    if (selectedSource === 'all' || selectedSource === 'notes') {
-      notes.forEach(note => {
-        // Formulate a clean timestamp date YYYY-MM-DD
-        const noteDateStr = new Date(note.updatedAt).toISOString().split('T')[0];
-        list.push({
-          type: 'note',
-          id: note.id,
-          title: note.title,
-          body: richTextHtmlToPlainText(note.body),
-          date: noteDateStr,
-          tags: note.tags,
-          diaryName: undefined,
-          photoCount: 0,
-          rawObj: note
-        });
-      });
-    }
+        if (selectedSource === 'all' || selectedSource === 'diaries') {
+          const entryPage = await diaryRepository.searchEntries(filters);
+          entryPage.items.forEach(entry => {
+            nextResults.push({
+              type: 'entry',
+              id: entry.id,
+              title: entry.title,
+              body: richTextHtmlToPlainText(entry.body),
+              date: entry.date,
+              tags: entry.tags,
+              diaryName: diaryNamesById[entry.diaryId] || 'Unknown Diary',
+              photoCount: entry.photoCount,
+              rawObj: entry,
+            });
+          });
+        }
 
-    // 3. Filter by text query (case-insensitive)
-    if (query.trim()) {
-      const q = query.toLowerCase().trim();
-      list = list.filter(item => 
-        item.title.toLowerCase().includes(q) || 
-        item.body.toLowerCase().includes(q)
-      );
-    }
+        if (!hasPhotos && (selectedSource === 'all' || selectedSource === 'notes')) {
+          const notePage = await diaryRepository.searchNotes(filters);
+          notePage.items.forEach(note => {
+            nextResults.push({
+              type: 'note',
+              id: note.id,
+              title: note.title,
+              body: richTextHtmlToPlainText(note.body),
+              date: new Date(note.updatedAt).toISOString().split('T')[0],
+              tags: note.tags,
+              diaryName: undefined,
+              photoCount: 0,
+              rawObj: note,
+            });
+          });
+        }
 
-    // 4. Filter by selected tags (must contain all selected tags)
-    if (selectedTags.length > 0) {
-      list = list.filter(item => 
-        selectedTags.every(tag => item.tags.includes(tag))
-      );
-    }
+        nextResults.sort((a, b) => b.date.localeCompare(a.date));
+        if (!cancelled) setResults(nextResults);
+      })();
+    }, 220);
 
-    // 5. Filter by "has photos" toggle
-    if (hasPhotos) {
-      list = list.filter(item => item.type === 'entry' && (item.photoCount || 0) > 0);
-    }
-
-    // 6. Filter by date ranges
-    if (fromDate) {
-      list = list.filter(item => item.date >= fromDate);
-    }
-    if (toDate) {
-      list = list.filter(item => item.date <= toDate);
-    }
-
-    // Sort: Newest date first
-    list.sort((a, b) => b.date.localeCompare(a.date));
-
-    setResults(list);
-  }, [query, selectedSource, selectedTags, hasPhotos, fromDate, toDate, entries, notes, diaries]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query, selectedSource, selectedTags, hasPhotos, fromDate, toDate, excludeDiaryKey, diaryNamesById]);
 
   const handleTagToggle = (tag: string) => {
     if (selectedTags.includes(tag)) {
@@ -175,7 +179,7 @@ export default function SearchScreen({
     setQuery('');
   };
 
-  const handleResultClick = (item: typeof results[0]) => {
+  const handleResultClick = (item: SearchResultItem) => {
     if (item.type === 'entry') {
       onNavigate('diaries', 'diaryDetail', item.rawObj.diaryId, item.id);
     } else {

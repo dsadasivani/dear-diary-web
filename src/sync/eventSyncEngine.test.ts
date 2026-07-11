@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SyncDevice, SyncObjectMetadata } from '../types';
-import { buildStorageBreakdown, EventSyncEngine, SyncConflictError } from './eventSyncEngine';
+import { buildStorageBreakdown, EventSyncEngine, isAccountWideOutboxFailure, SyncConflictError } from './eventSyncEngine';
 import { SupabaseControlPlaneError, type SupabaseControlPlaneClient } from './supabaseControlPlane';
 import type { SyncSecrets } from './syncSecrets';
 import { createRepository } from './testSupport';
@@ -370,6 +370,180 @@ test('failed outbox writes wait for backoff without blocking later operations', 
 
   assert.equal((await repository.getNote(delayedNote.id))?.title, 'Delayed');
   assert.equal((await repository.listSyncOutboxOperations()).length, 0);
+});
+
+test('resolves same-record dependent outbox base version after predecessor acknowledgement', async () => {
+  const repository = await createRepository();
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
+    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2, linkedAt: 1,
+  });
+  const account = (await repository.getLocalSyncAccountState())!;
+  const device: SyncDevice = {
+    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
+    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
+    revokedAt: null, replacedByDeviceId: null,
+  };
+  let sequence = 2;
+  const committedBaseVersions: number[] = [];
+  const controlPlane = {
+    getDeviceStatus: async () => device,
+    listSyncObjectsAfter: async () => [],
+    updateDeviceCursor: async () => ({}),
+    commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
+      committedBaseVersions.push(input.baseRecordVersion);
+      sequence += 1;
+      return {
+        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
+        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
+        affectedRecords: input.affectedRecords || [],
+      };
+    },
+  } as unknown as SupabaseControlPlaneClient;
+  const engine = new EventSyncEngine(repository, {
+    isOnline: () => true,
+    now: () => 10,
+    loadSecrets: async () => ({
+      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+    }),
+    restoreGoogleSession: async () => ({
+      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+    }),
+    createControlPlane: () => controlPlane,
+    upload: async () => ({ id: `drive-${sequence + 1}` }),
+  });
+  const first = {
+    id: 'note-chain-engine', title: 'First edit', body: '', isPinned: false,
+    tags: [], createdAt: 1, updatedAt: 1,
+  };
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-chain-engine-1',
+    recordType: 'note',
+    recordId: first.id,
+    operation: 'upsert',
+    account,
+    localPayload: first,
+  });
+  const [firstOperation] = await repository.listSyncOutboxOperations(['prepared']);
+  await repository.saveSyncOutboxOperation({
+    ...firstOperation,
+    state: 'event_uploaded',
+    eventDriveFileId: 'drive-existing-event',
+    eventSha256: 'existing-sha',
+    eventSizeBytes: 12,
+  });
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-chain-engine-2',
+    recordType: 'note',
+    recordId: first.id,
+    operation: 'upsert',
+    account,
+    localPayload: { ...first, title: 'Second edit', updatedAt: 2 },
+  });
+
+  await engine.flushPendingOutbox();
+
+  assert.deepEqual(committedBaseVersions, [0, 1]);
+  assert.equal(await repository.getSyncRecordVersion('note', first.id), 2);
+  assert.equal((await repository.getNote(first.id))?.title, 'Second edit');
+  assert.equal((await repository.listSyncOutboxOperations()).length, 0);
+});
+
+test('resume isolates a poisoned outbox operation and continues unrelated writes', async () => {
+  const repository = await createRepository();
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
+    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2, linkedAt: 1,
+  });
+  const account = (await repository.getLocalSyncAccountState())!;
+  const device: SyncDevice = {
+    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
+    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
+    revokedAt: null, replacedByDeviceId: null,
+  };
+  let sequence = 2;
+  const committedRecordIds: string[] = [];
+  const controlPlane = {
+    getDeviceStatus: async () => device,
+    listSyncObjectsAfter: async () => [],
+    updateDeviceCursor: async () => ({}),
+    commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
+      committedRecordIds.push(input.recordId);
+      sequence += 1;
+      return {
+        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
+        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
+        affectedRecords: input.affectedRecords || [],
+      };
+    },
+  } as unknown as SupabaseControlPlaneClient;
+  let failFirstUpload = true;
+  const engine = new EventSyncEngine(repository, {
+    isOnline: () => true,
+    now: () => 1,
+    loadSecrets: async () => ({
+      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+    }),
+    restoreGoogleSession: async () => ({
+      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+    }),
+    createControlPlane: () => controlPlane,
+    upload: async () => {
+      if (failFirstUpload) {
+        failFirstUpload = false;
+        throw new Error('local media file missing');
+      }
+      return { id: `drive-${sequence + 1}` };
+    },
+  });
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-poisoned',
+    recordType: 'note',
+    recordId: 'note-poisoned',
+    operation: 'upsert',
+    account,
+    localPayload: {
+      id: 'note-poisoned', title: 'Poisoned', body: '', isPinned: false,
+      tags: [], createdAt: 1, updatedAt: 1,
+    },
+  });
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-independent',
+    recordType: 'note',
+    recordId: 'note-independent',
+    operation: 'upsert',
+    account,
+    localPayload: {
+      id: 'note-independent', title: 'Independent', body: '', isPinned: false,
+      tags: [], createdAt: 1, updatedAt: 1,
+    },
+  });
+
+  await engine.flushPendingOutbox();
+
+  assert.deepEqual(committedRecordIds, ['note-independent']);
+  const failed = await repository.listSyncOutboxOperations(['failed']);
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].operationId, 'operation-poisoned');
+  assert.equal((await repository.getSyncStatusSummary()).failedOperationCount, 1);
+});
+
+test('classifies account-wide outbox failures separately from record failures', () => {
+  assert.equal(isAccountWideOutboxFailure(new Error('Google Drive authorization is required.')), true);
+  assert.equal(isAccountWideOutboxFailure(new Error('This device is not active. Recover or pair it again.')), true);
+  assert.equal(isAccountWideOutboxFailure(new Error('local media file missing')), false);
 });
 
 test('resumes a media-uploaded outbox write without reuploading media', async () => {
@@ -1045,8 +1219,9 @@ test('preserves local-first outbox conflicts and queues a recovered copy', async
   const recovered = operations.find(operation => operation.recordId.startsWith('note-recovered-'));
   const notes = await repository.listNotes();
 
-  assert.equal(failedOriginal?.state, 'failed');
-  assert.equal(failedOriginal?.nextRetryAt, Number.MAX_SAFE_INTEGER);
+  assert.equal(failedOriginal?.state, 'conflict_preserved');
+  assert.equal(failedOriginal?.nextRetryAt, undefined);
+  assert.equal(failedOriginal?.recoveredRecordId, recovered?.recordId);
   assert.deepEqual(failedOriginal?.payload, note);
   assert.equal(recovered?.state, 'prepared');
   assert.equal(recovered?.localApplied, true);
@@ -1054,7 +1229,8 @@ test('preserves local-first outbox conflicts and queues a recovered copy', async
   assert.ok(notes.some(stored => stored.id === note.id && stored.title === 'Local edit'));
   assert.ok(notes.some(stored => stored.title === 'Local edit (Recovered copy)'));
   const status = await repository.getSyncStatusSummary();
-  assert.equal(status.failedOperationCount, 1);
+  assert.equal(status.failedOperationCount, 0);
+  assert.equal(status.pendingOutboxCount, 1);
   assert.equal(status.conflictCount, 1);
 });
 

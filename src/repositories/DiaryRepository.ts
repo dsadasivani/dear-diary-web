@@ -102,10 +102,18 @@ export interface GlobalStatistics {
   photoCount: number;
 }
 
+export interface HomeRecentPhoto {
+  src: string;
+  entryId: string;
+  diaryId: string;
+  date: string;
+}
+
 export interface HomeSummary {
   profile: UserProfile;
   recentDiaries: DiarySummary[];
   recentEntries: EntrySummary[];
+  recentPhotos: HomeRecentPhoto[];
   pinnedNotes: NoteSummary[];
   entryCount: number;
   noteCount: number;
@@ -127,6 +135,11 @@ export interface SyncStatusSummary {
   isOffline: boolean;
   reauthorizationRequired?: boolean;
   conflictCount?: number;
+}
+
+export interface PreservedSyncConflict {
+  operation: SyncOutboxOperation;
+  recoveredRecord?: Entry | Note | null;
 }
 
 export type RepositoryChange =
@@ -243,6 +256,10 @@ export interface DiaryRepository {
   listSyncOutboxOperations(states?: SyncOutboxOperation['state'][]): Promise<SyncOutboxOperation[]>;
   removeSyncOutboxOperation(operationId: string): Promise<void>;
   getSyncStatusSummary(): Promise<SyncStatusSummary>;
+  listPreservedSyncConflicts(): Promise<PreservedSyncConflict[]>;
+  markSyncConflictResolved(operationId: string): Promise<void>;
+  deleteSyncConflictRecoveredCopy(operationId: string): Promise<boolean>;
+  retryPreservedSyncConflict(operationId: string): Promise<void>;
   applyLocalMutationWithOutbox(input: ApplyLocalMutationWithOutboxInput): Promise<Diary | Entry | Note | AppSettings | UserProfile | null>;
   acknowledgeLocalMutation(input: AcknowledgeLocalMutationInput): Promise<void>;
 

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   BookOpen, Plus, Lock, ArrowLeft, Check, List, LayoutGrid, Upload, Search
 } from 'lucide-react';
-import { Diary, Entry, ResponsiveLayout } from '../types';
+import { Diary, ResponsiveLayout } from '../types';
 import { PREDEFINED_COLORS } from '../domain/journalCatalog';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
 import { persistOptimizedImageFile } from '../mobile/mediaStorage';
@@ -13,7 +13,6 @@ type DiaryViewMode = 'compact' | 'list';
 
 interface DiariesScreenProps {
   diaries: Diary[];
-  entries: Entry[];
   layout?: ResponsiveLayout;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onRefreshDiaries: () => void | Promise<void>;
@@ -24,7 +23,6 @@ const FOIL_ICON_OPTIONS = ['⭐', '👑', '🕊️', '🍀', '🗝️', '💎', 
 
 export default function DiariesScreen({ 
   diaries, 
-  entries, 
   layout = 'mobile',
   onNavigate,
   onRefreshDiaries
@@ -55,7 +53,7 @@ export default function DiariesScreen({
   const [selectedFoilIcons, setSelectedFoilIcons] = useState<string[]>([]);
   const coverFileInputRef = useRef<HTMLInputElement>(null);
 
-  const totalEntries = entries.length;
+  const totalEntries = diaries.reduce((sum, diary) => sum + diary.entryCount, 0);
   const visibleDiaries = diaries.filter(diary => (
     !diarySearch.trim() ||
     diary.name.toLowerCase().includes(diarySearch.trim().toLowerCase())

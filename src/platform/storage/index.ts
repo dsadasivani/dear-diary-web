@@ -9,6 +9,7 @@ export type {
   LocalNoteQueryOptions,
   LocalQueryPageOptions,
   LocalQueryPageResult,
+  LocalStructuredRecordMutation,
 } from './LocalDataStore';
 
 export const localDataStore: LocalDataStore = isNativePlatform()

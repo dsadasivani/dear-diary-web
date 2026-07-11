@@ -136,14 +136,32 @@ export const measureAsync = async <T>(
   }
 };
 
-export const getPerformanceAggregates = (): Record<string, AggregateMeasurement & { averageMs: number }> => (
-  Object.fromEntries([...aggregates.entries()].map(([name, aggregate]) => [
-    name,
-    {
-      ...aggregate,
-      averageMs: aggregate.totalMs / aggregate.count,
-    },
-  ]))
+const percentile = (values: number[], percentileRank: number): number => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((percentileRank / 100) * sorted.length) - 1));
+  return sorted[index];
+};
+
+export const getPerformanceAggregates = (): Record<string, AggregateMeasurement & {
+  averageMs: number;
+  p50Ms: number;
+  p95Ms: number;
+}> => (
+  Object.fromEntries([...aggregates.entries()].map(([name, aggregate]) => {
+    const durations = samples
+      .filter(sample => sample.name === name)
+      .map(sample => sample.durationMs);
+    return [
+      name,
+      {
+        ...aggregate,
+        averageMs: aggregate.totalMs / aggregate.count,
+        p50Ms: percentile(durations, 50),
+        p95Ms: percentile(durations, 95),
+      },
+    ];
+  }))
 );
 
 export const getRecentPerformanceSamples = (): MeasurementSample[] => [...samples];

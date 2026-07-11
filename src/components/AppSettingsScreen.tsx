@@ -45,7 +45,7 @@ import {
 } from '../sync/e2eeKeyPackage';
 import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
 import type { DriveSyncStatus } from '../sync/eventSyncEngine';
-import type { SyncStatusSummary } from '../repositories';
+import type { PreservedSyncConflict, SyncStatusSummary } from '../repositories';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface AppSettingsScreenProps {
@@ -186,6 +186,8 @@ export default function AppSettingsScreen({
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
   const [syncStatusError, setSyncStatusError] = useState('');
   const [isRetryingSync, setIsRetryingSync] = useState(false);
+  const [preservedConflicts, setPreservedConflicts] = useState<PreservedSyncConflict[]>([]);
+  const [conflictActionId, setConflictActionId] = useState('');
 
   // Reminders preference states
   const [reminderTime, setReminderTime] = useState<string>(() => normalizeReminderTime(settings.reminderTime || '20:00'));
@@ -262,13 +264,39 @@ export default function AppSettingsScreen({
   const refreshLocalSyncStatus = async (): Promise<void> => {
     if (!syncAccountState) {
       setSyncStatus(null);
+      setPreservedConflicts([]);
       return;
     }
     setSyncStatusError('');
     try {
-      setSyncStatus(await diaryRepository.getSyncStatusSummary());
+      const [status, conflicts] = await Promise.all([
+        diaryRepository.getSyncStatusSummary(),
+        diaryRepository.listPreservedSyncConflicts(),
+      ]);
+      setSyncStatus(status);
+      setPreservedConflicts(conflicts);
     } catch (error: any) {
       setSyncStatusError(error?.message || 'Local sync status could not be loaded.');
+    }
+  };
+
+  const runConflictAction = async (
+    operationId: string,
+    action: () => Promise<void | boolean>,
+    successMessage: string,
+  ): Promise<void> => {
+    setConflictActionId(operationId);
+    setSyncStatusError('');
+    try {
+      await action();
+      await refreshLocalSyncStatus();
+      onShowToast?.(successMessage, 'success');
+    } catch (error: any) {
+      const message = error?.message || 'Conflict action could not be completed.';
+      setSyncStatusError(message);
+      onShowToast?.(message, 'warning');
+    } finally {
+      setConflictActionId('');
     }
   };
 
@@ -1431,6 +1459,76 @@ export default function AppSettingsScreen({
                         <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] font-bold leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
                           {syncStatusError}
                         </p>
+                      )}
+                      {preservedConflicts.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          {preservedConflicts.map(conflict => {
+                            const payload = conflict.operation.payload as { title?: string } | null | undefined;
+                            const recoveredTitle = conflict.recoveredRecord && 'title' in conflict.recoveredRecord
+                              ? conflict.recoveredRecord.title
+                              : conflict.operation.recoveredRecordId;
+                            const isBusy = conflictActionId === conflict.operation.operationId;
+                            return (
+                              <div key={conflict.operation.operationId} className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-[10px] dark:border-amber-900/50 dark:bg-amber-950/20">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+                                      Preserved {conflict.operation.recordType} conflict
+                                    </p>
+                                    <p className="mt-1 truncate font-semibold text-brand-plum dark:text-brand-text">
+                                      Original: {payload?.title || conflict.operation.recordId}
+                                    </p>
+                                    {conflict.operation.recoveredRecordId && (
+                                      <p className="mt-0.5 truncate font-semibold text-brand-text-muted">
+                                        Recovered: {recoveredTitle || conflict.operation.recoveredRecordId}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={isBusy}
+                                    onClick={() => void runConflictAction(
+                                      conflict.operation.operationId,
+                                      () => diaryRepository.retryPreservedSyncConflict(conflict.operation.operationId),
+                                      'Conflict queued for retry.',
+                                    )}
+                                    className="rounded-full bg-brand-sage px-3 py-1.5 font-bold text-white disabled:opacity-45"
+                                  >
+                                    Retry
+                                  </button>
+                                  {conflict.operation.recoveredRecordId && (
+                                    <button
+                                      type="button"
+                                      disabled={isBusy}
+                                      onClick={() => void runConflictAction(
+                                        conflict.operation.operationId,
+                                        () => diaryRepository.deleteSyncConflictRecoveredCopy(conflict.operation.operationId),
+                                        'Recovered duplicate deleted.',
+                                      )}
+                                      className="rounded-full border border-brand-border bg-brand-card-bg px-3 py-1.5 font-bold text-brand-rose disabled:opacity-45"
+                                    >
+                                      Delete duplicate
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    disabled={isBusy}
+                                    onClick={() => void runConflictAction(
+                                      conflict.operation.operationId,
+                                      () => diaryRepository.markSyncConflictResolved(conflict.operation.operationId),
+                                      'Conflict marked resolved.',
+                                    )}
+                                    className="rounded-full border border-brand-border bg-brand-card-bg px-3 py-1.5 font-bold text-brand-sage disabled:opacity-45"
+                                  >
+                                    Mark resolved
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
 

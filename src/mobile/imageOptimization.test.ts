@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   calculateTargetDimensions,
+  canUseImageOptimizationWorker,
   getImageOptimizationPolicy,
   getImageOptimizationSkipReason,
   selectOutputMimeType,
@@ -69,6 +70,10 @@ test('output mime prefers WebP and falls back only for photo-like inputs', () =>
   assert.equal(selectOutputMimeType('image/bmp', false), 'image/jpeg');
   assert.equal(selectOutputMimeType('image/png', false), null);
   assert.equal(selectOutputMimeType('image/webp', false), null);
+});
+
+test('worker optimization is gated by browser worker support', () => {
+  assert.equal(canUseImageOptimizationWorker(), false);
 });
 
 test('optimized image files persist optimizer output', async () => {

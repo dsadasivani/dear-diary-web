@@ -16,7 +16,7 @@ import type {
   SyncRecordType,
   UserProfile,
 } from '../types';
-import type { LocalDataStore } from '../platform/storage';
+import type { LocalDataStore, LocalStructuredRecordMutation } from '../platform/storage';
 import type {
   AcknowledgeLocalMutationInput,
   ApplyLocalMutationWithOutboxInput,
@@ -32,8 +32,8 @@ import type {
   NewNote,
   NoteListOptions,
   NoteSummary,
-  PageOptions,
   PageResult,
+  PreservedSyncConflict,
   RepositoryChange,
   RepositoryChangeListener,
   RepositoryImportMode,
@@ -57,6 +57,7 @@ import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote, sanitizeRepositor
 import { calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
 import { CORE_PARTITION_KEY, filterSnapshotForPartition, isMonthPartitionKey, monthFromTimestamp, partitionKeyForRecordPayload } from '../sync/syncPartitioning';
 import { measureAsync } from '../utils/performance';
+import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
 
 const STORAGE_KEYS = {
   diaries: 'deardiary_diaries',
@@ -84,6 +85,7 @@ const INITIAL_DIARIES: Diary[] = [{
   isLocked: false,
   entryCount: 0,
   lastUpdated: 'No entries yet',
+  lastEntryUpdatedAt: undefined,
 }];
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -117,6 +119,15 @@ const getLastUpdatedLabel = (entries: Entry[]): string => {
   return `${diffDays} days ago`;
 };
 
+const getLastEntryUpdatedAt = (entries: Entry[]): number | undefined => {
+  const latest = entries.reduce((current, entry) => Math.max(current, entry.updatedAt || 0), 0);
+  return latest || undefined;
+};
+
+const isRetryableFailedOutboxOperation = (operation: SyncOutboxOperation): boolean => (
+  operation.state === 'failed' && operation.nextRetryAt !== Number.MAX_SAFE_INTEGER
+);
+
 const entrySummary = (entry: Entry): EntrySummary => ({
   id: entry.id,
   diaryId: entry.diaryId,
@@ -141,18 +152,6 @@ const noteSummary = (note: Note): NoteSummary => ({
   updatedAt: note.updatedAt,
 });
 
-const paginate = <T>(items: T[], options: PageOptions = {}): PageResult<T> => {
-  const limit = Math.max(1, Math.min(options.limit || 50, 200));
-  const start = Math.max(0, options.cursor ? Number(options.cursor) || 0 : options.offset || 0);
-  const page = items.slice(start, start + limit);
-  const nextOffset = start + page.length;
-  return {
-    items: clone(page),
-    nextCursor: nextOffset < items.length ? String(nextOffset) : undefined,
-    total: items.length,
-  };
-};
-
 const filterEntriesByDiaryAccess = (
   entries: Entry[],
   options: Pick<EntryListOptions | SearchFilters | StatisticsFilters, 'allowedDiaryIds' | 'excludeDiaryIds'> = {},
@@ -167,10 +166,10 @@ const filterEntriesByDiaryAccess = (
 
 const sortEntries = (entries: Entry[], sort: EntryListOptions['sort'] = 'date-desc'): Entry[] => {
   const sorted = [...entries];
-  if (sort === 'date-asc') return sorted.sort((left, right) => left.date.localeCompare(right.date) || left.createdAt - right.createdAt);
-  if (sort === 'updated-desc') return sorted.sort((left, right) => right.updatedAt - left.updatedAt);
-  if (sort === 'created-desc') return sorted.sort((left, right) => right.createdAt - left.createdAt);
-  return sorted.sort((left, right) => right.date.localeCompare(left.date) || right.updatedAt - left.updatedAt);
+  if (sort === 'date-asc') return sorted.sort((left, right) => left.date.localeCompare(right.date) || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  if (sort === 'updated-desc') return sorted.sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
+  if (sort === 'created-desc') return sorted.sort((left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id));
+  return sorted.sort((left, right) => right.date.localeCompare(left.date) || right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
 };
 
 const matchesDateRange = (entry: Entry, filters: Pick<SearchFilters | StatisticsFilters, 'fromDate' | 'toDate'>): boolean => (
@@ -248,13 +247,22 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   createDiary(input: NewDiary): Promise<Diary> {
     return measureAsync('repository.local.diary.create', () => this.enqueueWrite(async () => {
-      const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
       const diary: Diary = {
         ...clone(input),
         id: createId('diary'),
         entryCount: 0,
         lastUpdated: 'No entries yet',
+        lastEntryUpdatedAt: undefined,
       };
+      if (this.store.commitStructuredRecords) {
+        await this.writeStructuredRecordsWithRevision(
+          [{ key: STORAGE_KEYS.diaries, id: diary.id, value: diary }],
+          {},
+          contentRevision => ({ type: 'diary-created', diary: clone(diary), contentRevision }),
+        );
+        return clone(diary);
+      }
+      const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
       diaries.push(diary);
       await this.writePortableItems(
         { [STORAGE_KEYS.diaries]: diaries },
@@ -270,6 +278,14 @@ export class LocalDiaryRepository implements DiaryRepository {
       const index = diaries.findIndex(diary => diary.id === updatedDiary.id);
       if (index < 0) return null;
       diaries[index] = clone(updatedDiary);
+      if (this.store.commitStructuredRecords) {
+        await this.writeStructuredRecordsWithRevision(
+          [{ key: STORAGE_KEYS.diaries, id: diaries[index].id, value: diaries[index] }],
+          {},
+          contentRevision => ({ type: 'diary-updated', diary: clone(diaries[index]), contentRevision }),
+        );
+        return clone(diaries[index]);
+      }
       await this.writePortableItems(
         { [STORAGE_KEYS.diaries]: diaries },
         contentRevision => ({ type: 'diary-updated', diary: clone(diaries[index]), contentRevision }),
@@ -285,6 +301,19 @@ export class LocalDiaryRepository implements DiaryRepository {
       const nextDiaries = diaries.filter(diary => diary.id !== id);
       if (nextDiaries.length === diaries.length) return false;
 
+      if (this.store.commitStructuredRecords) {
+        await this.writeStructuredRecordsWithRevision(
+          [
+            { key: STORAGE_KEYS.diaries, id, value: null },
+            ...entries
+              .filter(entry => entry.diaryId === id)
+              .map(entry => ({ key: STORAGE_KEYS.entries, id: entry.id, value: null })),
+          ],
+          {},
+          contentRevision => ({ type: 'diary-deleted', diaryId: id, contentRevision }),
+        );
+        return true;
+      }
       await this.writePortableItems({
         [STORAGE_KEYS.entries]: entries.filter(entry => entry.diaryId !== id),
         [STORAGE_KEYS.diaries]: nextDiaries,
@@ -327,7 +356,12 @@ export class LocalDiaryRepository implements DiaryRepository {
         .filter(entry => entry.diaryId === diaryId),
       options.sort,
     );
-    return paginate(options.includeBody ? entries : entries.map(entrySummary), options);
+    const page = pageEntries(entries, options, options.sort || 'date-desc');
+    return {
+      items: options.includeBody ? clone(page.items) : page.items.map(entrySummary),
+      nextCursor: page.nextCursor,
+      total: page.total,
+    };
   }
 
   async listEntriesByMonth(diaryId: string, yearMonth: string, options: EntryListOptions = {}): Promise<PageResult<Entry | EntrySummary>> {
@@ -344,7 +378,12 @@ export class LocalDiaryRepository implements DiaryRepository {
         .filter(entry => entry.diaryId === diaryId && entry.date.startsWith(yearMonth)),
       options.sort,
     );
-    return paginate(options.includeBody ? entries : entries.map(entrySummary), options);
+    const page = pageEntries(entries, options, options.sort || 'date-desc');
+    return {
+      items: options.includeBody ? clone(page.items) : page.items.map(entrySummary),
+      nextCursor: page.nextCursor,
+      total: page.total,
+    };
   }
 
   async getEntry(id: string): Promise<Entry | null> {
@@ -369,6 +408,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       await this.writeEntriesAndDiaryStats(
         entries,
         contentRevision => ({ type: 'entry-created', entry: clone(entry), contentRevision }),
+        [{ key: STORAGE_KEYS.entries, id: entry.id, value: entry }],
       );
       return clone(entry);
     }));
@@ -391,6 +431,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       await this.writeEntriesAndDiaryStats(
         entries,
         contentRevision => ({ type: 'entry-updated', entry: clone(entry), contentRevision }),
+        [{ key: STORAGE_KEYS.entries, id: entry.id, value: entry }],
       );
       return clone(entry);
     }));
@@ -405,6 +446,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       await this.writeEntriesAndDiaryStats(
         nextEntries,
         contentRevision => ({ type: 'entry-deleted', entryId: id, diaryId: deleted?.diaryId || '', contentRevision }),
+        [{ key: STORAGE_KEYS.entries, id, value: null }],
       );
       return true;
     }));
@@ -442,7 +484,12 @@ export class LocalDiaryRepository implements DiaryRepository {
         if (!left.isPinned && right.isPinned) return 1;
         return right.updatedAt - left.updatedAt;
       });
-    return paginate(options.includeBody ? filtered : filtered.map(noteSummary), options);
+    const page = pageNotes(filtered, options, 'pinned-updated-desc');
+    return {
+      items: options.includeBody ? clone(page.items) : page.items.map(noteSummary),
+      nextCursor: page.nextCursor,
+      total: page.total,
+    };
   }
 
   async getNote(id: string): Promise<Note | null> {
@@ -452,9 +499,17 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   createNote(input: NewNote): Promise<Note> {
     return measureAsync('repository.local.note.create', () => this.enqueueWrite(async () => {
-      const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
       const timestamp = Date.now();
       const note: Note = sanitizeNote({ ...clone(input), id: createId('note'), createdAt: timestamp, updatedAt: timestamp });
+      if (this.store.commitStructuredRecords) {
+        await this.writeStructuredRecordsWithRevision(
+          [{ key: STORAGE_KEYS.notes, id: note.id, value: note }],
+          {},
+          contentRevision => ({ type: 'note-created', note: clone(note), contentRevision }),
+        );
+        return clone(note);
+      }
+      const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
       notes.push(note);
       await this.writePortableItems(
         { [STORAGE_KEYS.notes]: notes },
@@ -466,10 +521,21 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   updateNote(updatedNote: Note): Promise<Note | null> {
     return measureAsync('repository.local.note.update', () => this.enqueueWrite(async () => {
+      const existing = await this.readRecord<Note>(STORAGE_KEYS.notes, updatedNote.id, []);
+      if (!existing) return null;
+      const note = sanitizeNote({ ...clone(updatedNote), updatedAt: Date.now() });
+      if (this.store.commitStructuredRecords) {
+        await this.writeStructuredRecordsWithRevision(
+          [{ key: STORAGE_KEYS.notes, id: note.id, value: note }],
+          {},
+          contentRevision => ({ type: 'note-updated', note: clone(note), contentRevision }),
+        );
+        return clone(note);
+      }
       const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
-      const index = notes.findIndex(note => note.id === updatedNote.id);
+      const index = notes.findIndex(candidate => candidate.id === updatedNote.id);
       if (index < 0) return null;
-      notes[index] = sanitizeNote({ ...clone(updatedNote), updatedAt: Date.now() });
+      notes[index] = note;
       await this.writePortableItems(
         { [STORAGE_KEYS.notes]: notes },
         contentRevision => ({ type: 'note-updated', note: clone(notes[index]), contentRevision }),
@@ -480,6 +546,16 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   deleteNote(id: string): Promise<boolean> {
     return measureAsync('repository.local.note.delete', () => this.enqueueWrite(async () => {
+      if (this.store.commitStructuredRecords) {
+        const existing = await this.readRecord<Note>(STORAGE_KEYS.notes, id, []);
+        if (!existing) return false;
+        await this.writeStructuredRecordsWithRevision(
+          [{ key: STORAGE_KEYS.notes, id, value: null }],
+          {},
+          contentRevision => ({ type: 'note-deleted', noteId: id, contentRevision }),
+        );
+        return true;
+      }
       const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
       const nextNotes = notes.filter(note => note.id !== id);
       if (nextNotes.length === notes.length) return false;
@@ -496,22 +572,22 @@ export class LocalDiaryRepository implements DiaryRepository {
     return measureAsync('repository.query.entries.search', async () => {
       const query = filters.query?.trim().toLowerCase();
       const tags = filters.tags?.map(tag => tag.toLowerCase()) || [];
-      if (!query && tags.length === 0) {
-        const storedPage = await this.store.queryEntries?.({
-          diaryId: filters.diaryId,
-          fromDate: filters.fromDate,
-          toDate: filters.toDate,
-          mood: filters.mood,
-          hasPhotos: filters.hasPhotos,
-          allowedDiaryIds: filters.allowedDiaryIds,
-          excludeDiaryIds: filters.excludeDiaryIds,
-          limit: filters.limit,
-          cursor: filters.cursor,
-          offset: filters.offset,
-          sort: 'updated-desc',
-        });
-        if (storedPage) return clone(storedPage);
-      }
+      const storedPage = await this.store.queryEntries?.({
+        diaryId: filters.diaryId,
+        fromDate: filters.fromDate,
+        toDate: filters.toDate,
+        mood: filters.mood,
+        hasPhotos: filters.hasPhotos,
+        allowedDiaryIds: filters.allowedDiaryIds,
+        excludeDiaryIds: filters.excludeDiaryIds,
+        query,
+        tags,
+        limit: filters.limit,
+        cursor: filters.cursor,
+        offset: filters.offset,
+        sort: 'updated-desc',
+      });
+      if (storedPage) return clone(storedPage);
 
       const entries = filterEntriesByDiaryAccess(await this.listEntries(), filters)
         .filter(entry => !filters.diaryId || entry.diaryId === filters.diaryId)
@@ -525,7 +601,7 @@ export class LocalDiaryRepository implements DiaryRepository {
           entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
           entry.moodName.toLowerCase().includes(query)
         ));
-      return paginate(sortEntries(entries, 'updated-desc'), filters);
+      return clone(pageEntries(entries, filters, 'updated-desc'));
     });
   }
 
@@ -534,17 +610,17 @@ export class LocalDiaryRepository implements DiaryRepository {
     return measureAsync('repository.query.notes.search', async () => {
       const query = filters.query?.trim().toLowerCase();
       const tags = filters.tags?.map(tag => tag.toLowerCase()) || [];
-      if (!query && tags.length === 0) {
-        const storedPage = await this.store.queryNotes?.({
-          fromDate: filters.fromDate,
-          toDate: filters.toDate,
-          limit: filters.limit,
-          cursor: filters.cursor,
-          offset: filters.offset,
-          sort: 'updated-desc',
-        });
-        if (storedPage) return clone(storedPage);
-      }
+      const storedPage = await this.store.queryNotes?.({
+        fromDate: filters.fromDate,
+        toDate: filters.toDate,
+        query,
+        tags,
+        limit: filters.limit,
+        cursor: filters.cursor,
+        offset: filters.offset,
+        sort: 'updated-desc',
+      });
+      if (storedPage) return clone(storedPage);
 
       const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
       const filtered = notes
@@ -559,7 +635,7 @@ export class LocalDiaryRepository implements DiaryRepository {
           note.tags.some(tag => tag.toLowerCase().includes(query))
         ))
         .sort((left, right) => right.updatedAt - left.updatedAt);
-      return paginate(filtered, filters);
+      return clone(pageNotes(filtered, filters, 'updated-desc'));
     });
   }
 
@@ -577,8 +653,18 @@ export class LocalDiaryRepository implements DiaryRepository {
       const commonTags = await this.getTagDistribution(options);
       return {
         profile,
-        recentDiaries: clone(diaries).sort((left, right) => String(right.lastUpdated).localeCompare(String(left.lastUpdated))).slice(0, 8),
+        recentDiaries: clone(diaries)
+          .sort((left, right) => (right.lastEntryUpdatedAt || 0) - (left.lastEntryUpdatedAt || 0))
+          .slice(0, 8),
         recentEntries: sortEntries(visibleEntries, 'updated-desc').slice(0, 8).map(entrySummary),
+        recentPhotos: sortEntries(visibleEntries, 'date-desc')
+          .flatMap(entry => (entry.photoUris || []).map(src => ({
+            src,
+            entryId: entry.id,
+            diaryId: entry.diaryId,
+            date: entry.date,
+          })))
+          .slice(0, 8),
         pinnedNotes: notes.filter(note => note.isPinned).sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 5).map(noteSummary),
         entryCount: visibleEntries.length,
         noteCount: notes.length,
@@ -796,6 +882,8 @@ export class LocalDiaryRepository implements DiaryRepository {
       }
 
       const items: Record<string, unknown> = {};
+      const metadataItems: Record<string, unknown> = {};
+      const recordMutations: LocalStructuredRecordMutation[] = [];
       if (event.recordType === 'diary') {
         const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
         const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
@@ -806,20 +894,46 @@ export class LocalDiaryRepository implements DiaryRepository {
           ? entries.filter(entry => entry.diaryId !== event.recordId)
           : entries;
         items[STORAGE_KEYS.entries] = nextEntries;
-        items[STORAGE_KEYS.diaries] = this.withDiaryStats(nextDiaries, nextEntries);
+        const diariesWithStats = this.withDiaryStats(nextDiaries, nextEntries);
+        items[STORAGE_KEYS.diaries] = diariesWithStats;
+        if (event.operation === 'delete') {
+          recordMutations.push(
+            { key: STORAGE_KEYS.diaries, id: event.recordId, value: null },
+            ...entries
+              .filter(entry => entry.diaryId === event.recordId)
+              .map(entry => ({ key: STORAGE_KEYS.entries, id: entry.id, value: null })),
+          );
+        } else {
+          const diary = diariesWithStats.find(candidate => candidate.id === event.recordId) || event.payload as Diary;
+          recordMutations.push({ key: STORAGE_KEYS.diaries, id: event.recordId, value: diary });
+        }
       } else if (event.recordType === 'entry') {
         const entries = await this.readCollection<Entry>(STORAGE_KEYS.entries, []);
         const nextEntries = event.operation === 'delete'
           ? entries.filter(entry => entry.id !== event.recordId)
           : this.upsertRecord(entries, sanitizeEntry(event.payload as Entry));
         const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+        const diariesWithStats = this.withDiaryStats(diaries, nextEntries);
         items[STORAGE_KEYS.entries] = nextEntries;
-        items[STORAGE_KEYS.diaries] = this.withDiaryStats(diaries, nextEntries);
+        items[STORAGE_KEYS.diaries] = diariesWithStats;
+        recordMutations.push(
+          {
+            key: STORAGE_KEYS.entries,
+            id: event.recordId,
+            value: event.operation === 'delete' ? null : sanitizeEntry(event.payload as Entry),
+          },
+          ...diariesWithStats.map(diary => ({ key: STORAGE_KEYS.diaries, id: diary.id, value: diary })),
+        );
       } else if (event.recordType === 'note') {
         const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
         items[STORAGE_KEYS.notes] = event.operation === 'delete'
           ? notes.filter(note => note.id !== event.recordId)
           : this.upsertRecord(notes, sanitizeNote(event.payload as Note));
+        recordMutations.push({
+          key: STORAGE_KEYS.notes,
+          id: event.recordId,
+          value: event.operation === 'delete' ? null : sanitizeNote(event.payload as Note),
+        });
       } else if (event.recordType === 'settings') {
         if (event.operation === 'delete' || !event.payload) throw new Error('Settings cannot be deleted.');
         const currentSettings = await this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS));
@@ -829,9 +943,11 @@ export class LocalDiaryRepository implements DiaryRepository {
           customMoods: event.payload.customMoods,
           theme: currentSettings.theme,
         };
+        metadataItems[STORAGE_KEYS.settings] = items[STORAGE_KEYS.settings];
       } else {
         if (event.operation === 'delete' || !event.payload) throw new Error('Profile cannot be deleted.');
         items[STORAGE_KEYS.userProfile] = event.payload;
+        metadataItems[STORAGE_KEYS.userProfile] = event.payload;
       }
 
       versions[recordKey] = event.recordVersion;
@@ -839,13 +955,13 @@ export class LocalDiaryRepository implements DiaryRepository {
         versions[`${affected.recordType}:${affected.recordId}`] = affected.recordVersion;
       }
       items[STORAGE_KEYS.syncRecordVersions] = versions;
+      metadataItems[STORAGE_KEYS.syncRecordVersions] = versions;
       items[STORAGE_KEYS.syncAccount] = {
         ...syncState,
         currentSyncSequence: Math.max(syncState.currentSyncSequence, sequence),
       };
-      await this.writePortableItems(
-        items,
-        contentRevision => ({
+      metadataItems[STORAGE_KEYS.syncAccount] = items[STORAGE_KEYS.syncAccount];
+      const changeFactory = (contentRevision: number): RepositoryChange => ({
           type: 'remote-batch-applied',
           affectedRecords: [
             { recordType: event.recordType, recordId: event.recordId },
@@ -855,8 +971,12 @@ export class LocalDiaryRepository implements DiaryRepository {
             })),
           ],
           contentRevision,
-        }),
-      );
+        });
+      if (this.store.commitStructuredRecords) {
+        await this.writeStructuredRecordsWithRevision(recordMutations, metadataItems, changeFactory);
+      } else {
+        await this.writePortableItems(items, changeFactory);
+      }
       if (event.recordType === 'settings') {
         await syncReminderNotification(await this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS)));
       }
@@ -1076,12 +1196,70 @@ export class LocalDiaryRepository implements DiaryRepository {
     return this.createSyncStatusSummary(outbox);
   }
 
+  async listPreservedSyncConflicts(): Promise<PreservedSyncConflict[]> {
+    const operations = await this.listSyncOutboxOperations(['conflict_preserved']);
+    const conflicts = await Promise.all(operations.map(async operation => {
+      const recoveredRecord = operation.recoveredRecordId
+        ? operation.recordType === 'entry'
+          ? await this.getEntry(operation.recoveredRecordId)
+          : operation.recordType === 'note'
+            ? await this.getNote(operation.recoveredRecordId)
+            : null
+        : null;
+      return { operation, recoveredRecord };
+    }));
+    return conflicts;
+  }
+
+  markSyncConflictResolved(operationId: string): Promise<void> {
+    return this.removeSyncOutboxOperation(operationId);
+  }
+
+  async deleteSyncConflictRecoveredCopy(operationId: string): Promise<boolean> {
+    const operation = (await this.listSyncOutboxOperations(['conflict_preserved']))
+      .find(candidate => candidate.operationId === operationId);
+    if (!operation?.recoveredRecordId) return false;
+    if (operation.recordType === 'entry') return this.deleteEntry(operation.recoveredRecordId);
+    if (operation.recordType === 'note') return this.deleteNote(operation.recoveredRecordId);
+    return false;
+  }
+
+  retryPreservedSyncConflict(operationId: string): Promise<void> {
+    return measureAsync('repository.sync.retryPreservedConflict', () => this.enqueueWrite(async () => {
+      const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {});
+      const operation = outbox[operationId];
+      if (!operation || operation.state !== 'conflict_preserved') return;
+      outbox[operationId] = {
+        ...operation,
+        state: 'prepared',
+        baseRecordVersion: undefined,
+        dependsOnOperationId: undefined,
+        retryCount: undefined,
+        lastErrorAt: undefined,
+        nextRetryAt: undefined,
+        error: undefined,
+        updatedAt: Date.now(),
+      };
+      await this.writeJson(STORAGE_KEYS.syncOutbox, outbox);
+      await this.emitSyncStatusChange(outbox, operationId);
+    }));
+  }
+
   applyLocalMutationWithOutbox(input: ApplyLocalMutationWithOutboxInput): Promise<Diary | Entry | Note | AppSettings | UserProfile | null> {
     return measureAsync('repository.local.mutationWithOutbox', () => this.enqueueWrite(async () => {
       const versions = await this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {});
       const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {});
       const recordKey = `${input.recordType}:${input.recordId}`;
-      const existingPreparedOperation = Object.values(outbox).find(operation => (
+      const existingSameRecordOperations = Object.values(outbox)
+        .filter(operation => (
+          operation.localApplied &&
+          operation.recordType === input.recordType &&
+          operation.recordId === input.recordId &&
+          operation.state !== 'applied'
+        ))
+        .sort((left, right) => (right.updatedAt || right.createdAt || 0) - (left.updatedAt || left.createdAt || 0));
+      const latestSameRecordOperation = existingSameRecordOperations[0];
+      const existingPreparedOperation = existingSameRecordOperations.find(operation => (
         operation.localApplied &&
         operation.recordType === input.recordType &&
         operation.recordId === input.recordId &&
@@ -1091,11 +1269,20 @@ export class LocalDiaryRepository implements DiaryRepository {
         !operation.committedObjects
       ));
       const operationId = existingPreparedOperation?.operationId || input.operationId;
-      const baseRecordVersion = existingPreparedOperation?.baseRecordVersion ?? versions[recordKey] ?? 0;
+      const dependsOnOperationId = existingPreparedOperation
+        ? existingPreparedOperation.dependsOnOperationId
+        : latestSameRecordOperation?.operationId;
+      const baseRecordVersion = existingPreparedOperation
+        ? existingPreparedOperation.baseRecordVersion
+        : dependsOnOperationId
+          ? undefined
+          : versions[recordKey] ?? 0;
       const nowMs = input.createdAt || Date.now();
       const syncPayload = input.syncPayload === undefined ? input.localPayload : input.syncPayload;
       const affectedRecords: SyncOutboxOperation['affectedRecords'] = [];
       const items: Record<string, unknown> = {};
+      const metadataItems: Record<string, unknown> = {};
+      const recordMutations: LocalStructuredRecordMutation[] = [];
       let result: Diary | Entry | Note | AppSettings | UserProfile | null = input.operation === 'delete' ? null : clone(input.localPayload);
       let changeFactory: ((contentRevision: number) => RepositoryChange) | undefined;
 
@@ -1112,11 +1299,23 @@ export class LocalDiaryRepository implements DiaryRepository {
             }));
           items[STORAGE_KEYS.entries] = entries.filter(entry => entry.diaryId !== input.recordId);
           items[STORAGE_KEYS.diaries] = diaries.filter(diary => diary.id !== input.recordId);
+          recordMutations.push(
+            { key: STORAGE_KEYS.diaries, id: input.recordId, value: null },
+            ...entries
+              .filter(entry => entry.diaryId === input.recordId)
+              .map(entry => ({ key: STORAGE_KEYS.entries, id: entry.id, value: null })),
+          );
           changeFactory = contentRevision => ({ type: 'diary-deleted', diaryId: input.recordId, contentRevision });
         } else {
           const diary = clone(input.localPayload as Diary);
           const nextDiaries = this.upsertRecord(diaries, diary);
-          items[STORAGE_KEYS.diaries] = this.withDiaryStats(nextDiaries, entries);
+          const diariesWithStats = this.withDiaryStats(nextDiaries, entries);
+          items[STORAGE_KEYS.diaries] = diariesWithStats;
+          recordMutations.push({
+            key: STORAGE_KEYS.diaries,
+            id: diary.id,
+            value: diariesWithStats.find(candidate => candidate.id === diary.id) || diary,
+          });
           result = diary;
           changeFactory = contentRevision => ({
             type: diaries.some(existing => existing.id === diary.id) ? 'diary-updated' : 'diary-created',
@@ -1129,8 +1328,14 @@ export class LocalDiaryRepository implements DiaryRepository {
         const existing = entries.find(entry => entry.id === input.recordId);
         const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
         if (input.operation === 'delete') {
-          items[STORAGE_KEYS.entries] = entries.filter(entry => entry.id !== input.recordId);
-          items[STORAGE_KEYS.diaries] = this.withDiaryStats(diaries, items[STORAGE_KEYS.entries] as Entry[]);
+          const nextEntries = entries.filter(entry => entry.id !== input.recordId);
+          const diariesWithStats = this.withDiaryStats(diaries, nextEntries);
+          items[STORAGE_KEYS.entries] = nextEntries;
+          items[STORAGE_KEYS.diaries] = diariesWithStats;
+          recordMutations.push(
+            { key: STORAGE_KEYS.entries, id: input.recordId, value: null },
+            ...diariesWithStats.map(diary => ({ key: STORAGE_KEYS.diaries, id: diary.id, value: diary })),
+          );
           changeFactory = contentRevision => ({
             type: 'entry-deleted',
             entryId: input.recordId,
@@ -1140,8 +1345,13 @@ export class LocalDiaryRepository implements DiaryRepository {
         } else {
           const entry = sanitizeEntry(clone(input.localPayload as Entry));
           const nextEntries = this.upsertRecord(entries, entry);
+          const diariesWithStats = this.withDiaryStats(diaries, nextEntries);
           items[STORAGE_KEYS.entries] = nextEntries;
-          items[STORAGE_KEYS.diaries] = this.withDiaryStats(diaries, nextEntries);
+          items[STORAGE_KEYS.diaries] = diariesWithStats;
+          recordMutations.push(
+            { key: STORAGE_KEYS.entries, id: entry.id, value: entry },
+            ...diariesWithStats.map(diary => ({ key: STORAGE_KEYS.diaries, id: diary.id, value: diary })),
+          );
           result = clone(entry);
           changeFactory = contentRevision => ({
             type: existing ? 'entry-updated' : 'entry-created',
@@ -1150,34 +1360,53 @@ export class LocalDiaryRepository implements DiaryRepository {
           } as RepositoryChange);
         }
       } else if (input.recordType === 'note') {
-        const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
-        const existing = notes.find(note => note.id === input.recordId);
-        if (input.operation === 'delete') {
-          items[STORAGE_KEYS.notes] = notes.filter(note => note.id !== input.recordId);
-          changeFactory = contentRevision => ({ type: 'note-deleted', noteId: input.recordId, contentRevision });
+        if (this.store.commitLocalMutationAndOutbox) {
+          const existing = await this.readRecord<Note>(STORAGE_KEYS.notes, input.recordId, []);
+          if (input.operation === 'delete') {
+            recordMutations.push({ key: STORAGE_KEYS.notes, id: input.recordId, value: null });
+            changeFactory = contentRevision => ({ type: 'note-deleted', noteId: input.recordId, contentRevision });
+          } else {
+            const note = sanitizeNote(clone(input.localPayload as Note));
+            recordMutations.push({ key: STORAGE_KEYS.notes, id: note.id, value: note });
+            result = clone(note);
+            changeFactory = contentRevision => ({
+              type: existing ? 'note-updated' : 'note-created',
+              note: clone(note),
+              contentRevision,
+            } as RepositoryChange);
+          }
         } else {
-          const note = sanitizeNote(clone(input.localPayload as Note));
-          items[STORAGE_KEYS.notes] = this.upsertRecord(notes, note);
-          result = clone(note);
-          changeFactory = contentRevision => ({
-            type: existing ? 'note-updated' : 'note-created',
-            note: clone(note),
-            contentRevision,
-          } as RepositoryChange);
+          const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
+          const existing = notes.find(note => note.id === input.recordId);
+          if (input.operation === 'delete') {
+            items[STORAGE_KEYS.notes] = notes.filter(note => note.id !== input.recordId);
+            changeFactory = contentRevision => ({ type: 'note-deleted', noteId: input.recordId, contentRevision });
+          } else {
+            const note = sanitizeNote(clone(input.localPayload as Note));
+            items[STORAGE_KEYS.notes] = this.upsertRecord(notes, note);
+            result = clone(note);
+            changeFactory = contentRevision => ({
+              type: existing ? 'note-updated' : 'note-created',
+              note: clone(note),
+              contentRevision,
+            } as RepositoryChange);
+          }
         }
       } else if (input.recordType === 'settings') {
         const settings = clone(input.localPayload as AppSettings);
         items[STORAGE_KEYS.settings] = settings;
+        metadataItems[STORAGE_KEYS.settings] = settings;
         result = settings;
         changeFactory = contentRevision => ({ type: 'settings-updated', settings: clone(settings), contentRevision });
       } else {
         const profile = clone(input.localPayload as UserProfile);
         items[STORAGE_KEYS.userProfile] = profile;
+        metadataItems[STORAGE_KEYS.userProfile] = profile;
         result = profile;
         changeFactory = contentRevision => ({ type: 'profile-updated', profile: clone(profile), contentRevision });
       }
 
-      outbox[operationId] = {
+      const outboxOperation: SyncOutboxOperation = {
         ...existingPreparedOperation,
         operationId,
         accountId: input.account.accountId,
@@ -1189,6 +1418,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         operation: input.operation,
         payload: clone(syncPayload),
         baseRecordVersion,
+        dependsOnOperationId,
         affectedRecords,
         state: 'prepared',
         localApplied: true,
@@ -1199,9 +1429,16 @@ export class LocalDiaryRepository implements DiaryRepository {
         nextRetryAt: undefined,
         error: undefined,
       };
+      outbox[operationId] = outboxOperation;
       items[STORAGE_KEYS.syncOutbox] = outbox;
 
-      const contentRevision = await this.writePortableItems(items, changeFactory);
+      const contentRevision = await this.writeLocalMutationWithOutbox(
+        recordMutations,
+        metadataItems,
+        outboxOperation,
+        items,
+        changeFactory,
+      );
       await this.emitSyncStatusChange(outbox, operationId, contentRevision);
       if (input.recordType === 'settings' && input.localPayload) {
         await syncReminderNotification(input.localPayload as AppSettings);
@@ -1336,8 +1573,20 @@ export class LocalDiaryRepository implements DiaryRepository {
   private async writeEntriesAndDiaryStats(
     entries: Entry[],
     createChange?: (contentRevision: number) => RepositoryChange,
+    entryMutations: LocalStructuredRecordMutation[] = [],
   ): Promise<void> {
     const diaries = await this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES));
+    if (entryMutations.length > 0 && this.store.commitStructuredRecords) {
+      await this.writeStructuredRecordsWithRevision([
+        ...entryMutations,
+        ...this.withDiaryStats(diaries, entries).map(diary => ({
+          key: STORAGE_KEYS.diaries,
+          id: diary.id,
+          value: diary,
+        })),
+      ], {}, createChange);
+      return;
+    }
     await this.writePortableItems({
       [STORAGE_KEYS.entries]: entries,
       [STORAGE_KEYS.diaries]: this.withDiaryStats(diaries, entries),
@@ -1351,6 +1600,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         ...diary,
         entryCount: diaryEntries.length,
         lastUpdated: getLastUpdatedLabel(diaryEntries),
+        lastEntryUpdatedAt: getLastEntryUpdatedAt(diaryEntries),
       };
     });
   }
@@ -1409,6 +1659,63 @@ export class LocalDiaryRepository implements DiaryRepository {
     await this.store.setItems(serializedItems);
   }
 
+  private serializeItems(items: Record<string, unknown>): Record<string, string> {
+    return Object.fromEntries(
+      Object.entries(items).map(([key, value]) => [key, JSON.stringify(value)]),
+    );
+  }
+
+  private async writeStructuredRecordsWithRevision(
+    records: LocalStructuredRecordMutation[],
+    metadataItems: Record<string, unknown>,
+    createChange?: (contentRevision: number) => RepositoryChange,
+  ): Promise<number> {
+    if (!this.store.commitStructuredRecords) {
+      throw new Error('Structured record commits are unavailable for this local data store.');
+    }
+    const backup = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, createDefaultDriveBackupSettings());
+    const contentRevision = (backup.contentRevision || 0) + 1;
+    await this.store.commitStructuredRecords({
+      records,
+      items: this.serializeItems({
+        ...metadataItems,
+        [STORAGE_KEYS.driveBackup]: {
+          ...backup,
+          contentRevision,
+        },
+      }),
+    });
+    this.emitChange(contentRevision, createChange?.(contentRevision));
+    return contentRevision;
+  }
+
+  private async writeLocalMutationWithOutbox(
+    records: LocalStructuredRecordMutation[],
+    metadataItems: Record<string, unknown>,
+    outboxOperation: SyncOutboxOperation,
+    fallbackItems: Record<string, unknown>,
+    createChange?: (contentRevision: number) => RepositoryChange,
+  ): Promise<number> {
+    if (!this.store.commitLocalMutationAndOutbox) {
+      return this.writePortableItems(fallbackItems, createChange);
+    }
+    const backup = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, createDefaultDriveBackupSettings());
+    const contentRevision = (backup.contentRevision || 0) + 1;
+    await this.store.commitLocalMutationAndOutbox({
+      records,
+      items: this.serializeItems({
+        ...metadataItems,
+        [STORAGE_KEYS.driveBackup]: {
+          ...backup,
+          contentRevision,
+        },
+      }),
+      outboxOperation,
+    });
+    this.emitChange(contentRevision, createChange?.(contentRevision));
+    return contentRevision;
+  }
+
   private async writePortableItems(
     items: Record<string, unknown>,
     createChange?: (contentRevision: number) => RepositoryChange,
@@ -1448,10 +1755,12 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   private createSyncStatusSummary(outbox: SyncOutboxOperation[]): SyncStatusSummary {
     return {
-      pendingOutboxCount: outbox.filter(operation => operation.state !== 'applied').length,
-      failedOperationCount: outbox.filter(operation => operation.state === 'failed').length,
+      pendingOutboxCount: outbox.filter(operation => (
+        operation.state !== 'applied' && operation.state !== 'conflict_preserved'
+      )).length,
+      failedOperationCount: outbox.filter(isRetryableFailedOutboxOperation).length,
       isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
-      conflictCount: outbox.filter(operation => String(operation.error || '').toLowerCase().includes('stale')).length,
+      conflictCount: outbox.filter(operation => operation.state === 'conflict_preserved').length,
     };
   }
 

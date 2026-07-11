@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - feature/dear-diary-v2
+      - feature/local-first-performance
 
 jobs:
   web:

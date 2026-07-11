@@ -8,6 +8,7 @@ export interface Diary {
   isLocked: boolean; // requires biometric/PIN verification
   entryCount: number;
   lastUpdated: string; // Date string or relative
+  lastEntryUpdatedAt?: number; // Stable timestamp used for sorting; lastUpdated remains display compatibility text.
   coverImage?: string; // Base64 data URI of uploaded cover image
   foilIcons?: string[]; // Multiple gold foil embossed icons
 }
@@ -376,7 +377,8 @@ export type SyncOutboxOperationState =
   | 'metadata_committing'
   | 'committed'
   | 'applied'
-  | 'failed';
+  | 'failed'
+  | 'conflict_preserved';
 
 export interface SyncOutboxDriveObject {
   driveFileId: string;
@@ -405,6 +407,8 @@ export interface SyncOutboxOperation {
   operation?: SyncEventOperation;
   payload?: unknown;
   baseRecordVersion?: number;
+  dependsOnOperationId?: string;
+  recoveredRecordId?: string;
   affectedRecords?: Array<Omit<SyncAffectedRecordVersion, 'recordVersion'>>;
   eventDriveFileId?: string;
   eventSha256?: string;

@@ -25,6 +25,9 @@ interface ImageSource {
 }
 
 type ImageOptimizationInput = Blob | string | { dataUri: string; mimeType?: string };
+type ImageOptimizationWorkerResponse =
+  | { id: string; ok: true; result: ImageOptimizationResult }
+  | { id: string; ok: false; error: string };
 
 const ONE_KB = 1024;
 const MIN_RELATIVE_SAVINGS = 0.1;
@@ -280,6 +283,55 @@ const skipResult = (
   skippedReason: reason,
 });
 
+export const canUseImageOptimizationWorker = (): boolean => (
+  typeof Worker !== 'undefined'
+  && typeof URL !== 'undefined'
+  && typeof Blob !== 'undefined'
+);
+
+const optimizeImageSourceInWorker = (
+  source: ImageSource,
+  kind: ImageStorageKind,
+): Promise<ImageOptimizationResult | null> => {
+  if (!canUseImageOptimizationWorker()) return Promise.resolve(null);
+
+  return new Promise(resolve => {
+    const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const worker = new Worker(new URL('./imageOptimization.worker.ts', import.meta.url), { type: 'module' });
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      worker.terminate();
+      resolve(null);
+    }, 30_000);
+
+    const finish = (result: ImageOptimizationResult | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      worker.terminate();
+      resolve(result);
+    };
+
+    worker.onmessage = (event: MessageEvent<ImageOptimizationWorkerResponse>) => {
+      const message = event.data;
+      if (!message || message.id !== id) return;
+      finish(message.ok ? message.result : null);
+    };
+    worker.onerror = () => finish(null);
+    worker.postMessage({
+      id,
+      kind,
+      source: {
+        dataUri: source.dataUri,
+        mimeType: source.mimeType,
+        size: source.size,
+      },
+    });
+  });
+};
+
 const optimizeImageSource = async (
   source: ImageSource,
   kind: ImageStorageKind,
@@ -344,7 +396,10 @@ export const optimizeImageForStorage = async (
     const source = await sourceFromInput(input);
     sourceMime = source.mimeType;
     originalSize = source.size;
-    result = await optimizeImageSource(source, kind);
+    const earlySkipReason = getImageOptimizationSkipReason(source.mimeType, source.size, kind);
+    result = earlySkipReason
+      ? skipResult(source, earlySkipReason)
+      : await optimizeImageSourceInWorker(source, kind) || await optimizeImageSource(source, kind);
     return result;
   } finally {
     recordPerformanceMeasurement('image.optimize.storage', now() - startedAt, {

@@ -6,17 +6,26 @@ import type {
   LocalDataStore,
   LocalEntryQueryOptions,
   LocalNoteQueryOptions,
-  LocalQueryPageOptions,
   LocalQueryPageResult,
+  LocalStructuredRecordMutation,
 } from './LocalDataStore';
 import { measureAsync } from '../../utils/performance';
+import {
+  decodePageCursor,
+  encodeKeysetCursor,
+  entryCursorValues,
+  noteCursorValues,
+  normalizePageLimit,
+  type CursorValue,
+} from './queryPagination';
 
 const DATABASE_NAME = 'dear_diary_local';
 const DATABASE_VERSION = 1;
-const STORAGE_SCHEMA_VERSION = 4;
+const STORAGE_SCHEMA_VERSION = 6;
 const SECURE_STORAGE_PREFIX = 'deardiary_';
 const SQLITE_SECRET_KEY = 'sqlite_encryption_secret_v1';
 const MIGRATION_META_KEY = 'legacy_preferences_migrated_at';
+const SEARCH_INDEX_META_KEY = 'search_index_version_v1';
 
 const LEGACY_LOCAL_STORAGE_KEYS = [
   'deardiary_diaries',
@@ -55,12 +64,6 @@ const generateSecret = (): string => {
 
 const boolToInt = (value: unknown): number => value ? 1 : 0;
 
-const getPageBounds = (options: LocalQueryPageOptions): { limit: number; offset: number } => {
-  const limit = Math.max(1, Math.min(options.limit || 50, 200));
-  const offset = Math.max(0, options.cursor ? Number(options.cursor) || 0 : options.offset || 0);
-  return { limit, offset };
-};
-
 const utcStartOfDay = (date: string | undefined): number | undefined => {
   if (!date) return undefined;
   const timestamp = Date.parse(`${date}T00:00:00.000Z`);
@@ -80,6 +83,14 @@ const safeJsonParse = <T>(value: string): T | null => {
     return null;
   }
 };
+
+const ftsQueryForText = (query?: string): string | null => {
+  const tokens = (query || '').toLowerCase().match(/[a-z0-9]+/g) || [];
+  if (tokens.length === 0) return null;
+  return tokens.map(token => `${token.replace(/"/g, '""')}*`).join(' ');
+};
+
+const jsonTagLikePattern = (tag: string): string => `%${JSON.stringify(tag.toLowerCase())}%`;
 
 export class NativeSQLiteDataStore implements LocalDataStore {
   private sqlite = new SQLiteConnection(CapacitorSQLite);
@@ -108,16 +119,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       await measureAsync('sqlite.transaction.setItems', async () => {
       await db.beginTransaction();
       try {
-        for (const [key, value] of Object.entries(items)) {
-          await db.run(
-            `INSERT INTO kv_store (key, value, updated_at)
-             VALUES (?, ?, ?)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`,
-            [key, value, now()],
-            false,
-          );
-          await this.syncStructuredTablesForKey(db, key, value, false);
-        }
+        await this.writeSerializedItemsInTransaction(db, items, false);
         await db.commitTransaction();
       } catch (error) {
         await db.rollbackTransaction().catch(() => undefined);
@@ -144,8 +146,10 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         DELETE FROM kv_store;
         DELETE FROM diaries;
         DELETE FROM entries;
+        DELETE FROM entries_fts;
         DELETE FROM entry_blocks;
         DELETE FROM notes;
+        DELETE FROM notes_fts;
         DELETE FROM media_assets;
         DELETE FROM app_settings;
         DELETE FROM user_profile;
@@ -195,19 +199,105 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }, { key });
   }
 
+  async putStructuredRecord<T>(key: string, id: string, value: T): Promise<void> {
+    await measureAsync('sqlite.structured.record.put', () => this.enqueueWrite(async () => {
+      const db = await this.ensureInitialized();
+      await db.beginTransaction();
+      try {
+        await this.upsertStructuredRecord(db, key, id, value, false);
+        await db.commitTransaction();
+      } catch (error) {
+        await db.rollbackTransaction().catch(() => undefined);
+        throw error;
+      }
+    }), { key });
+  }
+
+  async deleteStructuredRecord(key: string, id: string): Promise<void> {
+    await measureAsync('sqlite.structured.record.delete', () => this.enqueueWrite(async () => {
+      const db = await this.ensureInitialized();
+      await db.beginTransaction();
+      try {
+        await this.deleteStructuredRecordRow(db, key, id, false);
+        await db.commitTransaction();
+      } catch (error) {
+        await db.rollbackTransaction().catch(() => undefined);
+        throw error;
+      }
+    }), { key });
+  }
+
+  async commitStructuredRecords(input: {
+    records: LocalStructuredRecordMutation[];
+    items?: Record<string, string>;
+  }): Promise<void> {
+    await measureAsync('sqlite.structured.records.commit', () => this.enqueueWrite(async () => {
+      const db = await this.ensureInitialized();
+      await db.beginTransaction();
+      try {
+        for (const record of input.records) {
+          if (record.value === null) {
+            await this.deleteStructuredRecordRow(db, record.key, record.id, false);
+          } else {
+            await this.upsertStructuredRecord(db, record.key, record.id, record.value, false);
+          }
+        }
+        if (input.items) await this.writeSerializedItemsInTransaction(db, input.items, false);
+        await db.commitTransaction();
+      } catch (error) {
+        await db.rollbackTransaction().catch(() => undefined);
+        throw error;
+      }
+    }), { recordCount: input.records.length, itemCount: Object.keys(input.items || {}).length });
+  }
+
+  async commitLocalMutationAndOutbox(input: {
+    records: LocalStructuredRecordMutation[];
+    items?: Record<string, string>;
+    outboxOperation: SyncOutboxOperation;
+  }): Promise<void> {
+    await measureAsync('sqlite.structured.localMutationAndOutbox', () => this.enqueueWrite(async () => {
+      const db = await this.ensureInitialized();
+      await db.beginTransaction();
+      try {
+        for (const record of input.records) {
+          if (record.value === null) {
+            await this.deleteStructuredRecordRow(db, record.key, record.id, false);
+          } else {
+            await this.upsertStructuredRecord(db, record.key, record.id, record.value, false);
+          }
+        }
+        if (input.items) await this.writeSerializedItemsInTransaction(db, input.items, false);
+        await this.upsertOutboxOperation(db, input.outboxOperation, false);
+        await db.commitTransaction();
+      } catch (error) {
+        await db.rollbackTransaction().catch(() => undefined);
+        throw error;
+      }
+    }), { recordCount: input.records.length });
+  }
+
   async queryEntries(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<Entry> | undefined> {
     return measureAsync('sqlite.query.entries', async () => {
       const db = await this.ensureInitialized();
       if (!await this.isStructuredCollectionReady(db, 'deardiary_entries', 'entries')) return undefined;
 
+      const sort = options.sort || 'date-desc';
       const { whereClause, params } = this.buildEntryQuery(options);
-      const { limit, offset } = getPageBounds(options);
+      const cursor = decodePageCursor(options.cursor, 'entry', sort);
+      const keyset = cursor.kind === 'keyset' ? this.entryKeysetClause(sort, cursor.values) : null;
+      const queryWhereClause = keyset ? this.combineWhereClauses(whereClause, keyset.clause) : whereClause;
+      const queryParams = keyset ? [...params, ...keyset.params] : params;
+      const limit = normalizePageLimit(options.limit);
+      const offset = cursor.kind === 'offset' ? (cursor.offset || options.offset || 0) : 0;
       const total = await this.countRows(db, 'entries', whereClause, params);
       const result = await db.query(
-        `SELECT raw_json FROM entries${whereClause} ORDER BY ${this.entryOrderBy(options.sort)} LIMIT ? OFFSET ?;`,
-        [...params, limit, offset],
+        `SELECT raw_json FROM entries${queryWhereClause} ORDER BY ${this.entryOrderBy(sort)} LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
+        cursor.kind === 'offset'
+          ? [...queryParams, limit + 1, offset]
+          : [...queryParams, limit + 1],
       );
-      return this.pageFromRows<Entry>(result.values || [], total, offset);
+      return this.entryPageFromRows(result.values || [], total, limit, sort);
     }, { filters: this.redactedQueryMetadata(options) });
   }
 
@@ -216,14 +306,22 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       const db = await this.ensureInitialized();
       if (!await this.isStructuredCollectionReady(db, 'deardiary_notes', 'notes')) return undefined;
 
+      const sort = options.sort || 'pinned-updated-desc';
       const { whereClause, params } = this.buildNoteQuery(options);
-      const { limit, offset } = getPageBounds(options);
+      const cursor = decodePageCursor(options.cursor, 'note', sort);
+      const keyset = cursor.kind === 'keyset' ? this.noteKeysetClause(sort, cursor.values) : null;
+      const queryWhereClause = keyset ? this.combineWhereClauses(whereClause, keyset.clause) : whereClause;
+      const queryParams = keyset ? [...params, ...keyset.params] : params;
+      const limit = normalizePageLimit(options.limit);
+      const offset = cursor.kind === 'offset' ? (cursor.offset || options.offset || 0) : 0;
       const total = await this.countRows(db, 'notes', whereClause, params);
       const result = await db.query(
-        `SELECT raw_json FROM notes${whereClause} ORDER BY ${this.noteOrderBy(options.sort)} LIMIT ? OFFSET ?;`,
-        [...params, limit, offset],
+        `SELECT raw_json FROM notes${queryWhereClause} ORDER BY ${this.noteOrderBy(sort)} LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
+        cursor.kind === 'offset'
+          ? [...queryParams, limit + 1, offset]
+          : [...queryParams, limit + 1],
       );
-      return this.pageFromRows<Note>(result.values || [], total, offset);
+      return this.notePageFromRows(result.values || [], total, limit, sort);
     }, { filters: this.redactedQueryMetadata(options) });
   }
 
@@ -254,6 +352,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     if (!isOpen.result) {
       await db.open();
     }
+    await db.execute('PRAGMA foreign_keys = ON;');
 
     await this.createSchema(db);
     await this.migrateLegacyPreferences(db);
@@ -319,13 +418,25 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         is_timeline_bifurcated INTEGER NOT NULL DEFAULT 0,
-        raw_json TEXT NOT NULL
+        raw_json TEXT NOT NULL,
+        FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE CASCADE ON UPDATE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS idx_entries_diary_date ON entries(diary_id, date);
       CREATE INDEX IF NOT EXISTS idx_entries_updated_at ON entries(updated_at);
       CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
       CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
+      CREATE INDEX IF NOT EXISTS idx_entries_date_keyset ON entries(date, updated_at, id);
+      CREATE INDEX IF NOT EXISTS idx_entries_created_keyset ON entries(created_at, id);
+      CREATE INDEX IF NOT EXISTS idx_entries_updated_keyset ON entries(updated_at, id);
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+        id UNINDEXED,
+        title,
+        body,
+        tags,
+        mood
+      );
 
       CREATE TABLE IF NOT EXISTS entry_blocks (
         id TEXT NOT NULL,
@@ -335,7 +446,8 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         body TEXT,
         audio_uri TEXT,
         raw_json TEXT NOT NULL,
-        PRIMARY KEY (entry_id, position)
+        PRIMARY KEY (entry_id, position),
+        FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE ON UPDATE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS idx_entry_blocks_entry ON entry_blocks(entry_id, position);
@@ -353,6 +465,15 @@ export class NativeSQLiteDataStore implements LocalDataStore {
 
       CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at);
       CREATE INDEX IF NOT EXISTS idx_notes_pinned_updated ON notes(is_pinned, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_notes_updated_keyset ON notes(updated_at, id);
+      CREATE INDEX IF NOT EXISTS idx_notes_pinned_updated_keyset ON notes(is_pinned, updated_at, id);
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+        id UNINDEXED,
+        title,
+        body,
+        tags
+      );
 
       CREATE TABLE IF NOT EXISTS media_assets (
         id TEXT PRIMARY KEY NOT NULL,
@@ -364,7 +485,8 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         mime_type TEXT,
         byte_size INTEGER,
         created_at INTEGER NOT NULL,
-        raw_json TEXT
+        raw_json TEXT,
+        CHECK (owner_type IN ('diary', 'entry', 'note'))
       );
 
       CREATE INDEX IF NOT EXISTS idx_media_owner ON media_assets(owner_type, owner_id);
@@ -395,7 +517,8 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         record_type TEXT NOT NULL,
         record_id TEXT NOT NULL,
         version INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        CHECK (record_type IN ('diary', 'entry', 'note', 'settings', 'profile'))
       );
 
       CREATE INDEX IF NOT EXISTS idx_sync_record_versions_type_id ON sync_record_versions(record_type, record_id);
@@ -439,17 +562,264 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         next_retry_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        raw_json TEXT NOT NULL
+        raw_json TEXT NOT NULL,
+        CHECK (record_type IN ('diary', 'entry', 'note', 'settings', 'profile'))
       );
 
       CREATE INDEX IF NOT EXISTS idx_sync_outbox_state_retry ON sync_outbox(state, next_retry_at);
       CREATE INDEX IF NOT EXISTS idx_sync_outbox_record ON sync_outbox(record_type, record_id);
     `);
 
+    await this.migrateRelationalIntegritySchema(db);
     await this.migrateEntryBlocksPrimaryKey(db);
+    await this.ensureIntegrityTriggers(db);
+    await this.cleanupRelationalIntegrityRows(db);
     await this.backfillStructuredTablesFromKv(db);
+    await this.ensureSearchIndexes(db);
+    await this.verifyForeignKeys(db);
     await this.setMeta(db, 'storage_schema_version', String(STORAGE_SCHEMA_VERSION));
     await this.setMeta(db, 'storage_backend', 'encrypted_sqlite');
+  }
+
+  private async tableExists(db: SQLiteDBConnection, tableName: string): Promise<boolean> {
+    const result = await db.query(
+      "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ? LIMIT 1;",
+      [tableName],
+    );
+    return (result.values || []).length > 0;
+  }
+
+  private async tableReferences(
+    db: SQLiteDBConnection,
+    tableName: 'entries' | 'entry_blocks',
+    referencedTable: string,
+  ): Promise<boolean> {
+    const result = await db.query(`PRAGMA foreign_key_list(${tableName});`);
+    return (result.values || []).some(row => String(row.table) === referencedTable);
+  }
+
+  private async migrateRelationalIntegritySchema(db: SQLiteDBConnection): Promise<void> {
+    const entriesHaveDiaryFk = await this.tableReferences(db, 'entries', 'diaries');
+    const blocksHaveEntryFk = await this.tableReferences(db, 'entry_blocks', 'entries');
+    if (entriesHaveDiaryFk && blocksHaveEntryFk) return;
+
+    await db.execute('PRAGMA foreign_keys = OFF;');
+    await db.beginTransaction();
+    try {
+      await db.execute(`
+        DROP TABLE IF EXISTS entries_fts;
+        DROP TABLE IF EXISTS notes_fts;
+        DROP TABLE IF EXISTS entry_blocks_fk_migration_old;
+        DROP TABLE IF EXISTS entries_fk_migration_old;
+      `, false);
+
+      if (await this.tableExists(db, 'entry_blocks')) {
+        await db.run('ALTER TABLE entry_blocks RENAME TO entry_blocks_fk_migration_old;', [], false);
+      }
+      if (await this.tableExists(db, 'entries')) {
+        await db.run('ALTER TABLE entries RENAME TO entries_fk_migration_old;', [], false);
+      }
+
+      await db.execute(`
+        CREATE TABLE entries (
+          id TEXT PRIMARY KEY NOT NULL,
+          diary_id TEXT NOT NULL,
+          date TEXT NOT NULL,
+          time TEXT,
+          title TEXT NOT NULL,
+          body TEXT,
+          mood_name TEXT,
+          mood_emoji TEXT,
+          tags_json TEXT NOT NULL,
+          photo_uris_json TEXT NOT NULL,
+          photo_count INTEGER NOT NULL DEFAULT 0,
+          word_count INTEGER NOT NULL DEFAULT 0,
+          audio_uri TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          is_timeline_bifurcated INTEGER NOT NULL DEFAULT 0,
+          raw_json TEXT NOT NULL,
+          FOREIGN KEY (diary_id) REFERENCES diaries(id) ON DELETE CASCADE ON UPDATE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_entries_diary_date ON entries(diary_id, date);
+        CREATE INDEX IF NOT EXISTS idx_entries_updated_at ON entries(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
+        CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
+        CREATE INDEX IF NOT EXISTS idx_entries_date_keyset ON entries(date, updated_at, id);
+        CREATE INDEX IF NOT EXISTS idx_entries_created_keyset ON entries(created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_entries_updated_keyset ON entries(updated_at, id);
+
+        CREATE TABLE entry_blocks (
+          id TEXT NOT NULL,
+          entry_id TEXT NOT NULL,
+          position INTEGER NOT NULL,
+          time TEXT,
+          body TEXT,
+          audio_uri TEXT,
+          raw_json TEXT NOT NULL,
+          PRIMARY KEY (entry_id, position),
+          FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE ON UPDATE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_entry_blocks_entry ON entry_blocks(entry_id, position);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+          id UNINDEXED,
+          title,
+          body,
+          tags,
+          mood
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+          id UNINDEXED,
+          title,
+          body,
+          tags
+        );
+      `, false);
+
+      if (await this.tableExists(db, 'entries_fk_migration_old')) {
+        await db.run(`
+          INSERT INTO entries (
+            id, diary_id, date, time, title, body, mood_name, mood_emoji, tags_json,
+            photo_uris_json, photo_count, word_count, audio_uri, created_at, updated_at,
+            is_timeline_bifurcated, raw_json
+          )
+          SELECT
+            id, diary_id, date, time, title, body, mood_name, mood_emoji, tags_json,
+            photo_uris_json, photo_count, word_count, audio_uri, created_at, updated_at,
+            is_timeline_bifurcated, raw_json
+          FROM entries_fk_migration_old old_entries
+          WHERE EXISTS (SELECT 1 FROM diaries WHERE diaries.id = old_entries.diary_id);
+        `, [], false);
+      }
+
+      if (await this.tableExists(db, 'entry_blocks_fk_migration_old')) {
+        await db.run(`
+          INSERT OR REPLACE INTO entry_blocks (id, entry_id, position, time, body, audio_uri, raw_json)
+          SELECT id, entry_id, position, time, body, audio_uri, raw_json
+          FROM entry_blocks_fk_migration_old old_blocks
+          WHERE EXISTS (SELECT 1 FROM entries WHERE entries.id = old_blocks.entry_id);
+        `, [], false);
+      }
+
+      await db.execute(`
+        DROP TABLE IF EXISTS entry_blocks_fk_migration_old;
+        DROP TABLE IF EXISTS entries_fk_migration_old;
+        DELETE FROM storage_meta WHERE key = '${SEARCH_INDEX_META_KEY}';
+      `, false);
+      await db.commitTransaction();
+    } catch (error) {
+      await db.rollbackTransaction().catch(() => undefined);
+      throw error;
+    } finally {
+      await db.execute('PRAGMA foreign_keys = ON;').catch(() => undefined);
+    }
+  }
+
+  private async ensureIntegrityTriggers(db: SQLiteDBConnection): Promise<void> {
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_media_assets_owner_insert
+      BEFORE INSERT ON media_assets
+      BEGIN
+        SELECT CASE
+          WHEN NEW.owner_type = 'diary' AND NOT EXISTS (SELECT 1 FROM diaries WHERE id = NEW.owner_id)
+            THEN RAISE(ABORT, 'media_asset_diary_owner_missing')
+          WHEN NEW.owner_type = 'entry' AND NOT EXISTS (SELECT 1 FROM entries WHERE id = NEW.owner_id)
+            THEN RAISE(ABORT, 'media_asset_entry_owner_missing')
+          WHEN NEW.owner_type = 'note' AND NOT EXISTS (SELECT 1 FROM notes WHERE id = NEW.owner_id)
+            THEN RAISE(ABORT, 'media_asset_note_owner_missing')
+          WHEN NEW.owner_type NOT IN ('diary', 'entry', 'note')
+            THEN RAISE(ABORT, 'media_asset_owner_type_invalid')
+        END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_media_assets_owner_update
+      BEFORE UPDATE ON media_assets
+      BEGIN
+        SELECT CASE
+          WHEN NEW.owner_type = 'diary' AND NOT EXISTS (SELECT 1 FROM diaries WHERE id = NEW.owner_id)
+            THEN RAISE(ABORT, 'media_asset_diary_owner_missing')
+          WHEN NEW.owner_type = 'entry' AND NOT EXISTS (SELECT 1 FROM entries WHERE id = NEW.owner_id)
+            THEN RAISE(ABORT, 'media_asset_entry_owner_missing')
+          WHEN NEW.owner_type = 'note' AND NOT EXISTS (SELECT 1 FROM notes WHERE id = NEW.owner_id)
+            THEN RAISE(ABORT, 'media_asset_note_owner_missing')
+          WHEN NEW.owner_type NOT IN ('diary', 'entry', 'note')
+            THEN RAISE(ABORT, 'media_asset_owner_type_invalid')
+        END;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_diaries_media_delete
+      AFTER DELETE ON diaries
+      BEGIN
+        DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = OLD.id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_entries_media_delete
+      AFTER DELETE ON entries
+      BEGIN
+        DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = OLD.id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_notes_media_delete
+      AFTER DELETE ON notes
+      BEGIN
+        DELETE FROM media_assets WHERE owner_type = 'note' AND owner_id = OLD.id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_sync_record_versions_type_insert
+      BEFORE INSERT ON sync_record_versions
+      WHEN NEW.record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile')
+      BEGIN
+        SELECT RAISE(ABORT, 'sync_record_version_type_invalid');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_sync_record_versions_type_update
+      BEFORE UPDATE ON sync_record_versions
+      WHEN NEW.record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile')
+      BEGIN
+        SELECT RAISE(ABORT, 'sync_record_version_type_invalid');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_sync_outbox_type_insert
+      BEFORE INSERT ON sync_outbox
+      WHEN NEW.record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile')
+      BEGIN
+        SELECT RAISE(ABORT, 'sync_outbox_record_type_invalid');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_sync_outbox_type_update
+      BEFORE UPDATE ON sync_outbox
+      WHEN NEW.record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile')
+      BEGIN
+        SELECT RAISE(ABORT, 'sync_outbox_record_type_invalid');
+      END;
+    `);
+  }
+
+  private async cleanupRelationalIntegrityRows(db: SQLiteDBConnection): Promise<void> {
+    await db.execute(`
+      DELETE FROM media_assets
+      WHERE owner_type NOT IN ('diary', 'entry', 'note')
+        OR (owner_type = 'diary' AND NOT EXISTS (SELECT 1 FROM diaries WHERE diaries.id = media_assets.owner_id))
+        OR (owner_type = 'entry' AND NOT EXISTS (SELECT 1 FROM entries WHERE entries.id = media_assets.owner_id))
+        OR (owner_type = 'note' AND NOT EXISTS (SELECT 1 FROM notes WHERE notes.id = media_assets.owner_id));
+
+      DELETE FROM sync_record_versions
+      WHERE record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile');
+
+      DELETE FROM sync_outbox
+      WHERE record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile');
+    `);
+  }
+
+  private async verifyForeignKeys(db: SQLiteDBConnection): Promise<void> {
+    const result = await db.query('PRAGMA foreign_key_check;');
+    if ((result.values || []).length > 0) {
+      throw new Error(`SQLite foreign key verification failed for ${result.values?.length || 0} row(s).`);
+    }
   }
 
   private async migrateEntryBlocksPrimaryKey(db: SQLiteDBConnection): Promise<void> {
@@ -472,7 +842,8 @@ export class NativeSQLiteDataStore implements LocalDataStore {
           body TEXT,
           audio_uri TEXT,
           raw_json TEXT NOT NULL,
-          PRIMARY KEY (entry_id, position)
+          PRIMARY KEY (entry_id, position),
+          FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE ON UPDATE CASCADE
         );
         CREATE INDEX idx_entry_blocks_entry ON entry_blocks(entry_id, position);
       `, false);
@@ -576,6 +947,34 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }
 
     return counts;
+  }
+
+  private async ensureSearchIndexes(db: SQLiteDBConnection): Promise<void> {
+    if (await this.getMeta(db, SEARCH_INDEX_META_KEY) === '1') return;
+
+    await db.beginTransaction();
+    try {
+      await db.run('DELETE FROM entries_fts;', [], false);
+      await db.run('DELETE FROM notes_fts;', [], false);
+
+      const entryRows = (await db.query('SELECT raw_json FROM entries;')).values || [];
+      for (const row of entryRows) {
+        const entry = safeJsonParse<Entry>(String(row.raw_json));
+        if (entry) await this.upsertEntrySearchRow(db, entry, false);
+      }
+
+      const noteRows = (await db.query('SELECT raw_json FROM notes;')).values || [];
+      for (const row of noteRows) {
+        const note = safeJsonParse<Note>(String(row.raw_json));
+        if (note) await this.upsertNoteSearchRow(db, note, false);
+      }
+
+      await this.setMeta(db, SEARCH_INDEX_META_KEY, '1', false);
+      await db.commitTransaction();
+    } catch (error) {
+      await db.rollbackTransaction().catch(() => undefined);
+      throw error;
+    }
   }
 
   private async readStructuredValue(
@@ -715,6 +1114,19 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     if (options.hasPhotos !== undefined) {
       clauses.push(options.hasPhotos ? 'photo_count > 0' : 'photo_count = 0');
     }
+    if (options.query) {
+      const ftsQuery = ftsQueryForText(options.query);
+      if (ftsQuery) {
+        clauses.push('id IN (SELECT id FROM entries_fts WHERE entries_fts MATCH ?)');
+        params.push(ftsQuery);
+      } else {
+        clauses.push('1 = 0');
+      }
+    }
+    for (const tag of options.tags || []) {
+      clauses.push('LOWER(tags_json) LIKE ?');
+      params.push(jsonTagLikePattern(tag));
+    }
     this.addDiaryAccessClauses(clauses, params, options.allowedDiaryIds, options.excludeDiaryIds);
 
     return { whereClause: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', params };
@@ -736,6 +1148,19 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     if (toTimestamp !== undefined) {
       clauses.push('updated_at <= ?');
       params.push(toTimestamp);
+    }
+    if (options.query) {
+      const ftsQuery = ftsQueryForText(options.query);
+      if (ftsQuery) {
+        clauses.push('id IN (SELECT id FROM notes_fts WHERE notes_fts MATCH ?)');
+        params.push(ftsQuery);
+      } else {
+        clauses.push('1 = 0');
+      }
+    }
+    for (const tag of options.tags || []) {
+      clauses.push('LOWER(tags_json) LIKE ?');
+      params.push(jsonTagLikePattern(tag));
     }
 
     return { whereClause: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', params };
@@ -762,15 +1187,70 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   }
 
   private entryOrderBy(sort: LocalEntryQueryOptions['sort'] = 'date-desc'): string {
-    if (sort === 'date-asc') return 'date ASC, created_at ASC';
-    if (sort === 'updated-desc') return 'updated_at DESC';
-    if (sort === 'created-desc') return 'created_at DESC';
-    return 'date DESC, updated_at DESC';
+    if (sort === 'date-asc') return 'date ASC, created_at ASC, id ASC';
+    if (sort === 'updated-desc') return 'updated_at DESC, id ASC';
+    if (sort === 'created-desc') return 'created_at DESC, id ASC';
+    return 'date DESC, updated_at DESC, id ASC';
   }
 
   private noteOrderBy(sort: LocalNoteQueryOptions['sort'] = 'pinned-updated-desc'): string {
-    if (sort === 'updated-desc') return 'updated_at DESC';
-    return 'is_pinned DESC, updated_at DESC';
+    if (sort === 'updated-desc') return 'updated_at DESC, id ASC';
+    return 'is_pinned DESC, updated_at DESC, id ASC';
+  }
+
+  private combineWhereClauses(baseWhereClause: string, cursorClause: string): string {
+    if (!baseWhereClause) return ` WHERE ${cursorClause}`;
+    return `${baseWhereClause} AND ${cursorClause}`;
+  }
+
+  private entryKeysetClause(
+    sort: LocalEntryQueryOptions['sort'] = 'date-desc',
+    values: CursorValue[],
+  ): { clause: string; params: Array<string | number> } {
+    if (sort === 'date-asc') {
+      const [date, createdAt, id] = values;
+      return {
+        clause: '(date > ? OR (date = ? AND created_at > ?) OR (date = ? AND created_at = ? AND id > ?))',
+        params: [String(date || ''), String(date || ''), Number(createdAt || 0), String(date || ''), Number(createdAt || 0), String(id || '')],
+      };
+    }
+    if (sort === 'updated-desc') {
+      const [updatedAt, id] = values;
+      return {
+        clause: '(updated_at < ? OR (updated_at = ? AND id > ?))',
+        params: [Number(updatedAt || 0), Number(updatedAt || 0), String(id || '')],
+      };
+    }
+    if (sort === 'created-desc') {
+      const [createdAt, id] = values;
+      return {
+        clause: '(created_at < ? OR (created_at = ? AND id > ?))',
+        params: [Number(createdAt || 0), Number(createdAt || 0), String(id || '')],
+      };
+    }
+    const [date, updatedAt, id] = values;
+    return {
+      clause: '(date < ? OR (date = ? AND updated_at < ?) OR (date = ? AND updated_at = ? AND id > ?))',
+      params: [String(date || ''), String(date || ''), Number(updatedAt || 0), String(date || ''), Number(updatedAt || 0), String(id || '')],
+    };
+  }
+
+  private noteKeysetClause(
+    sort: LocalNoteQueryOptions['sort'] = 'pinned-updated-desc',
+    values: CursorValue[],
+  ): { clause: string; params: Array<string | number> } {
+    if (sort === 'updated-desc') {
+      const [updatedAt, id] = values;
+      return {
+        clause: '(updated_at < ? OR (updated_at = ? AND id > ?))',
+        params: [Number(updatedAt || 0), Number(updatedAt || 0), String(id || '')],
+      };
+    }
+    const [isPinned, updatedAt, id] = values;
+    return {
+      clause: '(is_pinned < ? OR (is_pinned = ? AND updated_at < ?) OR (is_pinned = ? AND updated_at = ? AND id > ?))',
+      params: [Number(isPinned || 0), Number(isPinned || 0), Number(updatedAt || 0), Number(isPinned || 0), Number(updatedAt || 0), String(id || '')],
+    };
   }
 
   private async countRows(
@@ -783,17 +1263,39 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     return Number(result.values?.[0]?.count || 0);
   }
 
-  private pageFromRows<T>(
+  private entryPageFromRows(
     rows: Array<{ raw_json?: unknown }>,
     total: number,
-    offset: number,
-  ): LocalQueryPageResult<T> | undefined {
-    const items = rows.map(row => safeJsonParse<T>(String(row.raw_json)));
-    if (items.some(item => item === null)) return undefined;
-    const nextOffset = offset + items.length;
+    limit: number,
+    sort: LocalEntryQueryOptions['sort'] = 'date-desc',
+  ): LocalQueryPageResult<Entry> | undefined {
+    const parsedItems = rows.map(row => safeJsonParse<Entry>(String(row.raw_json)));
+    if (parsedItems.some(item => item === null)) return undefined;
+    const items = parsedItems as Entry[];
+    const pageItems = items.slice(0, limit);
     return {
-      items: items as T[],
-      nextCursor: nextOffset < total ? String(nextOffset) : undefined,
+      items: pageItems,
+      nextCursor: items.length > limit && pageItems.length > 0
+        ? encodeKeysetCursor('entry', sort, entryCursorValues(pageItems[pageItems.length - 1], sort))
+        : undefined,
+      total,
+    };
+  }
+
+  private notePageFromRows(
+    rows: Array<{ raw_json?: unknown }>,
+    total: number,
+    limit: number,
+    sort: LocalNoteQueryOptions['sort'] = 'pinned-updated-desc',
+  ): LocalQueryPageResult<Note> | undefined {
+    const items = rows.map(row => safeJsonParse<Note>(String(row.raw_json)));
+    if (items.some(item => item === null)) return undefined;
+    const pageItems = (items as Note[]).slice(0, limit);
+    return {
+      items: pageItems,
+      nextCursor: items.length > limit && pageItems.length > 0
+        ? encodeKeysetCursor('note', sort, noteCursorValues(pageItems[pageItems.length - 1], sort))
+        : undefined,
       total,
     };
   }
@@ -863,11 +1365,13 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         break;
       case 'deardiary_entries':
         await db.run('DELETE FROM entries;');
+        await db.run('DELETE FROM entries_fts;');
         await db.run('DELETE FROM entry_blocks;');
         await db.run("DELETE FROM media_assets WHERE owner_type = 'entry';");
         break;
       case 'deardiary_notes':
         await db.execute('DELETE FROM notes;');
+        await db.execute('DELETE FROM notes_fts;');
         break;
       case 'deardiary_settings':
         await db.run('DELETE FROM app_settings WHERE key = ?;', ['current']);
@@ -897,6 +1401,23 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         break;
       default:
         break;
+    }
+  }
+
+  private async writeSerializedItemsInTransaction(
+    db: SQLiteDBConnection,
+    items: Record<string, string>,
+    transaction = true,
+  ): Promise<void> {
+    for (const [key, value] of Object.entries(items)) {
+      await db.run(
+        `INSERT INTO kv_store (key, value, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`,
+        [key, value, now()],
+        transaction,
+      );
+      await this.syncStructuredTablesForKey(db, key, value, transaction);
     }
   }
 
@@ -1165,10 +1686,21 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       const rawJson = JSON.stringify(diary);
       if (existingById.get(diary.id) === rawJson) continue;
       await db.run(
-        `INSERT OR REPLACE INTO diaries (
+        `INSERT INTO diaries (
           id, name, emoji, color, is_locked, entry_count, last_updated, cover_image_uri,
           foil_icons_json, raw_json, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          emoji = excluded.emoji,
+          color = excluded.color,
+          is_locked = excluded.is_locked,
+          entry_count = excluded.entry_count,
+          last_updated = excluded.last_updated,
+          cover_image_uri = excluded.cover_image_uri,
+          foil_icons_json = excluded.foil_icons_json,
+          raw_json = excluded.raw_json,
+          updated_at = excluded.updated_at;`,
         [
           diary.id,
           diary.name,
@@ -1203,6 +1735,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       const id = String(row.id);
       if (incomingIds.has(id)) continue;
       await db.run('DELETE FROM entries WHERE id = ?;', [id], transaction);
+      await this.deleteEntrySearchRow(db, id, transaction);
       await db.run('DELETE FROM entry_blocks WHERE entry_id = ?;', [id], transaction);
       await db.run("DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;", [id], transaction);
     }
@@ -1210,11 +1743,28 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       const rawJson = JSON.stringify(entry);
       if (existingById.get(entry.id) === rawJson) continue;
       await db.run(
-        `INSERT OR REPLACE INTO entries (
+        `INSERT INTO entries (
           id, diary_id, date, time, title, body, mood_name, mood_emoji, tags_json,
           photo_uris_json, photo_count, word_count, audio_uri, created_at, updated_at,
           is_timeline_bifurcated, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          diary_id = excluded.diary_id,
+          date = excluded.date,
+          time = excluded.time,
+          title = excluded.title,
+          body = excluded.body,
+          mood_name = excluded.mood_name,
+          mood_emoji = excluded.mood_emoji,
+          tags_json = excluded.tags_json,
+          photo_uris_json = excluded.photo_uris_json,
+          photo_count = excluded.photo_count,
+          word_count = excluded.word_count,
+          audio_uri = excluded.audio_uri,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          is_timeline_bifurcated = excluded.is_timeline_bifurcated,
+          raw_json = excluded.raw_json;`,
         [
           entry.id,
           entry.diaryId,
@@ -1245,11 +1795,18 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       if (entry.audioUri) {
         await this.insertMediaAsset(db, 'entry', entry.id, 'audioUri', 0, entry.audioUri, transaction);
       }
+      await this.upsertEntrySearchRow(db, entry, transaction);
 
       for (const [index, block] of (entry.blocks || []).entries()) {
         await db.run(
-          `INSERT OR REPLACE INTO entry_blocks (id, entry_id, position, time, body, audio_uri, raw_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?);`,
+          `INSERT INTO entry_blocks (id, entry_id, position, time, body, audio_uri, raw_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(entry_id, position) DO UPDATE SET
+             id = excluded.id,
+             time = excluded.time,
+             body = excluded.body,
+             audio_uri = excluded.audio_uri,
+             raw_json = excluded.raw_json;`,
           [
             block.id,
             entry.id,
@@ -1285,14 +1842,25 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     const existingById = new Map(existingRows.map(row => [String(row.id), String(row.raw_json)]));
     for (const row of existingRows) {
       const id = String(row.id);
-      if (!incomingIds.has(id)) await db.run('DELETE FROM notes WHERE id = ?;', [id], transaction);
+      if (!incomingIds.has(id)) {
+        await db.run('DELETE FROM notes WHERE id = ?;', [id], transaction);
+        await this.deleteNoteSearchRow(db, id, transaction);
+      }
     }
     for (const note of notes) {
       const rawJson = JSON.stringify(note);
       if (existingById.get(note.id) === rawJson) continue;
       await db.run(
-        `INSERT OR REPLACE INTO notes (id, title, body, is_pinned, tags_json, created_at, updated_at, raw_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+        `INSERT INTO notes (id, title, body, is_pinned, tags_json, created_at, updated_at, raw_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           title = excluded.title,
+           body = excluded.body,
+           is_pinned = excluded.is_pinned,
+           tags_json = excluded.tags_json,
+           created_at = excluded.created_at,
+           updated_at = excluded.updated_at,
+          raw_json = excluded.raw_json;`,
         [
           note.id,
           note.title,
@@ -1305,7 +1873,298 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         ],
         transaction,
       );
+      await this.upsertNoteSearchRow(db, note, transaction);
     }
+  }
+
+  private async upsertStructuredRecord<T>(
+    db: SQLiteDBConnection,
+    key: string,
+    id: string,
+    value: T,
+    transaction = true,
+  ): Promise<void> {
+    const recordId = (value as { id?: unknown })?.id;
+    if (recordId !== id) throw new Error(`Structured SQLite record id mismatch for ${key}.`);
+    switch (key) {
+      case 'deardiary_diaries':
+        await this.upsertDiaryRow(db, value as Diary, transaction);
+        break;
+      case 'deardiary_entries':
+        await this.upsertEntryRow(db, value as Entry, transaction);
+        break;
+      case 'deardiary_notes':
+        await this.upsertNoteRow(db, value as Note, transaction);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private async deleteStructuredRecordRow(
+    db: SQLiteDBConnection,
+    key: string,
+    id: string,
+    transaction = true,
+  ): Promise<void> {
+    switch (key) {
+      case 'deardiary_diaries':
+        await db.run('DELETE FROM diaries WHERE id = ?;', [id], transaction);
+        await db.run("DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;", [id], transaction);
+        await this.markStructuredCollectionReadyIfEmpty(db, key, 'diaries', transaction);
+        break;
+      case 'deardiary_entries':
+        await db.run('DELETE FROM entries WHERE id = ?;', [id], transaction);
+        await this.deleteEntrySearchRow(db, id, transaction);
+        await db.run('DELETE FROM entry_blocks WHERE entry_id = ?;', [id], transaction);
+        await db.run("DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;", [id], transaction);
+        await this.markStructuredCollectionReadyIfEmpty(db, key, 'entries', transaction);
+        break;
+      case 'deardiary_notes':
+        await db.run('DELETE FROM notes WHERE id = ?;', [id], transaction);
+        await this.deleteNoteSearchRow(db, id, transaction);
+        await this.markStructuredCollectionReadyIfEmpty(db, key, 'notes', transaction);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private async markStructuredCollectionReadyIfEmpty(
+    db: SQLiteDBConnection,
+    key: string,
+    table: 'diaries' | 'entries' | 'notes',
+    transaction = true,
+  ): Promise<void> {
+    const result = await db.query(`SELECT COUNT(*) AS count FROM ${table};`);
+    if (Number(result.values?.[0]?.count || 0) > 0) return;
+    await db.run(
+      `INSERT INTO kv_store (key, value, updated_at)
+       VALUES (?, '[]', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`,
+      [key, now()],
+      transaction,
+    );
+  }
+
+  private async upsertDiaryRow(db: SQLiteDBConnection, diary: Diary, transaction = true): Promise<void> {
+    const rawJson = JSON.stringify(diary);
+    await db.run(
+      `INSERT INTO diaries (
+        id, name, emoji, color, is_locked, entry_count, last_updated, cover_image_uri,
+        foil_icons_json, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        emoji = excluded.emoji,
+        color = excluded.color,
+        is_locked = excluded.is_locked,
+        entry_count = excluded.entry_count,
+        last_updated = excluded.last_updated,
+        cover_image_uri = excluded.cover_image_uri,
+        foil_icons_json = excluded.foil_icons_json,
+        raw_json = excluded.raw_json,
+        updated_at = excluded.updated_at;`,
+      [
+        diary.id,
+        diary.name,
+        diary.emoji,
+        diary.color,
+        boolToInt(diary.isLocked),
+        diary.entryCount || 0,
+        diary.lastUpdated || null,
+        diary.coverImage || null,
+        JSON.stringify(diary.foilIcons || []),
+        rawJson,
+        now(),
+      ],
+      transaction,
+    );
+    await db.run("DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;", [diary.id], transaction);
+    if (diary.coverImage) await this.insertMediaAsset(db, 'diary', diary.id, 'coverImage', 0, diary.coverImage, transaction);
+  }
+
+  private async upsertEntryRow(db: SQLiteDBConnection, entry: Entry, transaction = true): Promise<void> {
+    const rawJson = JSON.stringify(entry);
+    await db.run(
+      `INSERT INTO entries (
+        id, diary_id, date, time, title, body, mood_name, mood_emoji, tags_json,
+        photo_uris_json, photo_count, word_count, audio_uri, created_at, updated_at,
+        is_timeline_bifurcated, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        diary_id = excluded.diary_id,
+        date = excluded.date,
+        time = excluded.time,
+        title = excluded.title,
+        body = excluded.body,
+        mood_name = excluded.mood_name,
+        mood_emoji = excluded.mood_emoji,
+        tags_json = excluded.tags_json,
+        photo_uris_json = excluded.photo_uris_json,
+        photo_count = excluded.photo_count,
+        word_count = excluded.word_count,
+        audio_uri = excluded.audio_uri,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        is_timeline_bifurcated = excluded.is_timeline_bifurcated,
+        raw_json = excluded.raw_json;`,
+      [
+        entry.id,
+        entry.diaryId,
+        entry.date,
+        entry.time || null,
+        entry.title,
+        entry.body || '',
+        entry.moodName || '',
+        entry.moodEmoji || '',
+        JSON.stringify(entry.tags || []),
+        JSON.stringify(entry.photoUris || []),
+        entry.photoCount || 0,
+        entry.wordCount || 0,
+        entry.audioUri || null,
+        entry.createdAt || now(),
+        entry.updatedAt || now(),
+        boolToInt(entry.isTimelineBifurcated),
+        rawJson,
+      ],
+      transaction,
+    );
+
+    await db.run('DELETE FROM entry_blocks WHERE entry_id = ?;', [entry.id], transaction);
+    await db.run("DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;", [entry.id], transaction);
+    for (const [index, uri] of (entry.photoUris || []).entries()) {
+      await this.insertMediaAsset(db, 'entry', entry.id, 'photoUris', index, uri, transaction);
+    }
+    if (entry.audioUri) await this.insertMediaAsset(db, 'entry', entry.id, 'audioUri', 0, entry.audioUri, transaction);
+    for (const [index, block] of (entry.blocks || []).entries()) {
+      await db.run(
+        `INSERT INTO entry_blocks (id, entry_id, position, time, body, audio_uri, raw_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(entry_id, position) DO UPDATE SET
+           id = excluded.id,
+           time = excluded.time,
+           body = excluded.body,
+           audio_uri = excluded.audio_uri,
+           raw_json = excluded.raw_json;`,
+        [
+          block.id,
+          entry.id,
+          index,
+          block.time || null,
+          block.body || '',
+          block.audioUri || null,
+          JSON.stringify(block),
+        ],
+        transaction,
+      );
+      if (block.audioUri) {
+        await this.insertMediaAsset(db, 'entry', entry.id, `blocks.${block.id}.audioUri`, index, block.audioUri, transaction);
+      }
+    }
+    await this.upsertEntrySearchRow(db, entry, transaction);
+  }
+
+  private async upsertNoteRow(db: SQLiteDBConnection, note: Note, transaction = true): Promise<void> {
+    await db.run(
+      `INSERT INTO notes (id, title, body, is_pinned, tags_json, created_at, updated_at, raw_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         title = excluded.title,
+         body = excluded.body,
+         is_pinned = excluded.is_pinned,
+         tags_json = excluded.tags_json,
+         created_at = excluded.created_at,
+         updated_at = excluded.updated_at,
+         raw_json = excluded.raw_json;`,
+      [
+        note.id,
+        note.title,
+        note.body || '',
+        boolToInt(note.isPinned),
+        JSON.stringify(note.tags || []),
+        note.createdAt || now(),
+        note.updatedAt || now(),
+        JSON.stringify(note),
+      ],
+      transaction,
+    );
+    await this.upsertNoteSearchRow(db, note, transaction);
+  }
+
+  private async upsertEntrySearchRow(db: SQLiteDBConnection, entry: Entry, transaction = true): Promise<void> {
+    await this.deleteEntrySearchRow(db, entry.id, transaction);
+    await db.run(
+      'INSERT INTO entries_fts (id, title, body, tags, mood) VALUES (?, ?, ?, ?, ?);',
+      [
+        entry.id,
+        entry.title || '',
+        entry.body || '',
+        (entry.tags || []).join(' '),
+        entry.moodName || '',
+      ],
+      transaction,
+    );
+  }
+
+  private async deleteEntrySearchRow(db: SQLiteDBConnection, id: string, transaction = true): Promise<void> {
+    await db.run('DELETE FROM entries_fts WHERE id = ?;', [id], transaction);
+  }
+
+  private async upsertNoteSearchRow(db: SQLiteDBConnection, note: Note, transaction = true): Promise<void> {
+    await this.deleteNoteSearchRow(db, note.id, transaction);
+    await db.run(
+      'INSERT INTO notes_fts (id, title, body, tags) VALUES (?, ?, ?, ?);',
+      [
+        note.id,
+        note.title || '',
+        note.body || '',
+        (note.tags || []).join(' '),
+      ],
+      transaction,
+    );
+  }
+
+  private async deleteNoteSearchRow(db: SQLiteDBConnection, id: string, transaction = true): Promise<void> {
+    await db.run('DELETE FROM notes_fts WHERE id = ?;', [id], transaction);
+  }
+
+  private async upsertOutboxOperation(
+    db: SQLiteDBConnection,
+    operation: SyncOutboxOperation,
+    transaction = true,
+  ): Promise<void> {
+    await db.run(
+      `INSERT INTO sync_outbox (
+        operation_id, account_id, device_id, partition_key, record_type, record_id,
+        state, next_retry_at, created_at, updated_at, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(operation_id) DO UPDATE SET
+        account_id = excluded.account_id,
+        device_id = excluded.device_id,
+        partition_key = excluded.partition_key,
+        record_type = excluded.record_type,
+        record_id = excluded.record_id,
+        state = excluded.state,
+        next_retry_at = excluded.next_retry_at,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        raw_json = excluded.raw_json;`,
+      [
+        operation.operationId,
+        operation.accountId,
+        operation.deviceId,
+        String(operation.partitionKey || ''),
+        operation.recordType,
+        operation.recordId,
+        operation.state,
+        operation.nextRetryAt || null,
+        operation.createdAt || now(),
+        operation.updatedAt || now(),
+        JSON.stringify(operation),
+      ],
+      transaction,
+    );
   }
 
   private async insertMediaAsset(
@@ -1320,9 +2179,19 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     const id = `${ownerType}:${ownerId}:${field}:${position}`;
     const mimeType = uri.startsWith('data:') ? uri.slice(5, uri.indexOf(';')) : null;
     await db.run(
-      `INSERT OR REPLACE INTO media_assets (
+      `INSERT INTO media_assets (
         id, owner_type, owner_id, field, position, uri, mime_type, byte_size, created_at, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        owner_type = excluded.owner_type,
+        owner_id = excluded.owner_id,
+        field = excluded.field,
+        position = excluded.position,
+        uri = excluded.uri,
+        mime_type = excluded.mime_type,
+        byte_size = excluded.byte_size,
+        created_at = excluded.created_at,
+        raw_json = excluded.raw_json;`,
       [
         id,
         ownerType,

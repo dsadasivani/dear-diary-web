@@ -39,6 +39,14 @@ export const persistMediaDataUri = async (
     return Capacitor.convertFileSrc(stored.uri);
   } catch (error) {
     console.warn(`Failed to persist ${kind} media to native filesystem:`, error);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('deardiary-media-storage-warning', {
+        detail: {
+          kind,
+          message: `${kind} storage failed; keeping an inline copy until storage is available.`,
+        },
+      }));
+    }
     return dataUri;
   }
 };

@@ -1,21 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, Flame, Shuffle, Lock, Settings, Calendar, ChevronRight, Sparkles, PenLine
 } from 'lucide-react';
-import { Diary, Entry, Note, ResponsiveLayout, UserProfile } from '../types';
-import { PREDEFINED_TAGS, calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
+import { ResponsiveLayout, UserProfile } from '../types';
 import ProfileAvatar from './ProfileAvatar';
-import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import SyncedImage from './SyncedImage';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import { diaryRepository } from '../repositories';
+import type { HomeSummary } from '../repositories/DiaryRepository';
 
 interface HomeScreenProps {
-  diaries: Diary[];
-  entries: Entry[];
-  notes: Note[];
   userProfile: UserProfile;
   layout?: ResponsiveLayout;
+  excludeDiaryIds?: string[];
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onOpenQuickNote: (noteText: string) => void;
   onOpenNewEntryWithPrompt: (promptText: string) => void;
@@ -32,11 +30,9 @@ const DEFAULT_PROMPTS = [
 ];
 
 export default function HomeScreen({ 
-  diaries, 
-  entries, 
-  notes, 
   userProfile,
   layout = 'mobile',
+  excludeDiaryIds = [],
   onNavigate,
   onOpenQuickNote,
   onOpenNewEntryWithPrompt
@@ -44,10 +40,23 @@ export default function HomeScreen({
   useScreenPerformance('home');
   const [promptIndex, setPromptIndex] = useState<number>(0);
   const [quickThought, setQuickThought] = useState<string>('');
-  const [streak, setStreak] = useState<number>(0);
   const [activePrompt, setActivePrompt] = useState<string>(DEFAULT_PROMPTS[0]);
   const [greeting, setGreeting] = useState<string>('Good morning');
-  const todayWordCount = getTodayWordCount(entries);
+  const [summary, setSummary] = useState<HomeSummary | null>(null);
+  const [summaryError, setSummaryError] = useState('');
+  const excludeDiaryKey = excludeDiaryIds.join('|');
+
+  const loadSummary = useCallback(async () => {
+    try {
+      const nextSummary = await diaryRepository.getHomeSummary({
+        excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [],
+      });
+      setSummary(nextSummary);
+      setSummaryError('');
+    } catch (error: any) {
+      setSummaryError(error?.message || 'Home summary could not be loaded.');
+    }
+  }, [excludeDiaryKey]);
 
   useEffect(() => {
     // Dynamic greeting based on current hour
@@ -55,11 +64,28 @@ export default function HomeScreen({
     if (hour < 12) setGreeting('Good morning');
     else if (hour < 17) setGreeting('Good afternoon');
     else setGreeting('Good evening');
+  }, []);
 
-    // Calculate real streak from entries
-    const calculated = calculateStreak(entries);
-    setStreak(calculated);
-  }, [entries]);
+  useEffect(() => {
+    void loadSummary();
+    return diaryRepository.subscribeChanges((_revision, change) => {
+      if (!change || [
+        'entry-created',
+        'entry-updated',
+        'entry-deleted',
+        'diary-created',
+        'diary-updated',
+        'diary-deleted',
+        'note-created',
+        'note-updated',
+        'note-deleted',
+        'profile-updated',
+        'remote-batch-applied',
+      ].includes(change.type)) {
+        void loadSummary();
+      }
+    });
+  }, [loadSummary]);
 
   const handleShufflePrompt = () => {
     let nextIndex = (promptIndex + 1) % DEFAULT_PROMPTS.length;
@@ -67,7 +93,7 @@ export default function HomeScreen({
     setActivePrompt(DEFAULT_PROMPTS[nextIndex]);
   };
 
-  const handleDiaryClick = (diary: Diary) => {
+  const handleDiaryClick = (diary: HomeSummary['recentDiaries'][number]) => {
     onNavigate('diaries', 'diaryDetail', diary.id);
   };
 
@@ -78,45 +104,14 @@ export default function HomeScreen({
     setQuickThought('');
   };
 
-  // Get most active tags from entries and notes
-  const getFrequentlyUsedTags = () => {
-    const counts: { [key: string]: number } = {};
-    PREDEFINED_TAGS.forEach(t => { counts[t] = 0; });
-    
-    entries.forEach(e => {
-      e.tags.forEach(t => {
-        counts[t] = (counts[t] || 0) + 1;
-      });
-    });
-    notes.forEach(n => {
-      n.tags.forEach(t => {
-        counts[t] = (counts[t] || 0) + 1;
-      });
-    });
-
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(entry => entry[0]);
-  };
-
-  const recentDiaries = [...diaries]
-    .sort((a, b) => {
-      if (a.lastUpdated === 'Today') return -1;
-      if (b.lastUpdated === 'Today') return 1;
-      return b.entryCount - a.entryCount;
-    })
-    .slice(0, 4);
-
-  const freqTags = getFrequentlyUsedTags();
-  const goalPercent = Math.min(100, Math.round((todayWordCount / Math.max(1, userProfile.writingGoal)) * 100));
-  const recentEntries = [...entries]
-    .sort((a, b) => `${b.date} ${b.time || ''}`.localeCompare(`${a.date} ${a.time || ''}`))
-    .slice(0, 4);
-  const recentPhotos = [...entries]
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .flatMap(entry => (entry.photoUris || []).map(src => ({ src, entry })))
-    .slice(0, 4);
+  const profile = summary?.profile || userProfile;
+  const todayWordCount = summary?.todayWordCount || 0;
+  const streak = summary?.currentStreak || 0;
+  const recentDiaries = summary?.recentDiaries || [];
+  const recentEntries = summary?.recentEntries || [];
+  const recentPhotos = summary?.recentPhotos || [];
+  const freqTags = (summary?.commonTags || []).slice(0, 5).map(row => row.label || row.key);
+  const goalPercent = Math.min(100, Math.round((todayWordCount / Math.max(1, profile.writingGoal)) * 100));
 
   if (layout === 'desktop') {
     return (
@@ -128,7 +123,7 @@ export default function HomeScreen({
                 {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
               </p>
               <h1 className="mt-2 font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-[3.25rem]">
-                {greeting}, {userProfile.name || 'Writer'}
+                {greeting}, {profile.name || 'Writer'}
               </h1>
             </div>
             <button
@@ -139,6 +134,12 @@ export default function HomeScreen({
               Customize sanctuary
             </button>
           </header>
+
+          {summaryError && (
+            <p className="rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-2 text-xs font-semibold text-yellow-800">
+              {summaryError}
+            </p>
+          )}
 
           <section className="space-y-5">
             <div>
@@ -203,7 +204,9 @@ export default function HomeScreen({
                   >
                     <p className="text-sm font-bold text-brand-pink-dark">{new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', weekday: 'long' })}</p>
                     <h4 className="mt-1 font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">{entry.title}</h4>
-                    <p className="mt-1 line-clamp-1 text-sm text-brand-text-muted">{richTextHtmlToPlainText(entry.body)}</p>
+                    <p className="mt-1 line-clamp-1 text-sm text-brand-text-muted">
+                      {entry.moodEmoji} {entry.moodName} &bull; {entry.wordCount} words
+                    </p>
                   </button>
                 )) : (
                   <div className="px-5 py-10 text-center text-sm font-semibold text-brand-text-muted">Your first fragment will appear after you save an entry.</div>
@@ -255,7 +258,7 @@ export default function HomeScreen({
           <section className="rounded-[24px] border border-brand-border bg-white/60 p-5 shadow-sm dark:bg-brand-card-bg/60">
             <div className="flex items-center justify-between text-sm font-bold uppercase tracking-[0.16em] text-brand-plum dark:text-brand-text">
               <span>Daily goal</span>
-              <span className="text-brand-text-muted normal-case tracking-normal">{todayWordCount} / {userProfile.writingGoal} words</span>
+              <span className="text-brand-text-muted normal-case tracking-normal">{todayWordCount} / {profile.writingGoal} words</span>
             </div>
             <div className="mt-4 h-2 rounded-full bg-brand-border/50">
               <div className="h-full rounded-full bg-brand-sage transition-all" style={{ width: `${goalPercent}%` }} />
@@ -265,11 +268,11 @@ export default function HomeScreen({
           <section className="rounded-[24px] border border-brand-border bg-white/60 p-5 shadow-sm dark:bg-brand-card-bg/60">
             <h3 className="mb-4 text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Recent memories</h3>
             <div className="grid grid-cols-2 gap-3">
-              {recentPhotos.length > 0 ? recentPhotos.map(({ src, entry }, index) => (
+              {recentPhotos.length > 0 ? recentPhotos.map(({ src, entryId, diaryId }, index) => (
                 <button
-                  key={`${entry.id}-${index}`}
+                  key={`${entryId}-${index}`}
                   type="button"
-                  onClick={() => onNavigate('diaries', 'diaryDetail', entry.diaryId, entry.id)}
+                  onClick={() => onNavigate('diaries', 'diaryDetail', diaryId, entryId)}
                   className="aspect-square overflow-hidden rounded-xl border border-brand-border bg-white shadow-sm"
                 >
                   <SyncedImage
@@ -319,15 +322,15 @@ export default function HomeScreen({
             <button 
               onClick={() => onNavigate('stats', 'appSettings')}
               className="w-13 h-13 rounded-full bg-white dark:bg-brand-card-bg flex items-center justify-center text-2xl border-2 border-brand-border shadow-md z-10 relative overflow-hidden hover:scale-105 transition-transform"
-              style={{ backgroundColor: userProfile.avatarColor }}
+              style={{ backgroundColor: profile.avatarColor }}
               title="Edit Profile"
             >
-              <ProfileAvatar profile={userProfile} />
+              <ProfileAvatar profile={profile} />
             </button>
           </div>
           <div>
             <h1 className="text-2xl font-serif-diary font-bold italic tracking-tight text-brand-plum leading-tight dark:text-brand-text">
-              {greeting}, {userProfile.name}
+              {greeting}, {profile.name}
             </h1>
             <div className="flex items-center gap-1.5 opacity-65 font-medium text-[11px] text-brand-plum dark:text-brand-text mt-0.5 uppercase tracking-wider">
               <Calendar className="w-3 h-3 text-brand-pink" />
@@ -347,11 +350,17 @@ export default function HomeScreen({
         </button>
       </header>
 
+      {summaryError && (
+        <p className="rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-2 text-xs font-semibold text-yellow-800">
+          {summaryError}
+        </p>
+      )}
+
       {/* User Motto & Daily Writing Goal Progress */}
       <div className="bg-white/85 dark:bg-brand-card-bg/85 backdrop-blur-md p-5 rounded-[32px] border border-brand-border/60 dark:border-brand-border/20 shadow-md flex flex-col gap-3 select-none">
-        {userProfile.bio && (
+        {profile.bio && (
           <div className="text-center italic text-brand-plum/90 dark:text-brand-text/90 text-sm font-serif-diary leading-relaxed px-2 border-b border-brand-border/30 dark:border-brand-border/10 pb-3">
-            "{userProfile.bio}"
+            "{profile.bio}"
           </div>
         )}
         <div className="flex justify-between items-center text-xs">
@@ -360,21 +369,21 @@ export default function HomeScreen({
             <span>Daily Writing Goal</span>
           </div>
           <span className="font-mono text-[11px] text-brand-text-muted dark:text-brand-text font-bold bg-brand-bg dark:bg-brand-bg/50 px-2 py-0.5 rounded-lg border border-brand-border/50">
-            {todayWordCount} / {userProfile.writingGoal} words
+            {todayWordCount} / {profile.writingGoal} words
           </span>
         </div>
         <div className="relative w-full h-2.5 bg-brand-bg dark:bg-brand-bg/30 border border-brand-border/40 dark:border-brand-border/10 rounded-full overflow-hidden">
           <motion.div 
             className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-brand-pink to-brand-rose rounded-full"
             initial={{ width: 0 }}
-            animate={{ width: `${Math.min(100, (todayWordCount / userProfile.writingGoal) * 100)}%` }}
+            animate={{ width: `${goalPercent}%` }}
             transition={{ duration: 1.2, ease: "easeOut" }}
           />
         </div>
         <div className="flex justify-between items-center text-[10px] text-brand-text-muted dark:text-brand-text/60 font-semibold">
-          <span>{todayWordCount >= userProfile.writingGoal ? "🎉 Goal completed for today!" : "Start writing to achieve your daily habit"}</span>
+          <span>{todayWordCount >= profile.writingGoal ? "🎉 Goal completed for today!" : "Start writing to achieve your daily habit"}</span>
           <span className="text-brand-pink font-bold">
-            {Math.min(100, Math.round((todayWordCount / userProfile.writingGoal) * 100))}% Complete
+            {goalPercent}% Complete
           </span>
         </div>
       </div>
@@ -598,7 +607,7 @@ export default function HomeScreen({
         </div>
         
         <p className="text-xs mt-3 text-white/85 leading-relaxed max-w-sm relative z-10 font-medium">
-           {userProfile.name}, you're doing incredibly well. Taking quiet moments daily to reflect forms emotional resilience. Keep it up!
+           {profile.name || 'Writer'}, you're doing incredibly well. Taking quiet moments daily to reflect forms emotional resilience. Keep it up!
         </p>
       </section>
 

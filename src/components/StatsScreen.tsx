@@ -10,11 +10,14 @@ import { calculateStreak } from '../domain/journalCatalog';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import SyncedImage from './SyncedImage';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import { diaryRepository } from '../repositories';
+import type { GlobalStatistics } from '../repositories/DiaryRepository';
 
 interface StatsScreenProps {
   diaries: Diary[];
-  entries: Entry[];
-  notes: Note[];
+  initialEntries?: Entry[];
+  initialNotes?: Note[];
+  excludeDiaryIds?: string[];
   archiveMonths?: PartitionHydrationState[];
   layout?: ResponsiveLayout;
   onNavigate: (
@@ -30,13 +33,17 @@ interface StatsScreenProps {
 
 export default function StatsScreen({
   diaries,
-  entries,
-  notes,
+  initialEntries = [],
+  initialNotes = [],
+  excludeDiaryIds = [],
   archiveMonths = [],
   layout = 'mobile',
   onNavigate
 }: StatsScreenProps) {
   useScreenPerformance('stats');
+  const [entries, setEntries] = useState<Entry[]>(initialEntries);
+  const [notes, setNotes] = useState<Note[]>(initialNotes);
+  const [globalStats, setGlobalStats] = useState<GlobalStatistics | null>(null);
   const [streak, setStreak] = useState<number>(0);
   const [totalPhotos, setTotalPhotos] = useState<number>(0);
   const [selectedPixelYear, setSelectedPixelYear] = useState<number>(() => new Date().getFullYear());
@@ -44,6 +51,38 @@ export default function StatsScreen({
   const [selectedPixelMonth, setSelectedPixelMonth] = useState<number>(() => new Date().getMonth());
   const [selectedPixelEntry, setSelectedPixelEntry] = useState<Entry | null>(null);
   const [selectedPixelDate, setSelectedPixelDate] = useState<string>('');
+  const excludeDiaryKey = excludeDiaryIds.join('|');
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadStatsData = async () => {
+      const filters = { excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [] };
+      const [entryPage, notePage, nextGlobalStats] = await Promise.all([
+        diaryRepository.searchEntries({ ...filters, limit: 10000 }),
+        diaryRepository.listNotes({ includeBody: true, limit: 10000 }),
+        diaryRepository.getGlobalStatistics(filters),
+      ]);
+      if (cancelled) return;
+      setEntries(entryPage.items);
+      setNotes(notePage.items as Note[]);
+      setGlobalStats(nextGlobalStats);
+    };
+    void loadStatsData();
+    const unsubscribe = diaryRepository.subscribeChanges((_revision, change) => {
+      if (
+        !change ||
+        change.type === 'remote-batch-applied' ||
+        change.type.startsWith('entry-') ||
+        change.type.startsWith('note-')
+      ) {
+        void loadStatsData();
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [excludeDiaryKey]);
 
   // Dynamically extract all years where entries exist, plus current year
   const availableYears = React.useMemo(() => {
@@ -65,6 +104,11 @@ export default function StatsScreen({
     const calculated = calculateStreak(entries);
     setStreak(calculated);
 
+    if (globalStats) {
+      setTotalPhotos(globalStats.photoCount);
+      return;
+    }
+
     // count photos
     let pCount = 0;
     entries.forEach(e => {
@@ -73,7 +117,7 @@ export default function StatsScreen({
       }
     });
     setTotalPhotos(pCount);
-  }, [entries]);
+  }, [entries, globalStats]);
 
   // Point 4: Calculate real mood distribution and tag correlations
   const getMoodData = () => {

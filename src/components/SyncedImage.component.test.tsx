@@ -102,7 +102,7 @@ describe('SyncedImage', () => {
     expect(image).toHaveAttribute('data-image-state', 'loading');
   });
 
-  it('keeps a skeleton frame after synced media hydration fails', async () => {
+  it('shows fallback media and a retry affordance after synced media hydration fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     mocks.hydrateMediaReference.mockRejectedValue(new Error('download failed'));
 
@@ -120,9 +120,9 @@ describe('SyncedImage', () => {
       expect(image.getAttribute('src')).toMatch(/^data:image\/gif;base64,/);
 
       await waitFor(() => expect(image).toHaveAttribute('data-image-state', 'failed'));
-      expect(image.getAttribute('src')).toMatch(/^data:image\/gif;base64,/);
-      expect(image).not.toHaveAttribute('src', fallbackSrc);
+      expect(image).toHaveAttribute('src', fallbackSrc);
       expect(image).not.toHaveAttribute('aria-busy');
+      expect(screen.getByRole('button', { name: /image unavailable/i })).toBeInTheDocument();
     } finally {
       warn.mockRestore();
     }

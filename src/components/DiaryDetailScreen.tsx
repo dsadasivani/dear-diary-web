@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ArrowLeft, Edit, Download, Settings, ChevronLeft, ChevronRight, 
@@ -18,7 +18,6 @@ import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
-  entries: Entry[];
   entryId?: string;
   layout?: ResponsiveLayout;
   onBack: () => void;
@@ -30,6 +29,15 @@ interface DiaryDetailScreenProps {
   onHydrateArchiveMonth?: (partitionKey: string) => void | Promise<void>;
 }
 
+const sortDiaryEntries = (entries: Entry[]) =>
+  [...entries].sort((a, b) => `${b.date} ${b.time || ''}`.localeCompare(`${a.date} ${a.time || ''}`));
+
+const mergeDiaryEntries = (entries: Entry[]) => {
+  const byId = new Map<string, Entry>();
+  entries.forEach(entry => byId.set(entry.id, entry));
+  return sortDiaryEntries([...byId.values()]);
+};
+
 const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): string => {
   if (!archiveState || archiveState.status !== 'failed') return '';
   if (archiveState.nextRetryAt && archiveState.nextRetryAt > Date.now()) {
@@ -40,7 +48,6 @@ const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): strin
 
 export default function DiaryDetailScreen({
   diary,
-  entries,
   entryId,
   layout = 'mobile',
   onBack,
@@ -52,12 +59,8 @@ export default function DiaryDetailScreen({
   onHydrateArchiveMonth,
 }: DiaryDetailScreenProps) {
   useScreenPerformance('diaryDetail');
-  // Filter entries for this specific diary (newest first)
-  const diaryEntries = useMemo(() => {
-    return entries
-      .filter(e => e.diaryId === diary.id)
-      .sort((a, b) => b.date.localeCompare(a.date));
-  }, [entries, diary.id]);
+  const [diaryEntries, setDiaryEntries] = useState<Entry[]>([]);
+  const [calendarEntryDates, setCalendarEntryDates] = useState<Set<string>>(() => new Set());
 
   // Traversal & Search State
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -79,6 +82,59 @@ export default function DiaryDetailScreen({
   });
   const [hydratingArchiveKey, setHydratingArchiveKey] = useState<string | null>(null);
   const [archiveHydrationError, setArchiveHydrationError] = useState<string>('');
+
+  const loadDiaryEntries = useCallback(async () => {
+    const page = await diaryRepository.listEntriesByDiary(diary.id, {
+      includeBody: true,
+      limit: 200,
+      sort: 'date-desc',
+    });
+    let nextEntries = page.items as Entry[];
+    if (entryId && !nextEntries.some(entry => entry.id === entryId)) {
+      const deepLinkedEntry = await diaryRepository.getEntry(entryId);
+      if (deepLinkedEntry?.diaryId === diary.id) {
+        nextEntries = [deepLinkedEntry, ...nextEntries];
+      }
+    }
+    setDiaryEntries(mergeDiaryEntries(nextEntries));
+  }, [diary.id, entryId]);
+
+  const visibleYearMonth = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
+
+  const loadVisibleCalendarMonth = useCallback(async () => {
+    const page = await diaryRepository.listEntriesByMonth(diary.id, visibleYearMonth, {
+      includeBody: false,
+      limit: 80,
+      sort: 'date-asc',
+    });
+    setCalendarEntryDates(new Set(page.items.map(entry => entry.date)));
+  }, [diary.id, visibleYearMonth]);
+
+  React.useEffect(() => {
+    void loadDiaryEntries();
+    return diaryRepository.subscribeChanges((_revision, change) => {
+      if (
+        !change ||
+        change.type === 'remote-batch-applied' ||
+        (change.type.startsWith('entry-') && ('diaryId' in change ? change.diaryId === diary.id : true))
+      ) {
+        void loadDiaryEntries();
+      }
+    });
+  }, [diary.id, loadDiaryEntries]);
+
+  React.useEffect(() => {
+    void loadVisibleCalendarMonth();
+    return diaryRepository.subscribeChanges((_revision, change) => {
+      if (
+        !change ||
+        change.type === 'remote-batch-applied' ||
+        (change.type.startsWith('entry-') && ('diaryId' in change ? change.diaryId === diary.id : true))
+      ) {
+        void loadVisibleCalendarMonth();
+      }
+    });
+  }, [diary.id, loadVisibleCalendarMonth]);
 
   // Swipe Gestures refs
   const touchStartX = useRef<number | null>(null);
@@ -267,11 +323,26 @@ export default function DiaryDetailScreen({
     }
 
     // Check if there are entries on this date in this diary
-    const entryForDate = diaryEntries.find(e => e.date === dateStr);
+    let entryForDate = diaryEntries.find(e => e.date === dateStr);
+    let mergedEntriesForDate: Entry[] | null = null;
+    if (!entryForDate && calendarEntryDates.has(dateStr)) {
+      const monthEntries = await diaryRepository.listEntriesByMonth(diary.id, dateStr.slice(0, 7), {
+        includeBody: true,
+        limit: 80,
+        sort: 'date-desc',
+      });
+      const loadedMonthEntries = monthEntries.items as Entry[];
+      entryForDate = loadedMonthEntries.find(e => e.date === dateStr);
+      if (entryForDate) {
+        mergedEntriesForDate = mergeDiaryEntries([...diaryEntries, ...loadedMonthEntries]);
+        setDiaryEntries(mergedEntriesForDate);
+      }
+    }
     if (entryForDate) {
       // Navigate to it
-      const realIndex = diaryEntries.findIndex(e => e.id === entryForDate.id);
-      setCurrentIndex(realIndex);
+      const sourceEntries = mergedEntriesForDate || diaryEntries;
+      const realIndex = sourceEntries.findIndex(e => e.id === entryForDate.id);
+      setCurrentIndex(realIndex >= 0 ? realIndex : 0);
       setSearchQuery(''); // clear query to show it
       setShowCalendar(false);
     } else {
@@ -825,7 +896,7 @@ export default function DiaryDetailScreen({
               {/* Days Grid */}
               <div className="grid grid-cols-7 gap-1.5">
                 {calendarDays.map((cell, idx) => {
-                  const hasEntry = diaryEntries.some(e => e.date === cell.dateStr);
+                  const hasEntry = calendarEntryDates.has(cell.dateStr) || diaryEntries.some(e => e.date === cell.dateStr);
                   const isActive = activeEntry && activeEntry.date === cell.dateStr;
                   
                   return (
@@ -989,6 +1060,8 @@ export default function DiaryDetailScreen({
                       : activeEntry.blocks
                   };
                   await diaryRepository.updateEntry(updatedEntry);
+                  await loadDiaryEntries();
+                  await loadVisibleCalendarMonth();
                   await onRefreshEntries?.();
                 }}
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${

@@ -43,6 +43,7 @@ const diaries = Array.from({ length: diaryCount }, (_, index) => ({
   isLocked: index % 17 === 0,
   entryCount: 0,
   lastUpdated: 'No entries yet',
+  lastEntryUpdatedAt: undefined,
 }));
 
 const entries = Array.from({ length: entryCount }, (_, index) => {
@@ -96,6 +97,7 @@ diaries.forEach(diary => {
   diary.entryCount = entryCounts.get(diary.id) || 0;
   const updatedAt = lastUpdated.get(diary.id);
   diary.lastUpdated = updatedAt ? new Date(updatedAt).toISOString() : 'No entries yet';
+  diary.lastEntryUpdatedAt = updatedAt;
 });
 
 const syncOutbox = Object.fromEntries(Array.from({ length: outboxCount }, (_, index) => [

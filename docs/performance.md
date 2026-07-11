@@ -62,4 +62,4 @@ Capture p50/p95 timings for:
 - media encryption and thumbnail generation
 - editor save-to-navigation and screen mount/render timing
 
-Record baseline numbers before a refactor in `docs/testing/BASELINE.md` or a dated performance report, then record final numbers with the same fixture and device profile.
+Record baseline numbers before a refactor in `docs/testing/BASELINE.md` or a dated performance report, then record final numbers with the same fixture and device profile. The current local-first 10k baseline is recorded in `docs/benchmarks/local-first-10k-baseline-2026-07-11.md`.

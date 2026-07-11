@@ -14,6 +14,19 @@ const inFlight = new Map<string, Promise<string>>();
 const MAX_CACHE_SIZE = 100;
 const TRANSPARENT_PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
+const classifyHydrationError = (error: unknown): string => {
+  const message = String((error as { message?: unknown })?.message || '').toLowerCase();
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return 'Offline. Tap to retry.';
+  if (message.includes('authorization') || message.includes('sign in') || message.includes('session')) {
+    return 'Authorization required. Tap to retry.';
+  }
+  if (message.includes('missing') || message.includes('not found')) return 'Object missing. Tap to retry.';
+  if (message.includes('integrity') || message.includes('verification') || message.includes('authentication')) {
+    return 'Integrity check failed. Tap to retry.';
+  }
+  return 'Image unavailable. Tap to retry.';
+};
+
 const rememberResolved = (reference: string, resolved: string): void => {
   if (resolvedCache.has(reference)) resolvedCache.delete(reference);
   resolvedCache.set(reference, resolved);
@@ -45,7 +58,7 @@ const hydrateReference = (reference: string, label: string): Promise<string> => 
 
 export default function SyncedImage({
   src,
-  fallbackSrc: _fallbackSrc,
+  fallbackSrc,
   label = 'image',
   onClick,
   onError,
@@ -56,9 +69,10 @@ export default function SyncedImage({
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(() => (
     parseSyncMediaReference(src) ? resolvedCache.get(src) || null : src
   ));
-  const [hydrationFailed, setHydrationFailed] = useState(false);
+  const [hydrationError, setHydrationError] = useState('');
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(() => !parseSyncMediaReference(src) || resolvedCache.has(src));
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     if (!parseSyncMediaReference(src)) {
@@ -90,7 +104,7 @@ export default function SyncedImage({
     let cancelled = false;
     const isSyncReference = Boolean(parseSyncMediaReference(src));
     setResolvedSrc(isSyncReference ? resolvedCache.get(src) || null : src);
-    setHydrationFailed(false);
+    setHydrationError('');
     if (!isSyncReference) return;
     if (!isVisible) return;
 
@@ -101,17 +115,18 @@ export default function SyncedImage({
       .catch(error => {
         console.warn(`Synced ${label} could not be shown yet:`, error);
         if (!cancelled) {
-          setHydrationFailed(true);
+          setHydrationError(classifyHydrationError(error));
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [isVisible, label, src]);
+  }, [isVisible, label, retryNonce, src]);
 
-  const displaySrc = hydrationFailed ? TRANSPARENT_PLACEHOLDER_SRC : resolvedSrc || TRANSPARENT_PLACEHOLDER_SRC;
+  const displaySrc = hydrationError ? (fallbackSrc || TRANSPARENT_PLACEHOLDER_SRC) : resolvedSrc || TRANSPARENT_PLACEHOLDER_SRC;
   const isPlaceholder = displaySrc === TRANSPARENT_PLACEHOLDER_SRC;
+  const hydrationFailed = Boolean(hydrationError);
   const isSkeleton = isPlaceholder || loadedSrc !== displaySrc;
 
   useEffect(() => {
@@ -132,26 +147,43 @@ export default function SyncedImage({
   const clickableSrc = resolvedSrc && !hydrationFailed ? resolvedSrc : null;
 
   return (
-    <img
-      {...imgProps}
-      ref={imageRef}
-      src={displaySrc}
-      className={displayClassName || undefined}
-      aria-busy={(isSkeleton && !hydrationFailed) || undefined}
-      data-image-state={hydrationFailed ? 'failed' : isSkeleton ? 'loading' : 'ready'}
-      onClick={onClick && clickableSrc ? () => onClick(clickableSrc) : undefined}
-      onLoad={(event) => {
-        if (displaySrc !== TRANSPARENT_PLACEHOLDER_SRC) {
-          setLoadedSrc(displaySrc);
-        }
-        imgProps.onLoad?.(event);
-      }}
-      onError={(event) => {
-        if (displaySrc !== TRANSPARENT_PLACEHOLDER_SRC) {
-          setHydrationFailed(true);
-        }
-        onError?.(event);
-      }}
-    />
+    <span className="relative inline-block h-full w-full">
+      <img
+        {...imgProps}
+        ref={imageRef}
+        src={displaySrc}
+        className={displayClassName || undefined}
+        aria-busy={(isSkeleton && !hydrationFailed) || undefined}
+        data-image-state={hydrationFailed ? 'failed' : isSkeleton ? 'loading' : 'ready'}
+        onClick={onClick && clickableSrc ? () => onClick(clickableSrc) : undefined}
+        onLoad={(event) => {
+          if (displaySrc !== TRANSPARENT_PLACEHOLDER_SRC) {
+            setLoadedSrc(displaySrc);
+          }
+          imgProps.onLoad?.(event);
+        }}
+        onError={(event) => {
+          if (displaySrc !== TRANSPARENT_PLACEHOLDER_SRC) {
+            setHydrationError('Image unavailable. Tap to retry.');
+          }
+          onError?.(event);
+        }}
+      />
+      {hydrationFailed && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setResolvedSrc(null);
+            setLoadedSrc(null);
+            setHydrationError('');
+            setRetryNonce(value => value + 1);
+          }}
+          className="absolute inset-0 flex items-center justify-center bg-brand-plum/55 px-2 text-center text-[10px] font-extrabold uppercase tracking-wide text-white"
+        >
+          {hydrationError}
+        </button>
+      )}
+    </span>
   );
 }

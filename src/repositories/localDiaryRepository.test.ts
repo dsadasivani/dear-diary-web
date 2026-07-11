@@ -4,12 +4,14 @@ import type {
   LocalDataStore,
   LocalEntryQueryOptions,
   LocalNoteQueryOptions,
-  LocalQueryPageOptions,
   LocalQueryPageResult,
+  LocalStructuredRecordMutation,
 } from '../platform/storage';
-import type { AppSettings, Entry, Note, SecurityConfig, UserProfile } from '../types';
+import type { AppSettings, Entry, Note, SecurityConfig, SyncOutboxOperation, UserProfile } from '../types';
 import { LocalDiaryRepository } from './localDiaryRepository';
 import { createSyncDomainEvent } from '../sync/domainEvents';
+import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 
 class MemoryDataStore implements LocalDataStore {
   private values = new Map<string, string>();
@@ -39,24 +41,14 @@ type StructuredTestRecord = { id: string };
 
 const cloneTestValue = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-const pageTestRecords = <T>(items: T[], options: LocalQueryPageOptions): LocalQueryPageResult<T> => {
-  const limit = Math.max(1, Math.min(options.limit || 50, 200));
-  const offset = Math.max(0, options.cursor ? Number(options.cursor) || 0 : options.offset || 0);
-  const page = items.slice(offset, offset + limit);
-  const nextOffset = offset + page.length;
-  return {
-    items: cloneTestValue(page),
-    nextCursor: nextOffset < items.length ? String(nextOffset) : undefined,
-    total: items.length,
-  };
-};
-
 class StructuredMemoryDataStore extends MemoryDataStore {
   private readonly collections: Map<string, StructuredTestRecord[]>;
   private readonly collectionReadCounts = new Map<string, number>();
   private readonly recordReadCounts = new Map<string, number>();
   entryQueryCount = 0;
   noteQueryCount = 0;
+  structuredCommitCount = 0;
+  localMutationCommitCount = 0;
 
   constructor(collections: Record<string, StructuredTestRecord[]>) {
     super();
@@ -86,6 +78,8 @@ class StructuredMemoryDataStore extends MemoryDataStore {
     this.entryQueryCount += 1;
     const allowed = options.allowedDiaryIds ? new Set(options.allowedDiaryIds) : null;
     const excluded = options.excludeDiaryIds ? new Set(options.excludeDiaryIds) : null;
+    const query = options.query?.trim().toLowerCase();
+    const tags = options.tags?.map(tag => tag.toLowerCase()) || [];
     const filtered = records
       .filter(entry => !options.diaryId || entry.diaryId === options.diaryId)
       .filter(entry => !options.yearMonth || entry.date.startsWith(options.yearMonth))
@@ -93,14 +87,23 @@ class StructuredMemoryDataStore extends MemoryDataStore {
       .filter(entry => !options.toDate || entry.date <= options.toDate)
       .filter(entry => !options.mood || entry.moodName === options.mood)
       .filter(entry => options.hasPhotos === undefined || (entry.photoCount > 0) === options.hasPhotos)
+      .filter(entry => tags.length === 0 || tags.every(tag => entry.tags.some(entryTag => entryTag.toLowerCase() === tag)))
+      .filter(entry => !query || (
+        entry.title.toLowerCase().includes(query) ||
+        richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
+        entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
+        entry.moodName.toLowerCase().includes(query)
+      ))
       .filter(entry => (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)));
-    return pageTestRecords(this.sortEntries(filtered, options.sort), options);
+    return cloneTestValue(pageEntries(filtered, options, options.sort || 'date-desc')) as LocalQueryPageResult<Entry>;
   }
 
   async queryNotes(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<Note> | undefined> {
     const records = this.collections.get('deardiary_notes') as Note[] | undefined;
     if (!records) return undefined;
     this.noteQueryCount += 1;
+    const query = options.query?.trim().toLowerCase();
+    const tags = options.tags?.map(tag => tag.toLowerCase()) || [];
     const filtered = records
       .filter(note => {
         if (options.filter === 'pinned') return note.isPinned;
@@ -111,8 +114,52 @@ class StructuredMemoryDataStore extends MemoryDataStore {
       .filter(note => {
         const date = new Date(note.updatedAt).toISOString().slice(0, 10);
         return (!options.fromDate || date >= options.fromDate) && (!options.toDate || date <= options.toDate);
-      });
-    return pageTestRecords(this.sortNotes(filtered, options.sort), options);
+      })
+      .filter(note => tags.length === 0 || tags.every(tag => note.tags.some(noteTag => noteTag.toLowerCase() === tag)))
+      .filter(note => !query || (
+        note.title.toLowerCase().includes(query) ||
+        richTextHtmlToPlainText(note.body).toLowerCase().includes(query) ||
+        note.tags.some(tag => tag.toLowerCase().includes(query))
+      ));
+    return cloneTestValue(pageNotes(filtered, options, options.sort || 'pinned-updated-desc')) as LocalQueryPageResult<Note>;
+  }
+
+  async commitStructuredRecords(input: {
+    records: LocalStructuredRecordMutation[];
+    items?: Record<string, string>;
+  }): Promise<void> {
+    this.structuredCommitCount += 1;
+    this.applyStructuredRecordMutations(input.records);
+    if (input.items) await this.setItems(input.items);
+  }
+
+  async commitLocalMutationAndOutbox(input: {
+    records: LocalStructuredRecordMutation[];
+    items?: Record<string, string>;
+    outboxOperation: SyncOutboxOperation;
+  }): Promise<void> {
+    this.localMutationCommitCount += 1;
+    this.applyStructuredRecordMutations(input.records);
+    const currentOutbox = JSON.parse(await this.getItem('deardiary_sync_outbox') || '{}') as Record<string, SyncOutboxOperation>;
+    currentOutbox[input.outboxOperation.operationId] = cloneTestValue(input.outboxOperation);
+    await this.setItems({
+      ...(input.items || {}),
+      deardiary_sync_outbox: JSON.stringify(currentOutbox),
+    });
+  }
+
+  private applyStructuredRecordMutations(records: LocalStructuredRecordMutation[]): void {
+    records.forEach(record => {
+      const collection = cloneTestValue(this.collections.get(record.key) || []) as StructuredTestRecord[];
+      if (record.value === null) {
+        this.collections.set(record.key, collection.filter(item => item.id !== record.id));
+        return;
+      }
+      const nextRecord = cloneTestValue(record.value as StructuredTestRecord);
+      const next = collection.map(item => item.id === record.id ? nextRecord : item);
+      if (!collection.some(item => item.id === record.id)) next.push(nextRecord);
+      this.collections.set(record.key, next);
+    });
   }
 
   collectionReadCount(key: string): number {
@@ -123,23 +170,6 @@ class StructuredMemoryDataStore extends MemoryDataStore {
     return this.recordReadCounts.get(key) || 0;
   }
 
-  private sortEntries(entries: Entry[], sort: LocalEntryQueryOptions['sort'] = 'date-desc'): Entry[] {
-    const sorted = [...entries];
-    if (sort === 'date-asc') return sorted.sort((left, right) => left.date.localeCompare(right.date) || left.createdAt - right.createdAt);
-    if (sort === 'updated-desc') return sorted.sort((left, right) => right.updatedAt - left.updatedAt);
-    if (sort === 'created-desc') return sorted.sort((left, right) => right.createdAt - left.createdAt);
-    return sorted.sort((left, right) => right.date.localeCompare(left.date) || right.updatedAt - left.updatedAt);
-  }
-
-  private sortNotes(notes: Note[], sort: LocalNoteQueryOptions['sort'] = 'pinned-updated-desc'): Note[] {
-    const sorted = [...notes];
-    if (sort === 'updated-desc') return sorted.sort((left, right) => right.updatedAt - left.updatedAt);
-    return sorted.sort((left, right) => {
-      if (left.isPinned && !right.isPinned) return -1;
-      if (!left.isPinned && right.isPinned) return 1;
-      return right.updatedAt - left.updatedAt;
-    });
-  }
 }
 
 const createRepository = async (store = new MemoryDataStore()): Promise<LocalDiaryRepository> => {
@@ -245,7 +275,7 @@ test('uses storage-backed page queries for entry and note screens', async () => 
       body: '<p>Newer body</p>',
       moodName: 'Calm',
       moodEmoji: '',
-      tags: [],
+      tags: ['keep'],
       photoUris: [],
       photoCount: 0,
       wordCount: 2,
@@ -296,18 +326,95 @@ test('uses storage-backed page queries for entry and note screens', async () => 
 
   const entryPage = await repository.listEntriesByDiary('diary-default', { limit: 1 });
   assert.deepEqual(entryPage.items.map(item => item.id), ['entry-query-new']);
-  assert.equal(entryPage.nextCursor, '1');
+  assert.match(entryPage.nextCursor || '', /^ks:/);
   assert.equal(entryPage.total, 2);
+  const nextEntryPage = await repository.listEntriesByDiary('diary-default', {
+    limit: 1,
+    cursor: entryPage.nextCursor,
+  });
+  assert.deepEqual(nextEntryPage.items.map(item => item.id), ['entry-query-old']);
+  assert.equal(nextEntryPage.nextCursor, undefined);
 
   const searchPage = await repository.searchEntries({ diaryId: 'diary-default', hasPhotos: false, limit: 5 });
   assert.deepEqual(searchPage.items.map(item => item.id), ['entry-query-new', 'entry-query-old']);
+  const querySearchPage = await repository.searchEntries({
+    diaryId: 'diary-default',
+    query: 'newer',
+    tags: ['keep'],
+    limit: 5,
+  });
+  assert.deepEqual(querySearchPage.items.map(item => item.id), ['entry-query-new']);
 
   const notePage = await repository.listNotes({ filter: 'pinned', limit: 5 });
   assert.deepEqual(notePage.items.map(item => item.id), ['note-query-pinned']);
-  assert.equal(store.entryQueryCount, 2);
-  assert.equal(store.noteQueryCount, 1);
+  const noteSearchPage = await repository.searchNotes({ query: 'pinned', tags: ['keep'], limit: 5 });
+  assert.deepEqual(noteSearchPage.items.map(item => item.id), ['note-query-pinned']);
+  assert.equal(store.entryQueryCount, 4);
+  assert.equal(store.noteQueryCount, 2);
   assert.equal(store.collectionReadCount('deardiary_entries'), 0);
   assert.equal(store.collectionReadCount('deardiary_notes'), 0);
+});
+
+test('uses structured record commits for note CRUD without reading the full note collection', async () => {
+  const store = new StructuredMemoryDataStore({ deardiary_notes: [] });
+  const repository = await createRepository(store);
+
+  const note = await repository.createNote({ title: 'Record note', body: 'One', isPinned: false, tags: [] });
+  assert.equal(store.structuredCommitCount, 1);
+  assert.equal(store.collectionReadCount('deardiary_notes'), 0);
+  assert.equal((await repository.getNote(note.id))?.title, 'Record note');
+
+  await repository.updateNote({ ...note, title: 'Updated record note' });
+  await repository.deleteNote(note.id);
+
+  assert.equal(store.structuredCommitCount, 3);
+  assert.equal(store.collectionReadCount('deardiary_notes'), 0);
+  assert.equal(await repository.getNote(note.id), null);
+  assert.equal((await repository.getDriveBackupSettings()).contentRevision, 3);
+});
+
+test('uses atomic structured record and outbox commit for local-first note mutations', async () => {
+  const store = new StructuredMemoryDataStore({ deardiary_notes: [] });
+  const repository = await createRepository(store);
+  const account = {
+    accountId: 'account-structured',
+    deviceId: 'device-structured',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-structured',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-structured',
+    latestSnapshotDriveFileId: 'snapshot-structured',
+    currentSyncSequence: 0,
+    linkedAt: 1,
+  };
+  const note: Note = {
+    id: 'note-structured-local',
+    title: 'Structured local',
+    body: 'Queued locally',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 2,
+  };
+
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'op-structured-local',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account,
+    localPayload: note,
+  });
+
+  assert.equal(store.localMutationCommitCount, 1);
+  assert.equal(store.collectionReadCount('deardiary_notes'), 0);
+  assert.equal((await repository.getNote(note.id))?.title, 'Structured local');
+  const outbox = await repository.listSyncOutboxOperations();
+  assert.equal(outbox.length, 1);
+  assert.equal(outbox[0].operationId, 'op-structured-local');
+  assert.equal(outbox[0].state, 'prepared');
+  assert.equal((await repository.getDriveBackupSettings()).contentRevision, 1);
 });
 
 test('sanitizes malicious rich text when creating and updating entries and notes', async () => {
@@ -790,6 +897,121 @@ test('atomically applies a local note mutation with its durable outbox operation
   assert.equal(operation.recordId, note.id);
   assert.deepEqual(operation.payload, note);
   assert.deepEqual(changes, ['note-created', 'sync-status-updated']);
+});
+
+test('chains same-record local mutations once an earlier outbox operation is in flight', async () => {
+  const repository = await createRepository();
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
+  });
+  const account = (await repository.getLocalSyncAccountState())!;
+  const note: Note = {
+    id: 'note-chain',
+    title: 'First edit',
+    body: '<p>First.</p>',
+    isPinned: false,
+    tags: [],
+    createdAt: 10,
+    updatedAt: 10,
+  };
+
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-chain-1',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account,
+    localPayload: note,
+  });
+  const [firstOperation] = await repository.listSyncOutboxOperations(['prepared']);
+  await repository.saveSyncOutboxOperation({
+    ...firstOperation,
+    state: 'event_uploaded',
+    eventDriveFileId: 'drive-event-1',
+    eventSha256: 'sha',
+    eventSizeBytes: 10,
+  });
+
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-chain-2',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account,
+    localPayload: { ...note, title: 'Second edit', updatedAt: 20 },
+  });
+
+  const operations = await repository.listSyncOutboxOperations();
+  const secondOperation = operations.find(operation => operation.operationId === 'operation-chain-2');
+  assert.equal(operations.length, 2);
+  assert.equal(secondOperation?.dependsOnOperationId, 'operation-chain-1');
+  assert.equal(secondOperation?.baseRecordVersion, undefined);
+  assert.equal((secondOperation?.payload as Note | undefined)?.title, 'Second edit');
+  assert.equal((await repository.getNote(note.id))?.title, 'Second edit');
+});
+
+test('manages preserved conflicts separately from retryable outbox failures', async () => {
+  const repository = await createRepository();
+  const original: Note = {
+    id: 'note-conflict-original',
+    title: 'Original conflict',
+    body: '<p>Original.</p>',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  const recovered = await repository.createNote({
+    title: 'Original conflict (Recovered copy)',
+    body: '<p>Recovered.</p>',
+    isPinned: false,
+    tags: [],
+  });
+  const operation: SyncOutboxOperation = {
+    operationId: 'operation-conflict-preserved',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    partitionKey: 'core',
+    affectedPartitionKeys: ['core'],
+    recordType: 'note',
+    recordId: original.id,
+    operation: 'upsert',
+    payload: original,
+    recoveredRecordId: recovered.id,
+    localApplied: true,
+    state: 'conflict_preserved',
+    createdAt: 1,
+    updatedAt: 2,
+    error: 'stale_record_version',
+  };
+  await repository.saveSyncOutboxOperation(operation);
+
+  const status = await repository.getSyncStatusSummary();
+  assert.equal(status.pendingOutboxCount, 0);
+  assert.equal(status.failedOperationCount, 0);
+  assert.equal(status.conflictCount, 1);
+  const [conflict] = await repository.listPreservedSyncConflicts();
+  assert.equal(conflict.operation.operationId, operation.operationId);
+  assert.equal(conflict.recoveredRecord?.id, recovered.id);
+
+  assert.equal(await repository.deleteSyncConflictRecoveredCopy(operation.operationId), true);
+  assert.equal(await repository.getNote(recovered.id), null);
+  await repository.retryPreservedSyncConflict(operation.operationId);
+  const [retryable] = await repository.listSyncOutboxOperations(['prepared']);
+  assert.equal(retryable.operationId, operation.operationId);
+  assert.equal(retryable.baseRecordVersion, undefined);
+  assert.equal(retryable.error, undefined);
+  await repository.markSyncConflictResolved(operation.operationId);
+  assert.equal((await repository.listSyncOutboxOperations()).length, 0);
 });
 
 test('keeps local-first mutations and pending outbox rows after repository restart', async () => {

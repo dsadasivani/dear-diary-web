@@ -162,6 +162,25 @@ const nextOutboxRetryAt = (now: number, retryCount: number): number => {
   return now + delay;
 };
 
+export const isAccountWideOutboxFailure = (error: unknown): boolean => {
+  const message = String((error as { message?: unknown })?.message || '').toLowerCase();
+  if (!message) return false;
+  return [
+    'must be online',
+    'authorization',
+    'sign in again',
+    'session expired',
+    'account metadata',
+    'account key',
+    'root key',
+    'not active',
+    'device_revoked',
+    'schema',
+    'incompatible',
+    'create or recover your encrypted account',
+  ].some(fragment => message.includes(fragment));
+};
+
 const timestampForDriveFile = (file: DriveSyncObjectSummary): number => {
   const timestamp = file.modifiedTime || file.createdTime;
   return timestamp ? Date.parse(timestamp) || 0 : 0;
@@ -779,25 +798,41 @@ export class EventSyncEngine {
       'committed',
       'applied',
       'failed',
-    ]);
+    ]).then(items => items.sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0)));
     await measureAsync('sync.outbox.resume', async () => {
       for (const operation of operations) {
-        if (!operation.operation) continue;
-        if (operation.state === 'failed' && operation.nextRetryAt && operation.nextRetryAt > this.now()) {
+        const allOperations = await this.repository.listSyncOutboxOperations();
+        const latest = allOperations.find(candidate => candidate.operationId === operation.operationId);
+        if (!latest || !latest.operation || latest.state === 'conflict_preserved') continue;
+        if (latest.state === 'failed' && latest.nextRetryAt && latest.nextRetryAt > this.now()) {
           continue;
         }
+        const dependency = latest.dependsOnOperationId
+          ? allOperations.find(candidate => candidate.operationId === latest.dependsOnOperationId)
+          : null;
+        if (dependency) continue;
+        const readyOperation = latest.dependsOnOperationId && latest.baseRecordVersion === undefined
+          ? await this.updateOutboxOperation(latest, {
+              baseRecordVersion: await this.repository.getSyncRecordVersion(latest.recordType, latest.recordId),
+              dependsOnOperationId: undefined,
+            })
+          : latest;
         try {
-          await this.executeUserWriteOutboxOperation(runtime, operation);
+          await this.executeUserWriteOutboxOperation(runtime, readyOperation);
         } catch (error: any) {
           if (
-            operation.localApplied &&
+            readyOperation.localApplied &&
             error instanceof SupabaseControlPlaneError &&
             (error.message.includes('stale_sync_sequence') || error.message.includes('stale_record_version'))
           ) {
-            await this.preserveLocalFirstConflict(runtime, operation, error);
+            await this.preserveLocalFirstConflict(runtime, readyOperation, error);
             continue;
           }
-          throw error;
+          if (isAccountWideOutboxFailure(error)) throw error;
+          await this.markOutboxOperationFailed(
+            readyOperation.operationId,
+            error?.message || 'Encrypted sync write failed.',
+          ).catch(() => undefined);
         }
       }
     }, { operationCount: operations.length });
@@ -810,15 +845,15 @@ export class EventSyncEngine {
   ): Promise<void> {
     const latestOperation = (await this.repository.listSyncOutboxOperations())
       .find(candidate => candidate.operationId === operation.operationId) || operation;
-    await this.updateOutboxOperation(latestOperation, {
-      state: 'failed',
+    let preservedOperation = await this.updateOutboxOperation(latestOperation, {
+      state: 'conflict_preserved',
       error: error.message || 'Remote version conflict.',
       retryCount: (latestOperation.retryCount || 0) + 1,
       lastErrorAt: this.now(),
-      nextRetryAt: Number.MAX_SAFE_INTEGER,
+      nextRetryAt: undefined,
     });
     await this.pullWithRuntime(runtime);
-    if (latestOperation.operation !== 'upsert' || !latestOperation.payload || !['entry', 'note'].includes(latestOperation.recordType)) {
+    if (preservedOperation.operation !== 'upsert' || !preservedOperation.payload || !['entry', 'note'].includes(preservedOperation.recordType)) {
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('deardiary-sync-conflict', {
           detail: { message: 'This record changed on another device. The latest version is now loaded.' },
@@ -827,19 +862,19 @@ export class EventSyncEngine {
       return;
     }
 
-    const recoveredId = `${latestOperation.recordType}-recovered-${crypto.randomUUID()}`;
-    const recoveredPayload = latestOperation.recordType === 'entry'
+    const recoveredId = `${preservedOperation.recordType}-recovered-${crypto.randomUUID()}`;
+    const recoveredPayload = preservedOperation.recordType === 'entry'
       ? sanitizeSyncPayload('entry', {
-          ...(latestOperation.payload as Entry),
+          ...(preservedOperation.payload as Entry),
           id: recoveredId,
-          title: `${(latestOperation.payload as Entry).title || 'Untitled entry'} (Recovered copy)`,
+          title: `${(preservedOperation.payload as Entry).title || 'Untitled entry'} (Recovered copy)`,
           createdAt: this.now(),
           updatedAt: this.now(),
         }) as Entry
       : sanitizeSyncPayload('note', {
-          ...(latestOperation.payload as Note),
+          ...(preservedOperation.payload as Note),
           id: recoveredId,
-          title: `${(latestOperation.payload as Note).title || 'Untitled note'} (Recovered copy)`,
+          title: `${(preservedOperation.payload as Note).title || 'Untitled note'} (Recovered copy)`,
           createdAt: this.now(),
           updatedAt: this.now(),
         }) as Note;
@@ -853,11 +888,12 @@ export class EventSyncEngine {
       account,
       localPayload: recoveredPayload,
     });
+    preservedOperation = await this.updateOutboxOperation(preservedOperation, { recoveredRecordId: recoveredId });
     this.requestOutboxFlush(1_000);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('deardiary-sync-conflict', {
         detail: {
-          message: `This ${latestOperation.recordType} changed on another device. Your pending version was saved as a recovered copy.`,
+          message: `This ${preservedOperation.recordType} changed on another device. Your pending version was saved as a recovered copy.`,
           recoveredRecordId: recoveredId,
         },
       }));

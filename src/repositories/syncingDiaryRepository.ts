@@ -84,7 +84,13 @@ export const createSyncingDiaryRepository = (
     if (property === 'createDiary') return async (input: NewDiary): Promise<Diary> => {
       const account = await localRepository.getLocalSyncAccountState();
       if (!account) return localRepository.createDiary(input);
-      const diary: Diary = { ...input, id: createId('diary'), entryCount: 0, lastUpdated: 'No entries yet' };
+      const diary: Diary = {
+        ...input,
+        id: createId('diary'),
+        entryCount: 0,
+        lastUpdated: 'No entries yet',
+        lastEntryUpdatedAt: undefined,
+      };
       const saved = await localRepository.applyLocalMutationWithOutbox({
         operationId: crypto.randomUUID(),
         recordType: 'diary',

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Pin, Edit, Trash2, Plus, BookOpen,
@@ -15,20 +15,16 @@ import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface NotesScreenProps {
-  notes: Note[];
   settings: AppSettings;
   layout?: ResponsiveLayout;
-  onRefreshNotes: () => void | Promise<void>;
   onConvertToDiaryEntry: (noteTitle: string, noteBody: string, tags: string[]) => void | Promise<void>;
   initialNoteId?: string;
   onClearInitialNoteId?: () => void;
 }
 
 export default function NotesScreen({
-  notes,
   settings,
   layout = 'mobile',
-  onRefreshNotes,
   onConvertToDiaryEntry,
   initialNoteId,
   onClearInitialNoteId
@@ -37,6 +33,9 @@ export default function NotesScreen({
   const availableTags = getTagsForSettings(settings);
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'pinned' | 'tagged' | 'untagged'>('all');
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [noteTotal, setNoteTotal] = useState(0);
+  const [noteQuery, setNoteQuery] = useState('');
   
   // Note creation inputs
   const [quickThought, setQuickThought] = useState<string>('');
@@ -51,24 +50,46 @@ export default function NotesScreen({
   const [showConfirmDeleteId, setShowConfirmDeleteId] = useState<string | null>(null);
   const [syncError, setSyncError] = useState('');
 
+  const loadNotes = useCallback(async () => {
+    const page = await diaryRepository.listNotes({
+      filter: activeFilter,
+      query: noteQuery,
+      includeBody: true,
+      limit: 200,
+    });
+    setNotes(page.items as Note[]);
+    setNoteTotal(page.total ?? page.items.length);
+  }, [activeFilter, noteQuery]);
+
   const pinnedNotes = notes.filter(n => n.isPinned);
-  const totalNotes = notes.length;
+  const totalNotes = noteTotal;
+
+  React.useEffect(() => {
+    void loadNotes();
+    return diaryRepository.subscribeChanges((_revision, change) => {
+      if (!change || change.type.startsWith('note-') || change.type === 'remote-batch-applied') {
+        void loadNotes();
+      }
+    });
+  }, [loadNotes]);
 
   React.useEffect(() => {
     if (initialNoteId) {
-      const matched = notes.find(n => n.id === initialNoteId);
-      if (matched) {
-        setEditingNote(matched);
-        setEditingTitle(matched.title === 'Untitled note' ? '' : matched.title);
-        setEditingBody(matched.body);
-        setEditingPinned(matched.isPinned);
-        setEditingTags(matched.tags);
-      }
+      void (async () => {
+        const matched = notes.find(n => n.id === initialNoteId) || await diaryRepository.getNote(initialNoteId);
+        if (matched) {
+          setEditingNote(matched);
+          setEditingTitle(matched.title === 'Untitled note' ? '' : matched.title);
+          setEditingBody(matched.body);
+          setEditingPinned(matched.isPinned);
+          setEditingTags(matched.tags);
+        }
+      })();
       if (onClearInitialNoteId) {
         onClearInitialNoteId();
       }
     }
-  }, [initialNoteId, notes]);
+  }, [initialNoteId, notes, onClearInitialNoteId]);
 
   const handleSaveQuickNote = async () => {
     // A quick note might have html from quickThought if it were a rich text, but it's plain text here
@@ -84,7 +105,7 @@ export default function NotesScreen({
     });
     
     setQuickThought('');
-    await onRefreshNotes();
+    await loadNotes();
   };
 
   const handleStartEdit = (note: Note) => {
@@ -111,12 +132,12 @@ export default function NotesScreen({
       await diaryRepository.updateNote(updated);
       setEditingNote(null);
       setSyncError('');
-      await onRefreshNotes();
+      await loadNotes();
     } catch (saveError: any) {
       setSyncError(saveError?.message || 'Note could not be saved.');
       if (saveError instanceof SyncConflictError) {
         setEditingNote(null);
-        await onRefreshNotes();
+        await loadNotes();
       }
     }
   };
@@ -127,7 +148,7 @@ export default function NotesScreen({
     if (editingNote && editingNote.id === id) {
       setEditingNote(null);
     }
-    await onRefreshNotes();
+    await loadNotes();
   };
 
   const handleTogglePin = async (note: Note) => {
@@ -135,7 +156,7 @@ export default function NotesScreen({
       ...note,
       isPinned: !note.isPinned
     });
-    await onRefreshNotes();
+    await loadNotes();
   };
 
   const handleEditTagToggle = (tag: string) => {
@@ -215,13 +236,10 @@ export default function NotesScreen({
               <FileText className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
               <input
                 type="text"
+                value={noteQuery}
                 placeholder="Search notes..."
                 className="w-full rounded-full border border-brand-border bg-white/72 py-2.5 pl-10 pr-4 text-sm font-semibold text-brand-plum outline-none transition-all focus:border-brand-sage focus:bg-white dark:bg-white/5 dark:text-brand-text"
-                onChange={(event) => {
-                  const value = event.target.value.toLowerCase();
-                  const matched = notes.find(note => note.title.toLowerCase().includes(value) || note.body.toLowerCase().includes(value));
-                  if (matched && value) handleStartEdit(matched);
-                }}
+                onChange={(event) => setNoteQuery(event.target.value)}
               />
             </div>
             <div className="mt-4 flex flex-wrap gap-2">

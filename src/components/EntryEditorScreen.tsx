@@ -1165,13 +1165,28 @@ export default function EntryEditorScreen({
     const files = e.target.files;
     if (!files) return;
 
-    Array.from(files).forEach((file: File) => {
-      void persistOptimizedImageFile(file, 'photo')
-        .then(photoUri => setPhotoUris(prev => [...prev, photoUri]))
-        .catch(error => {
-          console.warn('Photo could not be attached:', error);
-        });
-    });
+    const selectedFiles: File[] = Array.from(files);
+    void (async () => {
+      const results: Array<string | null> = new Array(selectedFiles.length).fill(null);
+      let nextIndex = 0;
+      const worker = async () => {
+        while (nextIndex < selectedFiles.length) {
+          const index = nextIndex;
+          nextIndex += 1;
+          try {
+            results[index] = await persistOptimizedImageFile(selectedFiles[index], 'photo');
+          } catch (error) {
+            console.warn('Photo could not be attached:', error);
+            onShowToast?.('One photo could not be attached.', 'warning');
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(2, selectedFiles.length) }, () => worker()));
+      const orderedUris = results.filter((uri): uri is string => Boolean(uri));
+      if (orderedUris.length > 0) {
+        setPhotoUris(prev => [...prev, ...orderedUris]);
+      }
+    })();
     e.target.value = '';
   };
 
@@ -1207,8 +1222,6 @@ export default function EntryEditorScreen({
         audioUri // Store the current recording in the block
       };
       finalBlocks.push(newBlock);
-      setAudioUri(undefined); // Reset for next recording
-      setBody(''); // Reset body after saving new moment
     }
     
     // If absolutely everything is empty, don't save (or maybe show warning)
@@ -1262,6 +1275,10 @@ export default function EntryEditorScreen({
           });
         }
 
+        if (hasDraftText || audioUri) {
+          setAudioUri(undefined);
+          setBody('');
+        }
         onBack();
         onShowToast('Saved to this device', 'success');
       };
