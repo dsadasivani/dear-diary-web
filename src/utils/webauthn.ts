@@ -2,9 +2,6 @@
  * WebAuthn Passkeys Utility
  * Enables standards-compliant, secure biometric authentication using Touch ID, Face ID, or Windows Hello.
  */
-
-import { SecurityConfig } from '../types';
-
 // Helper to convert base64url string to Uint8Array
 export function base64ToBytes(base64: string): Uint8Array {
   const normalized = base64.replace(/-/g, '+').replace(/_/g, '/');

@@ -1,28 +1,34 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  ArrowLeft, Save, Trash2, Calendar, Smile, Tag, Camera, 
-  Plus, X, HelpCircle, Bold, Italic, Underline, List, Lock, LockOpen,
+  ArrowLeft, Trash2, Calendar, Tag, Camera,
+  Plus, X, Bold, Italic, Underline, List,
   Strikethrough, Maximize2, Minimize2, Type, Heading2, Quote,
-  ChevronUp, ChevronDown, Mic, MicOff, Pause, Play, Square, Circle, Sparkles,
+  ChevronUp, ChevronDown, Mic, MicOff, Pause, Play, Square, Sparkles,
   Clock, Edit
 } from 'lucide-react';
-import { AppSettings, Diary, Entry, EntryBlock } from '../types';
+import { AppSettings, Diary, Entry, EntryBlock, ResponsiveLayout } from '../types';
 import RichTextEditor from './RichTextEditor';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
+import SyncedImage from './SyncedImage';
 import { audioService } from '../platform/audio';
-import { persistMediaDataUri } from '../mobile/mediaStorage';
+import { persistMediaDataUri, persistOptimizedImageFile } from '../mobile/mediaStorage';
+import { SyncConflictError } from '../sync/eventSyncEngine';
 import { isNativePlatform } from '../platform';
 import { VoiceRecorder } from '@independo/capacitor-voice-recorder';
 import { SpeechRecognition as NativeSpeechRecognition } from '@capacitor-community/speech-recognition';
 import { diaryRepository } from '../repositories';
 import { getMoodsForSettings, getTagsForSettings } from '../domain/appSettings';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import { measureAsync } from '../utils/performance';
 
 interface EntryEditorScreenProps {
   diaries: Diary[];
   settings: AppSettings;
   diaryId?: string; // Optional default diary ID
   entryId?: string; // Optional entry ID if editing
+  layout?: ResponsiveLayout;
   onBack: () => void;
   onRefreshEntries: () => void | Promise<void>;
   onFocusModeChange?: (active: boolean) => void;
@@ -30,6 +36,7 @@ interface EntryEditorScreenProps {
   initialDate?: string;
   initialPrompt?: string;
   onShowToast?: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+  onRunWithLoader?: (message: string, operation: () => Promise<void>, detail?: string) => Promise<void>;
   showDiarySelector?: boolean;
 }
 
@@ -38,6 +45,7 @@ export default function EntryEditorScreen({
   settings,
   diaryId: initialDiaryId,
   entryId,
+  layout = 'mobile',
   onBack,
   onRefreshEntries,
   onFocusModeChange,
@@ -75,6 +83,7 @@ export default function EntryEditorScreen({
   const [photoUris, setPhotoUris] = useState<string[]>([]);
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
   const [audioUri, setAudioUri] = useState<string | undefined>(undefined);
+  const [isSaving, setIsSaving] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const [showTagPicker, setShowTagPicker] = useState<boolean>(false);
@@ -98,11 +107,7 @@ export default function EntryEditorScreen({
 
   const handleAiEnhance = async () => {
     // Strip HTML formatting
-    const plainText = [...blocks.map(block => block.body), body]
-      .join(' ')
-      .replace(/<[^>]*>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const plainText = richTextHtmlToPlainText([...blocks.map(block => block.body), body].join(' '));
     if (!plainText || plainText.length < 10) {
       setAiError('Please write at least a few sentences (at least 10 characters) before asking for reflection.');
       return;
@@ -559,11 +564,23 @@ export default function EntryEditorScreen({
         const recording = await VoiceRecorder.stopRecording();
         nativeRecordingActiveRef.current = false;
 
-        if (!discard && recording.value.recordDataBase64) {
-          const mimeType = recording.value.mimeType || 'audio/aac';
-          const dataUri = `data:${mimeType};base64,${recording.value.recordDataBase64}`;
-          const mediaUri = await persistMediaDataUri(dataUri, 'audio', mimeType);
+        const recordingValue = recording.value as {
+          recordDataBase64?: string;
+          mimeType?: string;
+          uri?: string;
+        };
+        const mimeType = recordingValue.mimeType || 'audio/aac';
+        let mediaUri: string | null = null;
+        if (!discard && recordingValue.uri) {
+          mediaUri = Capacitor.convertFileSrc(recordingValue.uri);
+        } else if (!discard && recordingValue.recordDataBase64) {
+          const dataUri = recordingValue.recordDataBase64.startsWith('data:')
+            ? recordingValue.recordDataBase64
+            : `data:${mimeType};base64,${recordingValue.recordDataBase64}`;
+          mediaUri = await persistMediaDataUri(dataUri, 'audio', mimeType);
+        }
 
+        if (mediaUri) {
           if (activeBlockId) {
             setBlocks(prev => prev.map(b => b.id === activeBlockId ? { ...b, audioUri: mediaUri } : b));
           } else {
@@ -591,7 +608,7 @@ export default function EntryEditorScreen({
     }
   };
 
-  const startSpeechRecognitionInstance = (isResume: boolean = false) => {
+  const startSpeechRecognitionInstance = () => {
     if (!audioService.getRecordingSupport().speechRecognition) return;
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -686,7 +703,7 @@ export default function EntryEditorScreen({
       if (thisSessionId !== currentSessionIdRef.current) return;
       if (shouldBeRecordingRef.current && shouldRestartSpeechRef.current) {
         // Automatically restart speech recognition in a new clean session instance
-        startSpeechRecognitionInstance(true);
+        startSpeechRecognitionInstance();
       }
     };
 
@@ -731,7 +748,7 @@ export default function EntryEditorScreen({
       shouldRestartSpeechRef.current = true;
       setIsRecording(true);
       setSpeechError(null);
-      startSpeechRecognitionInstance(true);
+      startSpeechRecognitionInstance();
       return;
     }
     
@@ -781,7 +798,7 @@ export default function EntryEditorScreen({
 
 
     if (mode === 'speech-to-text') {
-      startSpeechRecognitionInstance(isResume);
+      startSpeechRecognitionInstance();
       return;
     }
 
@@ -1133,10 +1150,10 @@ export default function EntryEditorScreen({
     const previousBlocksWords = blocks
       .filter(b => b.id !== activeBlockId)
       .reduce((acc, b) => {
-        const text = b.body ? b.body.replace(/<[^>]*>?/gm, '').trim() : '';
+        const text = richTextHtmlToPlainText(b.body);
         return acc + (text ? text.split(/\s+/).filter(Boolean).length : 0);
       }, 0);
-    const currentWords = body ? body.replace(/<[^>]*>?/gm, '').trim() : '';
+    const currentWords = richTextHtmlToPlainText(body);
     const currentWordsCount = currentWords ? currentWords.split(/\s+/).filter(Boolean).length : 0;
     return previousBlocksWords + currentWordsCount;
   }, [blocks, body, activeBlockId]);
@@ -1148,20 +1165,29 @@ export default function EntryEditorScreen({
     const files = e.target.files;
     if (!files) return;
 
-    Array.from(files).forEach((file: File) => {
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        if (event.target?.result) {
-          const photoUri = await persistMediaDataUri(
-            event.target.result as string,
-            'photo',
-            file.type || 'image/jpeg',
-          );
-          setPhotoUris(prev => [...prev, photoUri]);
+    const selectedFiles: File[] = Array.from(files);
+    void (async () => {
+      const results: Array<string | null> = new Array(selectedFiles.length).fill(null);
+      let nextIndex = 0;
+      const worker = async () => {
+        while (nextIndex < selectedFiles.length) {
+          const index = nextIndex;
+          nextIndex += 1;
+          try {
+            results[index] = await persistOptimizedImageFile(selectedFiles[index], 'photo');
+          } catch (error) {
+            console.warn('Photo could not be attached:', error);
+            onShowToast?.('One photo could not be attached.', 'warning');
+          }
         }
       };
-      reader.readAsDataURL(file);
-    });
+      await Promise.all(Array.from({ length: Math.min(2, selectedFiles.length) }, () => worker()));
+      const orderedUris = results.filter((uri): uri is string => Boolean(uri));
+      if (orderedUris.length > 0) {
+        setPhotoUris(prev => [...prev, ...orderedUris]);
+      }
+    })();
+    e.target.value = '';
   };
 
   const removePhoto = (idx: number) => {
@@ -1177,15 +1203,17 @@ export default function EntryEditorScreen({
   };
 
   const handleSave = async () => {
+    if (isSaving) return;
+
     const finalTitle = title.trim() || 'Untitled entry';
     
     let finalBlocks = [...blocks].filter(b => {
-      const hasText = b.body && b.body.replace(/<[^>]*>?/gm, '').trim() !== '';
+      const hasText = richTextHtmlToPlainText(b.body) !== '';
       return hasText || b.audioUri;
     });
     
     // Add new moment block if drafting area is not empty OR there is an audio note
-    const hasDraftText = body && body.replace(/<[^>]*>?/gm, '').trim() !== '';
+    const hasDraftText = richTextHtmlToPlainText(body) !== '';
     if (hasDraftText || audioUri) {
       const newBlock: EntryBlock = {
         id: `block-${Date.now()}`,
@@ -1194,8 +1222,6 @@ export default function EntryEditorScreen({
         audioUri // Store the current recording in the block
       };
       finalBlocks.push(newBlock);
-      setAudioUri(undefined); // Reset for next recording
-      setBody(''); // Reset body after saving new moment
     }
     
     // If absolutely everything is empty, don't save (or maybe show warning)
@@ -1208,53 +1234,76 @@ export default function EntryEditorScreen({
     // Save all block texts combined as the overall entry body so standard view displays them
     const finalBody = finalBlocks.map(b => b.body).filter(Boolean).join('<br/><br/>');
 
-    if (isEditing && entryId) {
-      const entryObj = await diaryRepository.getEntry(entryId);
-      if (entryObj) {
-        const updated: Entry = {
-          ...entryObj,
-          diaryId,
-          date,
-          time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
-          title: finalTitle,
-          body: finalBody,
-          moodName: mood.name,
-          moodEmoji: mood.emoji,
-          tags: selectedTags,
-          photoUris,
-          photoCount: photoUris.length,
-          wordCount: liveWordCount,
-          audioUri: undefined, // Always clear top-level, recordings live in blocks
-          updatedAt: Date.now(),
-          blocks: finalBlocks
-        };
-        await diaryRepository.updateEntry(updated);
-      }
-    } else {
-      await diaryRepository.createEntry({
-        diaryId,
-        date,
-        time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
-        title: finalTitle,
-        body: finalBody,
-        moodName: mood.name,
-        moodEmoji: mood.emoji,
-        tags: selectedTags,
-        photoUris,
-        audioUri: undefined, // Always clear top-level, recordings live in blocks
-        blocks: finalBlocks
-      });
-    }
+    try {
+      setIsSaving(true);
+      const saveOperation = async () => {
+        if (isEditing && entryId) {
+          const entryObj = await diaryRepository.getEntry(entryId);
+          if (entryObj) {
+            const updated: Entry = {
+              ...entryObj,
+              diaryId,
+              date,
+              time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
+              title: finalTitle,
+              body: finalBody,
+              moodName: mood.name,
+              moodEmoji: mood.emoji,
+              tags: selectedTags,
+              photoUris,
+              photoCount: photoUris.length,
+              wordCount: liveWordCount,
+              audioUri: undefined,
+              updatedAt: Date.now(),
+              blocks: finalBlocks,
+            };
+            await diaryRepository.updateEntry(updated);
+          }
+        } else {
+          await diaryRepository.createEntry({
+            diaryId,
+            date,
+            time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
+            title: finalTitle,
+            body: finalBody,
+            moodName: mood.name,
+            moodEmoji: mood.emoji,
+            tags: selectedTags,
+            photoUris,
+            audioUri: undefined,
+            blocks: finalBlocks,
+          });
+        }
 
-    await onRefreshEntries();
-    onBack();
+        if (hasDraftText || audioUri) {
+          setAudioUri(undefined);
+          setBody('');
+        }
+        onBack();
+        onShowToast('Saved to this device', 'success');
+      };
+
+      await measureAsync('app.entrySaveToNavigation', saveOperation, {
+        isEditing,
+        hasMedia: photoUris.length > 0,
+        blockCount: finalBlocks.length,
+      });
+    } catch (saveError: any) {
+      onShowToast(saveError?.message || 'Entry could not be saved.', saveError instanceof SyncConflictError ? 'warning' : 'error');
+      if (saveError instanceof SyncConflictError) {
+        await onRefreshEntries();
+        onBack();
+      }
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleDeleteEntry = async () => {
     if (entryId) {
       await diaryRepository.deleteEntry(entryId);
-      await onRefreshEntries();
       onBack();
+      onShowToast('Deleted on this device', 'success');
     }
   };
 
@@ -1639,9 +1688,10 @@ export default function EntryEditorScreen({
 
               <button 
                 onClick={handleSave}
-                className="bg-brand-sage hover:bg-brand-sage-dark text-white px-3.5 py-1 rounded-lg text-[11px] font-bold transition-all active:scale-95 shadow-sm"
+                disabled={isSaving}
+                className="bg-brand-sage hover:bg-brand-sage-dark text-white px-3.5 py-1 rounded-lg text-[11px] font-bold transition-all active:scale-95 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Save
+                {isSaving ? 'Saving' : 'Save'}
               </button>
             </div>
           </header>
@@ -1946,6 +1996,412 @@ export default function EntryEditorScreen({
     );
   }
 
+  if (layout === 'desktop') {
+    return (
+      <div className="space-y-6">
+        <header className="flex flex-wrap items-center justify-between gap-5 xl:gap-6">
+          <div className="min-w-0">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage transition-colors hover:text-brand-pink"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              My Journal
+            </button>
+            <h1 className="mt-2 font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
+              {isEditing ? 'Edit Reflection' : 'New Entry'}
+            </h1>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="rounded-full border border-brand-border bg-white/60 px-5 py-3 text-sm font-bold text-brand-sage transition-all hover:bg-white"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={isSaving}
+              className="rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              {isSaving ? 'Saving...' : 'Save Entry'}
+            </button>
+          </div>
+        </header>
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_340px] 2xl:gap-8">
+          <main className="min-w-0 overflow-hidden rounded-[28px] border border-brand-border bg-white/86 shadow-[0_18px_60px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/82">
+            <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-4 border-b border-brand-border bg-white/92 px-5 py-4 backdrop-blur-xl dark:bg-brand-card-bg/90 xl:px-7">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { key: 'bold', icon: Bold, action: () => execCommand('bold'), label: 'Bold' },
+                  { key: 'italic', icon: Italic, action: () => execCommand('italic'), label: 'Italic' },
+                  { key: 'underline', icon: Underline, action: () => execCommand('underline'), label: 'Underline' },
+                  { key: 'strikeThrough', icon: Strikethrough, action: () => execCommand('strikeThrough'), label: 'Strikethrough' },
+                ].map(item => {
+                  const Icon = item.icon;
+                  const active = Boolean(activeFormats[item.key as keyof typeof activeFormats]);
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        item.action();
+                      }}
+                      className={`rounded-xl p-2 transition-all ${active ? 'bg-brand-pink text-white' : 'text-brand-plum hover:bg-brand-blush-light dark:text-brand-text'}`}
+                      title={item.label}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </button>
+                  );
+                })}
+                <span className="mx-2 h-6 w-px bg-brand-border" />
+                <button
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    toggleFormatBlock('h2');
+                  }}
+                  className={`rounded-xl p-2 transition-all ${activeFormats.h2 ? 'bg-brand-pink text-white' : 'text-brand-plum hover:bg-brand-blush-light dark:text-brand-text'}`}
+                  title="Heading"
+                >
+                  <Heading2 className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    toggleFormatBlock('blockquote');
+                  }}
+                  className={`rounded-xl p-2 transition-all ${activeFormats.blockquote ? 'bg-brand-pink text-white' : 'text-brand-plum hover:bg-brand-blush-light dark:text-brand-text'}`}
+                  title="Quote"
+                >
+                  <Quote className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    execCommand('insertUnorderedList');
+                  }}
+                  className={`rounded-xl p-2 transition-all ${activeFormats.list ? 'bg-brand-pink text-white' : 'text-brand-plum hover:bg-brand-blush-light dark:text-brand-text'}`}
+                  title="List"
+                >
+                  <List className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs font-bold text-brand-text-muted">
+                <span>{liveWordCount} words</span>
+                <span className="h-2 w-2 rounded-full bg-brand-sage" />
+                <span>Local draft</span>
+              </div>
+            </div>
+
+            <section className="mx-auto max-w-4xl px-7 py-8 xl:px-10 xl:py-9 2xl:px-12 2xl:py-10">
+              {showDiarySelector && diaries.length > 0 && (
+                <label className="mb-7 flex flex-col gap-2">
+                  <span className="text-xs font-bold uppercase tracking-[0.18em] text-brand-sage">Destination journal</span>
+                  <select
+                    value={diaryId}
+                    onChange={(event) => setDiaryId(event.target.value)}
+                    className="w-full rounded-xl border border-brand-border bg-brand-bg/55 px-4 py-3 text-sm font-bold text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+                  >
+                    {diaries.map(diary => (
+                      <option key={diary.id} value={diary.id}>{diary.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <div className="flex flex-wrap items-center justify-center gap-3 text-sm font-bold text-brand-text-muted">
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(event) => setDate(event.target.value)}
+                  className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 font-serif-diary text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+                />
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(event) => setTime(event.target.value)}
+                  className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 font-serif-diary text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+                />
+                <select
+                  value={mood.name}
+                  onChange={(event) => {
+                    const found = availableMoods.find(item => item.name === event.target.value);
+                    if (found) setMood(found);
+                  }}
+                  className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+                >
+                  {availableMoods.map(item => (
+                    <option key={item.name} value={item.name}>{item.emoji} {item.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <input
+                type="text"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Title of your reflection..."
+                className={`mt-9 w-full border-none bg-transparent text-center text-4xl font-semibold tracking-tight text-brand-plum outline-none placeholder:text-brand-text-muted/30 dark:text-brand-text xl:text-[3rem] ${
+                  fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                }`}
+              />
+
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
+                {selectedTags.map(tag => (
+                  <span key={tag} className="inline-flex items-center gap-2 rounded-full bg-brand-sage-light px-3 py-1.5 text-sm font-bold text-brand-sage-dark">
+                    #{tag}
+                    <button type="button" onClick={() => handleTagToggle(tag)} className="text-brand-sage-dark/65 hover:text-brand-rose">x</button>
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setShowTagPicker(prev => !prev)}
+                  className="inline-flex items-center gap-1 rounded-full border border-dashed border-brand-border px-3 py-1.5 text-sm font-bold text-brand-sage hover:border-brand-sage"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Tag
+                </button>
+              </div>
+
+              {showTagPicker && (
+                <div className="mx-auto mt-4 flex max-h-32 max-w-2xl flex-wrap justify-center gap-2 overflow-y-auto rounded-2xl border border-brand-border bg-brand-bg/55 p-4">
+                  {availableTags.map(tag => {
+                    const isSelected = selectedTags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => handleTagToggle(tag)}
+                        className={`rounded-full px-3 py-1.5 text-xs font-bold transition-all ${isSelected ? 'bg-brand-pink text-white' : 'bg-white text-brand-sage-dark hover:bg-brand-sage-light'}`}
+                      >
+                        #{tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="mt-10 space-y-8">
+                {blocks.length > 0 && (
+                  <section className="space-y-5 border-b border-brand-border pb-8">
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-brand-pink">Saved Moments ({blocks.length})</p>
+                    {blocks.map((block, index) => (
+                      <div key={block.id} className="border-l-2 border-brand-pink/25 pl-6">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <input
+                            type="time"
+                            value={block.time}
+                            onChange={(event) => {
+                              const updated = [...blocks];
+                              updated[index].time = event.target.value;
+                              setBlocks(updated);
+                            }}
+                            className="rounded-full border border-brand-border bg-brand-bg/70 px-3 py-1 text-xs font-bold text-brand-plum outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setBlocks(prev => prev.filter(item => item.id !== block.id))}
+                            className="rounded-full p-2 text-brand-rose hover:bg-red-50"
+                            title="Delete moment"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                        <RichTextEditor
+                          html={block.body}
+                          onChange={(newHtml) => {
+                            const updated = [...blocks];
+                            updated[index].body = newHtml;
+                            setBlocks(updated);
+                          }}
+                          onFocus={() => setActiveBlockId(block.id)}
+                          placeholder="Edit moment..."
+                          className={`rich-text-editor min-h-[120px] w-full text-xl leading-relaxed text-brand-plum outline-none dark:text-brand-text ${
+                            fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                          }`}
+                        />
+                        {block.audioUri && (
+                          <div className="mt-4 max-w-md">
+                            <AudioWaveformPlayer
+                              src={block.audioUri}
+                              title="Voice moment"
+                              variant="minimal"
+                              onDelete={() => {
+                                const updated = [...blocks];
+                                updated[index].audioUri = undefined;
+                                setBlocks(updated);
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </section>
+                )}
+
+                <section>
+                  <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-brand-pink/5 px-3 py-1 text-xs font-bold uppercase tracking-[0.16em] text-brand-pink">
+                    <Clock className="h-3.5 w-3.5" />
+                    Drafting Moment at {formatTime12(currentTimeText)}
+                    <input
+                      type="time"
+                      value={currentTimeText}
+                      onChange={(event) => setCurrentTimeText(event.target.value)}
+                      className="ml-2 w-20 bg-transparent font-mono text-brand-plum outline-none"
+                    />
+                  </div>
+                  <RichTextEditor
+                    html={body}
+                    onChange={setBody}
+                    onFocus={() => setActiveBlockId(null)}
+                    placeholder="Write a brand-new moment reflection..."
+                    className={`rich-text-editor min-h-[360px] w-full text-2xl leading-[1.75] text-brand-plum outline-none dark:text-brand-text ${
+                      fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
+                    }`}
+                  />
+                  {audioUri && (
+                    <div className="mt-5 max-w-md">
+                      <AudioWaveformPlayer src={audioUri} variant="minimal" onDelete={() => setAudioUri(undefined)} />
+                    </div>
+                  )}
+                </section>
+              </div>
+            </section>
+          </main>
+
+          <aside className="flex flex-col gap-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-5rem)] xl:overflow-y-auto">
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-[0_14px_38px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/70">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Scrapbook</h2>
+                <button type="button" onClick={triggerPhotoInput} className="rounded-full border border-brand-border p-2 text-brand-sage hover:bg-brand-blush-light" title="Attach photo">
+                  <Camera className="h-4 w-4" />
+                </button>
+              </div>
+              <input type="file" ref={fileInputRef} onChange={handlePhotoUpload} multiple accept="image/*" className="hidden" />
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={triggerPhotoInput}
+                  className="flex aspect-square flex-col items-center justify-center rounded-xl border border-dashed border-brand-border bg-brand-bg/50 text-xs font-bold uppercase tracking-wider text-brand-text-muted hover:border-brand-sage hover:text-brand-sage"
+                >
+                  <Camera className="mb-2 h-5 w-5" />
+                  Drop photo
+                </button>
+                {photoUris.map((photo, index) => (
+                  <div key={`${photo}-${index}`} className="relative aspect-square overflow-hidden rounded-xl border border-brand-border bg-brand-bg">
+                    <SyncedImage src={photo} alt="" className="h-full w-full object-cover" label="entry photo" />
+                    <button
+                      type="button"
+                      onClick={() => removePhoto(index)}
+                      className="absolute right-1.5 top-1.5 rounded-full bg-black/60 p-1 text-white hover:bg-red-600"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
+              <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Voice Memo</h2>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => toggleRecording('voice-dictation')}
+                  className="rounded-2xl border border-brand-border bg-brand-bg/60 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-brand-sage-light"
+                >
+                  Audio note
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleRecording('speech-to-text')}
+                  className="rounded-2xl border border-brand-border bg-brand-bg/60 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-brand-sage-light"
+                >
+                  Dictate text
+                </button>
+              </div>
+            </section>
+
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
+              <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-sage">Local Reflection</h2>
+              <p className="mt-2 text-sm leading-relaxed text-brand-text-muted">Private suggestions are generated on this device from your draft.</p>
+              <button
+                type="button"
+                onClick={() => void handleAiEnhance()}
+                disabled={aiLoading}
+                className="mt-4 w-full rounded-full bg-brand-sage px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
+              >
+                {aiLoading ? 'Reflecting...' : 'Suggest mood and tags'}
+              </button>
+              {aiError && <p className="mt-3 text-xs font-bold text-brand-rose">{aiError}</p>}
+              {aiResult && (
+                <div className="mt-4 rounded-2xl bg-brand-sage-light/35 p-4">
+                  <p className="text-sm leading-relaxed text-brand-plum dark:text-brand-text">{aiResult.reflection}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => applyAiMood(aiResult.mood)} className="rounded-full bg-brand-pink/10 px-3 py-1 text-xs font-bold text-brand-pink">
+                      Use mood: {aiResult.mood}
+                    </button>
+                    {aiResult.tags.map(tag => (
+                      <button key={tag} type="button" onClick={() => applyAiTag(tag)} className="rounded-full bg-brand-sage/10 px-3 py-1 text-xs font-bold text-brand-sage">
+                        #{tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-[24px] border border-brand-border bg-white/62 p-5 shadow-sm dark:bg-brand-card-bg/55">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFocusMode(true);
+                  setIsDockMinimized(true);
+                  onFocusModeChange?.(true);
+                }}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-border bg-brand-bg/60 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-brand-blush-light"
+              >
+                <Maximize2 className="h-4 w-4" />
+                Focus mode
+              </button>
+            </section>
+          </aside>
+        </div>
+
+        {isEditing && (
+          <section className="max-w-4xl rounded-[24px] border border-red-100 bg-red-50/45 px-5 py-4">
+            <p className="text-sm font-semibold text-red-700">Deleting this journal entry is irreversible.</p>
+            {!showConfirmDelete ? (
+              <button type="button" onClick={() => setShowConfirmDelete(true)} className="mt-3 rounded-full border border-red-200 bg-white/65 px-4 py-2 text-sm font-bold text-red-700 hover:bg-red-100">
+                Delete Entry
+              </button>
+            ) : (
+              <div className="mt-3 flex gap-2">
+                <button type="button" onClick={handleDeleteEntry} className="rounded-full bg-red-600 px-4 py-2 text-sm font-bold text-white shadow-sm">
+                  Confirm Delete
+                </button>
+                <button type="button" onClick={() => setShowConfirmDelete(false)} className="rounded-full border border-red-200 px-4 py-2 text-sm font-bold text-red-700">
+                  Cancel
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {recordingOverlayUI}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-5 font-sans relative pb-28">
       {/* Top Header */}
@@ -1965,9 +2421,10 @@ export default function EntryEditorScreen({
           </button>
           <button 
             onClick={handleSave}
-            className="bg-brand-sage hover:bg-brand-sage-dark text-white px-5 py-2 rounded-full text-xs font-bold transition-all active:scale-95 shadow-sm"
+            disabled={isSaving}
+            className="bg-brand-sage hover:bg-brand-sage-dark text-white px-5 py-2 rounded-full text-xs font-bold transition-all active:scale-95 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Save Entry
+            {isSaving ? 'Saving...' : 'Save Entry'}
           </button>
         </div>
       </header>
@@ -2323,7 +2780,12 @@ export default function EntryEditorScreen({
             <div className="flex overflow-x-auto gap-3 py-1">
               {photoUris.map((photo, idx) => (
                 <div key={idx} className="relative w-20 h-20 rounded-xl overflow-hidden shadow-sm border border-brand-rose-light flex-shrink-0">
-                  <img src={photo} alt="" className="w-full h-full object-cover" />
+                  <SyncedImage
+                    src={photo}
+                    alt=""
+                    className="w-full h-full object-cover"
+                    label="entry photo"
+                  />
                   <button
                     type="button"
                     onClick={() => removePhoto(idx)}

@@ -1,3 +1,5 @@
+export type ResponsiveLayout = 'mobile' | 'desktop';
+
 export interface Diary {
   id: string;
   name: string;
@@ -6,6 +8,7 @@ export interface Diary {
   isLocked: boolean; // requires biometric/PIN verification
   entryCount: number;
   lastUpdated: string; // Date string or relative
+  lastEntryUpdatedAt?: number; // Stable timestamp used for sorting; lastUpdated remains display compatibility text.
   coverImage?: string; // Base64 data URI of uploaded cover image
   foilIcons?: string[]; // Multiple gold foil embossed icons
 }
@@ -106,6 +109,7 @@ export interface GoogleAccountSession {
   displayName: string | null;
   imageUrl?: string | null;
   accessToken: string | null;
+  idToken?: string | null;
 }
 
 export interface GoogleAccountIdentity {
@@ -213,4 +217,370 @@ export interface BackupFileSummary {
   modifiedTime?: string;
   size?: number;
   appProperties?: Record<string, string>;
+}
+
+export type SyncDeviceRole = 'primary_mobile' | 'web_companion' | 'desktop_companion';
+export type SyncDeviceActivationState = 'active' | 'pending_recovery' | 'aborted';
+export type SyncObjectKind =
+  | 'event'
+  | 'media'
+  | 'snapshot'
+  | 'key_package'
+  | 'manifest'
+  | 'partition_snapshot'
+  | 'thumbnail';
+
+export type SyncPartitionKey = 'core' | `month:${string}`;
+export type PairingPlatform = 'android' | 'ios' | 'web' | 'desktop';
+
+export interface SyncAccount {
+  id: string;
+  googleUserId: string;
+  googleEmail: string;
+  createdAt: string;
+  activePrimaryDeviceId: string | null;
+  currentSyncSequence: number;
+  currentSnapshotSequence: number;
+  currentKeyEpoch?: number;
+  partitionedSyncEnabled?: boolean;
+  recoveryConfigured: boolean;
+}
+
+export interface SyncDevice {
+  id: string;
+  accountId: string;
+  role: SyncDeviceRole;
+  publicKey: string;
+  displayName: string;
+  platform: PairingPlatform | string;
+  createdAt: string;
+  lastSeenAt: string;
+  revokedAt: string | null;
+  replacedByDeviceId: string | null;
+  activationState?: SyncDeviceActivationState;
+}
+
+export interface PrimaryRecoveryAttempt {
+  id: string;
+  accountId: string;
+  deviceId: string;
+  previousPrimaryDeviceId: string | null;
+  googleUserId: string;
+  googleEmail: string;
+  displayName: string;
+  platform: PairingPlatform | string;
+  status: 'pending' | 'finalized' | 'aborted';
+  startedAt: string;
+  finalizedAt: string | null;
+  restoredSequence: number | null;
+}
+
+export interface KeyEpochRotation {
+  id: string;
+  accountId: string;
+  primaryDeviceId: string;
+  revokedDeviceId: string;
+  reason: string;
+  nextKeyEpoch: number;
+  startingSequence: number;
+  keyPackageSequence: number | null;
+  status: 'pending' | 'finalized' | 'aborted';
+  createdAt: string;
+  finalizedAt: string | null;
+}
+
+export interface SyncObjectMetadata {
+  id: string;
+  accountId: string;
+  sequence: number;
+  driveFileId: string;
+  objectKind: SyncObjectKind;
+  sha256: string;
+  sizeBytes: number;
+  createdByDeviceId: string;
+  createdAt: string;
+  recordType?: SyncRecordType | null;
+  recordId?: string | null;
+  baseRecordVersion?: number | null;
+  recordVersion?: number | null;
+  affectedRecords?: SyncAffectedRecordVersion[];
+  retiredAt?: string | null;
+  partitionKey?: SyncPartitionKey | string | null;
+  affectedPartitionKeys?: string[];
+  operationId?: string | null;
+  keyEpoch?: number;
+}
+
+export interface SyncPartitionHead {
+  accountId: string;
+  partitionKey: SyncPartitionKey | string;
+  latestSnapshotSequence: number;
+  latestEventSequence: number;
+  updatedAt: string;
+}
+
+export interface SyncPartitionCursor {
+  accountId: string;
+  deviceId: string;
+  partitionKey: SyncPartitionKey | string;
+  lastAppliedSequence: number;
+  hydratedAt: string | null;
+  updatedAt: string;
+}
+
+export interface SyncPartitionManifestEntry {
+  partitionKey: SyncPartitionKey | string;
+  displayLabel: string;
+  rangeStart: string | null;
+  rangeEnd: string | null;
+  entryCount: number;
+  noteCount: number;
+  mediaCount: number;
+  approximateBytes: number;
+  latestSnapshotSequence: number;
+  latestSnapshotDriveFileId: string | null;
+  latestSnapshotSha256: string | null;
+  latestSnapshotSizeBytes: number | null;
+  headSequence: number;
+  sealed: boolean;
+  searchIndexAvailable?: boolean;
+}
+
+export interface SyncPartitionManifest {
+  version: 1;
+  kind: 'partition_manifest';
+  accountId: string;
+  keyEpoch: number;
+  generatedAt: string;
+  currentMonth: string;
+  previousMonth: string;
+  partitions: SyncPartitionManifestEntry[];
+}
+
+export interface PartitionHydrationState {
+  partitionKey: SyncPartitionKey | string;
+  status: 'not_available' | 'available' | 'hydrating' | 'hydrated' | 'failed';
+  lastAppliedSequence: number;
+  hydratedAt?: number;
+  failedAt?: number;
+  failureCount?: number;
+  nextRetryAt?: number;
+  error?: string;
+}
+
+export type SyncOutboxOperationState =
+  | 'prepared'
+  | 'media_uploading'
+  | 'media_uploaded'
+  | 'event_uploading'
+  | 'event_uploaded'
+  | 'metadata_committing'
+  | 'committed'
+  | 'applied'
+  | 'failed'
+  | 'conflict_preserved';
+
+export interface SyncOutboxDriveObject {
+  driveFileId: string;
+  objectKind: SyncObjectKind;
+  sha256: string;
+  sizeBytes: number;
+  partitionKey?: SyncPartitionKey | string | null;
+  mediaId?: string;
+  localUri?: string;
+  reference?: string;
+  thumbnail?: {
+    driveFileId: string;
+    sha256: string;
+    sizeBytes: number;
+  };
+}
+
+export interface SyncOutboxOperation {
+  operationId: string;
+  accountId: string;
+  deviceId: string;
+  partitionKey: SyncPartitionKey | string;
+  affectedPartitionKeys: string[];
+  recordType: SyncRecordType;
+  recordId: string;
+  operation?: SyncEventOperation;
+  payload?: unknown;
+  baseRecordVersion?: number;
+  dependsOnOperationId?: string;
+  recoveredRecordId?: string;
+  affectedRecords?: Array<Omit<SyncAffectedRecordVersion, 'recordVersion'>>;
+  eventDriveFileId?: string;
+  eventSha256?: string;
+  eventSizeBytes?: number;
+  uploadedObjects?: SyncOutboxDriveObject[];
+  committedObjects?: SyncObjectMetadata[];
+  localApplied?: boolean;
+  state: SyncOutboxOperationState;
+  createdAt: number;
+  updatedAt: number;
+  retryCount?: number;
+  lastErrorAt?: number;
+  nextRetryAt?: number;
+  error?: string;
+}
+
+export interface SyncMediaPointer {
+  mediaId: string;
+  sequence: number;
+  driveFileId: string;
+  sha256: string;
+  sizeBytes: number;
+  createdByDeviceId: string;
+  createdAt: string;
+  localUri?: string;
+  thumbnailSequence?: number;
+  thumbnailDriveFileId?: string;
+  thumbnailSha256?: string;
+  thumbnailSizeBytes?: number;
+  keyEpoch?: number;
+}
+
+export type SyncRecordType = 'diary' | 'entry' | 'note' | 'settings' | 'profile';
+export type SyncEventOperation = 'upsert' | 'delete';
+
+export interface SyncAffectedRecordVersion {
+  recordType: SyncRecordType;
+  recordId: string;
+  baseRecordVersion: number;
+  recordVersion: number;
+}
+
+interface SyncDomainEventBase {
+  version: 1;
+  eventId: string;
+  accountId: string;
+  deviceId: string;
+  createdAt: string;
+  operation: SyncEventOperation;
+  recordId: string;
+  baseRecordVersion: number;
+  recordVersion: number;
+  affectedRecords?: SyncAffectedRecordVersion[];
+}
+
+export type SyncDomainEvent =
+  | (SyncDomainEventBase & { recordType: 'diary'; payload: Diary | null })
+  | (SyncDomainEventBase & { recordType: 'entry'; payload: Entry | null })
+  | (SyncDomainEventBase & { recordType: 'note'; payload: Note | null })
+  | (SyncDomainEventBase & { recordType: 'settings'; payload: AppSettings | null })
+  | (SyncDomainEventBase & { recordType: 'profile'; payload: UserProfile | null });
+
+export interface SyncDeviceCursor {
+  accountId: string;
+  deviceId: string;
+  lastAppliedSequence: number;
+  updatedAt: string;
+}
+
+export interface PairingSession {
+  id: string;
+  accountId: string;
+  requestedDevicePublicKey: string;
+  requestedDisplayName: string;
+  requestedPlatform: PairingPlatform | string;
+  pairingCodeHash: string;
+  expiresAt: string;
+  approvedByPrimaryDeviceId: string | null;
+  approvedAt: string | null;
+  approvedDeviceId: string | null;
+  keyPackageDriveFileId: string | null;
+  keyPackageSha256: string | null;
+  keyPackageSizeBytes: number | null;
+}
+
+export interface PairingSessionDetails {
+  session: PairingSession;
+  device: SyncDevice | null;
+  keyObject: SyncObjectMetadata | null;
+}
+
+export interface DevicePublicKeyBundle {
+  version: 1;
+  signing: JsonWebKey;
+  encryption: JsonWebKey;
+}
+
+export interface DevicePrivateKeyBundle {
+  version: 1;
+  signing: JsonWebKey;
+  encryption: JsonWebKey;
+}
+
+export interface CompanionKeyPackage {
+  version: 1;
+  packageKind: 'companion_root_key';
+  cipher: 'AES-256-GCM';
+  kdf: 'HKDF-SHA-256';
+  accountId: string;
+  keyEpoch?: number;
+  targetDevicePublicKeySha256: string;
+  senderEphemeralPublicKey: JsonWebKey;
+  salt: string;
+  nonce: string;
+  wrappedRootKey: string;
+  wrappedEpochRootKeys?: Array<{
+    keyEpoch: number;
+    nonce: string;
+    wrappedRootKey: string;
+  }>;
+  createdAt: string;
+}
+
+export interface DeviceRevocation {
+  accountId: string;
+  deviceId: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface RecoveryKeyPackage {
+  version: 1;
+  packageKind: 'root_key';
+  cipher: 'AES-256-GCM';
+  kdf: 'PBKDF2-SHA-256';
+  iterations: number;
+  keyVersion: number;
+  keyEpoch?: number;
+  accountId?: string;
+  createdAt: string;
+  salt: string;
+  nonce: string;
+  wrappedRootKey: string;
+  wrappedEpochRootKeys?: Array<{
+    keyEpoch: number;
+    nonce: string;
+    wrappedRootKey: string;
+  }>;
+}
+
+export interface LocalSyncAccountState {
+  accountId: string;
+  deviceId: string;
+  deviceRole: SyncDeviceRole;
+  googleUserId: string;
+  googleEmail: string;
+  devicePublicKey: string;
+  recoveryKeyDriveFileId: string;
+  latestSnapshotDriveFileId: string;
+  latestSnapshotSequence?: number;
+  currentSyncSequence: number;
+  keyEpoch?: number;
+  partitionedSyncEnabled?: boolean;
+  latestManifestDriveFileId?: string;
+  latestManifestSequence?: number;
+  linkedAt: number;
+}
+
+export interface SupabaseAuthSession {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt?: number;
+  userId?: string;
+  email?: string | null;
 }

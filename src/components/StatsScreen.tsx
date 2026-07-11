@@ -1,18 +1,25 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
-  Flame, BookOpen, FileText, Camera, BarChart2, 
-  Settings, Award, Smile, ShieldAlert, ArrowRight, Image as ImageIcon,
+  Flame, BookOpen, Camera, BarChart2,
+  Settings, Award, ArrowRight,
   Sparkles, X, Calendar, Grid, ChevronDown
 } from 'lucide-react';
-import { Diary, Entry, Note, UserProfile } from '../types';
+import { Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { calculateStreak } from '../domain/journalCatalog';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import SyncedImage from './SyncedImage';
+import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import { diaryRepository } from '../repositories';
+import type { GlobalStatistics } from '../repositories/DiaryRepository';
 
 interface StatsScreenProps {
   diaries: Diary[];
-  entries: Entry[];
-  notes: Note[];
-  userProfile: UserProfile;
+  initialEntries?: Entry[];
+  initialNotes?: Note[];
+  excludeDiaryIds?: string[];
+  archiveMonths?: PartitionHydrationState[];
+  layout?: ResponsiveLayout;
   onNavigate: (
     tab: string, 
     screen?: string, 
@@ -26,11 +33,17 @@ interface StatsScreenProps {
 
 export default function StatsScreen({
   diaries,
-  entries,
-  notes,
-  userProfile,
+  initialEntries = [],
+  initialNotes = [],
+  excludeDiaryIds = [],
+  archiveMonths = [],
+  layout = 'mobile',
   onNavigate
 }: StatsScreenProps) {
+  useScreenPerformance('stats');
+  const [entries, setEntries] = useState<Entry[]>(initialEntries);
+  const [notes, setNotes] = useState<Note[]>(initialNotes);
+  const [globalStats, setGlobalStats] = useState<GlobalStatistics | null>(null);
   const [streak, setStreak] = useState<number>(0);
   const [totalPhotos, setTotalPhotos] = useState<number>(0);
   const [selectedPixelYear, setSelectedPixelYear] = useState<number>(() => new Date().getFullYear());
@@ -38,6 +51,38 @@ export default function StatsScreen({
   const [selectedPixelMonth, setSelectedPixelMonth] = useState<number>(() => new Date().getMonth());
   const [selectedPixelEntry, setSelectedPixelEntry] = useState<Entry | null>(null);
   const [selectedPixelDate, setSelectedPixelDate] = useState<string>('');
+  const excludeDiaryKey = excludeDiaryIds.join('|');
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadStatsData = async () => {
+      const filters = { excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [] };
+      const [entryPage, notePage, nextGlobalStats] = await Promise.all([
+        diaryRepository.searchEntries({ ...filters, limit: 10000 }),
+        diaryRepository.listNotes({ includeBody: true, limit: 10000 }),
+        diaryRepository.getGlobalStatistics(filters),
+      ]);
+      if (cancelled) return;
+      setEntries(entryPage.items);
+      setNotes(notePage.items as Note[]);
+      setGlobalStats(nextGlobalStats);
+    };
+    void loadStatsData();
+    const unsubscribe = diaryRepository.subscribeChanges((_revision, change) => {
+      if (
+        !change ||
+        change.type === 'remote-batch-applied' ||
+        change.type.startsWith('entry-') ||
+        change.type.startsWith('note-')
+      ) {
+        void loadStatsData();
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [excludeDiaryKey]);
 
   // Dynamically extract all years where entries exist, plus current year
   const availableYears = React.useMemo(() => {
@@ -59,6 +104,11 @@ export default function StatsScreen({
     const calculated = calculateStreak(entries);
     setStreak(calculated);
 
+    if (globalStats) {
+      setTotalPhotos(globalStats.photoCount);
+      return;
+    }
+
     // count photos
     let pCount = 0;
     entries.forEach(e => {
@@ -67,7 +117,7 @@ export default function StatsScreen({
       }
     });
     setTotalPhotos(pCount);
-  }, [entries]);
+  }, [entries, globalStats]);
 
   // Point 4: Calculate real mood distribution and tag correlations
   const getMoodData = () => {
@@ -222,6 +272,196 @@ export default function StatsScreen({
   const photos = getPhotoMemories();
   const moodData = getMoodData();
   const moodCorrelations = getMoodTagCorrelations();
+  const hasUnhydratedArchives = archiveMonths.some(month => month.status !== 'hydrated');
+  const entryScopeLabel = hasUnhydratedArchives ? 'Downloaded Entries' : 'Total Entries';
+  const photoScopeLabel = hasUnhydratedArchives ? 'Downloaded Photos' : 'Visual Memories';
+  const scopeHint = 'Stats reflect downloaded memories. Restore older archive months to complete these totals.';
+
+  if (layout === 'desktop') {
+    const dominantMood = moodData[0];
+
+    return (
+      <div className="space-y-7 pb-8">
+        <header className="flex flex-wrap items-start justify-between gap-5 xl:gap-6">
+          <div>
+            <h1 className="font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">Your Reflections</h1>
+            <p className="mt-2 max-w-2xl text-lg leading-relaxed text-brand-text-muted">
+              Taking a moment to observe the journey of your thoughts over time.
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => onNavigate('stats', 'appSettings')}
+              className="rounded-full border border-brand-border bg-white/60 px-5 py-3 text-sm font-bold text-brand-sage hover:bg-white"
+            >
+              Settings
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const targetDiary = diaries[0];
+                if (targetDiary) onNavigate('diaries', 'entryEditor', targetDiary.id);
+                else onNavigate('diaries');
+              }}
+              className="rounded-full bg-brand-sage px-5 py-3 text-sm font-bold text-white hover:bg-brand-sage-dark"
+            >
+              New Entry
+            </button>
+          </div>
+        </header>
+
+        {hasUnhydratedArchives && (
+          <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-sm font-semibold text-brand-sage-dark">
+            {scopeHint}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[210px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)_260px] 2xl:gap-7">
+          <aside className="grid grid-cols-3 gap-4 xl:block xl:space-y-5">
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 text-center shadow-[0_14px_38px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/70">
+              <Flame className="mx-auto h-8 w-8 text-brand-pink" />
+              <p className="mt-5 text-xs font-bold uppercase tracking-[0.18em] text-brand-text-muted">Current Streak</p>
+              <p className="mt-3 font-serif-diary text-5xl font-semibold text-brand-plum dark:text-brand-text">{streak}</p>
+              <p className="mt-2 text-sm text-brand-text-muted">Days of mindful writing</p>
+            </section>
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
+              <p className="text-sm font-bold text-brand-text-muted">{entryScopeLabel}</p>
+              <p className="mt-4 font-serif-diary text-4xl font-semibold text-brand-plum dark:text-brand-text">{entries.length}</p>
+            </section>
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
+              <p className="text-sm font-bold text-brand-text-muted">{photoScopeLabel}</p>
+              <p className="mt-4 font-serif-diary text-4xl font-semibold text-brand-plum dark:text-brand-text">{totalPhotos} Photos</p>
+            </section>
+          </aside>
+
+          <main className="space-y-7">
+            <section className="rounded-[28px] border border-brand-border bg-white/76 p-6 shadow-[0_18px_55px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/72">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">Year in Pixels</h2>
+                  <p className="mt-1 text-sm text-brand-text-muted">A calm map of your emotional rhythm.</p>
+                </div>
+                <select
+                  value={selectedPixelYear}
+                  onChange={(event) => setSelectedPixelYear(parseInt(event.target.value, 10))}
+                  className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 text-sm font-bold text-brand-sage outline-none"
+                >
+                  {availableYears.map(year => <option key={year} value={year}>{year}</option>)}
+                </select>
+              </div>
+
+              <div className="mt-7 grid grid-cols-12 gap-1">
+                {Array.from({ length: 12 }, (_, monthIdx) => (
+                  <div key={monthIdx} className="space-y-0.5">
+                    {Array.from({ length: 31 }, (_, dayIdx) => {
+                      const day = dayIdx + 1;
+                      const date = `${selectedPixelYear}-${String(monthIdx + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                      const entry = entries.find(item => item.date === date);
+                      const mood = (entry?.moodName || '').toLowerCase();
+                      const colorClass = entry
+                        ? mood.includes('calm') ? 'bg-[#d8f3dc]' :
+                          mood.includes('joy') || mood.includes('happy') ? 'bg-[#ffccd5]' :
+                          mood.includes('sad') ? 'bg-[#cfe2ff]' :
+                          mood.includes('anxious') ? 'bg-[#fff3cd]' :
+                          'bg-brand-sage-light'
+                        : 'bg-brand-border/45';
+                      return (
+                        <button
+                          key={date}
+                          type="button"
+                          onClick={() => entry ? onNavigate('diaries', 'diaryDetail', entry.diaryId, entry.id) : undefined}
+                          className={`h-1.5 w-full rounded-[4px] transition-transform hover:scale-125 ${colorClass}`}
+                          title={entry ? `${date}: ${entry.title}` : `${date}: No entry`}
+                        />
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 grid grid-cols-12 gap-2 text-center text-[10px] font-bold uppercase tracking-wider text-brand-text-muted">
+                {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map(month => <span key={month}>{month}</span>)}
+              </div>
+            </section>
+
+            <section className="rounded-[28px] border border-brand-border bg-white/76 p-6 shadow-[0_18px_55px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/72">
+              <div className="flex items-center justify-between">
+                <h2 className="font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">Writing Intensity</h2>
+                <span className="text-sm font-bold text-brand-text-muted">Last 30 Days</span>
+              </div>
+              <div className="mt-8 flex h-36 items-end gap-2 rounded-2xl bg-brand-bg/25 px-3 pt-4">
+                {heatmap.map(item => (
+                  <div key={item.date} className="flex min-w-0 flex-1 flex-col items-center gap-2">
+                    <div
+                      className="w-full rounded-t-lg bg-brand-sage-light transition-all hover:bg-brand-sage"
+                      style={{ height: `${Math.max(10, item.weight * 22)}%` }}
+                      title={`${item.date}: ${item.count} items`}
+                    />
+                  </div>
+                ))}
+              </div>
+            </section>
+          </main>
+
+          <aside className="grid gap-5 xl:col-start-2 xl:row-start-2 xl:grid-cols-2 2xl:col-start-auto 2xl:row-start-auto 2xl:sticky 2xl:top-6 2xl:block 2xl:space-y-5">
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-[0_14px_40px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/72">
+              <h2 className="font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Mood Mix</h2>
+              <div className="mx-auto mt-7 flex h-40 w-40 items-center justify-center rounded-full border-[24px] border-brand-sage-light bg-white text-center">
+                <div>
+                  <p className="font-serif-diary text-2xl font-bold text-brand-plum">{dominantMood?.name || 'None'}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-muted">Dominant</p>
+                </div>
+              </div>
+              <div className="mt-6 space-y-3">
+                {moodData.slice(0, 4).map(item => (
+                  <div key={item.name} className="flex items-center justify-between text-sm">
+                    <span className="font-bold text-brand-plum dark:text-brand-text">{item.emoji} {item.name}</span>
+                    <span className="font-bold text-brand-text-muted">{item.percentage}%</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/72">
+              <h2 className="font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Top Tags</h2>
+              <div className="mt-5 space-y-4">
+                {topTags.map(item => (
+                  <div key={item.tag}>
+                    <div className="flex justify-between text-sm font-bold text-brand-plum dark:text-brand-text">
+                      <span>#{item.tag}</span>
+                      <span>{item.count}</span>
+                    </div>
+                    <div className="mt-1 h-2 rounded-full bg-brand-border/50">
+                      <div className="h-full rounded-full bg-brand-sage" style={{ width: `${item.percentage}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {photos.length > 0 && (
+              <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/72">
+                <h2 className="font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Recent Memories</h2>
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  {photos.slice(0, 4).map((photo, index) => (
+                    <button key={`${photo.src}-${index}`} type="button" onClick={() => onNavigate('diaries', 'diaryDetail', photo.diaryId, photo.entryId)} className="aspect-square overflow-hidden rounded-xl border border-brand-border">
+                      <SyncedImage
+                        src={photo.src}
+                        alt=""
+                        className="h-full w-full object-cover"
+                        fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                        label="recent memory"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+          </aside>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-5 font-sans pb-16">
@@ -242,6 +482,12 @@ export default function StatsScreen({
       </header>
 
       <div className="flex flex-col gap-6">
+        {hasUnhydratedArchives && (
+          <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-xs font-semibold text-brand-sage-dark">
+            {scopeHint}
+          </div>
+        )}
+
         {/* Grid statistics highlights */}
         <section className="grid grid-cols-3 gap-3">
           <div className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border text-center flex flex-col gap-1 shadow-sm">
@@ -253,13 +499,13 @@ export default function StatsScreen({
           <div className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border text-center flex flex-col gap-1 shadow-sm">
             <BookOpen className="w-5 h-5 text-brand-sage mx-auto" />
             <span className="text-xl font-bold text-brand-plum mt-1">{entries.length}</span>
-            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">Entries</span>
+            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">{hasUnhydratedArchives ? 'Downloaded' : 'Entries'}</span>
           </div>
 
           <div className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border text-center flex flex-col gap-1 shadow-sm">
             <Camera className="w-5 h-5 text-brand-pink mx-auto" />
             <span className="text-xl font-bold text-brand-plum mt-1">{totalPhotos}</span>
-            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">Photos</span>
+            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">{hasUnhydratedArchives ? 'DL Photos' : 'Photos'}</span>
           </div>
         </section>
 
@@ -668,7 +914,7 @@ export default function StatsScreen({
                     </span>
                   </div>
                   <p className="text-xs text-brand-plum/85 line-clamp-3 leading-relaxed font-serif-diary italic">
-                    {selectedPixelEntry.body.replace(/<[^>]*>/g, '')}
+                    {richTextHtmlToPlainText(selectedPixelEntry.body)}
                   </p>
                   <div className="flex justify-between items-center pt-2 border-t border-brand-border/40">
                     <div className="flex gap-1.5">
@@ -758,7 +1004,7 @@ export default function StatsScreen({
 
               {/* Heatmap Grid */}
               <div className="grid grid-cols-10 gap-2.5 py-2">
-                {heatmap.map((item, idx) => {
+                {heatmap.map((item) => {
                   const bgClass = 
                     item.weight === 0 ? 'bg-brand-bg border-brand-border/40' :
                     item.weight === 1 ? 'bg-brand-blush-light text-brand-pink/50' :
@@ -836,13 +1082,12 @@ export default function StatsScreen({
                       onClick={() => onNavigate('diaries', 'diaryDetail', photo.diaryId, photo.entryId)}
                       className="aspect-square rounded-2xl overflow-hidden relative shadow-sm border border-brand-border cursor-pointer group hover:shadow-md transition-all"
                     >
-                      <img 
-                        src={photo.src} 
-                        alt="" 
+                      <SyncedImage
+                        src={photo.src}
+                        alt=""
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1517842645767-c639042777db?w=600";
-                        }}
+                        fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                        label="photo memory"
                       />
                       <div className="absolute inset-x-2 bottom-2 bg-brand-card-bg/95 backdrop-blur-md px-2.5 py-1 rounded-xl text-[9px] font-bold text-brand-plum truncate flex justify-between shadow-sm border border-brand-border/20">
                         <span>{photo.date}</span>

@@ -1,4 +1,4 @@
-import type { AppSettings, BackupMergePreview, BackupMergeResult, Diary, Entry, Mood, Note } from '../types';
+import type { AppSettings, BackupMergePreview, BackupMergeResult, Diary, Mood, Note } from '../types';
 import type { RepositorySnapshot } from '../repositories/DiaryRepository';
 
 export type MergeIdFactory = (kind: 'diary' | 'entry' | 'note', sourceId: string) => string;

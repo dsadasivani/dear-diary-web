@@ -1,14 +1,15 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
-const nativeDebug = process.env.CAPACITOR_DEBUG === 'true';
+const webViewDebug = process.env.CAPACITOR_WEBVIEW_DEBUG === 'true' || process.env.CAPACITOR_DEBUG === 'true';
+const bridgeLogging = process.env.CAPACITOR_BRIDGE_LOGGING === 'true';
 
 const config: CapacitorConfig = {
   appId: 'com.deardiary.app',
   appName: 'Dear Diary',
   webDir: 'dist',
   android: {
-    loggingBehavior: nativeDebug ? 'debug' : 'none',
-    webContentsDebuggingEnabled: nativeDebug,
+    loggingBehavior: bridgeLogging ? 'debug' : 'none',
+    webContentsDebuggingEnabled: webViewDebug,
   },
   plugins: {
     CapacitorSQLite: {

@@ -46,15 +46,17 @@ npm run cap:sync
 
 Then open the generated iOS project with Xcode.
 
-## Google Drive Backup Notes
+## Google Drive and Sync Notes
 
-- Dear Diary is local-first. Device storage is the source of truth; Google Drive is used only for scheduled/on-demand backup and restore, never record synchronization.
+- Dear Diary is local-first at the UI/repository boundary. Optional encrypted sync stores metadata in Supabase and encrypted objects in Google Drive `appDataFolder`.
+- Native scheduled/on-demand backup still uses Google Drive backup bundles. Encrypted multi-device sync uses separate encrypted event, media, snapshot, manifest, and key-package objects.
 - Drive backups use the `https://www.googleapis.com/auth/drive.appdata` scope and are stored in the hidden Google Drive `appDataFolder`.
 - Drive backups can optionally be end-to-end encrypted with a separate passphrase. The random master key is cached in Android secure storage for background work; the passphrase is never stored and cannot be reset. Legacy/plaintext backups remain supported.
 - The linked Google identity is persisted in Android Keystore-protected storage and SQLite. OAuth access tokens are never persisted; `AuthorizationClient` obtains fresh account-specific authorization before Drive work.
 - Automatic backup supports Off, Daily, or Weekly with a preferred local time and Wi-Fi-only or any-network policy. Android WorkManager may delay the preferred time for Doze or unmet constraints.
 - Backups are atomically staged in app-private storage before upload. The worker uses resumable Drive uploads, exponential retry, and retention of the five newest successful bundles.
 - Backup lineage records the device, portable content revision, and parent backup. After restore, the new device creates a checkpoint; an older device cannot silently replace that lineage through automatic backup.
+- Primary-device recovery and companion revocation use server-backed two-phase RPCs. Devices are not revoked and key epochs are not advanced until restore/package distribution succeeds.
 - Backup discovery offers Replace, Safe Merge, or Keep Local. Safe Merge never deletes local content and preserves divergent records as recovered copies; snapshot deletions are not synchronized.
 - Choosing Continue Local after discovering an existing cloud backup blocks cloud writes until the user explicitly chooses Start Fresh From This Device.
 - Existing Firestore data from older builds is left untouched, but the app no longer reads or writes Firestore.
@@ -68,12 +70,12 @@ Then open the generated iOS project with Xcode.
 
 Missing Drive API enablement produces a clear API-disabled backup error. Revoked consent or a removed account moves the connection to reauthorization-required state; ordinary navigation and process restarts do not require reconnection.
 
-## Phase 2 Progress
+## Current Native Implementation
 
 - Native builds load all journal, settings, profile, security, and backup metadata through the async repository. Diary data is no longer hydrated into `localStorage`; only the non-sensitive diary view preference is mirrored for the UI.
 - Native storage is now backed by encrypted SQLite through `@capacitor-community/sqlite` with SQLCipher enabled in Capacitor config.
 - The SQLite encryption secret is generated on device and stored through `@aparajita/capacitor-secure-storage`; the SQLite plugin also receives the secret for encrypted database access.
-- On first migrated native launch, existing Capacitor Preferences values are copied into SQLite, collection counts are verified, and only then is migration marked complete. Preferences are retained as a one-release fallback.
+- On first migrated native launch, existing Capacitor Preferences values are copied into SQLite, collection counts are verified, and only then is migration marked complete. Preferences are migration input only; runtime native writes fail closed if encrypted SQLite cannot open.
 - All diary, entry, note, settings, profile, security, Drive metadata, manual export, and Drive restore operations use the serialized async repository.
 - SQLite maintains normalized tables for `diaries`, `entries`, `entry_blocks`, `notes`, `media_assets`, `app_settings`, `user_profile`, and `storage_meta`. Its internal `kv_store` is retained only as a migration/format compatibility record, not as a UI data source.
 - Multi-record snapshot restores use one native SQLite transaction, preventing partially restored application state.
@@ -90,7 +92,7 @@ Missing Drive API enablement produces a clear API-disabled backup error. Revoked
 
 ## Known Limitations
 
-- The legacy media migration needs physical-device QA with large photo/audio libraries and interrupted launches before the fallback can be retired.
+- The legacy media migration needs physical-device QA with large photo/audio libraries, interrupted launches, retry behavior, and low-storage cases.
 - Android is the complete background-backup target. iOS still uses local export/import until an equivalent native scheduler and authorization bridge are implemented.
 - Android Settings > Apps > Dear Diary > Clear storage is destructive. It deletes local diary data, encrypted SQLite, secure storage secrets, Preferences, Google backup link metadata, and the app PIN hash/salt. Android OS backup/device transfer is disabled to avoid restoring encrypted SQLite without its key; use Drive or a `.ddbackup` archive.
 - Native speech recognition depends on Android speech services and microphone permission. If unavailable, the app shows a graceful message; audio recording still works through the native recorder.
@@ -99,8 +101,8 @@ Missing Drive API enablement produces a clear API-disabled backup error. Revoked
 ## Release Checklist
 
 - Complete physical-device upgrade QA for Preferences-to-SQLite and data-URI-to-file migrations, including interruption and low-storage cases.
-- Verify backup scheduling, interrupted resumable upload, token revocation, and two-device ownership transfer with production-signed physical devices.
-- Remove legacy Capacitor Preferences fallback after one stable release with successful SQLite migration.
+- Verify backup scheduling, interrupted resumable upload, token revocation, two-phase primary recovery, and two-phase companion revocation/key rotation with production-signed physical devices.
+- Verify native secure-storage failure behavior: encrypted SQLite initialization failure must show a secure-storage error and must not fall back to Preferences for runtime writes.
 - Add cloud/device recovery education for users who intentionally clear OS app storage.
 - Verify the generated production icons/splash on target densities and configure external signing credentials from `android/keystore.properties.example`.
 
@@ -109,7 +111,7 @@ Missing Drive API enablement produces a clear API-disabled backup error. Revoked
 - Preferences-to-SQLite and data-URI-to-file migration with a large library, interrupted launch, retry, and low storage.
 - Encrypted Drive/local archive restore with correct, wrong, changed, and lost passphrases; verify legacy plaintext and legacy `.txt` compatibility.
 - Scheduled WorkManager execution under Doze, Wi-Fi/cellular policy, battery/storage constraints, revoked consent, expired upload sessions, and transient Drive failures.
-- Two-device lineage: replacement restore, safe merge with diary/entry/note conflicts, Keep Local cloud-write block, and explicit ownership transfer.
+- Two-device lineage: replacement restore, safe merge with diary/entry/note conflicts, Keep Local cloud-write block, two-phase primary recovery, and companion revocation/key rotation.
 - Audio Note and Dictate Text with permissions denied, browser support absent, Android speech services disabled, and network loss during dictation.
 - Android Clear Storage followed by recovery from Drive and `.ddbackup`.
 - Production-signed OAuth SHA-1, release APK/AAB installation, adaptive/round launcher icons, light/dark splash rendering, and WebView debugging disabled.

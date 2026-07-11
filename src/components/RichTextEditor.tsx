@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from 'react';
+import { sanitizeRichTextHtml } from '../domain/richTextSanitizer';
 
 interface RichTextEditorProps {
   html: string;
@@ -12,13 +13,27 @@ export default function RichTextEditor({ html, onChange, onFocus, placeholder, c
   const contentEditableRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (contentEditableRef.current && contentEditableRef.current.innerHTML !== html) {
-      contentEditableRef.current.innerHTML = html;
+    const sanitized = sanitizeRichTextHtml(html);
+    if (contentEditableRef.current && contentEditableRef.current.innerHTML !== sanitized) {
+      contentEditableRef.current.innerHTML = sanitized;
     }
   }, [html]);
 
   const handleInput = (e: React.FormEvent<HTMLDivElement>) => {
-    onChange(e.currentTarget.innerHTML);
+    onChange(sanitizeRichTextHtml(e.currentTarget.innerHTML));
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const htmlContent = e.clipboardData.getData('text/html');
+    const textContent = e.clipboardData.getData('text/plain');
+    const pasted = htmlContent || textContent;
+    if (!pasted) return;
+    document.execCommand(
+      htmlContent ? 'insertHTML' : 'insertText',
+      false,
+      htmlContent ? sanitizeRichTextHtml(htmlContent) : textContent,
+    );
   };
 
   return (
@@ -26,6 +41,7 @@ export default function RichTextEditor({ html, onChange, onFocus, placeholder, c
       ref={contentEditableRef}
       contentEditable
       onInput={handleInput}
+      onPaste={handlePaste}
       onFocus={onFocus}
       className={`focus:outline-none focus:ring-0 empty:before:content-[attr(data-placeholder)] empty:before:text-brand-plum/40 ${className}`}
       data-placeholder={placeholder}

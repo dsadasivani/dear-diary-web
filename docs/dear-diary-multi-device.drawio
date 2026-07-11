@@ -1,0 +1,119 @@
+<mxfile host="app.diagrams.net" modified="2026-07-05T00:00:00.000Z" agent="Codex" version="24.7.17">
+  <diagram id="dear-diary-multi-device" name="Dear Diary Multi-Device Sync">
+    <mxGraphModel dx="1560" dy="960" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Dear Diary Multi-Device Sync&#xa;Google identity + Supabase metadata + encrypted Drive data" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#4B2E4C;" vertex="1" parent="1">
+          <mxGeometry x="330" y="20" width="740" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mobile" value="Primary Mobile&#xa;• Account creation&#xa;• One active primary&#xa;• E2EE root key holder&#xa;• Approves companions&#xa;• Local encrypted cache + PIN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCE7F3;strokeColor=#BE5B8C;fontColor=#4B2E4C;fontSize=14;align=left;spacing=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="190" width="250" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="web" value="Web Companion&#xa;• Existing account only&#xa;• Google login&#xa;• QR/pairing approval&#xa;• Online edits only&#xa;• Local cache is not authority" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#123047;fontSize=14;align=left;spacing=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="450" width="250" height="160" as="geometry" />
+        </mxCell>
+
+        <mxCell id="desktop" value="Future Desktop Companion&#xa;• Same companion model&#xa;• Existing account only&#xa;• Online edits only&#xa;• Revoked on primary transfer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontColor=#123047;fontSize=14;align=left;spacing=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="650" width="250" height="140" as="geometry" />
+        </mxCell>
+
+        <mxCell id="google" value="Google Sign-In&#xa;Identity provider only&#xa;OAuth proves Google user" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontColor=#5B3A00;fontSize=14;align=center;" vertex="1" parent="1">
+          <mxGeometry x="500" y="120" width="230" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="supabase" value="Supabase Control Plane&#xa;Metadata only&#xa;&#xa;• Accounts&#xa;• Active primary mobile&#xa;• Device registry&#xa;• Pairing sessions&#xa;• Sync sequence/cursors&#xa;• Drive file IDs + hashes&#xa;• Realtime notifications&#xa;&#xa;Never stores journal plaintext" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontColor=#153A24;fontSize=14;align=left;spacing=12;" vertex="1" parent="1">
+          <mxGeometry x="480" y="310" width="280" height="260" as="geometry" />
+        </mxCell>
+
+        <mxCell id="drive" value="Google Drive appDataFolder&#xa;Encrypted data plane in user's Drive storage&#xa;&#xa;• Encrypted event chunks&#xa;• Encrypted media blobs&#xa;• Encrypted periodic snapshots&#xa;• Encrypted root-key recovery package&#xa;&#xa;Hidden from normal Drive UI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#7E22CE;fontColor=#33124D;fontSize=14;align=left;spacing=12;" vertex="1" parent="1">
+          <mxGeometry x="930" y="300" width="310" height="240" as="geometry" />
+        </mxCell>
+
+        <mxCell id="passphrase" value="Recovery Passphrase&#xa;12+ characters&#xa;Never stored&#xa;Wraps account root key&#xa;Required when primary mobile is lost" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE4E6;strokeColor=#E11D48;fontColor=#5D1023;fontSize=14;align=center;" vertex="1" parent="1">
+          <mxGeometry x="500" y="660" width="250" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="events" value="Encrypted Sync Event&#xa;create / update / delete&#xa;record version + sequence" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#1F2937;fontSize=13;align=center;" vertex="1" parent="1">
+          <mxGeometry x="950" y="610" width="180" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="snapshot" value="Encrypted Snapshot&#xa;Periodic compaction&#xa;Restore checkpoint" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#FFFFFF;strokeColor=#64748B;fontColor=#1F2937;fontSize=13;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="610" width="180" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="localcache" value="Local Encrypted Cache&#xa;Fast loading only&#xa;Not cloud authority&#xa;Writes disabled offline" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;fontColor=#334155;fontSize=13;align=center;" vertex="1" parent="1">
+          <mxGeometry x="500" y="835" width="250" height="105" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_google_mobile" value="Google Sign-In" style="endArrow=block;html=1;rounded=0;strokeColor=#D97706;fontColor=#5B3A00;" edge="1" parent="1" source="mobile" target="google">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_google_web" value="Google Sign-In" style="endArrow=block;html=1;rounded=0;strokeColor=#D97706;fontColor=#5B3A00;" edge="1" parent="1" source="web" target="google">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_google_desktop" value="Google Sign-In" style="endArrow=block;html=1;rounded=0;strokeColor=#D97706;fontColor=#5B3A00;" edge="1" parent="1" source="desktop" target="google">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_mobile_supabase" value="device/account metadata&#xa;sync commit" style="endArrow=block;html=1;rounded=0;strokeColor=#16A34A;fontColor=#153A24;" edge="1" parent="1" source="mobile" target="supabase">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_web_supabase" value="device status&#xa;realtime cursor" style="endArrow=block;html=1;rounded=0;strokeColor=#16A34A;fontColor=#153A24;" edge="1" parent="1" source="web" target="supabase">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_desktop_supabase" value="device status&#xa;realtime cursor" style="endArrow=block;html=1;rounded=0;strokeColor=#16A34A;fontColor=#153A24;" edge="1" parent="1" source="desktop" target="supabase">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_supabase_drive" value="Drive object IDs&#xa;hashes, sizes, sequences" style="endArrow=block;startArrow=block;html=1;rounded=0;strokeColor=#64748B;fontColor=#334155;" edge="1" parent="1" source="supabase" target="drive">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_mobile_drive" value="upload/fetch encrypted events&#xa;media + snapshots" style="endArrow=block;html=1;rounded=0;strokeColor=#7E22CE;fontColor=#33124D;" edge="1" parent="1" source="mobile" target="drive">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="360" y="260" as="sourcePoint" />
+            <mxPoint x="930" y="340" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_web_drive" value="fetch/upload encrypted objects&#xa;only while online" style="endArrow=block;html=1;rounded=0;strokeColor=#7E22CE;fontColor=#33124D;" edge="1" parent="1" source="web" target="drive">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_desktop_drive" value="future encrypted fetch/upload" style="endArrow=block;html=1;rounded=0;strokeColor=#7E22CE;fontColor=#33124D;" edge="1" parent="1" source="desktop" target="drive">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_passphrase_drive" value="unwraps encrypted root-key package&#xa;on new primary recovery" style="endArrow=block;html=1;rounded=0;strokeColor=#E11D48;fontColor=#5D1023;" edge="1" parent="1" source="passphrase" target="drive">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_mobile_web" value="QR approval + wrapped device key" style="endArrow=block;html=1;rounded=0;strokeColor=#BE5B8C;fontColor=#4B2E4C;dashed=1;" edge="1" parent="1" source="mobile" target="web">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_drive_events" value="stores" style="endArrow=block;html=1;rounded=0;strokeColor=#7E22CE;fontColor=#33124D;" edge="1" parent="1" source="drive" target="events">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_drive_snapshot" value="stores" style="endArrow=block;html=1;rounded=0;strokeColor=#7E22CE;fontColor=#33124D;" edge="1" parent="1" source="drive" target="snapshot">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_mobile_cache" value="encrypted cache" style="endArrow=block;html=1;rounded=0;strokeColor=#64748B;fontColor=#334155;" edge="1" parent="1" source="mobile" target="localcache">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_web_cache" value="optional encrypted cache" style="endArrow=block;html=1;rounded=0;strokeColor=#64748B;fontColor=#334155;" edge="1" parent="1" source="web" target="localcache">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="boundary" value="Trust Boundary&#xa;Plaintext exists only inside unlocked client devices" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#EF4444;fontColor=#7F1D1D;fontSize=13;align=center;" vertex="1" parent="1">
+          <mxGeometry x="40" y="110" width="360" height="730" as="geometry" />
+        </mxCell>
+
+        <mxCell id="serverboundary" value="Server/Cloud Boundary&#xa;Supabase sees metadata. Drive sees encrypted bytes." style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#64748B;fontColor=#334155;fontSize=13;align=center;" vertex="1" parent="1">
+          <mxGeometry x="450" y="100" width="830" height="700" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

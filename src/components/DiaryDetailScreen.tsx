@@ -1,49 +1,70 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ArrowLeft, Edit, Download, Settings, ChevronLeft, ChevronRight, 
-  Smile, Tag, Camera, Plus, Trash2, Calendar, X, Maximize2,
-  Search, List, Printer, FileText, ArrowUpRight, Clock, HelpCircle,
-  MoreVertical
+  Plus, Calendar, X, Maximize2,
+  Search, List, Clock, HelpCircle,
+  MoreVertical, RefreshCw
 } from 'lucide-react';
-import { Diary, Entry } from '../types';
+import { Diary, Entry, PartitionHydrationState, ResponsiveLayout } from '../types';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import { diaryRepository } from '../repositories';
-import { exportDiaryArchive } from '../utils/diaryArchive';
-import { BACKUP_PASSPHRASE_MIN_LENGTH } from '../utils/backupEncryption';
 import OverlayPortal from './OverlayPortal';
+import SyncedImage from './SyncedImage';
+import SanitizedRichText from './SanitizedRichText';
+import { resolveEntryIndexForEntryId } from './diaryDetailNavigation';
+import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import { useScreenPerformance } from '../hooks/useScreenPerformance';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
-  entries: Entry[];
+  entryId?: string;
+  layout?: ResponsiveLayout;
   onBack: () => void;
   onEditEntry: (entryId: string) => void;
   onNewEntry: (diaryId: string, dateStr?: string) => void;
   onOpenSettings: (diaryId: string) => void;
   onRefreshEntries?: () => void | Promise<void>;
+  archiveMonths?: PartitionHydrationState[];
+  onHydrateArchiveMonth?: (partitionKey: string) => void | Promise<void>;
 }
+
+const sortDiaryEntries = (entries: Entry[]) =>
+  [...entries].sort((a, b) => `${b.date} ${b.time || ''}`.localeCompare(`${a.date} ${a.time || ''}`));
+
+const mergeDiaryEntries = (entries: Entry[]) => {
+  const byId = new Map<string, Entry>();
+  entries.forEach(entry => byId.set(entry.id, entry));
+  return sortDiaryEntries([...byId.values()]);
+};
+
+const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): string => {
+  if (!archiveState || archiveState.status !== 'failed') return '';
+  if (archiveState.nextRetryAt && archiveState.nextRetryAt > Date.now()) {
+    return `Background restore will retry after ${new Date(archiveState.nextRetryAt).toLocaleString()}. You can retry manually now.`;
+  }
+  return 'The previous restore attempt failed. You can retry manually now.';
+};
 
 export default function DiaryDetailScreen({
   diary,
-  entries,
+  entryId,
+  layout = 'mobile',
   onBack,
   onEditEntry,
   onNewEntry,
   onOpenSettings,
-  onRefreshEntries
+  onRefreshEntries,
+  archiveMonths = [],
+  onHydrateArchiveMonth,
 }: DiaryDetailScreenProps) {
-  // Filter entries for this specific diary (newest first)
-  const diaryEntries = useMemo(() => {
-    return entries
-      .filter(e => e.diaryId === diary.id)
-      .sort((a, b) => b.date.localeCompare(a.date));
-  }, [entries, diary.id]);
+  useScreenPerformance('diaryDetail');
+  const [diaryEntries, setDiaryEntries] = useState<Entry[]>([]);
+  const [calendarEntryDates, setCalendarEntryDates] = useState<Set<string>>(() => new Set());
 
   // Traversal & Search State
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showTOC, setShowTOC] = useState<boolean>(false);
-  const [showExportModal, setShowExportModal] = useState<boolean>(false);
-  const [showPrintPreview, setShowPrintPreview] = useState<boolean>(false);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   const [slideDirection, setSlideDirection] = useState<'left' | 'right'>('right');
@@ -59,6 +80,61 @@ export default function DiaryDetailScreen({
     const today = new Date();
     return today.getMonth(); // 0-11
   });
+  const [hydratingArchiveKey, setHydratingArchiveKey] = useState<string | null>(null);
+  const [archiveHydrationError, setArchiveHydrationError] = useState<string>('');
+
+  const loadDiaryEntries = useCallback(async () => {
+    const page = await diaryRepository.listEntriesByDiary(diary.id, {
+      includeBody: true,
+      limit: 200,
+      sort: 'date-desc',
+    });
+    let nextEntries = page.items as Entry[];
+    if (entryId && !nextEntries.some(entry => entry.id === entryId)) {
+      const deepLinkedEntry = await diaryRepository.getEntry(entryId);
+      if (deepLinkedEntry?.diaryId === diary.id) {
+        nextEntries = [deepLinkedEntry, ...nextEntries];
+      }
+    }
+    setDiaryEntries(mergeDiaryEntries(nextEntries));
+  }, [diary.id, entryId]);
+
+  const visibleYearMonth = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
+
+  const loadVisibleCalendarMonth = useCallback(async () => {
+    const page = await diaryRepository.listEntriesByMonth(diary.id, visibleYearMonth, {
+      includeBody: false,
+      limit: 80,
+      sort: 'date-asc',
+    });
+    setCalendarEntryDates(new Set(page.items.map(entry => entry.date)));
+  }, [diary.id, visibleYearMonth]);
+
+  React.useEffect(() => {
+    void loadDiaryEntries();
+    return diaryRepository.subscribeChanges((_revision, change) => {
+      if (
+        !change ||
+        change.type === 'remote-batch-applied' ||
+        (change.type.startsWith('entry-') && ('diaryId' in change ? change.diaryId === diary.id : true))
+      ) {
+        void loadDiaryEntries();
+      }
+    });
+  }, [diary.id, loadDiaryEntries]);
+
+  React.useEffect(() => {
+    void loadVisibleCalendarMonth();
+    return diaryRepository.subscribeChanges((_revision, change) => {
+      if (
+        !change ||
+        change.type === 'remote-batch-applied' ||
+        (change.type.startsWith('entry-') && ('diaryId' in change ? change.diaryId === diary.id : true))
+      ) {
+        void loadVisibleCalendarMonth();
+      }
+    });
+  }, [diary.id, loadVisibleCalendarMonth]);
 
   // Swipe Gestures refs
   const touchStartX = useRef<number | null>(null);
@@ -70,7 +146,7 @@ export default function DiaryDetailScreen({
     const query = searchQuery.toLowerCase();
     return diaryEntries.filter(entry => 
       entry.title.toLowerCase().includes(query) ||
-      entry.body.toLowerCase().includes(query) ||
+      richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
       entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
       entry.moodName.toLowerCase().includes(query)
     );
@@ -90,6 +166,11 @@ export default function DiaryDetailScreen({
     if (!activeEntry || filteredEntries.length === 0) return -1;
     return filteredEntries.findIndex(e => e.id === activeEntry.id);
   }, [filteredEntries, activeEntry]);
+
+  React.useEffect(() => {
+    if (!entryId) return;
+    setCurrentIndex(resolveEntryIndexForEntryId(diaryEntries, entryId));
+  }, [entryId, diaryEntries]);
 
   const handlePrev = () => {
     if (activeEntryIndex < filteredEntries.length - 1) {
@@ -168,21 +249,20 @@ export default function DiaryDetailScreen({
     return uris;
   }, [activeEntry]);
 
-  const formatFullDate = (dateStr: string) => {
-    if (!dateStr) return '';
-    const dateObj = new Date(dateStr + 'T12:00:00'); // enforce local timezone parsing
-    return dateObj.toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
-
   const MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June", 
     "July", "August", "September", "October", "November", "December"
   ];
+
+  const partitionKeyForDate = (dateStr: string) => `month:${dateStr.slice(0, 7)}`;
+  const visibleCalendarPartitionKey = `month:${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
+  const visibleArchiveState = archiveMonths.find(month => month.partitionKey === visibleCalendarPartitionKey);
+  const visibleArchiveNeedsHydration = Boolean(
+    visibleArchiveState
+    && visibleArchiveState.status !== 'hydrated'
+    && visibleArchiveState.status !== 'not_available'
+  );
+  const visibleArchiveRetryStatus = formatArchiveRetryStatus(visibleArchiveState);
 
   // Calculate days for the calendar grid
   const calendarDays = useMemo(() => {
@@ -221,13 +301,48 @@ export default function DiaryDetailScreen({
     return days;
   }, [calendarYear, calendarMonth]);
 
-  const handleCalendarDayClick = (dateStr: string) => {
+  const handleCalendarDayClick = async (dateStr: string) => {
+    const clickedPartitionKey = partitionKeyForDate(dateStr);
+    const clickedArchiveState = archiveMonths.find(month => month.partitionKey === clickedPartitionKey);
+    if (
+      clickedArchiveState
+      && clickedArchiveState.status !== 'hydrated'
+      && clickedArchiveState.status !== 'not_available'
+      && onHydrateArchiveMonth
+    ) {
+      setHydratingArchiveKey(clickedPartitionKey);
+      setArchiveHydrationError('');
+      try {
+        await onHydrateArchiveMonth(clickedPartitionKey);
+      } catch (error: any) {
+        setArchiveHydrationError(error?.message || 'Could not restore this archive month.');
+      } finally {
+        setHydratingArchiveKey(null);
+      }
+      return;
+    }
+
     // Check if there are entries on this date in this diary
-    const entryForDate = diaryEntries.find(e => e.date === dateStr);
+    let entryForDate = diaryEntries.find(e => e.date === dateStr);
+    let mergedEntriesForDate: Entry[] | null = null;
+    if (!entryForDate && calendarEntryDates.has(dateStr)) {
+      const monthEntries = await diaryRepository.listEntriesByMonth(diary.id, dateStr.slice(0, 7), {
+        includeBody: true,
+        limit: 80,
+        sort: 'date-desc',
+      });
+      const loadedMonthEntries = monthEntries.items as Entry[];
+      entryForDate = loadedMonthEntries.find(e => e.date === dateStr);
+      if (entryForDate) {
+        mergedEntriesForDate = mergeDiaryEntries([...diaryEntries, ...loadedMonthEntries]);
+        setDiaryEntries(mergedEntriesForDate);
+      }
+    }
     if (entryForDate) {
       // Navigate to it
-      const realIndex = diaryEntries.findIndex(e => e.id === entryForDate.id);
-      setCurrentIndex(realIndex);
+      const sourceEntries = mergedEntriesForDate || diaryEntries;
+      const realIndex = sourceEntries.findIndex(e => e.id === entryForDate.id);
+      setCurrentIndex(realIndex >= 0 ? realIndex : 0);
       setSearchQuery(''); // clear query to show it
       setShowCalendar(false);
     } else {
@@ -235,54 +350,6 @@ export default function DiaryDetailScreen({
       onNewEntry(diary.id, dateStr);
       setShowCalendar(false);
     }
-  };
-
-  // Point 2: Actual export functions
-  const handleExportText = () => {
-    const header = `=========================================\n${diary.name.toUpperCase()} JOURNAL EXPORT\n=========================================\nGenerated on: ${new Date().toLocaleDateString()}\nTotal entries exported: ${diaryEntries.length}\n\n`;
-    const content = diaryEntries.map((e, idx) => {
-      const cleanBody = e.body.replace(/<[^>]*>/g, ''); // strip HTML tags
-      const formattedTime = e.time ? ` @ ${formatTime12(e.time)}` : '';
-      return `Page ${idx + 1} | ${formatFullDate(e.date)}${formattedTime}\nMood: ${e.moodEmoji} ${e.moodName}\nTags: ${e.tags.map(t => `#${t}`).join(', ') || 'None'}\nTitle: ${e.title}\n-----------------------------------------\n${cleanBody}\n\n\n`;
-    }).join('\n');
-
-    const blob = new Blob([header + content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${diary.name.toLowerCase().replace(/\s+/g, '_')}_export.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setShowExportModal(false);
-  };
-
-  const handleExportJSON = async () => {
-    const passphrase = window.prompt(`Choose a password of at least ${BACKUP_PASSPHRASE_MIN_LENGTH} characters for this portable diary archive.`);
-    if (passphrase === null) return;
-    if (passphrase.length < BACKUP_PASSPHRASE_MIN_LENGTH) {
-      window.alert(`Password must contain at least ${BACKUP_PASSPHRASE_MIN_LENGTH} characters.`);
-      return;
-    }
-    try {
-      const bytes = await exportDiaryArchive(diary, diaryEntries, passphrase);
-      const blob = new Blob([bytes], { type: 'application/vnd.deardiary.diary-archive' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${diary.name.toLowerCase().replace(/\s+/g, '_')}.ddiary`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setShowExportModal(false);
-    } catch (error: any) {
-      window.alert(error?.message || 'Diary archive could not be created.');
-    }
-  };
-
-  const triggerPrint = () => {
-    setShowPrintPreview(false);
-    setTimeout(() => {
-      window.print();
-    }, 300);
   };
 
   // 3D paper fold and curling variants (Point 4)
@@ -316,6 +383,291 @@ export default function DiaryDetailScreen({
       }
     })
   };
+
+  if (layout === 'desktop') {
+    return (
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[270px_minmax(0,1fr)] xl:gap-7 2xl:grid-cols-[290px_minmax(0,1fr)_280px] 2xl:gap-8">
+        <aside className="xl:sticky xl:top-6 flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-[26px] border border-brand-border bg-white/68 shadow-[0_18px_55px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/55">
+          <div className="border-b border-brand-border p-5">
+            <button
+              type="button"
+              onClick={onBack}
+              className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-brand-sage transition-colors hover:text-brand-pink"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to library
+            </button>
+            <div className="flex items-center gap-3">
+              <span className="flex h-12 w-12 items-center justify-center rounded-2xl text-2xl shadow-inner" style={{ backgroundColor: diary.color }}>
+                {diary.emoji}
+              </span>
+              <div className="min-w-0">
+                <h1 className="truncate font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{diary.name}</h1>
+                <p className="text-xs font-semibold text-brand-text-muted">{diaryEntries.length} entries</p>
+              </div>
+            </div>
+            <div className="relative mt-5">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search entries..."
+                className="w-full rounded-full border border-brand-border bg-brand-bg/65 py-2.5 pl-10 pr-4 text-sm font-semibold text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+              />
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {filteredEntries.map((entry) => {
+              const isSelected = activeEntry?.id === entry.id;
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  onClick={() => {
+                    const realIndex = diaryEntries.findIndex(candidate => candidate.id === entry.id);
+                    setCurrentIndex(realIndex);
+                  }}
+                  className={`block w-full border-l-4 px-6 py-5 text-left transition-all ${
+                    isSelected
+                      ? 'border-brand-sage bg-brand-sage-light/36'
+                      : 'border-transparent hover:bg-brand-blush-light/45'
+                  }`}
+                >
+                  <p className="text-sm font-bold text-brand-sage">{new Date(entry.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                  <h2 className="mt-2 font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">{entry.title || 'Untitled reflection'}</h2>
+                  <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{richTextHtmlToPlainText(entry.body)}</p>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {entry.tags.slice(0, 3).map(tag => (
+                      <span key={tag} className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold text-brand-sage-dark">
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-brand-border p-5">
+            <button
+              type="button"
+              onClick={() => onNewEntry(diary.id)}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-sage px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark"
+            >
+              <Plus className="h-4 w-4" />
+              New Entry
+            </button>
+          </div>
+        </aside>
+
+        <main className="min-w-0">
+          {diaryEntries.length === 0 ? (
+            <section className="flex min-h-[560px] flex-col items-center justify-center rounded-2xl border border-brand-border bg-white/70 p-12 text-center shadow-sm dark:bg-brand-card-bg/70">
+              <Calendar className="h-12 w-12 text-brand-sage" />
+              <h2 className="mt-6 font-serif-diary text-4xl font-bold text-brand-plum dark:text-brand-text">A Clean Canvas Awaits</h2>
+              <p className="mt-3 max-w-md text-sm leading-relaxed text-brand-text-muted">Every intimate story begins with a single silent word.</p>
+              <button
+                type="button"
+                onClick={() => onNewEntry(diary.id)}
+                className="mt-7 inline-flex items-center gap-2 rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white"
+              >
+                <Plus className="h-4 w-4" />
+                Write the First Page
+              </button>
+            </section>
+          ) : !activeEntry || filteredEntries.length === 0 ? (
+            <section className="rounded-2xl border border-dashed border-brand-border bg-white/55 p-12 text-center">
+              <Search className="mx-auto h-10 w-10 text-brand-sage" />
+              <h2 className="mt-4 font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">No pages found</h2>
+              <button type="button" onClick={() => setSearchQuery('')} className="mt-4 text-sm font-bold text-brand-pink">
+                Clear search
+              </button>
+            </section>
+          ) : (
+            <article className="rounded-[30px] border border-brand-border bg-white/86 px-7 py-8 shadow-[0_20px_65px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/80 xl:px-10 xl:py-10 2xl:px-12 2xl:py-11">
+              <div className="flex flex-wrap items-start justify-between gap-5 xl:gap-6">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-brand-sage">
+                    {diary.isLocked && <Lock className="h-4 w-4" />}
+                    {new Date(activeEntry.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                    {activeEntry.time && ` - ${formatTime12(activeEntry.time)}`}
+                  </p>
+                  <h1 className="mt-4 font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
+                    {activeEntry.title === 'Untitled entry' ? 'Untitled Reflection' : activeEntry.title}
+                  </h1>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onEditEntry(activeEntry.id)}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-pink px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-pink-dark"
+                >
+                  <Edit className="h-4 w-4" />
+                  Edit
+                </button>
+              </div>
+
+              <div className="mt-10 max-w-3xl font-serif-diary text-xl leading-[1.8] text-brand-plum/95 dark:text-brand-text xl:text-2xl">
+                {activeEntry.isTimelineBifurcated && activeEntry.blocks && activeEntry.blocks.length > 0 ? (
+                  <div className="space-y-8">
+                    {activeEntry.blocks.map(block => (
+                      <section key={block.id} className="border-l-2 border-brand-sage/25 pl-6">
+                        <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-brand-sage-light px-3 py-1 text-xs font-bold uppercase tracking-widest text-brand-sage-dark">
+                          <Clock className="h-3 w-3" />
+                          {formatTime12(block.time)}
+                        </p>
+                        <SanitizedRichText className="rich-text-editor-content" html={block.body} fallback={block.audioUri ? '' : 'No content written yet.'} />
+                        {block.audioUri && (
+                          <div className="mt-4 max-w-md">
+                            <AudioWaveformPlayer src={block.audioUri} title="Voice Moment" />
+                          </div>
+                        )}
+                      </section>
+                    ))}
+                  </div>
+                ) : (
+                  <SanitizedRichText className="rich-text-editor-content" html={activeEntry.body} fallback={!allAudioUris.length ? 'No content written yet.' : ''} />
+                )}
+              </div>
+
+              <footer className="mt-12 flex items-center justify-between border-t border-brand-border pt-6">
+                <button
+                  type="button"
+                  onClick={handlePrev}
+                  disabled={activeEntryIndex === filteredEntries.length - 1}
+                  className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage disabled:opacity-30"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                  Previous
+                </button>
+                <span className="text-xs font-bold uppercase tracking-[0.18em] text-brand-text-muted">
+                  Page {activeEntryIndex + 1} of {filteredEntries.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleNext}
+                  disabled={activeEntryIndex === 0}
+                  className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage disabled:opacity-30"
+                >
+                  Next
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+              </footer>
+            </article>
+          )}
+        </main>
+
+        <aside className="flex flex-col gap-5 overflow-visible xl:col-start-2 xl:row-start-2 2xl:sticky 2xl:top-8 2xl:col-start-auto 2xl:row-start-auto 2xl:max-h-[calc(100vh-10rem)] 2xl:overflow-y-auto">
+          {activeEntry && (
+            <>
+              <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Mood</h2>
+                <div className="mt-4 flex items-center gap-3 rounded-2xl bg-brand-bg/70 p-4">
+                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-sage-light text-2xl">{activeEntry.moodEmoji}</span>
+                  <div>
+                    <p className="font-bold text-brand-plum dark:text-brand-text">{activeEntry.moodName}</p>
+                    <p className="text-xs text-brand-text-muted">{activeEntry.wordCount} words</p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Tags</h2>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {activeEntry.tags.length > 0 ? activeEntry.tags.map(tag => (
+                    <span key={tag} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-sm font-bold text-brand-sage-dark">
+                      #{tag}
+                    </span>
+                  )) : (
+                    <p className="text-sm text-brand-text-muted">No tags yet.</p>
+                  )}
+                </div>
+              </section>
+
+              {allAudioUris.length > 0 && (
+                <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+                  <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Voice Notes</h2>
+                  <div className="mt-4 space-y-3">
+                    {allAudioUris.map((audio, index) => (
+                      <div key={`${audio.uri}-${index}`}>
+                        <AudioWaveformPlayer src={audio.uri} title={audio.title} variant="minimal" />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Scrapbook</h2>
+                  <span className="text-xs font-bold text-brand-text-muted">{activeEntry.photoUris?.length || 0}</span>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  {activeEntry.photoUris && activeEntry.photoUris.length > 0 ? activeEntry.photoUris.slice(0, 6).map((src, index) => (
+                    <button
+                      key={`${src}-${index}`}
+                      type="button"
+                      onClick={() => setLightboxImg(src)}
+                      className="aspect-square overflow-hidden rounded-xl border border-brand-border bg-brand-bg"
+                    >
+                      <SyncedImage
+                        src={src}
+                        alt={`Memory ${index + 1}`}
+                        className="h-full w-full object-cover transition-transform duration-500 hover:scale-105"
+                        fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                        label="entry photo"
+                      />
+                    </button>
+                  )) : (
+                    <p className="col-span-2 rounded-xl border border-dashed border-brand-border p-5 text-center text-sm text-brand-text-muted">No photos attached.</p>
+                  )}
+                </div>
+              </section>
+            </>
+          )}
+        </aside>
+
+        <AnimatePresence>
+          {lightboxImg && (
+            <OverlayPortal>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setLightboxImg(null)}
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-4 backdrop-blur-lg"
+              >
+                <button
+                  type="button"
+                  onClick={() => setLightboxImg(null)}
+                  className="absolute right-6 top-6 rounded-full bg-white/10 p-3 text-white transition-all hover:bg-white/20"
+                >
+                  <X className="h-6 w-6" />
+                </button>
+                <motion.div
+                  initial={{ scale: 0.95 }}
+                  animate={{ scale: 1 }}
+                  exit={{ scale: 0.95 }}
+                  className="relative max-h-[85vh] max-w-3xl overflow-hidden rounded-2xl shadow-2xl"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <SyncedImage
+                    src={lightboxImg}
+                    alt="Enlarged memory"
+                    className="max-h-[80vh] max-w-full rounded-2xl object-contain"
+                    referrerPolicy="no-referrer"
+                    fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=1200"
+                    label="entry photo"
+                  />
+                </motion.div>
+              </motion.div>
+            </OverlayPortal>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6 font-sans select-none relative">
@@ -375,17 +727,6 @@ export default function DiaryDetailScreen({
                 >
                   <Settings className="w-4 h-4 text-brand-pink" />
                   <span>Diary Cover Settings</span>
-                </button>
-                
-                <button
-                  onClick={() => {
-                    setShowMoreMenu(false);
-                    setShowExportModal(true);
-                  }}
-                  className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-xl transition-all text-left w-full"
-                >
-                  <Download className="w-4 h-4 text-brand-pink" />
-                  <span>Export / Backup Options</span>
                 </button>
               </div>
             </>
@@ -486,6 +827,60 @@ export default function DiaryDetailScreen({
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
+
+              {visibleArchiveNeedsHydration && (
+                <div className="rounded-2xl border border-brand-pink/20 bg-brand-pink/5 p-3 text-left">
+                  <div className="flex items-start gap-2">
+                    <Download className="mt-0.5 h-4 w-4 shrink-0 text-brand-pink" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-brand-pink">
+                        {visibleArchiveState?.status === 'failed'
+                          ? 'Archive restore needs retry'
+                          : 'Archive month not on this device'}
+                      </p>
+                      <p className="mt-1 text-[11px] font-medium leading-relaxed text-brand-text-muted">
+                        {visibleArchiveState?.status === 'failed'
+                          ? (visibleArchiveState.error || 'This encrypted archive month could not be restored last time.')
+                          : 'This month exists in your encrypted archive. Restore it before opening or creating entries here.'}
+                      </p>
+                      {visibleArchiveRetryStatus && (
+                        <p className="mt-1 text-[11px] font-semibold leading-relaxed text-brand-text-muted">
+                          {visibleArchiveRetryStatus}
+                        </p>
+                      )}
+                      {archiveHydrationError && (
+                        <p className="mt-1 text-[11px] font-bold text-red-500">{archiveHydrationError}</p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={hydratingArchiveKey === visibleCalendarPartitionKey}
+                    onClick={async () => {
+                      if (!onHydrateArchiveMonth) return;
+                      setHydratingArchiveKey(visibleCalendarPartitionKey);
+                      setArchiveHydrationError('');
+                      try {
+                        await onHydrateArchiveMonth(visibleCalendarPartitionKey);
+                      } catch (error: any) {
+                        setArchiveHydrationError(error?.message || 'Could not restore this archive month.');
+                      } finally {
+                        setHydratingArchiveKey(null);
+                      }
+                    }}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-brand-pink px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-white shadow-sm transition-all hover:bg-brand-pink-dark disabled:cursor-wait disabled:bg-brand-pink/60"
+                  >
+                    {hydratingArchiveKey === visibleCalendarPartitionKey ? (
+                      <RefreshCw className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Download className="h-3 w-3" />
+                    )}
+                    {hydratingArchiveKey === visibleCalendarPartitionKey
+                      ? 'Restoring'
+                      : visibleArchiveState?.status === 'failed' ? 'Retry restore' : 'Restore month'}
+                  </button>
+                </div>
+              )}
               
               {/* Weekdays */}
               <div className="grid grid-cols-7 text-center text-[10px] font-bold text-brand-sage uppercase tracking-wider">
@@ -501,7 +896,7 @@ export default function DiaryDetailScreen({
               {/* Days Grid */}
               <div className="grid grid-cols-7 gap-1.5">
                 {calendarDays.map((cell, idx) => {
-                  const hasEntry = diaryEntries.some(e => e.date === cell.dateStr);
+                  const hasEntry = calendarEntryDates.has(cell.dateStr) || diaryEntries.some(e => e.date === cell.dateStr);
                   const isActive = activeEntry && activeEntry.date === cell.dateStr;
                   
                   return (
@@ -665,6 +1060,8 @@ export default function DiaryDetailScreen({
                       : activeEntry.blocks
                   };
                   await diaryRepository.updateEntry(updatedEntry);
+                  await loadDiaryEntries();
+                  await loadVisibleCalendarMonth();
                   await onRefreshEntries?.();
                 }}
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
@@ -734,9 +1131,10 @@ export default function DiaryDetailScreen({
                           </span>
                         </div>
                         
-                        <div 
+                        <SanitizedRichText
                           className="rich-text-editor-content text-base md:text-lg text-brand-plum/90 font-serif-diary select-text"
-                          dangerouslySetInnerHTML={{ __html: block.body || (block.audioUri ? '' : 'No content written yet.') }}
+                          html={block.body}
+                          fallback={block.audioUri ? '' : 'No content written yet.'}
                         />
 
                         {block.audioUri && (
@@ -749,9 +1147,10 @@ export default function DiaryDetailScreen({
                   </div>
                 ) : (
                   <div className="flex flex-col gap-2">
-                    <div 
-                      dangerouslySetInnerHTML={{ __html: activeEntry.body || (!allAudioUris.length ? 'No content written yet.' : '') }}
+                    <SanitizedRichText
                       className="rich-text-editor-content text-base md:text-lg text-brand-plum/90 font-serif-diary select-text"
+                      html={activeEntry.body}
+                      fallback={!allAudioUris.length ? 'No content written yet.' : ''}
                     />
                     
                     {allAudioUris.length > 0 && (
@@ -792,19 +1191,18 @@ export default function DiaryDetailScreen({
                   <motion.div 
                     key={idx}
                     whileHover={{ scale: 1.02, y: -2 }}
-                    onClick={() => setLightboxImg(imgSrc)}
                     className="w-44 h-56 flex-none rounded-2xl overflow-hidden shadow-md border border-brand-border/60 bg-brand-blush-light/10 relative group cursor-zoom-in"
                   >
-                    <img 
+                    <SyncedImage
                       src={imgSrc}
                       alt={`Memory ${idx + 1}`}
                       className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                       referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1517842645767-c639042777db?w=600";
-                      }}
+                      fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                      label="entry photo"
+                      onClick={setLightboxImg}
                     />
-                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="pointer-events-none absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <Maximize2 className="w-5 h-5 text-white drop-shadow-md" />
                     </div>
                   </motion.div>
@@ -904,160 +1302,6 @@ export default function DiaryDetailScreen({
         )}
       </AnimatePresence>
 
-      {/* Point 2: REAL EXPORT OPTIONS MODAL */}
-      <AnimatePresence>
-        {showExportModal && (
-          <OverlayPortal>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md" onClick={() => setShowExportModal(false)}>
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-md bg-white dark:bg-brand-card-bg rounded-[32px] p-6.5 shadow-2xl border border-brand-border flex flex-col gap-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex justify-between items-center border-b border-brand-border pb-3.5">
-                <div className="flex items-center gap-2">
-                  <Download className="w-5 h-5 text-brand-pink animate-bounce" />
-                  <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Export Sanctuary</h3>
-                </div>
-                <button 
-                  onClick={() => setShowExportModal(false)}
-                  className="p-1.5 hover:bg-brand-blush-light rounded-full text-brand-sage"
-                >
-                  <X className="w-5.5 h-5.5" />
-                </button>
-              </div>
-
-              <p className="text-xs text-brand-text-muted mt-1 leading-relaxed">
-                Unlock, compile and back up your written logs from "{diary.name}". Select your preferred formatting design:
-              </p>
-
-              <div className="flex flex-col gap-3.5 py-2">
-                {/* Text Export Option */}
-                <button
-                  onClick={handleExportText}
-                  className="flex items-center gap-4 p-4 rounded-2xl bg-brand-blush-light/30 hover:bg-brand-blush-light/50 dark:hover:bg-brand-blush-light/10 border border-brand-pink/15 text-left transition-all active:scale-98 group"
-                >
-                  <span className="p-3 bg-brand-pink/10 text-brand-pink rounded-xl group-hover:bg-brand-pink group-hover:text-white transition-all">
-                    <FileText className="w-4.5 h-4.5" />
-                  </span>
-                  <div className="flex-1">
-                    <h4 className="text-sm font-bold text-brand-plum flex items-center justify-between">
-                      <span>Export as Elegant Plain Text</span>
-                      <ArrowUpRight className="w-3.5 h-3.5 text-brand-sage" />
-                    </h4>
-                    <p className="text-[10px] text-brand-sage mt-0.5">Clean text containing dated thoughts and tags; attached media is not included.</p>
-                  </div>
-                </button>
-
-                {/* JSON Backup Option */}
-                <button
-                  onClick={handleExportJSON}
-                  className="flex items-center gap-4 p-4 rounded-2xl bg-brand-blush-light/30 hover:bg-brand-blush-light/50 dark:hover:bg-brand-blush-light/10 border border-brand-pink/15 text-left transition-all active:scale-98 group"
-                >
-                  <span className="p-3 bg-brand-pink/10 text-brand-pink rounded-xl group-hover:bg-brand-pink group-hover:text-white transition-all">
-                    <Download className="w-4.5 h-4.5" />
-                  </span>
-                  <div className="flex-1">
-                    <h4 className="text-sm font-bold text-brand-plum flex items-center justify-between">
-                      <span>Download Portable Diary Archive</span>
-                      <ArrowUpRight className="w-3.5 h-3.5 text-brand-sage" />
-                    </h4>
-                    <p className="text-[10px] text-brand-sage mt-0.5">Password-protected diary data, readable text, photos, covers, and audio.</p>
-                  </div>
-                </button>
-
-                {/* Print/PDF layout option */}
-                <button
-                  onClick={() => {
-                    setShowExportModal(false);
-                    setShowPrintPreview(true);
-                  }}
-                  className="flex items-center gap-4 p-4 rounded-2xl bg-brand-blush-light/30 hover:bg-brand-blush-light/50 dark:hover:bg-brand-blush-light/10 border border-brand-pink/15 text-left transition-all active:scale-98 group"
-                >
-                  <span className="p-3 bg-brand-pink/10 text-brand-pink rounded-xl group-hover:bg-brand-pink group-hover:text-white transition-all">
-                    <Printer className="w-4.5 h-4.5" />
-                  </span>
-                  <div className="flex-1">
-                    <h4 className="text-sm font-bold text-brand-plum flex items-center justify-between">
-                      <span>Preview for Print / PDF</span>
-                      <ArrowUpRight className="w-3.5 h-3.5 text-brand-sage" />
-                    </h4>
-                    <p className="text-[10px] text-brand-sage mt-0.5">Compiles all pages into a gorgeous vertical layout ready to print.</p>
-                  </div>
-                </button>
-              </div>
-            </motion.div>
-            </div>
-          </OverlayPortal>
-        )}
-      </AnimatePresence>
-
-      {/* PRINT PREVIEW COMPILATION VIEW MODAL */}
-      <AnimatePresence>
-        {showPrintPreview && (
-          <OverlayPortal>
-            <div className="fixed inset-0 z-50 bg-brand-bg overflow-y-auto p-4 md:p-8 flex flex-col gap-6">
-            <header className="flex justify-between items-center max-w-3xl mx-auto w-full border-b border-brand-border/60 pb-3 select-none no-print">
-              <button
-                onClick={() => setShowPrintPreview(false)}
-                className="flex items-center gap-1.5 text-xs font-bold text-brand-sage hover:text-brand-plum transition-colors"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                Close Preview
-              </button>
-              <h2 className="font-serif-diary text-lg font-bold text-brand-plum italic">Print Compilation Preview</h2>
-              <button
-                onClick={triggerPrint}
-                className="bg-brand-pink hover:bg-brand-pink-dark text-white px-5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-md shadow-brand-pink/10"
-              >
-                <Printer className="w-4 h-4" />
-                Print Now
-              </button>
-            </header>
-
-            <div className="max-w-3xl mx-auto w-full bg-white text-brand-plum p-8 md:p-12 rounded-[36px] shadow-lg border border-brand-border/40 select-text flex flex-col gap-8 print:shadow-none print:border-none print:p-0">
-              <div className="text-center space-y-2 border-b-2 border-brand-pink/10 pb-6">
-                <span className="text-4xl">{diary.emoji}</span>
-                <h1 className="font-serif-diary text-3xl font-bold">{diary.name}</h1>
-                <p className="text-xs uppercase tracking-widest text-brand-sage font-semibold">
-                  A personal memory sanctuary compiled on {new Date().toLocaleDateString()}
-                </p>
-                <p className="text-[10px] text-brand-text-muted italic">Contains {diaryEntries.length} chronological journal chapters</p>
-              </div>
-
-              <div className="flex flex-col gap-10">
-                {diaryEntries.map((e, index) => (
-                  <article key={e.id} className="space-y-4 pb-8 border-b border-brand-border/40 last:border-0 page-break">
-                    <div className="flex justify-between items-baseline text-brand-sage border-b border-dashed border-brand-border pb-1.5">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider">Chapter {diaryEntries.length - index}</span>
-                      <span className="text-xs font-bold font-serif-diary">{formatFullDate(e.date)} {e.time ? `@ ${formatTime12(e.time)}` : ''}</span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">{e.moodEmoji}</span>
-                      <span className="text-xs font-bold text-brand-pink-dark uppercase tracking-wide bg-brand-pink/5 px-2.5 py-0.5 rounded-full border border-brand-pink/10">Mood: {e.moodName}</span>
-                      {e.tags.map(t => (
-                        <span key={t} className="text-[10px] font-bold text-brand-sage font-mono">#{t}</span>
-                      ))}
-                    </div>
-
-                    <h3 className="text-lg md:text-xl font-bold font-serif-diary">{e.title === 'Untitled entry' ? '' : e.title}</h3>
-                    
-                    <div 
-                      dangerouslySetInnerHTML={{ __html: e.body }}
-                      className="font-serif-diary text-sm md:text-base leading-relaxed text-brand-plum/90 pl-4 border-l border-brand-pink/20"
-                    />
-                  </article>
-                ))}
-              </div>
-            </div>
-            </div>
-          </OverlayPortal>
-        )}
-      </AnimatePresence>
-
       {/* PHOTO LIGHTBOX POPUP */}
       <AnimatePresence>
         {lightboxImg && (
@@ -1084,11 +1328,13 @@ export default function DiaryDetailScreen({
               className="max-w-3xl max-h-[85vh] rounded-2xl overflow-hidden shadow-2xl relative"
               onClick={(e) => e.stopPropagation()}
             >
-              <img 
+              <SyncedImage
                 src={lightboxImg} 
                 alt="Enlarged memory" 
                 className="max-w-full max-h-[80vh] object-contain rounded-2xl"
                 referrerPolicy="no-referrer"
+                fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=1200"
+                label="entry photo"
               />
             </motion.div>
             </motion.div>
@@ -1097,10 +1343,4 @@ export default function DiaryDetailScreen({
       </AnimatePresence>
     </div>
   );
-}
-
-// Fallback safety filter
-function getActiveEntryBody(body: string): string {
-  if (!body) return 'No content written yet.';
-  return body;
 }

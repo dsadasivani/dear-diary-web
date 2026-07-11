@@ -1,30 +1,42 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { Suspense, useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AlertCircle, ArrowLeft, BarChart2, BookOpen, Check, ClipboardList, Eye, EyeOff,
-  Fingerprint, Home, Lock, Search, ShieldCheck, X
+  Fingerprint, Home, LoaderCircle, Lock, Plus, RefreshCw, Search, ShieldCheck, WifiOff, X
 } from 'lucide-react';
 
-// Import our modular screens
-import LockScreen from './components/LockScreen';
-import HomeScreen from './components/HomeScreen';
-import DiariesScreen from './components/DiariesScreen';
-import DiaryDetailScreen from './components/DiaryDetailScreen';
-import DiarySettingsScreen from './components/DiarySettingsScreen';
-import EntryEditorScreen from './components/EntryEditorScreen';
-import NotesScreen from './components/NotesScreen';
-import SearchScreen from './components/SearchScreen';
-import StatsScreen from './components/StatsScreen';
-import AppSettingsScreen from './components/AppSettingsScreen';
 import OverlayPortal from './components/OverlayPortal';
+import ProfileAvatar from './components/ProfileAvatar';
 
-import { AppSettings, Diary, Entry, Note, SecurityConfig, UserProfile } from './types';
-import { addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
-import { isAndroid } from './platform';
+import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
+import type { RepositoryChange, SyncStatusSummary } from './repositories';
+import { addNativeAppStateListener, addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
+import { isAndroid, isNativePlatform } from './platform';
 
 import { secureAuthService } from './platform/security';
-import { diaryRepository } from './repositories';
+import { diaryRepository, eventSyncEngine } from './repositories';
 import { isValidPin, unlockWithPin } from './domain/security';
+import useIsDesktop from './hooks/useIsDesktop';
+import { calculateStreak } from './domain/journalCatalog';
+import { shouldLockAfterBackground } from './domain/privacyLock';
+import { loadPendingPrimaryRecovery, resumePendingPrimaryRecovery } from './sync/accountBootstrap';
+import { createConfiguredSupabaseControlPlaneClient } from './sync/config';
+import { resumePendingDeviceKeyRotation } from './sync/deviceKeyRotation';
+import { loadSyncSecrets } from './sync/syncSecrets';
+import { restoreGoogleDriveSession } from './utils/googleAuth';
+import { applyThemePreference, getLocalThemePreference, setLocalThemePreference } from './utils/themePreference';
+import { measureAsync } from './utils/performance';
+
+const LockScreen = React.lazy(() => import('./components/LockScreen'));
+const HomeScreen = React.lazy(() => import('./components/HomeScreen'));
+const DiariesScreen = React.lazy(() => import('./components/DiariesScreen'));
+const DiaryDetailScreen = React.lazy(() => import('./components/DiaryDetailScreen'));
+const DiarySettingsScreen = React.lazy(() => import('./components/DiarySettingsScreen'));
+const EntryEditorScreen = React.lazy(() => import('./components/EntryEditorScreen'));
+const NotesScreen = React.lazy(() => import('./components/NotesScreen'));
+const SearchScreen = React.lazy(() => import('./components/SearchScreen'));
+const StatsScreen = React.lazy(() => import('./components/StatsScreen'));
+const AppSettingsScreen = React.lazy(() => import('./components/AppSettingsScreen'));
 
 interface AppProps {
   initialSettings: AppSettings;
@@ -32,9 +44,72 @@ interface AppProps {
   initialUserProfile: UserProfile;
 }
 
+type GlobalLoadingState = {
+  message: string;
+  detail?: string;
+};
+
+const GlobalLoaderOverlay = ({ loading }: { loading: GlobalLoadingState | null }) => (
+  <AnimatePresence>
+    {loading && (
+      <OverlayPortal>
+        <motion.div
+          key="global-loader"
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-brand-bg/65 px-5 backdrop-blur-sm"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+        >
+          <motion.div
+            className="flex w-full max-w-xs flex-col items-center gap-3 rounded-2xl border border-brand-border bg-white/95 p-5 text-center shadow-2xl dark:bg-brand-card-bg/95"
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.97 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 24 }}
+          >
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-pink/10 text-brand-pink">
+              <LoaderCircle className="h-6 w-6 animate-spin" />
+            </span>
+            <div className="space-y-1">
+              <p className="text-sm font-extrabold text-brand-plum dark:text-brand-text">{loading.message}</p>
+              {loading.detail && (
+                <p className="text-[11px] font-semibold leading-relaxed text-brand-text-muted">{loading.detail}</p>
+              )}
+            </div>
+          </motion.div>
+        </motion.div>
+      </OverlayPortal>
+    )}
+  </AnimatePresence>
+);
+
+const ScreenFallback = () => (
+  <div className="flex min-h-[12rem] w-full items-center justify-center text-brand-sage">
+    <LoaderCircle className="h-6 w-6 animate-spin" />
+  </div>
+);
+
+const isLikelyCellularConnection = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  const nav = navigator as any;
+  const connection = nav.connection || nav.mozConnection || nav.webkitConnection;
+  const connectionType = String(connection?.type || '').toLowerCase();
+  const effectiveType = String(connection?.effectiveType || '').toLowerCase();
+  return connectionType === 'cellular' || ['slow-2g', '2g', '3g'].includes(effectiveType);
+};
+
 export default function App({ initialSettings, initialSecurity, initialUserProfile }: AppProps) {
+  const isDesktop = useIsDesktop();
+  const layout: ResponsiveLayout = isDesktop ? 'desktop' : 'mobile';
+
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator === 'undefined' || navigator.onLine);
+  const [syncAuthorizationMessage, setSyncAuthorizationMessage] = useState('');
+  const [isReauthorizingSync, setIsReauthorizingSync] = useState(false);
+  const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
+  const [searchInitialQuery, setSearchInitialQuery] = useState('');
   
   // Navigation states
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
@@ -57,10 +132,29 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   
   // Toast notification state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
+  const [globalLoading, setGlobalLoading] = useState<GlobalLoadingState | null>(null);
+  const loadingDepthRef = React.useRef(0);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
     setToast({ message, type });
   };
+
+  const runWithGlobalLoader = useCallback(async (
+    message: string,
+    operation: () => Promise<void>,
+    detail?: string
+  ) => {
+    loadingDepthRef.current += 1;
+    setGlobalLoading({ message, detail });
+    try {
+      await operation();
+    } finally {
+      loadingDepthRef.current = Math.max(0, loadingDepthRef.current - 1);
+      if (loadingDepthRef.current === 0) {
+        setGlobalLoading(null);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (toast) {
@@ -77,54 +171,360 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [notes, setNotes] = useState<Note[]>([]);
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
-  const [theme, setTheme] = useState<'light' | 'dark'>(initialSettings.theme || 'light');
   const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
+  const [archiveMonths, setArchiveMonths] = useState<PartitionHydrationState[]>([]);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
+  const [homeStreak, setHomeStreak] = useState(0);
+
+  const lockedDiaryIds = React.useMemo(() => (
+    diaries
+      .filter(diary => diary.isLocked && !unlockedDiaryIds.has(diary.id))
+      .map(diary => diary.id)
+  ), [diaries, unlockedDiaryIds]);
 
   const accessibleEntries = React.useMemo(() => {
-    const lockedDiaryIds = new Set(
-      diaries
-        .filter(diary => diary.isLocked && !unlockedDiaryIds.has(diary.id))
-        .map(diary => diary.id)
-    );
-    return entries.filter(entry => !lockedDiaryIds.has(entry.diaryId));
-  }, [diaries, entries, unlockedDiaryIds]);
+    const lockedDiaryIdSet = new Set(lockedDiaryIds);
+    return entries.filter(entry => !lockedDiaryIdSet.has(entry.diaryId));
+  }, [entries, lockedDiaryIds]);
+
+  const visibleStreak = React.useMemo(
+    () => accessibleEntries.length > 0 ? calculateStreak(accessibleEntries) : homeStreak,
+    [accessibleEntries, homeStreak],
+  );
 
   // Reload data from the async repository. SQLite is authoritative on native.
   const reloadData = async () => {
-    const [storedDiaries, storedEntries, storedNotes, storedProfile, storedSettings, storedSecurity] = await Promise.all([
+    await measureAsync('app.reloadData', async () => {
+    const [storedDiaries, storedEntries, storedNotes, storedProfile, storedSettings, storedSecurity, storedArchiveMonths, storedSyncStatus] = await Promise.all([
       diaryRepository.listDiaries(),
       diaryRepository.listEntries(),
       diaryRepository.listNotes(),
       diaryRepository.getUserProfile(),
       diaryRepository.getSettings(),
       diaryRepository.getSecurityConfig(),
+      diaryRepository.listAvailableArchiveMonths(),
+      diaryRepository.getSyncStatusSummary(),
     ]);
     setDiaries(storedDiaries);
     setEntries(storedEntries);
     setNotes(storedNotes);
     setUserProfile(storedProfile);
-    setSettings(storedSettings);
+    setHomeStreak(calculateStreak(storedEntries));
+    const currentTheme = getLocalThemePreference(storedSettings.theme || 'light');
+    setSettings({ ...storedSettings, theme: currentTheme });
     setSecurity(storedSecurity);
-    const currentTheme = storedSettings.theme || 'light';
-    setTheme(currentTheme);
-    if (currentTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    setArchiveMonths(storedArchiveMonths);
+    setSyncStatus(storedSyncStatus);
+    applyThemePreference(currentTheme);
     void syncNativeStatusBar(currentTheme);
+    });
+  };
+
+  const reloadShellData = async () => {
+    await measureAsync('app.reloadShellData', async () => {
+      const [storedDiaries, storedProfile, storedSettings, storedSecurity, storedArchiveMonths, storedSyncStatus, storedHomeSummary] = await Promise.all([
+        diaryRepository.listDiaries(),
+        diaryRepository.getUserProfile(),
+        diaryRepository.getSettings(),
+        diaryRepository.getSecurityConfig(),
+        diaryRepository.listAvailableArchiveMonths(),
+        diaryRepository.getSyncStatusSummary(),
+        diaryRepository.getHomeSummary(),
+      ]);
+      setDiaries(storedDiaries);
+      setUserProfile(storedProfile);
+      setHomeStreak(storedHomeSummary.currentStreak);
+      const currentTheme = getLocalThemePreference(storedSettings.theme || 'light');
+      setSettings({ ...storedSettings, theme: currentTheme });
+      setSecurity(storedSecurity);
+      setArchiveMonths(storedArchiveMonths);
+      setSyncStatus(storedSyncStatus);
+      applyThemePreference(currentTheme);
+      void syncNativeStatusBar(currentTheme);
+    });
+  };
+
+  const handleLocalThemeChange = (nextTheme: 'light' | 'dark') => {
+    setLocalThemePreference(nextTheme);
+    setSettings(prev => ({ ...prev, theme: nextTheme }));
+    void syncNativeStatusBar(nextTheme);
+  };
+
+  const applyRepositoryChange = useCallback((change: RepositoryChange) => {
+    switch (change.type) {
+      case 'entry-created':
+        setEntries(prev => [...prev.filter(entry => entry.id !== change.entry.id), change.entry]);
+        void diaryRepository.listDiaries().then(setDiaries).catch(() => undefined);
+        break;
+      case 'entry-updated':
+        setEntries(prev => prev.map(entry => entry.id === change.entry.id ? change.entry : entry));
+        void diaryRepository.listDiaries().then(setDiaries).catch(() => undefined);
+        break;
+      case 'entry-deleted':
+        setEntries(prev => prev.filter(entry => entry.id !== change.entryId));
+        void diaryRepository.listDiaries().then(setDiaries).catch(() => undefined);
+        break;
+      case 'diary-created':
+        setDiaries(prev => [...prev.filter(diary => diary.id !== change.diary.id), change.diary]);
+        break;
+      case 'diary-updated':
+        setDiaries(prev => prev.map(diary => diary.id === change.diary.id ? change.diary : diary));
+        break;
+      case 'diary-deleted':
+        setDiaries(prev => prev.filter(diary => diary.id !== change.diaryId));
+        setEntries(prev => prev.filter(entry => entry.diaryId !== change.diaryId));
+        break;
+      case 'note-created':
+        setNotes(prev => [...prev.filter(note => note.id !== change.note.id), change.note]);
+        break;
+      case 'note-updated':
+        setNotes(prev => prev.map(note => note.id === change.note.id ? change.note : note));
+        break;
+      case 'note-deleted':
+        setNotes(prev => prev.filter(note => note.id !== change.noteId));
+        break;
+      case 'settings-updated': {
+        const currentTheme = getLocalThemePreference(change.settings.theme || 'light');
+        setSettings({ ...change.settings, theme: currentTheme });
+        applyThemePreference(currentTheme);
+        void syncNativeStatusBar(currentTheme);
+        break;
+      }
+      case 'profile-updated':
+        setUserProfile(change.profile);
+        break;
+      case 'sync-status-updated':
+        setSyncStatus(change.status);
+        break;
+      case 'remote-batch-applied':
+        void reloadShellData();
+        break;
+      default:
+        break;
+    }
+  }, []);
+
+  const refreshDiaries = async () => {
+    setDiaries(await diaryRepository.listDiaries());
+  };
+
+  const refreshEntries = async () => {
+    const [storedEntries, storedDiaries] = await Promise.all([
+      diaryRepository.listEntries(),
+      diaryRepository.listDiaries(),
+    ]);
+    setEntries(storedEntries);
+    setDiaries(storedDiaries);
+  };
+
+  const resumePendingSyncWorkAfterUnlock = async () => {
+    const secrets = await loadSyncSecrets();
+    const pendingRecovery = await loadPendingPrimaryRecovery();
+    const accessToken = secrets?.supabaseSession.accessToken || pendingRecovery?.supabaseSession.accessToken;
+    if (pendingRecovery && !accessToken) {
+      throw new Error('Primary recovery is pending but sync authorization is unavailable. Reconnect Google and Supabase to finish recovery.');
+    }
+    if (pendingRecovery && accessToken) {
+      const controlPlane = createConfiguredSupabaseControlPlaneClient(accessToken);
+      const googleSession = await restoreGoogleDriveSession(false).catch(() => null)
+        || secrets?.googleSession
+        || pendingRecovery.googleSession
+        || null;
+      const result = await resumePendingPrimaryRecovery({
+        repository: diaryRepository,
+        controlPlane,
+        googleSession,
+      });
+      if (result.status === 'completed' || result.status === 'aborted') {
+        showToast(result.message, 'info');
+        await reloadShellData();
+      }
+    }
+    const refreshedAccount = await diaryRepository.getLocalSyncAccountState();
+    if (!refreshedAccount || refreshedAccount.deviceRole !== 'primary_mobile') return refreshedAccount;
+    const refreshedSecrets = await loadSyncSecrets();
+    if (!refreshedSecrets) return refreshedAccount;
+    const controlPlane = createConfiguredSupabaseControlPlaneClient(refreshedSecrets.supabaseSession.accessToken);
+    const googleSession = await restoreGoogleDriveSession(false).catch(() => null) || refreshedSecrets.googleSession || null;
+    const result = await resumePendingDeviceKeyRotation({
+      repository: diaryRepository,
+      controlPlane,
+      googleSession,
+    });
+    if (result.status === 'completed' || result.status === 'aborted') {
+      showToast(result.message, 'info');
+      await reloadShellData();
+    }
+    return diaryRepository.getLocalSyncAccountState();
   };
 
   const handleUnlock = async () => {
-    await reloadData();
-    setUnlockedDiaryIds(new Set());
-    setIsAuthenticated(true);
+    await runWithGlobalLoader('Unlocking your diary', async () => {
+      await measureAsync('app.pinUnlock', () => reloadShellData());
+      setUnlockedDiaryIds(new Set());
+      setIsAuthenticated(true);
+    }, 'Loading your latest local data.');
+    void resumePendingSyncWorkAfterUnlock()
+      .then(syncAccount => {
+        if (syncAccount) {
+          eventSyncEngine.requestOutboxFlush();
+          eventSyncEngine.startPolling();
+        }
+      })
+      .catch(err => {
+        showToast(err?.message || 'Encrypted sync could not resume after unlock.', 'warning');
+        console.warn('Unable to start sync polling after unlock:', err);
+      });
   };
 
   // On mount: load initial state
   useEffect(() => {
-    void reloadData();
+    void reloadShellData();
     setIsAuthenticated(false);
+    return () => eventSyncEngine.stopPolling();
+  }, []);
+
+  useEffect(() => {
+    if (isAuthenticated || isNativePlatform()) return;
+    let cancelled = false;
+    void diaryRepository.getLocalSyncAccountState().then(syncAccount => {
+      if (cancelled || syncAccount?.deviceRole !== 'web_companion') return;
+      eventSyncEngine.startPolling();
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    const handleAuthorizationRequired = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      setSyncAuthorizationMessage(detail?.message || 'Reconnect your account to resume sync.');
+    };
+    window.addEventListener('deardiary-sync-auth-required', handleAuthorizationRequired);
+    return () => window.removeEventListener('deardiary-sync-auth-required', handleAuthorizationRequired);
+  }, []);
+
+  useEffect(() => {
+    const handleMediaStorageWarning = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      showToast(detail?.message || 'Media storage failed; keeping an inline copy for now.', 'warning');
+    };
+    window.addEventListener('deardiary-media-storage-warning', handleMediaStorageWarning);
+    return () => window.removeEventListener('deardiary-media-storage-warning', handleMediaStorageWarning);
+  }, []);
+
+  useEffect(() => {
+    const handleSyncConflict = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      showToast(detail?.message || 'Conflict preserved as recovered copy.', 'warning');
+      void diaryRepository.getSyncStatusSummary().then(setSyncStatus).catch(() => undefined);
+    };
+    window.addEventListener('deardiary-sync-conflict', handleSyncConflict);
+    return () => window.removeEventListener('deardiary-sync-conflict', handleSyncConflict);
+  }, []);
+
+  const handleSyncReauthorization = async () => {
+    setIsReauthorizingSync(true);
+    try {
+      await runWithGlobalLoader('Reconnecting encrypted sync', async () => {
+        await eventSyncEngine.reauthorize();
+        setSyncAuthorizationMessage('');
+        await eventSyncEngine.pullPending();
+      }, 'Checking Google Drive and bringing in pending updates.');
+      showToast('Encrypted sync reconnected.', 'success');
+    } catch (reauthorizationError: any) {
+      showToast(reauthorizationError?.message || 'Sync reconnection failed.', 'error');
+    } finally {
+      setIsReauthorizingSync(false);
+    }
+  };
+
+  const handleHydrateArchiveMonth = async (partitionKey: string) => {
+    try {
+      showToast('Restoring that archive month…', 'info');
+      await runWithGlobalLoader('Restoring archive month', async () => {
+        await eventSyncEngine.hydrateArchivePartition(partitionKey);
+        await reloadShellData();
+      }, 'Downloading older encrypted entries.');
+      showToast('Archive month restored.', 'success');
+    } catch (archiveError: any) {
+      const message = archiveError?.message || 'Could not restore that archive month yet.';
+      await reloadShellData();
+      showToast(message, 'error');
+      throw archiveError;
+    }
+  };
+
+  const handleHydrateAllArchiveMonths = async () => {
+    const candidates = (await diaryRepository.listAvailableArchiveMonths())
+      .filter(month => month.status !== 'hydrated' && month.status !== 'not_available' && month.status !== 'hydrating');
+    if (candidates.length === 0) {
+      showToast('All available archive months are already restored.', 'info');
+      return;
+    }
+    if (isLikelyCellularConnection()) {
+      const message = 'Connect to Wi-Fi before restoring the full encrypted archive.';
+      showToast(message, 'warning');
+      throw new Error(message);
+    }
+
+    let restoredCount = 0;
+    let failedCount = 0;
+    showToast(`Restoring ${candidates.length} archive month${candidates.length === 1 ? '' : 's'} on Wi-Fi…`, 'info');
+    await runWithGlobalLoader(`Restoring ${candidates.length} archive month${candidates.length === 1 ? '' : 's'}`, async () => {
+      for (const candidate of candidates) {
+        try {
+          await eventSyncEngine.hydrateArchivePartition(String(candidate.partitionKey));
+          restoredCount += 1;
+          await reloadShellData();
+        } catch {
+          failedCount += 1;
+        }
+      }
+      await reloadShellData();
+    }, 'Keep the app open while older entries come back.');
+    if (failedCount > 0) {
+      const message = `Restored ${restoredCount} archive month${restoredCount === 1 ? '' : 's'}. ${failedCount} need retry later.`;
+      showToast(message, restoredCount > 0 ? 'warning' : 'error');
+      if (restoredCount === 0) throw new Error(message);
+      return;
+    }
+    showToast(`Restored ${restoredCount} archive month${restoredCount === 1 ? '' : 's'}.`, 'success');
+  };
+
+  useEffect(() => {
+    const updateOnlineState = () => {
+      setIsOnline(navigator.onLine);
+      if (navigator.onLine) eventSyncEngine.requestOutboxFlush();
+      void diaryRepository.getSyncStatusSummary().then(setSyncStatus).catch(() => undefined);
+    };
+    window.addEventListener('online', updateOnlineState);
+    window.addEventListener('offline', updateOnlineState);
+    return () => {
+      window.removeEventListener('online', updateOnlineState);
+      window.removeEventListener('offline', updateOnlineState);
+    };
+  }, []);
+
+  useEffect(() => diaryRepository.subscribeChanges((_revision, change) => {
+    if (!isAuthenticated) return;
+    if (change) {
+      applyRepositoryChange(change);
+      return;
+    }
+    void reloadShellData();
+  }), [applyRepositoryChange, isAuthenticated]);
+
+  useEffect(() => {
+    const handleRejectedSyncWrite = (event: PromiseRejectionEvent) => {
+      const message = event.reason?.message || '';
+      if (!message.includes('online') && !message.includes('another device') && !message.includes('revoked')) return;
+      event.preventDefault();
+      showToast(message, 'warning');
+    };
+    window.addEventListener('unhandledrejection', handleRejectedSyncWrite);
+    return () => window.removeEventListener('unhandledrejection', handleRejectedSyncWrite);
   }, []);
 
   const [selectedPrompt, setSelectedPrompt] = useState<string>('');
@@ -147,7 +547,26 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setSelectedNoteId(noteId);
     setSelectedPrompt(promptText);
     setIsEditorFocusMode(false);
-    void reloadData();
+  };
+
+  const handleDesktopSearchSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmedQuery = desktopSearchQuery.trim();
+    if (!trimmedQuery) {
+      handleNavigate('search');
+      return;
+    }
+    setSearchInitialQuery(trimmedQuery);
+    handleNavigate('search');
+  };
+
+  const handleDesktopNewEntry = () => {
+    const targetDiary = diaries[0];
+    if (targetDiary) {
+      handleNavigate('diaries', 'entryEditor', targetDiary.id);
+      return;
+    }
+    handleNavigate('diaries');
   };
 
   useEffect(() => {
@@ -192,7 +611,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const handleDiaryBiometricUnlock = async (diary: Diary) => {
-    if (!security.isBiometricsEnabled) {
+    if (!isNativePlatform() || !security.isBiometricsEnabled) {
       setDiaryUnlockError('Biometric unlock is not enabled. Use your app PIN.');
       setDiaryUnlockSuccess('');
       return;
@@ -232,9 +651,38 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const handleLockApp = () => {
+    eventSyncEngine.stopPolling();
     setUnlockedDiaryIds(new Set());
     setIsAuthenticated(false);
   };
+
+  useEffect(() => {
+    if (!isNativePlatform()) return undefined;
+    let backgroundedAt: number | null = null;
+    return addNativeAppStateListener(({ isActive }) => {
+      if (!isActive) {
+        backgroundedAt = Date.now();
+        return;
+      }
+      if (isAuthenticated && shouldLockAfterBackground({ backgroundedAt, resumedAt: Date.now() })) {
+        showToast('Dear Diary locked after being in the background.', 'info');
+        handleLockApp();
+      } else if (isAuthenticated) {
+        eventSyncEngine.requestOutboxFlush();
+      }
+      backgroundedAt = null;
+    });
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    const handleRevokedDevice = () => {
+      showToast('This device was revoked and its encrypted cache was cleared.', 'warning');
+      handleLockApp();
+      window.setTimeout(() => window.location.reload(), 300);
+    };
+    window.addEventListener('deardiary-device-revoked', handleRevokedDevice);
+    return () => window.removeEventListener('deardiary-device-revoked', handleRevokedDevice);
+  }, []);
 
   const handleBackNavigation = useCallback(() => {
     if (!isAuthenticated) {
@@ -290,30 +738,34 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     const targetDiary = diaries[0];
     if (!targetDiary) return;
 
-    await diaryRepository.createEntry({
-      diaryId: targetDiary.id,
-      date: new Date().toISOString().split('T')[0],
-      title: noteTitle,
-      body: noteBody,
-      moodName: 'Reflective',
+    await measureAsync('app.quickNote.convertToEntry', async () => {
+      await diaryRepository.createEntry({
+        diaryId: targetDiary.id,
+        date: new Date().toISOString().split('T')[0],
+        title: noteTitle,
+        body: noteBody,
+        moodName: 'Reflective',
       moodEmoji: '💭',
-      tags: tags,
-      photoUris: []
+        tags: tags,
+        photoUris: []
+      });
     });
 
-    showToast(`Successfully converted quick note to diary entry inside "${targetDiary.name}"!`, 'success');
+    showToast(`Saved to this device inside "${targetDiary.name}".`, 'success');
     handleNavigate('diaries', 'diaryDetail', targetDiary.id);
   };
 
   // Quick Capturing note helpers
   const handleOpenQuickNote = async (noteText: string) => {
-    await diaryRepository.createNote({
-      title: noteText.substring(0, 24) || 'Untitled quick thought',
-      body: noteText,
-      isPinned: false,
-      tags: ['thoughts']
+    await measureAsync('app.quickNote.create', async () => {
+      await diaryRepository.createNote({
+        title: noteText.substring(0, 24) || 'Untitled quick thought',
+        body: noteText,
+        isPinned: false,
+        tags: ['thoughts']
+      });
     });
-    showToast('Saved a quick thought to your notes!', 'success');
+    showToast('Saved to this device.', 'success');
     handleNavigate('notes');
   };
 
@@ -328,6 +780,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const renderDiaryUnlockPrompt = (diary: Diary) => {
     const requiredLength = security.pinLength || 4;
     const canSubmitPin = isValidPin(diaryUnlockPin, security.pinLength);
+    const canUseBiometricDiaryUnlock = isNativePlatform() && security.isBiometricsEnabled;
 
     return (
       <OverlayPortal>
@@ -365,11 +818,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 {diary.name}
               </h2>
               <p className="text-xs leading-relaxed text-brand-text-muted">
-                This journal is private. Confirm your app PIN or biometric identity to open it for this session.
+                This journal is private. Confirm your app PIN{canUseBiometricDiaryUnlock ? ' or biometric identity' : ''} to open it for this session.
               </p>
             </div>
 
-            {security.isBiometricsEnabled && (
+            {canUseBiometricDiaryUnlock && (
               <button
                 type="button"
                 onClick={() => handleDiaryBiometricUnlock(diary)}
@@ -455,10 +908,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       case 'home':
         return (
           <HomeScreen 
-            diaries={diaries}
-            entries={accessibleEntries}
-            notes={notes}
             userProfile={userProfile}
+            layout={layout}
+            excludeDiaryIds={lockedDiaryIds}
             onNavigate={handleNavigate}
             onOpenQuickNote={handleOpenQuickNote}
             onOpenNewEntryWithPrompt={handleOpenNewEntryWithPrompt}
@@ -480,12 +932,15 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             return (
               <DiaryDetailScreen 
                 diary={selectedDiary}
-                entries={accessibleEntries}
+                entryId={selectedEntryId}
+                layout={layout}
                 onBack={() => handleNavigate('diaries', 'list')}
                 onEditEntry={(entryId) => handleNavigate('diaries', 'entryEditor', selectedDiaryId, entryId)}
                 onNewEntry={(diaryId, dateStr) => handleNavigate('diaries', 'entryEditor', diaryId, '', dateStr)}
                 onOpenSettings={(diaryId) => handleNavigate('diaries', 'diarySettings', diaryId)}
-                onRefreshEntries={reloadData}
+                onRefreshEntries={refreshEntries}
+                archiveMonths={archiveMonths}
+                onHydrateArchiveMonth={handleHydrateArchiveMonth}
               />
             );
           }
@@ -498,7 +953,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               <DiarySettingsScreen 
                 diary={selectedDiary}
                 onBack={() => handleNavigate('diaries', 'diaryDetail', selectedDiaryId)}
-                onRefreshDiaries={reloadData}
+                onRefreshDiaries={refreshDiaries}
               />
             );
           }
@@ -511,6 +966,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               settings={settings}
               diaryId={selectedDiaryId}
               entryId={selectedEntryId}
+              layout={layout}
               initialDate={selectedDate}
               initialPrompt={selectedPrompt}
               showDiarySelector={!!selectedPrompt}
@@ -524,10 +980,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                   handleNavigate('diaries', 'list');
                 }
               }}
-              onRefreshEntries={reloadData}
+              onRefreshEntries={refreshEntries}
               onFocusModeChange={setIsEditorFocusMode}
               initialFocusMode={isEditorFocusMode}
               onShowToast={showToast}
+              onRunWithLoader={runWithGlobalLoader}
             />
           );
         }
@@ -535,18 +992,17 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         return (
           <DiariesScreen 
             diaries={diaries}
-            entries={entries}
+            layout={layout}
             onNavigate={handleNavigate}
-            onRefreshDiaries={reloadData}
+            onRefreshDiaries={refreshDiaries}
           />
         );
 
       case 'notes':
         return (
           <NotesScreen 
-            notes={notes}
             settings={settings}
-            onRefreshNotes={reloadData}
+            layout={layout}
             onConvertToDiaryEntry={handleConvertToDiaryEntry}
             initialNoteId={selectedNoteId}
             onClearInitialNoteId={() => setSelectedNoteId('')}
@@ -556,10 +1012,13 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       case 'search':
         return (
           <SearchScreen 
-            diaries={diaries}
-            entries={accessibleEntries}
-            notes={notes}
             settings={settings}
+            layout={layout}
+            initialQuery={searchInitialQuery}
+            excludeDiaryIds={lockedDiaryIds}
+            archiveMonths={archiveMonths}
+            onHydrateArchiveMonth={handleHydrateArchiveMonth}
+            onHydrateAllArchiveMonths={handleHydrateAllArchiveMonths}
             onNavigate={handleNavigate}
             onEditNote={(note) => {
               // Deep-link note editing from search results
@@ -572,12 +1031,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         if (currentScreen === 'appSettings') {
           return (
             <AppSettingsScreen 
-              diaries={diaries}
-              entries={entries}
-              notes={notes}
               initialSettings={settings}
               initialSecurity={security}
               initialProfile={userProfile}
+              layout={layout}
               onBack={() => handleNavigate('stats', 'list')}
               onResetSuccess={() => {
                 void reloadData();
@@ -585,6 +1042,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               }}
               onDataChanged={reloadData}
               onShowToast={showToast}
+              onThemeChange={handleLocalThemeChange}
             />
           );
         }
@@ -592,9 +1050,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         return (
           <StatsScreen 
             diaries={diaries}
-            entries={accessibleEntries}
-            notes={notes}
-            userProfile={userProfile}
+            initialEntries={accessibleEntries}
+            initialNotes={notes}
+            excludeDiaryIds={lockedDiaryIds}
+            archiveMonths={archiveMonths}
+            layout={layout}
             onNavigate={handleNavigate}
           />
         );
@@ -604,16 +1064,292 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     }
   };
 
+  const renderSuspendedContent = () => (
+    <Suspense fallback={<ScreenFallback />}>
+      {renderContent()}
+    </Suspense>
+  );
+
+  const renderSyncAuthorizationBanner = () => syncAuthorizationMessage ? (
+    <div className="fixed inset-x-3 top-3 z-[91] mx-auto flex max-w-sm items-center gap-3 rounded-lg bg-brand-plum px-3 py-2 text-white shadow-lg">
+      <p className="min-w-0 flex-1 text-xs font-semibold">{syncAuthorizationMessage}</p>
+      <button
+        type="button"
+        onClick={() => void handleSyncReauthorization()}
+        disabled={isReauthorizingSync}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15 disabled:opacity-50"
+        title="Reconnect encrypted sync"
+      >
+        <RefreshCw className={`h-4 w-4 ${isReauthorizingSync ? 'animate-spin' : ''}`} />
+      </button>
+    </div>
+  ) : null;
+
+  const getSyncStatusDisplay = () => {
+    if (!syncStatus || syncAuthorizationMessage) return null;
+    const pending = syncStatus.pendingOutboxCount;
+    const failed = syncStatus.failedOperationCount;
+    const label = failed > 0
+      ? `${failed} sync item${failed === 1 ? '' : 's'} need attention`
+      : !isOnline || syncStatus.isOffline
+        ? pending > 0 ? `${pending} waiting for internet` : 'Offline'
+        : pending > 0
+          ? `${pending} syncing`
+          : syncStatus.currentActivity || '';
+    if (!label) return null;
+    if (failed === 0 && pending === 0 && (!isOnline || syncStatus.isOffline)) return null;
+    return {
+      label,
+      pending,
+      failed,
+      spinning: pending > 0 && failed === 0 && isOnline && !syncStatus.isOffline,
+      tone: failed > 0 ? 'attention' : (!isOnline || syncStatus.isOffline) ? 'offline' : 'syncing',
+    };
+  };
+
+  const renderSyncStatusBadge = (placement: 'desktop' | 'floating' = 'floating') => {
+    const status = getSyncStatusDisplay();
+    if (!status) return null;
+    const toneClass = status.tone === 'attention'
+      ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200'
+      : status.tone === 'offline'
+        ? 'border-brand-border bg-white/86 text-brand-plum dark:bg-brand-card-bg/86 dark:text-brand-text'
+        : 'border-brand-border bg-white/86 text-brand-sage dark:bg-brand-card-bg/86 dark:text-brand-sage-light';
+    const chip = (
+      <div className={`flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-[11px] font-extrabold shadow-sm backdrop-blur-md ${toneClass}`}>
+        <RefreshCw className={`h-3.5 w-3.5 shrink-0 ${status.spinning ? 'animate-spin' : ''}`} />
+        <span className="truncate">{status.label}</span>
+      </div>
+    );
+    if (placement === 'desktop') {
+      return <div className="hidden max-w-[14rem] lg:block">{chip}</div>;
+    }
+    return (
+      <div className={`fixed left-4 z-[38] max-w-[calc(100vw-2rem)] ${currentScreen !== 'entryEditor' ? 'bottom-[calc(5.75rem+var(--safe-area-inset-bottom))]' : 'bottom-[calc(1rem+var(--safe-area-inset-bottom))]'}`}>
+        {chip}
+      </div>
+    );
+  };
+
+  const renderToast = () => (
+    <AnimatePresence>
+      {toast && (
+        <motion.div
+          initial={{ opacity: 0, y: -40, scale: 0.92, x: '-50%' }}
+          animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
+          exit={{ opacity: 0, y: -15, scale: 0.95, x: '-50%' }}
+          transition={{ type: "spring", stiffness: 350, damping: 25 }}
+          className="fixed top-6 left-1/2 z-50 flex items-center gap-3 bg-white/95 dark:bg-brand-card-bg/95 backdrop-blur-md px-5 py-3.5 rounded-2xl border border-brand-border/80 shadow-2xl max-w-sm w-[90%] select-none pointer-events-auto toast-safe"
+        >
+          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 animate-pulse ${
+            toast.type === 'success' ? 'bg-brand-sage' :
+            toast.type === 'error' ? 'bg-brand-rose' : 'bg-brand-pink'
+          }`} />
+
+          <p className="text-xs font-bold text-brand-plum leading-snug flex-grow">
+            {toast.message}
+          </p>
+
+          <button
+            onClick={() => setToast(null)}
+            className="text-brand-text-muted hover:text-brand-rose transition-colors p-1 rounded-lg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
+  const desktopPageTitle = () => {
+    if (activeTab === 'stats' && currentScreen === 'appSettings') return 'Settings';
+    if (activeTab === 'stats') return 'Reflections';
+    if (activeTab === 'diaries' && currentScreen === 'entryEditor') return selectedEntryId ? 'Edit Entry' : 'New Entry';
+    if (activeTab === 'diaries' && currentScreen === 'diaryDetail') {
+      return diaries.find(diary => diary.id === selectedDiaryId)?.name || 'My Journal';
+    }
+    return {
+      home: 'Home',
+      diaries: 'Diaries Library',
+      notes: 'Quick Notes',
+      search: 'Global Search',
+    }[activeTab] || 'Dear Diary';
+  };
+
+  const renderDesktopBackground = () => (
+    <div className="fixed inset-0 z-0 pointer-events-none">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.74),transparent_42%)] dark:bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05),transparent_40%)]" />
+      <div className="absolute left-[15rem] top-[-18rem] h-[38rem] w-[38rem] rounded-full bg-brand-blush-dark/28 blur-[150px]" />
+      <div className="absolute bottom-[-16rem] right-[-10rem] h-[34rem] w-[34rem] rounded-full bg-brand-sage-light/28 blur-[145px]" />
+    </div>
+  );
+
+  const renderDesktopShell = () => {
+    const navItems = [
+      { id: 'home', label: 'Home', icon: Home, onClick: () => handleNavigate('home'), active: activeTab === 'home' },
+      { id: 'diaries', label: 'Diaries', icon: BookOpen, onClick: () => handleNavigate('diaries'), active: activeTab === 'diaries' },
+      { id: 'notes', label: 'Notes', icon: ClipboardList, onClick: () => handleNavigate('notes'), active: activeTab === 'notes' },
+      { id: 'search', label: 'Search', icon: Search, onClick: () => handleNavigate('search'), active: activeTab === 'search' },
+      { id: 'stats', label: 'Reflections', icon: BarChart2, onClick: () => handleNavigate('stats'), active: activeTab === 'stats' && currentScreen !== 'appSettings' },
+      { id: 'settings', label: 'Settings', icon: ShieldCheck, onClick: () => handleNavigate('stats', 'appSettings'), active: activeTab === 'stats' && currentScreen === 'appSettings' },
+    ];
+
+    return (
+      <div className="min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-hidden">
+        {renderSyncAuthorizationBanner()}
+        <GlobalLoaderOverlay loading={globalLoading} />
+        {renderDesktopBackground()}
+        {!isOnline && (
+          <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+            <WifiOff className="h-4 w-4" />
+            <span>Offline. Synced changes are paused.</span>
+          </div>
+        )}
+
+        <div className="relative z-10 flex h-screen min-h-0">
+          <aside className="flex h-screen w-[232px] shrink-0 flex-col border-r border-brand-border/70 bg-gradient-to-b from-brand-blush-light/78 via-brand-blush-light/48 to-white/35 px-4 py-5 shadow-[18px_0_70px_rgba(62,36,41,0.06)] backdrop-blur-xl dark:from-brand-card-bg/78 dark:via-brand-card-bg/55 dark:to-brand-bg/45 xl:w-72 xl:px-6 xl:py-7">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-brand-border bg-white text-brand-sage shadow-sm dark:bg-brand-bg/40 xl:h-12 xl:w-12">
+                <BookOpen className="h-5 w-5 xl:h-6 xl:w-6" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="font-serif-diary text-2xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-3xl">Dear Diary</h1>
+                <p className="mt-0.5 text-xs font-semibold text-brand-text-muted">{visibleStreak} Day Streak</p>
+              </div>
+            </div>
+
+            <nav className="mt-9 flex flex-col gap-1.5 xl:mt-14 xl:gap-2">
+              {navItems.map(item => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={item.onClick}
+                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-bold transition-all xl:gap-4 xl:rounded-2xl xl:px-4 xl:py-3 ${
+                      item.active
+                        ? 'bg-white/86 text-brand-plum shadow-[0_10px_28px_rgba(62,36,41,0.08)] ring-1 ring-brand-border/75 dark:bg-white/10 dark:text-brand-text'
+                        : 'text-brand-plum/72 hover:bg-white/55 hover:text-brand-plum dark:text-brand-text/75 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    <Icon className={`h-5 w-5 ${item.active ? 'text-brand-sage' : 'text-brand-plum/75 dark:text-brand-text/70'}`} />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            <div className="mt-auto flex flex-col gap-4">
+              <div className="hidden rounded-2xl border border-brand-border/70 bg-white/62 p-4 shadow-sm dark:bg-white/5 xl:block">
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-brand-sage">Private Vault</p>
+                <p className="mt-2 text-xs leading-relaxed text-brand-text-muted">Local-first, encrypted sync aware, and ready to lock instantly.</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleLockApp}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-sage px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark active:scale-[0.99]"
+              >
+                <Lock className="h-4 w-4" />
+                Lock
+              </button>
+            </div>
+          </aside>
+
+          <section className="flex min-w-0 flex-1 flex-col">
+            <header className="flex h-16 shrink-0 items-center justify-between border-b border-brand-border/55 bg-brand-bg/78 px-5 backdrop-blur-2xl dark:bg-brand-bg/70 xl:h-20 xl:px-10">
+              <div className="min-w-0">
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-brand-sage">Dear Diary</p>
+                <h2 className="truncate font-serif-diary text-xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-2xl">{desktopPageTitle()}</h2>
+              </div>
+
+              <div className="flex min-w-0 items-center gap-3 xl:gap-4">
+                {renderSyncStatusBadge('desktop')}
+                <form onSubmit={handleDesktopSearchSubmit} className="relative hidden w-[18rem] max-w-[30vw] lg:block xl:w-[28rem] xl:max-w-[36vw]">
+                  <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
+                  <input
+                    type="text"
+                    value={desktopSearchQuery}
+                    onChange={(event) => setDesktopSearchQuery(event.target.value)}
+                    placeholder="Search thoughts, memories, dreams"
+                    className="w-full rounded-full border border-brand-border/60 bg-white/68 py-2.5 pl-11 pr-4 text-sm font-semibold text-brand-plum placeholder:text-brand-text-muted/55 outline-none transition-all focus:border-brand-sage focus:bg-white focus:shadow-[0_8px_30px_rgba(62,36,41,0.08)] dark:bg-white/5 dark:text-brand-text xl:py-3"
+                  />
+                </form>
+                <button
+                  type="button"
+                  onClick={handleDesktopNewEntry}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-sage px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark active:scale-[0.98] xl:px-5 xl:py-3"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span className="hidden xl:inline">New Entry</span>
+                  <span className="xl:hidden">New</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleNavigate('stats', 'appSettings')}
+                  className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-brand-border bg-white text-xl shadow-sm transition-transform hover:scale-105 dark:bg-brand-card-bg xl:h-12 xl:w-12"
+                  style={{ backgroundColor: userProfile.avatarColor }}
+                  title="Open settings"
+                >
+                  <ProfileAvatar profile={userProfile} />
+                </button>
+              </div>
+            </header>
+
+            <main className="min-h-0 flex-1 overflow-y-auto px-5 py-5 xl:px-10 xl:py-7">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={`${activeTab}-${currentScreen}`}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.22 }}
+                  className="mx-auto w-full max-w-[1280px] 2xl:max-w-[1460px]"
+                >
+                  {renderSuspendedContent()}
+                </motion.div>
+              </AnimatePresence>
+            </main>
+          </section>
+        </div>
+        {renderToast()}
+      </div>
+    );
+  };
+
+  const renderDesktopEditorShell = () => (
+    <div className="min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-x-hidden">
+      {renderSyncAuthorizationBanner()}
+      {renderSyncStatusBadge()}
+      <GlobalLoaderOverlay loading={globalLoading} />
+      {renderDesktopBackground()}
+      {!isOnline && (
+        <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+          <WifiOff className="h-4 w-4" />
+          <span>Offline. Synced changes are paused.</span>
+        </div>
+      )}
+      <main className="relative z-10 mx-auto min-h-screen w-full max-w-[1500px] px-5 py-5 xl:px-8 xl:py-8">
+        {renderSuspendedContent()}
+      </main>
+      {renderToast()}
+    </div>
+  );
+
   // If locked, return LockScreen view
   if (!isAuthenticated) {
     return (
-      <LockScreen
-        initialSecurity={security}
-        initialSettings={settings}
-        onSecurityChange={setSecurity}
-        onSettingsChange={setSettings}
-        onUnlock={handleUnlock}
-      />
+      <>
+        <Suspense fallback={<ScreenFallback />}>
+          <LockScreen
+            initialSecurity={security}
+            initialSettings={settings}
+            onSecurityChange={setSecurity}
+            onThemeChange={handleLocalThemeChange}
+            onUnlock={handleUnlock}
+          />
+        </Suspense>
+        <GlobalLoaderOverlay loading={globalLoading} />
+      </>
     );
   }
 
@@ -621,20 +1357,47 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   if (isEditorFocusMode && activeTab === 'diaries' && currentScreen === 'entryEditor') {
     return (
       <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col font-sans select-none relative safe-area-root">
+        {renderSyncAuthorizationBanner()}
+        {renderSyncStatusBadge()}
+        <GlobalLoaderOverlay loading={globalLoading} />
+        {!isOnline && (
+          <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+            <WifiOff className="h-4 w-4" />
+            <span>Offline. Synced changes are paused.</span>
+          </div>
+        )}
         {/* Background Soft Ambient Light Blurs */}
         <div className="fixed inset-0 z-0 pointer-events-none opacity-20">
           <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full bg-brand-blush-dark blur-[120px]" />
           <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-brand-sage-light blur-[100px]" />
         </div>
         <div className="z-10 flex-grow flex flex-col">
-          {renderContent()}
+          {renderSuspendedContent()}
         </div>
+        {renderToast()}
       </div>
     );
   }
 
+  if (isDesktop && activeTab === 'diaries' && currentScreen === 'entryEditor') {
+    return renderDesktopEditorShell();
+  }
+
+  if (isDesktop) {
+    return renderDesktopShell();
+  }
+
   return (
     <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none pb-24 relative safe-area-root app-shell">
+      {renderSyncAuthorizationBanner()}
+      {renderSyncStatusBadge()}
+      <GlobalLoaderOverlay loading={globalLoading} />
+      {!isOnline && (
+        <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+          <WifiOff className="h-4 w-4" />
+          <span>Offline. Synced changes are paused.</span>
+        </div>
+      )}
       
       {/* Background Soft Ambient Light Blurs */}
       <div className="fixed inset-0 z-0 pointer-events-none opacity-20">
@@ -653,7 +1416,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             transition={{ duration: 0.25 }}
             className="flex-grow flex flex-col justify-start"
           >
-            {renderContent()}
+            {renderSuspendedContent()}
           </motion.div>
         </AnimatePresence>
       </main>
@@ -736,34 +1499,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         </nav>
       )}
 
-      {/* Elegant, Non-blocking Floating Toast Notification System */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: -40, scale: 0.92, x: '-50%' }}
-            animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
-            exit={{ opacity: 0, y: -15, scale: 0.95, x: '-50%' }}
-            transition={{ type: "spring", stiffness: 350, damping: 25 }}
-            className="fixed top-6 left-1/2 z-50 flex items-center gap-3 bg-white/95 dark:bg-brand-card-bg/95 backdrop-blur-md px-5 py-3.5 rounded-2xl border border-brand-border/80 shadow-2xl max-w-sm w-[90%] select-none pointer-events-auto toast-safe"
-          >
-            <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 animate-pulse ${
-              toast.type === 'success' ? 'bg-brand-sage' :
-              toast.type === 'error' ? 'bg-brand-rose' : 'bg-brand-pink'
-            }`} />
-            
-            <p className="text-xs font-bold text-brand-plum leading-snug flex-grow">
-              {toast.message}
-            </p>
-            
-            <button 
-              onClick={() => setToast(null)}
-              className="text-brand-text-muted hover:text-brand-rose transition-colors p-1 rounded-lg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {renderToast()}
     </div>
   );
 }
