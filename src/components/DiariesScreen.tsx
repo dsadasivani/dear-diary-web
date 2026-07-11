@@ -6,7 +6,7 @@ import {
 import { Diary, Entry, ResponsiveLayout } from '../types';
 import { PREDEFINED_COLORS } from '../domain/journalCatalog';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
-import { persistMediaDataUri } from '../mobile/mediaStorage';
+import { persistOptimizedImageFile } from '../mobile/mediaStorage';
 import { diaryRepository } from '../repositories';
 
 type DiaryViewMode = 'compact' | 'list';
@@ -68,18 +68,12 @@ export default function DiariesScreen({
   const handleCoverImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      if (event.target?.result) {
-        const coverUri = await persistMediaDataUri(
-          event.target.result as string,
-          'cover',
-          file.type || 'image/jpeg',
-        );
-        setCoverImage(coverUri);
-      }
-    };
-    reader.readAsDataURL(file);
+    void persistOptimizedImageFile(file, 'cover')
+      .then(setCoverImage)
+      .catch(error => {
+        console.warn('Cover image could not be attached:', error);
+      });
+    e.target.value = '';
   };
 
   const handleFoilIconToggle = (icon: string) => {

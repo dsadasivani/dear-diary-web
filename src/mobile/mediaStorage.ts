@@ -1,8 +1,17 @@
 import { Capacitor } from '@capacitor/core';
 import { fileStorageService } from '../platform/filesystem';
 import { isNativePlatform } from '../platform';
+import {
+  optimizeImageForStorage,
+  type ImageOptimizationResult,
+  type ImageStorageKind,
+} from './imageOptimization';
 
 export type MediaKind = 'audio' | 'photo' | 'cover' | 'avatar';
+type ImageOptimizer = (
+  input: Blob | string | { dataUri: string; mimeType?: string },
+  kind: ImageStorageKind,
+) => Promise<ImageOptimizationResult>;
 
 const extensionFromMime = (mimeType: string, fallback: string): string => {
   const subtype = mimeType.split('/')[1]?.split(';')[0];
@@ -61,8 +70,30 @@ export const readImageAsDataUri = async (uri: string): Promise<{ dataUri: string
   };
 };
 
-export const cacheRemoteProfileImage = async (imageUrl: string): Promise<string | null> => {
+export const persistOptimizedImageFile = async (
+  file: Blob,
+  kind: ImageStorageKind,
+  optimizer: ImageOptimizer = optimizeImageForStorage,
+): Promise<string> => {
+  const optimized = await optimizer(file, kind);
+  return persistMediaDataUri(optimized.dataUri, kind, optimized.mimeType);
+};
+
+export const persistOptimizedImageDataUri = async (
+  dataUri: string,
+  kind: ImageStorageKind,
+  mimeType: string,
+  optimizer: ImageOptimizer = optimizeImageForStorage,
+): Promise<string> => {
+  const optimized = await optimizer({ dataUri, mimeType }, kind);
+  return persistMediaDataUri(optimized.dataUri, kind, optimized.mimeType);
+};
+
+export const cacheRemoteProfileImage = async (
+  imageUrl: string,
+  optimizer: ImageOptimizer = optimizeImageForStorage,
+): Promise<string | null> => {
   const image = await readImageAsDataUri(imageUrl);
   if (!image) return null;
-  return persistMediaDataUri(image.dataUri, 'avatar', image.mimeType);
+  return persistOptimizedImageDataUri(image.dataUri, 'avatar', image.mimeType, optimizer);
 };

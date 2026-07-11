@@ -1054,7 +1054,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     </div>
   ) : null;
 
-  const renderSyncStatusBadge = () => {
+  const getSyncStatusDisplay = () => {
     if (!syncStatus || syncAuthorizationMessage) return null;
     const pending = syncStatus.pendingOutboxCount;
     const failed = syncStatus.failedOperationCount;
@@ -1066,10 +1066,36 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           ? `${pending} syncing`
           : syncStatus.currentActivity || '';
     if (!label) return null;
+    if (failed === 0 && pending === 0 && (!isOnline || syncStatus.isOffline)) return null;
+    return {
+      label,
+      pending,
+      failed,
+      spinning: pending > 0 && failed === 0 && isOnline && !syncStatus.isOffline,
+      tone: failed > 0 ? 'attention' : (!isOnline || syncStatus.isOffline) ? 'offline' : 'syncing',
+    };
+  };
+
+  const renderSyncStatusBadge = (placement: 'desktop' | 'floating' = 'floating') => {
+    const status = getSyncStatusDisplay();
+    if (!status) return null;
+    const toneClass = status.tone === 'attention'
+      ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200'
+      : status.tone === 'offline'
+        ? 'border-brand-border bg-white/86 text-brand-plum dark:bg-brand-card-bg/86 dark:text-brand-text'
+        : 'border-brand-border bg-white/86 text-brand-sage dark:bg-brand-card-bg/86 dark:text-brand-sage-light';
+    const chip = (
+      <div className={`flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-[11px] font-extrabold shadow-sm backdrop-blur-md ${toneClass}`}>
+        <RefreshCw className={`h-3.5 w-3.5 shrink-0 ${status.spinning ? 'animate-spin' : ''}`} />
+        <span className="truncate">{status.label}</span>
+      </div>
+    );
+    if (placement === 'desktop') {
+      return <div className="hidden max-w-[14rem] lg:block">{chip}</div>;
+    }
     return (
-      <div className="fixed inset-x-3 top-3 z-[89] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-white/92 px-3 py-2 text-xs font-bold text-brand-plum shadow-lg ring-1 ring-brand-border dark:bg-brand-card-bg/92 dark:text-brand-text">
-        <RefreshCw className={`h-3.5 w-3.5 ${pending > 0 && failed === 0 && isOnline ? 'animate-spin' : ''}`} />
-        <span>{label}</span>
+      <div className={`fixed left-4 z-[38] max-w-[calc(100vw-2rem)] ${currentScreen !== 'entryEditor' ? 'bottom-[calc(5.75rem+var(--safe-area-inset-bottom))]' : 'bottom-[calc(1rem+var(--safe-area-inset-bottom))]'}`}>
+        {chip}
       </div>
     );
   };
@@ -1140,7 +1166,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     return (
       <div className="min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-hidden">
         {renderSyncAuthorizationBanner()}
-        {renderSyncStatusBadge()}
         <GlobalLoaderOverlay loading={globalLoading} />
         {renderDesktopBackground()}
         {!isOnline && (
@@ -1207,6 +1232,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               </div>
 
               <div className="flex min-w-0 items-center gap-3 xl:gap-4">
+                {renderSyncStatusBadge('desktop')}
                 <form onSubmit={handleDesktopSearchSubmit} className="relative hidden w-[18rem] max-w-[30vw] lg:block xl:w-[28rem] xl:max-w-[36vw]">
                   <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
                   <input

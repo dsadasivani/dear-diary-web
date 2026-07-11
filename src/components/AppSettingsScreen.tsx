@@ -222,6 +222,7 @@ export default function AppSettingsScreen({
   const journalDataPercent = driveSyncStatus ? percentOf(driveSyncStatus.storageBreakdown.journalDataBytes, appStorageBytes) : 0;
   const imageStoragePercent = driveSyncStatus ? percentOf(driveSyncStatus.storageBreakdown.imageBytes, appStorageBytes) : 0;
   const audioStoragePercent = driveSyncStatus ? percentOf(driveSyncStatus.storageBreakdown.audioBytes, appStorageBytes) : 0;
+  const pendingCleanupPercent = driveSyncStatus ? percentOf(driveSyncStatus.storageBreakdown.pendingCleanupBytes, appStorageBytes) : 0;
   const pendingSyncCount = syncStatus?.pendingOutboxCount || 0;
   const failedSyncCount = syncStatus?.failedOperationCount || 0;
   const conflictSyncCount = syncStatus?.conflictCount || 0;
@@ -1460,6 +1461,9 @@ export default function AppSettingsScreen({
                         ['Journal data', driveSyncStatus?.storageBreakdown.journalDataBytes || 0, journalDataPercent, 'bg-brand-sage'],
                         ['Photos', driveSyncStatus?.storageBreakdown.imageBytes || 0, imageStoragePercent, 'bg-brand-pink'],
                         ['Voice notes', driveSyncStatus?.storageBreakdown.audioBytes || 0, audioStoragePercent, 'bg-brand-plum'],
+                        ...(driveSyncStatus?.storageBreakdown.pendingCleanupBytes
+                          ? [['Pending cleanup', driveSyncStatus.storageBreakdown.pendingCleanupBytes, pendingCleanupPercent, 'bg-amber-500']]
+                          : []),
                       ].map(([label, bytes, percent, colorClass]) => (
                         <div key={String(label)} className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3">
                           <div className="flex items-center justify-between gap-3">

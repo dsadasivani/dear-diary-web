@@ -7,6 +7,7 @@ import type {
   SecurityConfig,
   SupabaseAuthSession,
   SyncDevice,
+  UserProfile,
 } from '../types';
 import type { DiaryRepository } from '../repositories';
 import { createInitialPinWithRecovery } from '../domain/security';
@@ -43,6 +44,7 @@ import { recoverAccountRootKey } from './accountRecovery';
 import { restoreLatestPartitions } from './partitionedRestore';
 import type { SyncSecretStorage } from './syncSecrets';
 import { manualSyncFlowCheckpoint } from '../testing/manualSyncFlowHooks';
+import { populateUserProfileFromGoogle, type AvatarCache } from '../utils/googleProfile';
 
 interface RecoveryQuestionInput {
   questionId: string;
@@ -62,6 +64,7 @@ export interface BootstrapNewMobileAccountInput {
   platform?: PairingPlatform | string;
   download?: SyncObjectDownloader;
   secretStorage?: SyncSecretStorage;
+  cacheGoogleAvatar?: AvatarCache;
   onProgress?: (message: string) => void;
 }
 
@@ -276,6 +279,29 @@ const localStateFromPending = (
   latestManifestSequence: options.latestManifestSequence,
   linkedAt: Date.now(),
 });
+
+const profilesMatch = (left: UserProfile, right: UserProfile): boolean => (
+  left.name === right.name &&
+  left.email === right.email &&
+  left.bio === right.bio &&
+  left.avatarEmoji === right.avatarEmoji &&
+  left.avatarColor === right.avatarColor &&
+  left.avatarUri === right.avatarUri &&
+  left.writingGoal === right.writingGoal &&
+  left.joinedDate === right.joinedDate
+);
+
+const populateLocalProfileFromGoogle = async (
+  repository: DiaryRepository,
+  googleSession: GoogleAccountSession,
+  cacheGoogleAvatar?: AvatarCache,
+): Promise<void> => {
+  const profile = await repository.getUserProfile();
+  const updatedProfile = await populateUserProfileFromGoogle(profile, googleSession, cacheGoogleAvatar);
+  if (!profilesMatch(profile, updatedProfile)) {
+    await repository.saveUserProfile(updatedProfile);
+  }
+};
 
 const primaryRecoveryAlreadyFinalized = async (
   pending: PendingPrimaryRecovery,
@@ -748,6 +774,7 @@ export const bootstrapNewMobileAccount = async ({
   platform = getPlatformName(),
   download,
   secretStorage,
+  cacheGoogleAvatar,
   onProgress,
 }: BootstrapNewMobileAccountInput): Promise<BootstrapNewMobileAccountResult> => {
   if (!googleSession.email) throw new Error('Google must return an email address to create a Dear Diary account.');
@@ -793,6 +820,9 @@ export const bootstrapNewMobileAccount = async ({
       onProgress,
     });
   }
+
+  onProgress?.('Personalizing your profile...');
+  await populateLocalProfileFromGoogle(repository, googleSession, cacheGoogleAvatar);
 
   onProgress?.('Creating encryption keys...');
   const accountRootKey = generateAccountRootKey();

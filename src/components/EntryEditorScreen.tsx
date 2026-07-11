@@ -13,7 +13,7 @@ import RichTextEditor from './RichTextEditor';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
 import SyncedImage from './SyncedImage';
 import { audioService } from '../platform/audio';
-import { persistMediaDataUri } from '../mobile/mediaStorage';
+import { persistMediaDataUri, persistOptimizedImageFile } from '../mobile/mediaStorage';
 import { SyncConflictError } from '../sync/eventSyncEngine';
 import { isNativePlatform } from '../platform';
 import { VoiceRecorder } from '@independo/capacitor-voice-recorder';
@@ -1166,19 +1166,13 @@ export default function EntryEditorScreen({
     if (!files) return;
 
     Array.from(files).forEach((file: File) => {
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        if (event.target?.result) {
-          const photoUri = await persistMediaDataUri(
-            event.target.result as string,
-            'photo',
-            file.type || 'image/jpeg',
-          );
-          setPhotoUris(prev => [...prev, photoUri]);
-        }
-      };
-      reader.readAsDataURL(file);
+      void persistOptimizedImageFile(file, 'photo')
+        .then(photoUri => setPhotoUris(prev => [...prev, photoUri]))
+        .catch(error => {
+          console.warn('Photo could not be attached:', error);
+        });
     });
+    e.target.value = '';
   };
 
   const removePhoto = (idx: number) => {

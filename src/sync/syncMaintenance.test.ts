@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SyncObjectMetadata } from '../types';
-import { planSyncMaintenance } from './syncMaintenance';
+import { ORPHAN_GRACE_PERIOD_MS, planSyncMaintenance } from './syncMaintenance';
 
 const object = (
   sequence: number,
@@ -133,4 +133,26 @@ test('retires old unreferenced media while keeping current media references', ()
 
   assert.deepEqual(plan.mediaToRetire.map(item => item.driveFileId), ['deleted-media', 'deleted-thumb']);
   assert.deepEqual(plan.objectsToRetire.map(item => item.driveFileId), ['deleted-media', 'deleted-thumb']);
+});
+
+test('uses a two-hour default grace period before retiring unreferenced remote media', () => {
+  const now = Date.parse('2026-07-06T12:00:00.000Z');
+  const metadata = [
+    object(1, 'media', null, 'month:2026-07'),
+    object(2, 'media', null, 'month:2026-07'),
+  ];
+  metadata[0].driveFileId = 'almost-old-media';
+  metadata[0].createdAt = '2026-07-06T10:01:00.000Z';
+  metadata[1].driveFileId = 'old-enough-media';
+  metadata[1].createdAt = '2026-07-06T10:00:00.000Z';
+
+  const plan = planSyncMaintenance({
+    metadata,
+    driveFiles: [],
+    now,
+    liveDriveFileIds: [],
+  });
+
+  assert.equal(ORPHAN_GRACE_PERIOD_MS, 2 * 60 * 60 * 1000);
+  assert.deepEqual(plan.mediaToRetire.map(item => item.driveFileId), ['old-enough-media']);
 });

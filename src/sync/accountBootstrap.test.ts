@@ -334,6 +334,113 @@ const createPartitionedPendingRecoveryFixture = async () => {
   };
 };
 
+test('new account setup populates the local profile from Google', async () => {
+  const repository = await createRepository();
+  const secretStorage = new MemorySecretStorage();
+  const originalFetch = globalThis.fetch;
+  const uploadedNames: string[] = [];
+  const driveFileIds = ['drive-recovery', 'drive-snapshot'];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+    const body = init.body;
+    const bytes = body instanceof Uint8Array
+      ? body
+      : body instanceof ArrayBuffer
+        ? new Uint8Array(body)
+        : typeof body === 'string'
+          ? new TextEncoder().encode(body)
+          : null;
+    if (!bytes) throw new Error('Expected multipart Drive upload body.');
+    const text = new TextDecoder().decode(bytes.slice(0, 4096));
+    const name = /"name":"([^"]+)"/.exec(text)?.[1] || `upload-${uploadedNames.length + 1}`;
+    uploadedNames.push(name);
+    return new Response(JSON.stringify({
+      id: driveFileIds[uploadedNames.length - 1],
+      name,
+      size: String(bytes.byteLength),
+      appProperties: {},
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+  const account: SyncAccount = {
+    id: 'account-1',
+    googleUserId: googleSession.userId,
+    googleEmail: googleSession.email!,
+    createdAt: '',
+    activePrimaryDeviceId: 'primary-1',
+    currentSyncSequence: 0,
+    currentSnapshotSequence: 0,
+    currentKeyEpoch: 1,
+    recoveryConfigured: true,
+  };
+  const controlPlane = {
+    lookupCurrentGoogleAccount: async () => null,
+    createPrimaryMobileAccount: async (input: { publicKey: string; displayName: string }) => {
+      assert.equal(input.displayName, 'Google Writer');
+      return {
+        account,
+        device: {
+          id: 'primary-1',
+          accountId: account.id,
+          role: 'primary_mobile',
+          publicKey: input.publicKey,
+          displayName: input.displayName,
+          platform: 'android',
+          createdAt: '',
+          lastSeenAt: '',
+          revokedAt: null,
+          replacedByDeviceId: null,
+        },
+      };
+    },
+    commitSyncObject: async (input: { deviceId: string; driveFileId: string; objectKind: SyncObjectMetadata['objectKind']; sha256: string; sizeBytes: number; keyEpoch?: number }): Promise<SyncObjectMetadata> => ({
+      id: `${input.objectKind}-${input.driveFileId}`,
+      accountId: account.id,
+      sequence: input.objectKind === 'key_package' ? 1 : 2,
+      driveFileId: input.driveFileId,
+      objectKind: input.objectKind,
+      sha256: input.sha256,
+      sizeBytes: input.sizeBytes,
+      createdByDeviceId: input.deviceId,
+      createdAt: '',
+      keyEpoch: input.keyEpoch || 1,
+    }),
+  } as unknown as SupabaseControlPlaneClient;
+
+  try {
+    const result = await bootstrapNewMobileAccount({
+      googleSession: {
+        ...googleSession,
+        displayName: 'Google Writer',
+        imageUrl: 'https://example.com/avatar.jpg',
+      },
+      supabaseSession,
+      recoveryPassphrase: 'a sufficiently long passphrase',
+      localPin: '1234',
+      recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+      repository,
+      controlPlane,
+      platform: 'android',
+      secretStorage,
+      cacheGoogleAvatar: async imageUrl => {
+        assert.equal(imageUrl, 'https://example.com/avatar.jpg');
+        return 'file:///google-avatar.jpg';
+      },
+    });
+
+    assert.equal(result.mode, 'created');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const profile = await repository.getUserProfile();
+  assert.equal(profile.name, 'Google Writer');
+  assert.equal(profile.email, 'writer@example.com');
+  assert.equal(profile.avatarUri, 'file:///google-avatar.jpg');
+  assert.deepEqual(uploadedNames, ['/key-packages/root-key-v1.ddkey', '/snapshots/2.ddsnapshot']);
+});
+
 test('primary recovery aborts without finalizing when restore fails', async () => {
   const repository = await createRepository();
   const originalRootKey = crypto.getRandomValues(new Uint8Array(32));

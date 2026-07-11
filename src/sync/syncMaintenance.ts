@@ -10,7 +10,7 @@ import { emitSyncTelemetry } from './syncTelemetry';
 export const SNAPSHOT_RETENTION_COUNT = 3;
 export const MANIFEST_RETENTION_COUNT = 3;
 export const PARTITION_SNAPSHOT_RETENTION_COUNT = 2;
-export const ORPHAN_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
+export const ORPHAN_GRACE_PERIOD_MS = 2 * 60 * 60 * 1000;
 
 export interface SyncMaintenancePlan {
   objectsToRetire: SyncObjectMetadata[];

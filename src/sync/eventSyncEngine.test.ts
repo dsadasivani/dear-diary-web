@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SyncDevice, SyncObjectMetadata } from '../types';
-import { EventSyncEngine, SyncConflictError } from './eventSyncEngine';
+import { buildStorageBreakdown, EventSyncEngine, SyncConflictError } from './eventSyncEngine';
 import { SupabaseControlPlaneError, type SupabaseControlPlaneClient } from './supabaseControlPlane';
 import type { SyncSecrets } from './syncSecrets';
 import { createRepository } from './testSupport';
@@ -27,6 +27,46 @@ const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 };
+
+test('storage breakdown reports unreferenced media as pending cleanup instead of active photos', () => {
+  const breakdown = buildStorageBreakdown([
+    {
+      id: 'event-file',
+      name: '/events/1.ddevent',
+      size: 100,
+      appProperties: { objectKind: 'event' },
+    },
+    {
+      id: 'live-photo',
+      name: '/media/live.ddmedia',
+      size: 200,
+      appProperties: { objectKind: 'media', mediaKind: 'image' },
+    },
+    {
+      id: 'live-photo-thumb',
+      name: '/thumbnails/live.ddthumb',
+      size: 20,
+      appProperties: { objectKind: 'thumbnail', mediaKind: 'image', sourceDriveFileId: 'live-photo' },
+    },
+    {
+      id: 'deleted-photo',
+      name: '/media/deleted.ddmedia',
+      size: 500,
+      appProperties: { objectKind: 'media', mediaKind: 'image' },
+    },
+    {
+      id: 'deleted-photo-thumb',
+      name: '/thumbnails/deleted.ddthumb',
+      size: 50,
+      appProperties: { objectKind: 'thumbnail', mediaKind: 'image', sourceDriveFileId: 'deleted-photo' },
+    },
+  ], ['live-photo', 'live-photo-thumb']);
+
+  assert.equal(breakdown.journalDataBytes, 100);
+  assert.equal(breakdown.imageBytes, 220);
+  assert.equal(breakdown.audioBytes, 0);
+  assert.equal(breakdown.pendingCleanupBytes, 550);
+});
 
 test('uploads and commits an encrypted event before applying it locally', async () => {
   const repository = await createRepository();

@@ -2,7 +2,7 @@ import type { GoogleAccountSession, UserProfile } from '../types';
 import { createDefaultUserProfile } from '../repositories/defaults';
 import { cacheRemoteProfileImage } from '../mobile/mediaStorage';
 
-type AvatarCache = (imageUrl: string) => Promise<string | null>;
+export type AvatarCache = (imageUrl: string) => Promise<string | null>;
 
 const isUntouchedName = (profile: UserProfile): boolean => {
   const name = profile.name.trim();

@@ -195,7 +195,11 @@ const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 };
 
-const buildStorageBreakdown = (files: DriveSyncObjectSummary[]): DriveSyncStorageBreakdown => {
+export const buildStorageBreakdown = (
+  files: DriveSyncObjectSummary[],
+  liveDriveFileIds?: Iterable<string>,
+): DriveSyncStorageBreakdown => {
+  const liveFiles = liveDriveFileIds ? new Set(liveDriveFileIds) : null;
   const legacyImageSourceIds = new Set(
     files
       .filter(file => file.appProperties?.objectKind === 'thumbnail')
@@ -205,10 +209,16 @@ const buildStorageBreakdown = (files: DriveSyncObjectSummary[]): DriveSyncStorag
   let imageBytes = 0;
   let audioBytes = 0;
   let journalDataBytes = 0;
+  let pendingCleanupBytes = 0;
   files.forEach(file => {
     const size = file.size || 0;
     const kind = file.appProperties?.mediaKind;
     const objectKind = file.appProperties?.objectKind;
+    const isMediaObject = objectKind === 'media' || objectKind === 'thumbnail';
+    if (liveFiles && isMediaObject && !liveFiles.has(file.id)) {
+      pendingCleanupBytes += size;
+      return;
+    }
     if (kind === 'image' || objectKind === 'thumbnail' || legacyImageSourceIds.has(file.id)) {
       imageBytes += size;
     } else if (kind === 'audio' || objectKind === 'media') {
@@ -217,7 +227,7 @@ const buildStorageBreakdown = (files: DriveSyncObjectSummary[]): DriveSyncStorag
       journalDataBytes += size;
     }
   });
-  return { journalDataBytes, imageBytes, audioBytes };
+  return { journalDataBytes, imageBytes, audioBytes, pendingCleanupBytes };
 };
 
 export interface BackgroundArchiveHydrationResult {
@@ -229,6 +239,7 @@ export interface DriveSyncStorageBreakdown {
   journalDataBytes: number;
   imageBytes: number;
   audioBytes: number;
+  pendingCleanupBytes: number;
 }
 
 export interface DriveSyncStatus {
@@ -415,8 +426,10 @@ export class EventSyncEngine {
     return this.enqueue(async () => {
       this.requireOnline();
       const runtime = await this.openRuntime();
+      let liveMediaDriveFileIds: Set<string> | undefined;
       if (runtime.state.deviceRole === 'primary_mobile') {
-        await this.runMaintenanceWithRuntime(runtime, true).catch(error => {
+        liveMediaDriveFileIds = collectLiveMediaDriveFileIds(await this.repository.exportSnapshot());
+        await this.runMaintenanceWithRuntime(runtime, true, liveMediaDriveFileIds).catch(error => {
           console.warn('Encrypted sync cleanup before storage status failed:', error);
         });
       }
@@ -430,7 +443,7 @@ export class EventSyncEngine {
         accountEmail: runtime.state.googleEmail,
         appStorageBytes: files.reduce((sum, file) => sum + (file.size || 0), 0),
         storageQuota,
-        storageBreakdown: buildStorageBreakdown(files),
+        storageBreakdown: buildStorageBreakdown(files, liveMediaDriveFileIds),
         lastUploadAt: latestFile?.modifiedTime || latestFile?.createdTime || null,
         recoveryKeyDriveFileId: runtime.state.recoveryKeyDriveFileId,
         latestSnapshotDriveFileId: runtime.state.latestSnapshotDriveFileId,
@@ -1599,6 +1612,7 @@ export class EventSyncEngine {
   private async runMaintenanceWithRuntime(
     runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
     force: boolean,
+    liveDriveFileIds?: Iterable<string>,
   ): Promise<void> {
     const state = await this.repository.getLocalSyncAccountState();
     if (!state || state.deviceRole !== 'primary_mobile') return;
@@ -1611,7 +1625,7 @@ export class EventSyncEngine {
         primaryDeviceId: state.deviceId,
         googleSession: runtime.googleSession,
         now,
-        liveDriveFileIds: collectLiveMediaDriveFileIds(await this.repository.exportSnapshot()),
+        liveDriveFileIds: liveDriveFileIds || collectLiveMediaDriveFileIds(await this.repository.exportSnapshot()),
       });
       emitSyncTelemetry('sync.maintenance.complete', {
         durationMs: this.now() - startedAt,

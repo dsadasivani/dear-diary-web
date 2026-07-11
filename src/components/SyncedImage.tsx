@@ -12,6 +12,7 @@ interface SyncedImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement
 const resolvedCache = new Map<string, string>();
 const inFlight = new Map<string, Promise<string>>();
 const MAX_CACHE_SIZE = 100;
+const TRANSPARENT_PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
 const rememberResolved = (reference: string, resolved: string): void => {
   if (resolvedCache.has(reference)) resolvedCache.delete(reference);
@@ -44,19 +45,27 @@ const hydrateReference = (reference: string, label: string): Promise<string> => 
 
 export default function SyncedImage({
   src,
-  fallbackSrc,
+  fallbackSrc: _fallbackSrc,
   label = 'image',
   onClick,
   onError,
+  className,
   ...imgProps
 }: SyncedImageProps) {
   const imageRef = useRef<HTMLImageElement | null>(null);
-  const [resolvedSrc, setResolvedSrc] = useState(src);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const [isVisible, setIsVisible] = useState(() => !parseSyncMediaReference(src));
+  const [resolvedSrc, setResolvedSrc] = useState<string | null>(() => (
+    parseSyncMediaReference(src) ? resolvedCache.get(src) || null : src
+  ));
+  const [hydrationFailed, setHydrationFailed] = useState(false);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [isVisible, setIsVisible] = useState(() => !parseSyncMediaReference(src) || resolvedCache.has(src));
 
   useEffect(() => {
     if (!parseSyncMediaReference(src)) {
+      setIsVisible(true);
+      return undefined;
+    }
+    if (resolvedCache.has(src)) {
       setIsVisible(true);
       return undefined;
     }
@@ -79,9 +88,10 @@ export default function SyncedImage({
 
   useEffect(() => {
     let cancelled = false;
-    setResolvedSrc(src);
-    setFailedSrc(null);
-    if (!parseSyncMediaReference(src)) return;
+    const isSyncReference = Boolean(parseSyncMediaReference(src));
+    setResolvedSrc(isSyncReference ? resolvedCache.get(src) || null : src);
+    setHydrationFailed(false);
+    if (!isSyncReference) return;
     if (!isVisible) return;
 
     void hydrateReference(src, label)
@@ -90,25 +100,55 @@ export default function SyncedImage({
       })
       .catch(error => {
         console.warn(`Synced ${label} could not be shown yet:`, error);
-        if (!cancelled && fallbackSrc) setFailedSrc(fallbackSrc);
+        if (!cancelled) {
+          setHydrationFailed(true);
+        }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [fallbackSrc, isVisible, label, src]);
+  }, [isVisible, label, src]);
 
-  const displaySrc = failedSrc || resolvedSrc;
+  const displaySrc = hydrationFailed ? TRANSPARENT_PLACEHOLDER_SRC : resolvedSrc || TRANSPARENT_PLACEHOLDER_SRC;
+  const isPlaceholder = displaySrc === TRANSPARENT_PLACEHOLDER_SRC;
+  const isSkeleton = isPlaceholder || loadedSrc !== displaySrc;
+
+  useEffect(() => {
+    if (isPlaceholder) {
+      setLoadedSrc(null);
+      return;
+    }
+
+    const node = imageRef.current;
+    setLoadedSrc(node?.complete && node.naturalWidth > 0 ? displaySrc : null);
+  }, [displaySrc, isPlaceholder]);
+
+  const displayClassName = [
+    className,
+    isSkeleton ? 'synced-image-skeleton ring-1 ring-inset ring-brand-border/45 dark:ring-white/10' : '',
+    isSkeleton && !hydrationFailed ? 'animate-pulse' : '',
+  ].filter(Boolean).join(' ');
+  const clickableSrc = resolvedSrc && !hydrationFailed ? resolvedSrc : null;
 
   return (
     <img
       {...imgProps}
       ref={imageRef}
       src={displaySrc}
-      onClick={onClick ? () => onClick(displaySrc) : undefined}
+      className={displayClassName || undefined}
+      aria-busy={(isSkeleton && !hydrationFailed) || undefined}
+      data-image-state={hydrationFailed ? 'failed' : isSkeleton ? 'loading' : 'ready'}
+      onClick={onClick && clickableSrc ? () => onClick(clickableSrc) : undefined}
+      onLoad={(event) => {
+        if (displaySrc !== TRANSPARENT_PLACEHOLDER_SRC) {
+          setLoadedSrc(displaySrc);
+        }
+        imgProps.onLoad?.(event);
+      }}
       onError={(event) => {
-        if (fallbackSrc && displaySrc !== fallbackSrc) {
-          setFailedSrc(fallbackSrc);
+        if (displaySrc !== TRANSPARENT_PLACEHOLDER_SRC) {
+          setHydrationFailed(true);
         }
         onError?.(event);
       }}
