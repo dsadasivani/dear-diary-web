@@ -48,7 +48,6 @@ import {
   partitionKeyForRecordPayload,
   recentPartitionKeys,
 } from './syncPartitioning';
-import { hydrateArchivePartition as hydrateArchivePartitionFromCloud } from './partitionedRestore';
 import {
   cacheSyncMedia,
   createStableSyncMediaReference,
@@ -63,11 +62,7 @@ import { downloadVerifiedSyncObject, type SyncObjectDownloader } from './eventRe
 import { restoreWebGoogleSyncSession, startWebGoogleSyncSignIn } from './webGoogleAuth';
 import { performSyncMaintenance } from './syncMaintenance';
 import { migrateLocalAccountToPartitionedSync } from './partitionedMigration';
-import {
-  shouldBackgroundHydrateArchive,
-  type ArchiveHydrationDecision,
-  type ArchiveHydrationPolicyInput,
-} from './partitionHydrationPolicy';
+import type { ArchiveHydrationPolicyInput } from './partitionHydrationPolicy';
 import { emitSyncTelemetry } from './syncTelemetry';
 import { getSyncRuntimeFlags } from './runtimeFlags';
 import { SyncError } from './errors';
@@ -75,6 +70,13 @@ import { reportUnexpectedError } from '../infrastructure/telemetry/reportUnexpec
 import { sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
 import { measureAsync } from '../utils/performance';
 import { SyncHealthService } from './health/SyncHealthService';
+import {
+  ArchiveHydrationService,
+  defaultArchiveHydrationPolicyInput,
+  type BackgroundArchiveHydrationResult,
+} from './ArchiveHydrationService';
+
+export type { BackgroundArchiveHydrationResult } from './ArchiveHydrationService';
 
 type SyncPayload = NonNullable<SyncDomainEvent['payload']>;
 
@@ -252,11 +254,6 @@ export const buildStorageBreakdown = (
   return { journalDataBytes, imageBytes, audioBytes, pendingCleanupBytes };
 };
 
-export interface BackgroundArchiveHydrationResult {
-  decision: ArchiveHydrationDecision;
-  hydratedPartitionKeys: string[];
-}
-
 export interface DriveSyncStorageBreakdown {
   journalDataBytes: number;
   imageBytes: number;
@@ -274,36 +271,6 @@ export interface DriveSyncStatus {
   latestSnapshotDriveFileId: string;
   latestManifestDriveFileId?: string;
 }
-
-const defaultArchiveHydrationPolicyInput = async (
-  isOnline: () => boolean,
-): Promise<ArchiveHydrationPolicyInput> => {
-  const nav = typeof navigator === 'undefined' ? undefined : navigator as any;
-  const connection = nav?.connection || nav?.mozConnection || nav?.webkitConnection;
-  const connectionType = String(connection?.type || '').toLowerCase();
-  const effectiveType = String(connection?.effectiveType || '').toLowerCase();
-  const isCellular = connectionType === 'cellular' || ['slow-2g', '2g', '3g'].includes(effectiveType);
-  let isCharging = true;
-  let batteryLevel = 1;
-  try {
-    if (typeof nav?.getBattery === 'function') {
-      const battery = await nav.getBattery();
-      isCharging = Boolean(battery?.charging);
-      batteryLevel = typeof battery?.level === 'number' ? battery.level : 1;
-    }
-  } catch {
-    isCharging = true;
-    batteryLevel = 1;
-  }
-  return {
-    isOnline: isOnline(),
-    isWifi: !isCellular,
-    isCharging,
-    batteryLevel,
-    userAllowedMobileData: false,
-    storagePressure: 'normal',
-  };
-};
 
 const collectLiveMediaDriveFileIds = (snapshot: RepositorySnapshot): Set<string> => {
   const live = new Set<string>();
@@ -365,10 +332,9 @@ export class EventSyncEngine {
   private readonly snapshotIntervalEvents: number;
   private readonly maintenance: typeof performSyncMaintenance;
   private readonly maintenanceIntervalMs: number;
-  private readonly getArchiveHydrationPolicyInput: () => ArchiveHydrationPolicyInput | Promise<ArchiveHydrationPolicyInput>;
-  private readonly backgroundArchiveBatchSize: number;
   private readonly createThumbnail: SyncThumbnailGenerator;
   private readonly syncHealthService: SyncHealthService;
+  private readonly archiveHydrationService: ArchiveHydrationService;
   private lastMaintenanceAt = 0;
   private readonly resolvedMediaReferences = new Map<string, string>();
   private readonly localMediaReferences = new Map<string, string>();
@@ -394,11 +360,15 @@ export class EventSyncEngine {
     this.snapshotIntervalEvents = dependencies.snapshotIntervalEvents || DEFAULT_SNAPSHOT_INTERVAL_EVENTS;
     this.maintenance = dependencies.maintenance || performSyncMaintenance;
     this.maintenanceIntervalMs = dependencies.maintenanceIntervalMs || 24 * 60 * 60 * 1000;
-    this.getArchiveHydrationPolicyInput = dependencies.getArchiveHydrationPolicyInput
-      || (() => defaultArchiveHydrationPolicyInput(this.isOnline));
-    this.backgroundArchiveBatchSize = Math.max(1, dependencies.backgroundArchiveBatchSize || 1);
     this.createThumbnail = dependencies.createThumbnail || createImageThumbnail;
     this.syncHealthService = dependencies.syncHealthService || new SyncHealthService(repository, this.now);
+    this.archiveHydrationService = new ArchiveHydrationService(repository, {
+      download: this.download,
+      now: this.now,
+      getArchiveHydrationPolicyInput: dependencies.getArchiveHydrationPolicyInput
+        || (() => defaultArchiveHydrationPolicyInput(this.isOnline)),
+      backgroundArchiveBatchSize: dependencies.backgroundArchiveBatchSize,
+    });
   }
 
   commitMutation(
@@ -528,7 +498,7 @@ export class EventSyncEngine {
       this.requireOnline();
       const runtime = await this.openRuntime();
       await this.assertActiveDevice(runtime.controlPlane, runtime.state.deviceId);
-      await this.hydrateArchivePartitionWithRuntime(runtime, partitionKey);
+      await this.archiveHydrationService.hydratePartition(runtime, partitionKey);
     });
   }
 
@@ -540,58 +510,11 @@ export class EventSyncEngine {
       });
     }
     return this.enqueue(async () => {
-      const policyInput = await this.getArchiveHydrationPolicyInput();
-      const decision = shouldBackgroundHydrateArchive(policyInput);
-      emitSyncTelemetry('sync.archive.background.policy', {
-        allowed: decision.allowed,
-        reason: decision.reason,
-        isWifi: policyInput.isWifi,
-        isCharging: policyInput.isCharging,
-        storagePressure: policyInput.storagePressure || 'normal',
+      return this.archiveHydrationService.hydrateBackgroundArchiveOnce({
+        requireOnline: () => this.requireOnline(),
+        openRuntime: () => this.openRuntime(),
+        assertActiveDevice: (controlPlane, deviceId) => this.assertActiveDevice(controlPlane, deviceId),
       });
-      if (!decision.allowed) return { decision, hydratedPartitionKeys: [] };
-      this.requireOnline();
-
-      const state = await this.repository.getLocalSyncAccountState();
-      if (!state?.partitionedSyncEnabled) {
-        emitSyncTelemetry('sync.archive.background.skipped', { reason: 'partitioned_sync_disabled' });
-        return { decision, hydratedPartitionKeys: [] };
-      }
-
-      const now = this.now();
-      const candidates = (await this.repository.listAvailableArchiveMonths())
-        .filter(partition => (
-          partition.status === 'available' ||
-          (partition.status === 'failed' && (partition.nextRetryAt || 0) <= now)
-        ))
-        .slice(0, this.backgroundArchiveBatchSize);
-      if (candidates.length === 0) {
-        emitSyncTelemetry('sync.archive.background.skipped', { reason: 'no_retryable_partitions' });
-        return { decision, hydratedPartitionKeys: [] };
-      }
-
-      const runtime = await this.openRuntime();
-      await this.assertActiveDevice(runtime.controlPlane, runtime.state.deviceId);
-
-      const hydratedPartitionKeys: string[] = [];
-      for (const candidate of candidates) {
-        try {
-          await this.hydrateArchivePartitionWithRuntime(runtime, candidate.partitionKey);
-          hydratedPartitionKeys.push(candidate.partitionKey);
-        } catch (error: any) {
-          emitSyncTelemetry('sync.archive.background.stopped_after_failure', {
-            partitionKey: candidate.partitionKey,
-            error: error?.message || 'Archive hydration failed.',
-          }, 'warn');
-          break;
-        }
-      }
-      emitSyncTelemetry('sync.archive.background.complete', {
-        attemptedCount: candidates.length,
-        hydratedCount: hydratedPartitionKeys.length,
-        hydratedPartitionKeys,
-      });
-      return { decision, hydratedPartitionKeys };
     });
   }
 
@@ -1702,61 +1625,6 @@ export class EventSyncEngine {
       throw error;
     }
     this.lastMaintenanceAt = now;
-  }
-
-  private async hydrateArchivePartitionWithRuntime(
-    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
-    partitionKey: string,
-  ): Promise<void> {
-    const startedAt = this.now();
-    emitSyncTelemetry('sync.archive.partition.start', { partitionKey });
-    await this.repository.markPartitionHydrating(partitionKey);
-    try {
-      const result = await hydrateArchivePartitionFromCloud({
-        repository: this.repository,
-        controlPlane: runtime.controlPlane,
-        localState: runtime.state,
-        accountRootKey: runtime.secrets.accountRootKey,
-        accountRootKeys: runtime.secrets.accountRootKeys,
-        googleSession: runtime.googleSession,
-        partitionKey,
-        download: this.download,
-        now: new Date(this.now()),
-      });
-      if (!result.hydratedPartitionKeys.includes(partitionKey)) {
-        throw new Error('Archive partition is not available in the latest manifest.');
-      }
-      const hydrationState = await this.repository.getPartitionHydrationState(partitionKey);
-      await runtime.controlPlane.updatePartitionCursor({
-        deviceId: runtime.state.deviceId,
-        partitionKey,
-        lastAppliedSequence: hydrationState.lastAppliedSequence,
-        hydratedAt: new Date(this.now()).toISOString(),
-      });
-      const currentState = await this.repository.getLocalSyncAccountState();
-      if (currentState) {
-        await runtime.controlPlane.updateDeviceCursor({
-          deviceId: currentState.deviceId,
-          lastAppliedSequence: Math.max(currentState.currentSyncSequence, result.currentSyncSequence),
-        });
-      }
-      emitSyncTelemetry('sync.archive.partition.complete', {
-        partitionKey,
-        durationMs: this.now() - startedAt,
-        currentSyncSequence: result.currentSyncSequence,
-      });
-    } catch (error: any) {
-      await this.repository.markPartitionHydrationFailed(partitionKey, error?.message || 'Archive hydration failed.');
-      const failedState = await this.repository.getPartitionHydrationState(partitionKey);
-      emitSyncTelemetry('sync.archive.partition.failed', {
-        partitionKey,
-        durationMs: this.now() - startedAt,
-        error: error?.message || 'Archive hydration failed.',
-        failureCount: failedState.failureCount || 1,
-        nextRetryAt: failedState.nextRetryAt,
-      }, 'warn');
-      throw error;
-    }
   }
 
   private async pullWithRuntime(runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>): Promise<void> {
