@@ -28,7 +28,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import com.deardiary.sync.protocol.ProtocolResponse;
+import com.deardiary.sync.protocol.ProtocolService;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -40,6 +44,9 @@ class JwtAuthenticationIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @MockitoBean
+    private ProtocolService protocolService;
 
     @DynamicPropertySource
     static void jwtProperties(DynamicPropertyRegistry registry) {
@@ -105,10 +112,14 @@ class JwtAuthenticationIntegrationTest {
 
     @Test
     void validAuthenticatedUserTokenPassesTheSecurityBoundary() throws Exception {
+        when(protocolService.current()).thenReturn(new ProtocolResponse(
+            2, 2, 2, 2, 2, 10_485_760, 104_857_600,
+            new ProtocolResponse.FeatureFlags(true, true, true, false, false, false)));
         mockMvc.perform(get("/api/v2/sync/protocol")
                 .header(HttpHeaders.AUTHORIZATION, bearer(token(
                     TRUSTED_KEY, "user-1", "authenticated", "authenticated", Instant.now().plusSeconds(300)))))
-            .andExpect(status().isNotFound());
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.currentProtocolVersion").value(2));
     }
 
     private void expectUnauthorized(String token) throws Exception {
