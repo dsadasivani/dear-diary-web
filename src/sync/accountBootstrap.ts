@@ -23,7 +23,7 @@ import {
 import { encryptSyncPayload } from './encryptedSyncObject';
 import { fingerprintDevicePublicKey, generateDeviceKeyPair } from './deviceKeys';
 import { uploadDriveSyncObject } from './driveSyncObjects';
-import { SupabaseControlPlaneClient } from './supabaseControlPlane';
+import { SupabaseControlPlaneClient, SupabaseControlPlaneError } from './supabaseControlPlane';
 import type { RepositorySnapshot } from '../repositories/DiaryRepository';
 import type { SyncAccount, SyncObjectMetadata } from '../types';
 import { replaySyncObjects, type SyncObjectDownloader } from './eventReplay';
@@ -93,11 +93,14 @@ const listAllSyncObjects = async (
 };
 
 const isStaleRecoverySequenceError = (error: unknown): boolean => (
-  String((error as { message?: string })?.message || error).includes('stale_recovery_sequence')
+  error instanceof SupabaseControlPlaneError && error.providerCode === 'stale_recovery_sequence'
 );
 
 const isAlreadyFinalizedRecoveryError = (error: unknown): boolean => (
-  /recovery_attempt_not_pending|recovery_attempt_not_found/.test(String((error as { message?: string })?.message || error))
+  error instanceof SupabaseControlPlaneError && (
+    error.providerCode === 'recovery_attempt_not_pending' ||
+    error.providerCode === 'recovery_attempt_not_found'
+  )
 );
 
 export type PendingPrimaryRecoveryPhase =

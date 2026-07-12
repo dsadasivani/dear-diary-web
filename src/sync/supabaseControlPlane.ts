@@ -312,12 +312,16 @@ const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: 
 export class SupabaseControlPlaneError extends Error {
   readonly status: number;
   readonly detail: unknown;
+  readonly providerCode?: string;
 
   constructor(message: string, status: number, detail: unknown) {
     super(message);
     this.name = 'SupabaseControlPlaneError';
     this.status = status;
     this.detail = detail;
+    this.providerCode = typeof (detail as { code?: unknown } | null)?.code === 'string'
+      ? (detail as { code: string }).code
+      : undefined;
   }
 }
 

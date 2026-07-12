@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { generateDeviceKeyPair } from './deviceKeys';
-import { unwrapRootKeyForCompanion, unwrapRootKeysForCompanion, wrapRootKeyForCompanion } from './companionKeyPackage';
+import {
+  CompanionKeyPackageError,
+  unwrapRootKeyForCompanion,
+  unwrapRootKeysForCompanion,
+  wrapRootKeyForCompanion,
+} from './companionKeyPackage';
 
 test('wraps the account root key exclusively for one companion device', async () => {
   const companion = await generateDeviceKeyPair();
@@ -20,7 +25,7 @@ test('wraps the account root key exclusively for one companion device', async ()
   );
   await assert.rejects(
     () => unwrapRootKeyForCompanion(keyPackage, anotherDevice.publicKey, anotherDevice.privateKeyJwk),
-    /another device/,
+    (error: unknown) => error instanceof CompanionKeyPackageError && error.code === 'TARGET_DEVICE_MISMATCH',
   );
 });
 

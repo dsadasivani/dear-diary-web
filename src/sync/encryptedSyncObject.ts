@@ -17,6 +17,16 @@ export interface EncryptedSyncObject {
   header: EncryptedSyncObjectHeader;
 }
 
+export class EncryptedSyncObjectError extends Error {
+  constructor(
+    readonly code: 'AUTHENTICATION_FAILED' | 'UNSUPPORTED_VERSION',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'EncryptedSyncObjectError';
+  }
+}
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -97,7 +107,7 @@ export const decryptSyncPayload = async (
       ciphertext: string;
     };
     if (envelope.header.version !== 1 || envelope.header.cipher !== 'AES-256-GCM') {
-      throw new Error('Encrypted sync object version is not supported.');
+      throw new EncryptedSyncObjectError('UNSUPPORTED_VERSION', 'Encrypted sync object version is not supported.');
     }
     const headerBytes = encoder.encode(JSON.stringify(envelope.header));
     const key = await importRootKey(accountRootKey);
@@ -113,7 +123,7 @@ export const decryptSyncPayload = async (
       ));
       return { objectKind: envelope.header.objectKind, payload };
     } catch {
-      throw new Error('Encrypted sync object authentication failed.');
+      throw new EncryptedSyncObjectError('AUTHENTICATION_FAILED', 'Encrypted sync object authentication failed.');
     }
   }, { sizeBytes: bytes.byteLength });
 };
@@ -166,13 +176,14 @@ export const decryptSyncPayloadWithKnownKeys = async (
       lastError = error;
     }
   }
-  if (String((lastError as { message?: string })?.message || lastError).includes('Encrypted sync object authentication failed')) {
+  if (lastError instanceof EncryptedSyncObjectError && lastError.code === 'AUTHENTICATION_FAILED') {
     const knownEpochs = Object.keys(accountRootKeys || {}).sort((left, right) => Number(left) - Number(right));
-    throw new Error(
+    throw new EncryptedSyncObjectError(
+      'AUTHENTICATION_FAILED',
       `Encrypted sync object authentication failed for ${header?.objectKind || 'unknown object'} `
       + `(header epoch ${headerKeyEpoch ?? 'unknown'}, metadata epoch ${preferredKeyEpoch ?? 'unknown'}, `
       + `known epochs ${knownEpochs.length ? knownEpochs.join(',') : 'none'}, tried keys ${keys.length}).`,
     );
   }
-  throw lastError || new Error('Encrypted sync object authentication failed.');
+  throw lastError || new EncryptedSyncObjectError('AUTHENTICATION_FAILED', 'Encrypted sync object authentication failed.');
 };

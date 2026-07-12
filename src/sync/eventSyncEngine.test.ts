@@ -23,6 +23,7 @@ import {
   parsePartitionManifestPayload,
 } from './syncPartitioning';
 import { configureSyncRuntimeFlags } from './runtimeFlags';
+import { SyncError } from './errors';
 
 configureSyncRuntimeFlags({ snapshotCreationEnabled: true, archiveHydrationEnabled: true });
 
@@ -544,8 +545,8 @@ test('resume isolates a poisoned outbox operation and continues unrelated writes
 });
 
 test('classifies account-wide outbox failures separately from record failures', () => {
-  assert.equal(isAccountWideOutboxFailure(new Error('Google Drive authorization is required.')), true);
-  assert.equal(isAccountWideOutboxFailure(new Error('This device is not active. Recover or pair it again.')), true);
+  assert.equal(isAccountWideOutboxFailure(new SyncError({ code: 'AUTH_EXPIRED' })), true);
+  assert.equal(isAccountWideOutboxFailure(new SyncError({ code: 'DEVICE_REVOKED' })), true);
   assert.equal(isAccountWideOutboxFailure(new Error('local media file missing')), false);
 });
 
@@ -831,7 +832,7 @@ test('rejects writes while offline without changing local content', async () => 
   const engine = new EventSyncEngine(repository, { isOnline: () => false });
   await assert.rejects(
     () => engine.commitMutation('note', 'delete', 'note-1', null),
-    /must be online/,
+    (error: unknown) => error instanceof SyncError && error.code === 'OFFLINE',
   );
   assert.equal(await repository.getNote('note-1'), null);
 });
@@ -1120,7 +1121,7 @@ test('preserves a stale note edit as a recovered copy after pulling the winner',
     commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
       commitAttempt += 1;
       if (commitAttempt === 1) {
-        throw new SupabaseControlPlaneError('stale_record_version', 409, {});
+        throw new SupabaseControlPlaneError('conflict', 409, { code: 'stale_record_version' });
       }
       return {
         id: 'recovered-object', accountId: 'account-1', sequence: 3,
@@ -1178,7 +1179,7 @@ test('preserves local-first outbox conflicts and queues a recovered copy', async
     listSyncObjectsAfter: async () => [],
     updateDeviceCursor: async () => ({}),
     commitSyncObject: async () => {
-      throw new SupabaseControlPlaneError('stale_record_version', 409, {});
+      throw new SupabaseControlPlaneError('conflict', 409, { code: 'stale_record_version' });
     },
   } as unknown as SupabaseControlPlaneClient;
   const engine = new EventSyncEngine(repository, {

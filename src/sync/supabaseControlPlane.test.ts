@@ -431,7 +431,7 @@ test('surfaces Supabase RPC errors with status and detail', async () => {
   const client = new SupabaseControlPlaneClient({
     url: 'https://example.supabase.co',
     anonKey: 'anon-key',
-    fetchImpl: async () => new Response(JSON.stringify({ message: 'device_revoked' }), {
+    fetchImpl: async () => new Response(JSON.stringify({ message: 'Device access denied.', code: 'device_revoked' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' },
     }),
@@ -442,7 +442,7 @@ test('surfaces Supabase RPC errors with status and detail', async () => {
     (error: unknown) => (
       error instanceof SupabaseControlPlaneError &&
       error.status === 400 &&
-      error.message === 'device_revoked'
+      error.providerCode === 'device_revoked'
     ),
   );
 });

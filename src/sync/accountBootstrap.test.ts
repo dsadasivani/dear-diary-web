@@ -26,7 +26,7 @@ import {
   encodePartitionSnapshotPayload,
 } from './syncPartitioning';
 import { encodeRepositorySnapshotPayload } from './syncSnapshot';
-import type { SupabaseControlPlaneClient } from './supabaseControlPlane';
+import { SupabaseControlPlaneError, type SupabaseControlPlaneClient } from './supabaseControlPlane';
 import { createRepository } from './testSupport';
 
 class MemorySecretStorage implements SyncSecretStorage {
@@ -312,7 +312,7 @@ const createPartitionedPendingRecoveryFixture = async () => {
     finalizePrimaryMobileRecovery: async (input: { restoredSequence: number }) => {
       callOrder.push(`finalize:${input.restoredSequence}`);
       finalizeSequences.push(input.restoredSequence);
-      if (finalizeSequences.length === 1) throw new Error('stale_recovery_sequence');
+      if (finalizeSequences.length === 1) throw new SupabaseControlPlaneError('conflict', 409, { code: 'stale_recovery_sequence' });
       account.activePrimaryDeviceId = device.id;
       return {};
     },
@@ -1079,7 +1079,7 @@ test('primary recovery finalizes after partition restore and stale tail replay',
     finalizePrimaryMobileRecovery: async (input: { restoredSequence: number }) => {
       callOrder.push(`finalize:${input.restoredSequence}`);
       finalizeSequences.push(input.restoredSequence);
-      if (finalizeSequences.length === 1) throw new Error('stale_recovery_sequence');
+      if (finalizeSequences.length === 1) throw new SupabaseControlPlaneError('conflict', 409, { code: 'stale_recovery_sequence' });
       return {};
     },
     abortPrimaryMobileRecovery: async () => {
@@ -1442,7 +1442,7 @@ test('primary recovery resume clears the journal when server finalize already su
       currentSyncSequence: 6,
     }),
     finalizePrimaryMobileRecovery: async () => {
-      throw new Error('recovery_attempt_not_pending');
+      throw new SupabaseControlPlaneError('conflict', 409, { code: 'recovery_attempt_not_pending' });
     },
     updateDeviceCursor: async () => {
       throw new Error('cursor should not be updated again');

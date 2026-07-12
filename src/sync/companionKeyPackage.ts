@@ -6,6 +6,13 @@ import {
   parseDevicePublicKeyBundle,
 } from './deviceKeys';
 
+export class CompanionKeyPackageError extends Error {
+  constructor(readonly code: 'TARGET_DEVICE_MISMATCH') {
+    super('Companion key package cannot be opened by this device.');
+    this.name = 'CompanionKeyPackageError';
+  }
+}
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const HKDF_INFO = encoder.encode('dear-diary/companion-root-key/v1');
@@ -115,7 +122,7 @@ export const unwrapRootKeysForCompanion = async (
   ) throw new Error('Companion key package is invalid or unsupported.');
   const fingerprint = await fingerprintDevicePublicKey(targetDevicePublicKey);
   if (fingerprint !== keyPackage.targetDevicePublicKeySha256) {
-    throw new Error('Companion key package targets another device.');
+    throw new CompanionKeyPackageError('TARGET_DEVICE_MISMATCH');
   }
   const privateBundle = parseDevicePrivateKeyBundle(targetDevicePrivateKey);
   const privateKey = await crypto.subtle.importKey(

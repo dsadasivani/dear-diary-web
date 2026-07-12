@@ -30,7 +30,7 @@ import {
 } from './driveSyncObjects';
 import { decryptSyncPayload, decryptSyncPayloadWithKnownKeys, encryptSyncPayload } from './encryptedSyncObject';
 import { replaySyncObjects } from './eventReplay';
-import { decodeCompanionKeyPackage, unwrapRootKeysForCompanion } from './companionKeyPackage';
+import { CompanionKeyPackageError, decodeCompanionKeyPackage, unwrapRootKeysForCompanion } from './companionKeyPackage';
 import { refreshSupabaseSession } from './supabaseAuth';
 import { exchangeGoogleIdTokenForSupabaseSession } from './supabaseAuth';
 import { SupabaseControlPlaneClient, SupabaseControlPlaneError } from './supabaseControlPlane';
@@ -74,6 +74,7 @@ import { SyncError } from './errors';
 import { reportUnexpectedError } from '../infrastructure/telemetry/reportUnexpectedError';
 import { sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
 import { measureAsync } from '../utils/performance';
+import { SyncHealthService } from './health/SyncHealthService';
 
 type SyncPayload = NonNullable<SyncDomainEvent['payload']>;
 
@@ -151,6 +152,7 @@ export interface EventSyncEngineDependencies {
   getArchiveHydrationPolicyInput?: () => ArchiveHydrationPolicyInput | Promise<ArchiveHydrationPolicyInput>;
   backgroundArchiveBatchSize?: number;
   createThumbnail?: SyncThumbnailGenerator;
+  syncHealthService?: SyncHealthService;
 }
 
 export const DEFAULT_SNAPSHOT_INTERVAL_EVENTS = 100;
@@ -166,22 +168,20 @@ const nextOutboxRetryAt = (now: number, retryCount: number): number => {
 };
 
 export const isAccountWideOutboxFailure = (error: unknown): boolean => {
-  const message = String((error as { message?: unknown })?.message || '').toLowerCase();
-  if (!message) return false;
-  return [
-    'must be online',
-    'authorization',
-    'sign in again',
-    'session expired',
-    'account metadata',
-    'account key',
-    'root key',
-    'not active',
-    'device_revoked',
-    'schema',
-    'incompatible',
-    'create or recover your encrypted account',
-  ].some(fragment => message.includes(fragment));
+  if (error instanceof SupabaseControlPlaneError) return error.status === 401 || error.status === 403;
+  if (!(error instanceof SyncError)) return false;
+  return new Set([
+    'OFFLINE',
+    'AUTH_EXPIRED',
+    'AUTH_INVALID',
+    'DEVICE_REVOKED',
+    'PROTOCOL_INCOMPATIBLE',
+    'SCHEMA_INCOMPATIBLE',
+    'KEY_EPOCH_UNAVAILABLE',
+    'LOCAL_DATABASE_FAILURE',
+    'SERVER_UNAVAILABLE',
+    'INVARIANT_VIOLATION',
+  ]).has(error.code);
 };
 
 const timestampForDriveFile = (file: DriveSyncObjectSummary): number => {
@@ -368,6 +368,7 @@ export class EventSyncEngine {
   private readonly getArchiveHydrationPolicyInput: () => ArchiveHydrationPolicyInput | Promise<ArchiveHydrationPolicyInput>;
   private readonly backgroundArchiveBatchSize: number;
   private readonly createThumbnail: SyncThumbnailGenerator;
+  private readonly syncHealthService: SyncHealthService;
   private lastMaintenanceAt = 0;
   private readonly resolvedMediaReferences = new Map<string, string>();
   private readonly localMediaReferences = new Map<string, string>();
@@ -397,6 +398,7 @@ export class EventSyncEngine {
       || (() => defaultArchiveHydrationPolicyInput(this.isOnline));
     this.backgroundArchiveBatchSize = Math.max(1, dependencies.backgroundArchiveBatchSize || 1);
     this.createThumbnail = dependencies.createThumbnail || createImageThumbnail;
+    this.syncHealthService = dependencies.syncHealthService || new SyncHealthService(repository, this.now);
   }
 
   commitMutation(
@@ -417,21 +419,10 @@ export class EventSyncEngine {
 
   pullPending(): Promise<void> {
     if (!getSyncRuntimeFlags().remotePullEnabled) return Promise.resolve();
-    return this.enqueue(async () => {
-      await this.repository.updateSyncHealth({ lastPullAttemptAt: this.now() });
-      try {
-        await measureAsync('sync.pullPending', () => this.pullPendingUnlocked());
-        await this.repository.updateSyncHealth({ lastSuccessfulPullAt: this.now() });
-      } catch (error) {
-        const typed = error instanceof SyncError ? error : new SyncError({ code: 'UNKNOWN', cause: error });
-        await this.repository.updateSyncHealth({
-          lastErrorCode: typed.code,
-          lastErrorAt: this.now(),
-          integrityState: typed.safetyRelevant ? 'SAFETY_STOP' : 'WARNING',
-        });
-        throw typed;
-      }
-    });
+    return this.enqueue(() => this.syncHealthService.track(
+      'PULL',
+      () => measureAsync('sync.pullPending', () => this.pullPendingUnlocked()),
+    ));
   }
 
   requestOutboxFlush(delayMs = 0): void {
@@ -446,21 +437,10 @@ export class EventSyncEngine {
 
   flushPendingOutbox(): Promise<void> {
     if (!getSyncRuntimeFlags().syncWritesEnabled) return Promise.resolve();
-    return this.enqueue(async () => {
-      await this.repository.updateSyncHealth({ lastPushAttemptAt: this.now() });
-      try {
-        await measureAsync('sync.outbox.flush', () => this.flushPendingOutboxUnlocked());
-        await this.repository.updateSyncHealth({ lastSuccessfulPushAt: this.now() });
-      } catch (error) {
-        const typed = error instanceof SyncError ? error : new SyncError({ code: 'UNKNOWN', cause: error });
-        await this.repository.updateSyncHealth({
-          lastErrorCode: typed.code,
-          lastErrorAt: this.now(),
-          integrityState: typed.safetyRelevant ? 'SAFETY_STOP' : 'WARNING',
-        });
-        throw typed;
-      }
-    });
+    return this.enqueue(() => this.syncHealthService.track(
+      'PUSH',
+      () => measureAsync('sync.outbox.flush', () => this.flushPendingOutboxUnlocked()),
+    ));
   }
 
   createSnapshot(): Promise<SyncObjectMetadata | null> {
@@ -530,7 +510,7 @@ export class EventSyncEngine {
 
       await this.pullWithRuntime(runtime);
       const current = await this.repository.getLocalSyncAccountState();
-      if (!current) throw new Error('Encrypted account metadata is unavailable.');
+      if (!current) throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
       await migrateLocalAccountToPartitionedSync({
         repository: this.repository,
         controlPlane: runtime.controlPlane,
@@ -622,10 +602,10 @@ export class EventSyncEngine {
     }
     const state = await this.repository.getLocalSyncAccountState();
     const secrets = await this.loadSecrets();
-    if (!state || !secrets) throw new Error('Encrypted account metadata is unavailable.');
+    if (!state || !secrets) throw new SyncError({ code: 'AUTH_INVALID', userActionRequired: true });
     const googleSession = await startGoogleAuth('sync');
     if (googleSession.userId !== state.googleUserId || !googleSession.idToken) {
-      throw new Error(`Reconnect ${state.googleEmail} to continue syncing.`);
+      throw new SyncError({ code: 'AUTH_INVALID', userActionRequired: true });
     }
     const supabaseSession = await exchangeGoogleIdTokenForSupabaseSession({
       supabaseUrl: getConfiguredSupabaseUrl(),
@@ -744,7 +724,7 @@ export class EventSyncEngine {
     payload = sanitizeSyncPayload(recordType, payload);
     const originalPayload = payload;
     const state = await this.repository.getLocalSyncAccountState();
-    if (!state) throw new Error('Create or recover your encrypted account before editing.');
+    if (!state) throw new SyncError({ code: 'AUTH_INVALID', userActionRequired: true });
     const baseRecordVersion = await this.repository.getSyncRecordVersion(recordType, recordId);
     const affectedRecords = recordType === 'diary' && operation === 'delete'
       ? await Promise.all((await this.repository.listEntries())
@@ -779,7 +759,7 @@ export class EventSyncEngine {
     } catch (error: any) {
       if (
         error instanceof SupabaseControlPlaneError &&
-        (error.message.includes('stale_sync_sequence') || error.message.includes('stale_record_version'))
+        (error.providerCode === 'stale_sync_sequence' || error.providerCode === 'stale_record_version')
       ) {
         await this.repository.removeSyncOutboxOperation(operationId).catch(() => undefined);
         await this.pullWithRuntime(runtime);
@@ -867,7 +847,7 @@ export class EventSyncEngine {
           if (
             readyOperation.localApplied &&
             error instanceof SupabaseControlPlaneError &&
-            (error.message.includes('stale_sync_sequence') || error.message.includes('stale_record_version'))
+            (error.providerCode === 'stale_sync_sequence' || error.providerCode === 'stale_record_version')
           ) {
             await this.preserveLocalFirstConflict(runtime, readyOperation, error);
             continue;
@@ -923,7 +903,7 @@ export class EventSyncEngine {
           updatedAt: this.now(),
         }) as Note;
     const account = await this.repository.getLocalSyncAccountState();
-    if (!account) throw new Error('Encrypted account metadata is unavailable.');
+    if (!account) throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
     await this.repository.applyLocalMutationWithOutbox({
       operationId: crypto.randomUUID(),
       recordType: latestOperation.recordType,
@@ -991,7 +971,7 @@ export class EventSyncEngine {
     if (!operation) throw new Error('Sync outbox operation is missing its mutation type.');
     let payload = sanitizeSyncPayload(outboxOperation.recordType, outboxOperation.payload as SyncPayload | null);
     const state = await this.repository.getLocalSyncAccountState();
-    if (!state) throw new Error('Create or recover your encrypted account before editing.');
+    if (!state) throw new SyncError({ code: 'AUTH_INVALID', userActionRequired: true });
     const baseRecordVersion = outboxOperation.baseRecordVersion
       ?? await this.repository.getSyncRecordVersion(outboxOperation.recordType, outboxOperation.recordId);
     const affectedRecords = affectedRecordsOverride || outboxOperation.affectedRecords || [];
@@ -1321,7 +1301,7 @@ export class EventSyncEngine {
     const resolvedMediaKind = mediaKind || mediaKindFromMimeType(media.mimeType);
     const payload = encodeSyncMediaPayload(mediaId, media.mimeType, media.bytes);
     const state = await this.repository.getLocalSyncAccountState();
-    if (!state) throw new Error('Encrypted account metadata is unavailable.');
+    if (!state) throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
     const activeKeyEpoch = runtime.state.keyEpoch || state.keyEpoch || 1;
     const activeRootKey = getAccountRootKeyForEpoch(runtime.secrets, activeKeyEpoch);
     let encrypted: { bytes: Uint8Array; sha256: string } = await encryptSyncPayload(
@@ -1445,7 +1425,7 @@ export class EventSyncEngine {
 
     const runtime = await this.openRuntime();
     const state = await this.repository.getLocalSyncAccountState();
-    if (!state) throw new Error('Encrypted account metadata is unavailable.');
+    if (!state) throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
     const encrypted = await downloadVerifiedSyncObject(runtime.googleSession, {
       id: `media-${pointer.sequence}`,
       accountId: state.accountId,
@@ -1629,7 +1609,7 @@ export class EventSyncEngine {
     if (!force && state.currentSyncSequence - localSnapshotSequence < this.snapshotIntervalEvents) return null;
 
     const account = await runtime.controlPlane.lookupCurrentGoogleAccount();
-    if (!account) throw new Error('Encrypted account metadata was not found.');
+    if (!account) throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
     if (!force && account.currentSyncSequence - account.currentSnapshotSequence < this.snapshotIntervalEvents) {
       if (account.currentSnapshotSequence > localSnapshotSequence) {
         await this.repository.saveLocalSyncAccountState({
@@ -2008,7 +1988,7 @@ export class EventSyncEngine {
           runtime.secrets.devicePrivateKeyJwk,
         );
       } catch (error: any) {
-        if (String(error?.message || '').includes('targets another device')) continue;
+        if (error instanceof CompanionKeyPackageError && error.code === 'TARGET_DEVICE_MISMATCH') continue;
         emitSyncTelemetry('sync.key_package.open_failed', {
           sequence: object.sequence,
           keyEpoch: packageEpoch,
@@ -2071,16 +2051,16 @@ export class EventSyncEngine {
 
   private async openRuntime() {
     const state = await this.repository.getLocalSyncAccountState();
-    if (!state) throw new Error('Create or recover your encrypted account before editing.');
+    if (!state) throw new SyncError({ code: 'AUTH_INVALID', userActionRequired: true });
     let secrets = await this.loadSecrets();
     if (!secrets || secrets.accountId !== state.accountId) {
-      throw new Error('This device no longer has the encrypted account key. Recover the account to continue.');
+      throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', userActionRequired: true, safetyRelevant: true });
     }
     const expiresAt = secrets.supabaseSession.expiresAt || 0;
     if (expiresAt <= Math.floor(this.now() / 1000) + 90) {
       if (!secrets.supabaseSession.refreshToken) {
         this.notifyAuthorizationRequired('Your encrypted sync session expired.');
-        throw new Error('Your encrypted sync session expired. Sign in again.');
+        throw new SyncError({ code: 'AUTH_EXPIRED', userActionRequired: true });
       }
       let supabaseSession;
       try {
@@ -2091,7 +2071,7 @@ export class EventSyncEngine {
         });
       } catch (error) {
         this.notifyAuthorizationRequired('Your encrypted sync session expired.');
-        throw error;
+        throw new SyncError({ code: 'AUTH_EXPIRED', userActionRequired: true, cause: error });
       }
       secrets = { ...secrets, supabaseSession };
       await this.saveSecrets(secrets);
@@ -2112,7 +2092,7 @@ export class EventSyncEngine {
     const googleSession = await this.restoreGoogleSession(secrets);
     if (!googleSession?.accessToken || googleSession.userId !== state.googleUserId) {
       this.notifyAuthorizationRequired('Google Drive authorization is required.');
-      throw new Error('Google Drive authorization is required to sync this account.');
+      throw new SyncError({ code: 'AUTH_EXPIRED', userActionRequired: true });
     }
     const controlPlane = this.createControlPlane(secrets.supabaseSession.accessToken);
     let runtimeState = state;
@@ -2122,7 +2102,7 @@ export class EventSyncEngine {
       if (accountEpoch > (state.keyEpoch || 1)) {
         const epochRootKey = secrets.accountRootKeys?.[accountEpoch];
         if (!epochRootKey) {
-          throw new Error('This device is missing the active account key. Recover the account to continue.');
+          throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', userActionRequired: true, safetyRelevant: true });
         }
         secrets = withAccountRootKeyForEpoch(secrets, accountEpoch, epochRootKey);
         await this.saveSecrets(secrets);
@@ -2148,12 +2128,12 @@ export class EventSyncEngine {
       await clearSyncSecrets();
       await this.repository.clearLocalSyncAccountState();
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('deardiary-device-revoked'));
-      throw new Error('This device is not active. Recover or pair it again.');
+      throw new SyncError({ code: 'DEVICE_REVOKED', userActionRequired: true, safetyRelevant: true });
     }
   }
 
   private requireOnline(): void {
-    if (!this.isOnline()) throw new Error('Dear Diary must be online to save synced changes.');
+    if (!this.isOnline()) throw new SyncError({ code: 'OFFLINE', retryable: true });
   }
 
   private notifyAuthorizationRequired(message: string): void {
@@ -2164,9 +2144,8 @@ export class EventSyncEngine {
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.operationTail.then(operation, operation).catch(error => {
-      const message = error?.message || '';
-      if (message.includes('authorization expired') || message.includes('session expired')) {
-        this.notifyAuthorizationRequired(message);
+      if (error instanceof SyncError && (error.code === 'AUTH_EXPIRED' || error.code === 'AUTH_INVALID')) {
+        this.notifyAuthorizationRequired(error.message);
       }
       throw error;
     });
