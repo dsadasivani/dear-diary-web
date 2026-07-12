@@ -64,6 +64,7 @@ import { CORE_PARTITION_KEY, filterSnapshotForPartition, isMonthPartitionKey, mo
 import { measureAsync } from '../utils/performance';
 import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
 import { createDefaultSyncHealth, type SyncHealth, type SyncHealthPatch } from '../sync/health/SyncHealth';
+import { pendingOutboxV2FromLegacy, type SyncOutboxOperationV2 } from '../sync/outbox';
 
 const STORAGE_KEYS = {
   diaries: 'deardiary_diaries',
@@ -78,6 +79,7 @@ const STORAGE_KEYS = {
   syncMediaPointers: 'deardiary_sync_media_pointers',
   syncPartitionHydration: 'deardiary_sync_partition_hydration',
   syncOutbox: 'deardiary_sync_outbox',
+  syncOutboxV2: 'deardiary_sync_outbox_v2',
   syncHealth: 'deardiary_sync_health_v1',
 } as const;
 
@@ -886,6 +888,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         [STORAGE_KEYS.syncMediaPointers]: {},
         [STORAGE_KEYS.syncPartitionHydration]: {},
         [STORAGE_KEYS.syncOutbox]: {},
+        [STORAGE_KEYS.syncOutboxV2]: {},
       });
       await this.store.removeItem(STORAGE_KEYS.syncAccount);
     });
@@ -1331,6 +1334,7 @@ export class LocalDiaryRepository implements DiaryRepository {
     return measureAsync('repository.local.mutationWithOutbox', () => this.enqueueWrite(async () => {
       const versions = await this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {});
       const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {});
+      const outboxV2 = await this.readJson<Record<string, SyncOutboxOperationV2>>(STORAGE_KEYS.syncOutboxV2, {});
       const recordKey = `${input.recordType}:${input.recordId}`;
       const existingSameRecordOperations = Object.values(outbox)
         .filter(operation => (
@@ -1513,6 +1517,9 @@ export class LocalDiaryRepository implements DiaryRepository {
       };
       outbox[operationId] = outboxOperation;
       items[STORAGE_KEYS.syncOutbox] = outbox;
+      outboxV2[operationId] = pendingOutboxV2FromLegacy(outboxOperation, outboxV2[operationId]);
+      items[STORAGE_KEYS.syncOutboxV2] = outboxV2;
+      metadataItems[STORAGE_KEYS.syncOutboxV2] = outboxV2;
 
       const contentRevision = await this.writeLocalMutationWithOutbox(
         recordMutations,
@@ -1575,6 +1582,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         [STORAGE_KEYS.syncMediaPointers]: {},
         [STORAGE_KEYS.syncPartitionHydration]: {},
         [STORAGE_KEYS.syncOutbox]: {},
+        [STORAGE_KEYS.syncOutboxV2]: {},
       });
     });
   }

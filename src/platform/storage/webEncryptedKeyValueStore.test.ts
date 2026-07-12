@@ -338,6 +338,23 @@ test('web structured local mutation and outbox commit rolls back atomically', as
     createdAt: 3,
     updatedAt: 3,
   };
+  const outboxV2Operation = {
+    operationId: outboxOperation.operationId,
+    accountId: 'account',
+    deviceId: 'device',
+    recordType: 'ENTRY',
+    recordId: entry.id,
+    operationType: 'UPSERT',
+    baseRecordVersion: 0,
+    state: 'PENDING',
+    retryCount: 0,
+    nextAttemptAt: 3,
+    createdAt: 3,
+    updatedAt: 3,
+  };
+  const v2Items = {
+    deardiary_sync_outbox_v2: JSON.stringify({ [outboxOperation.operationId]: outboxV2Operation }),
+  };
 
   const originalPut = IDBObjectStore.prototype.put;
   IDBObjectStore.prototype.put = function patchedPut(
@@ -356,6 +373,7 @@ test('web structured local mutation and outbox commit rolls back atomically', as
     await assert.rejects(
       () => store.commitLocalMutationAndOutbox({
         records: [{ key: 'deardiary_entries', id: entry.id, value: entry }],
+        items: v2Items,
         outboxOperation,
       }),
       /simulated outbox write failure|transaction aborted/i,
@@ -366,14 +384,20 @@ test('web structured local mutation and outbox commit rolls back atomically', as
 
   assert.deepEqual(await store.getStructuredCollection('deardiary_entries'), undefined);
   assert.equal(await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.outbox).getItem(outboxOperation.operationId), null);
+  assert.equal(await store.getItem('deardiary_sync_outbox_v2'), null);
 
   await store.commitLocalMutationAndOutbox({
     records: [{ key: 'deardiary_entries', id: entry.id, value: entry }],
+    items: v2Items,
     outboxOperation,
   });
   assert.deepEqual(await store.getStructuredRecord('deardiary_entries', entry.id), entry);
   assert.deepEqual(
     JSON.parse((await store.getItem('deardiary_sync_outbox'))!),
     { [outboxOperation.operationId]: outboxOperation },
+  );
+  assert.deepEqual(
+    JSON.parse((await store.getItem('deardiary_sync_outbox_v2'))!),
+    { [outboxOperation.operationId]: outboxV2Operation },
   );
 });

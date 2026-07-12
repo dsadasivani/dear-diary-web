@@ -14,6 +14,7 @@ import { LocalDiaryRepository } from './localDiaryRepository';
 import { createSyncDomainEvent } from '../sync/domainEvents';
 import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
+import type { SyncOutboxOperationV2 } from '../sync/outbox';
 
 class MemoryDataStore implements LocalDataStore {
   private values = new Map<string, string>();
@@ -609,6 +610,22 @@ test('uses atomic structured record and outbox commit for local-first note mutat
   assert.equal(outbox.length, 1);
   assert.equal(outbox[0].operationId, 'op-structured-local');
   assert.equal(outbox[0].state, 'prepared');
+  const outboxV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  assert.deepEqual(outboxV2['op-structured-local'], {
+    operationId: 'op-structured-local',
+    accountId: 'account-structured',
+    deviceId: 'device-structured',
+    recordType: 'NOTE',
+    recordId: 'note-structured-local',
+    operationType: 'UPSERT',
+    baseRecordVersion: 0,
+    state: 'PENDING',
+    retryCount: 0,
+    nextAttemptAt: outboxV2['op-structured-local'].nextAttemptAt,
+    createdAt: outboxV2['op-structured-local'].createdAt,
+    updatedAt: outboxV2['op-structured-local'].updatedAt,
+  });
+  assert.equal(JSON.stringify(outboxV2).includes(note.body), false);
   assert.equal((await repository.getDriveBackupSettings()).contentRevision, 1);
 });
 
@@ -1048,7 +1065,8 @@ test('emits sync status changes when durable outbox rows change', async () => {
 });
 
 test('atomically applies a local note mutation with its durable outbox operation', async () => {
-  const repository = await createRepository();
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
   await repository.saveLocalSyncAccountState({
     accountId: 'account-1',
     deviceId: 'device-1',
@@ -1091,11 +1109,17 @@ test('atomically applies a local note mutation with its durable outbox operation
   assert.equal(operation.localApplied, true);
   assert.equal(operation.recordId, note.id);
   assert.deepEqual(operation.payload, note);
+  const outboxV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  assert.equal(outboxV2['operation-local-first'].recordType, 'NOTE');
+  assert.equal(outboxV2['operation-local-first'].state, 'PENDING');
+  assert.equal(outboxV2['operation-local-first'].baseRecordVersion, 0);
+  assert.equal(JSON.stringify(outboxV2).includes('Saved locally.'), false);
   assert.deepEqual(changes, ['note-created', 'sync-status-updated']);
 });
 
 test('chains same-record local mutations once an earlier outbox operation is in flight', async () => {
-  const repository = await createRepository();
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
   await repository.saveLocalSyncAccountState({
     accountId: 'account-1',
     deviceId: 'device-1',
@@ -1152,6 +1176,9 @@ test('chains same-record local mutations once an earlier outbox operation is in 
   assert.equal(secondOperation?.baseRecordVersion, undefined);
   assert.equal((secondOperation?.payload as Note | undefined)?.title, 'Second edit');
   assert.equal((await repository.getNote(note.id))?.title, 'Second edit');
+  const outboxV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  assert.equal(outboxV2['operation-chain-2'].dependencyOperationId, 'operation-chain-1');
+  assert.equal(outboxV2['operation-chain-2'].baseRecordVersion, 0);
 });
 
 test('manages preserved conflicts separately from retryable outbox failures', async () => {
@@ -1250,6 +1277,8 @@ test('keeps local-first mutations and pending outbox rows after repository resta
   assert.equal(operation.operationId, 'operation-restart');
   assert.equal(operation.localApplied, true);
   assert.deepEqual(operation.payload, note);
+  const outboxV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  assert.equal(outboxV2['operation-restart'].state, 'PENDING');
 });
 
 test('acknowledges a local mutation without rewriting the local record', async () => {
