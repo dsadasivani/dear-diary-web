@@ -18,6 +18,8 @@
     "test:outbox-v2": "tsx --test src/sync/outbox/OutboxStateMachine.test.ts && tsx --test src/sync/outbox/PersistentOutboxRepository.test.ts && tsx --test src/sync/outbox/legacyOutboxV2.test.ts && tsx --test src/sync/outbox/retryScheduling.test.ts",
     "test:component": "vitest run",
     "test:server": "tsx --test server.test.ts",
+    "backend:test": "node scripts/run-backend-gradle.mjs test",
+    "backend:bootRun": "node scripts/run-backend-gradle.mjs bootRun",
     "test:supabase": "node scripts/supabase-integration-tests.mjs",
     "test:e2e": "playwright test",
     "test:accessibility": "playwright test --grep @accessibility",

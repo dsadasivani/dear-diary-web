@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: dear-diary-sync-api
+  datasource:
+    url: ${SYNC_DB_URL:jdbc:postgresql://localhost:5432/dear_diary_sync}
+    username: ${SYNC_DB_USERNAME:dear_diary_sync}
+    password: ${SYNC_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${SYNC_DB_MAX_POOL_SIZE:10}
+      minimum-idle: ${SYNC_DB_MIN_IDLE:1}
+      connection-timeout: ${SYNC_DB_CONNECTION_TIMEOUT_MS:5000}
+  flyway:
+    enabled: true
+    validate-migration-naming: true
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+server:
+  shutdown: graceful
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+logging:
+  pattern:
+    correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "
