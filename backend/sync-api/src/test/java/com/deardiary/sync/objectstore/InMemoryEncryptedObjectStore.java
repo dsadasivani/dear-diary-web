@@ -10,7 +10,7 @@ public class InMemoryEncryptedObjectStore implements EncryptedObjectStore {
 
     @Override
     public UploadInstruction initiateUpload(UploadObjectCommand command) {
-        objects.put(command.objectKey(), new ObjectMetadata(
+        objects.putIfAbsent(command.objectKey(), new ObjectMetadata(
             command.objectKey(), command.sizeBytes(), command.sha256(),
             Map.of("object-kind", command.objectKind(), "upload-status", "pending")));
         return new UploadInstruction(
@@ -19,7 +19,8 @@ public class InMemoryEncryptedObjectStore implements EncryptedObjectStore {
     }
 
     public void markUploaded(ObjectKey key) {
-        var current = head(key);
+        var current = objects.get(key);
+        if (current == null) throw new ObjectStoreException("OBJECT_MISSING", false, null);
         objects.put(key, new ObjectMetadata(
             key, current.sizeBytes(), current.sha256(), Map.of("upload-status", "uploaded")));
     }
@@ -28,6 +29,9 @@ public class InMemoryEncryptedObjectStore implements EncryptedObjectStore {
     public ObjectMetadata head(ObjectKey objectKey) {
         var value = objects.get(objectKey);
         if (value == null) throw new ObjectStoreException("OBJECT_MISSING", false, null);
+        if ("pending".equals(value.metadata().get("upload-status"))) {
+            throw new ObjectStoreException("OBJECT_MISSING", false, null);
+        }
         return value;
     }
 

@@ -26,8 +26,9 @@ class ObjectStoreContractTest {
 
         var upload = store.initiateUpload(new UploadObjectCommand(key, "EVENT", sha256, 42));
         assertThat(upload.expiresAt()).isAfter(java.time.Instant.now());
-        assertThat(store.head(key).sha256()).isEqualTo(sha256);
+        assertThatThrownBy(() -> store.head(key)).isInstanceOf(ObjectStoreException.class);
         store.markUploaded(key);
+        assertThat(store.head(key).sha256()).isEqualTo(sha256);
         assertThat(store.createDownload(key).url().toString()).doesNotContain(sha256);
         store.quarantine(key);
         assertThat(store.head(key).metadata()).containsEntry("quarantined", "true");
