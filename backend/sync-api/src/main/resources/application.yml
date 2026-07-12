@@ -38,6 +38,15 @@ logging:
     correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "
 
 sync:
+  object-store:
+    enabled: ${SYNC_OBJECT_STORE_ENABLED:false}
+    bucket: ${SYNC_OBJECT_STORE_BUCKET:disabled}
+    region: ${SYNC_OBJECT_STORE_REGION:us-east-1}
+    endpoint: ${SYNC_OBJECT_STORE_ENDPOINT:}
+    path-style-access: ${SYNC_OBJECT_STORE_PATH_STYLE:false}
+    signed-url-ttl: ${SYNC_OBJECT_STORE_SIGNED_URL_TTL:5m}
+    api-call-timeout: ${SYNC_OBJECT_STORE_API_TIMEOUT:10s}
+    api-call-attempt-timeout: ${SYNC_OBJECT_STORE_ATTEMPT_TIMEOUT:5s}
   security:
     jwt:
       enabled: ${SYNC_JWT_ENABLED:false}

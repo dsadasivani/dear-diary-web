@@ -18,6 +18,7 @@ repositories {
 }
 
 dependencies {
+    implementation(platform("software.amazon.awssdk:bom:2.46.8"))
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
@@ -27,6 +28,8 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("io.micrometer:micrometer-tracing-bridge-otel")
+    implementation("software.amazon.awssdk:s3")
+    implementation("software.amazon.awssdk:url-connection-client")
 
     runtimeOnly("org.postgresql:postgresql")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")

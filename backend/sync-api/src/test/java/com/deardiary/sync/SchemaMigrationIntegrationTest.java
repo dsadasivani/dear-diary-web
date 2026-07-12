@@ -26,7 +26,7 @@ class SchemaMigrationIntegrationTest {
 
         var migration = flyway.migrate();
 
-        assertThat(migration.migrationsExecuted).isEqualTo(16);
+        assertThat(migration.migrationsExecuted).isEqualTo(17);
         try (Connection connection = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              Statement statement = connection.createStatement()) {
@@ -38,7 +38,7 @@ class SchemaMigrationIntegrationTest {
                 .isTrue();
             assertThat(queryLong(statement,
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'sync_%'"))
-                .isEqualTo(16);
+                .isEqualTo(17);
             assertThatThrownBy(() -> statement.executeUpdate("""
                 INSERT INTO sync_accounts (
                     account_id, owner_subject, current_sequence, current_key_epoch,
