@@ -1,5 +1,11 @@
 # Local-First Performance Refactor Notes
 
+## Latest Audit Snapshot
+
+As of 2026-07-12 on `feature/local-first-performance` at `34f74c0ccc270b6e245a1328cc6effd399e1bfbf`, the local automated release suite passed through `npm.cmd run test:all`, Docker-backed `npm.cmd run test:supabase` passed with migrations `001` through `018`, and `npm.cmd run benchmark:seed` / `npm.cmd run benchmark:run` completed against the 100-diary, 10k-entry, 10k-note fixture. Detailed command results and timings live in `docs/testing/TEST_RESULTS.md`.
+
+The current release verdict remains `NOT READY` because the remaining real interaction item is parked for now: full Google Drive/OAuth breadth, physical-device validation, real permission and biometric prompt paths, real pending-outbox/media-upload resume, and remaining primary-recovery permutations still require documented device/provider evidence.
+
 ## Current Implementation
 
 - Normal synced diary, entry, note, settings, and profile writes now apply to the encrypted local repository first and enqueue a durable sync outbox operation in the same serialized stored batch.
@@ -21,7 +27,7 @@
 - Native SQLite now enables foreign-key enforcement on initialization, migrates entries and entry blocks into FK-backed tables, verifies `PRAGMA foreign_key_check`, and uses triggers/checks to reject invalid media owners and invalid sync record/outbox record types.
 - Web IndexedDB now writes diaries, entries, notes, settings/profile/security metadata, sync account metadata, record versions, media pointers, partition hydration state, and sync outbox rows into dedicated encrypted record stores in the same IndexedDB transaction as the compatibility key-value row. Repository list/get paths prefer the structured record API once readiness metadata is present; direct diary, entry, and note lookups can read one encrypted record without rebuilding the compatibility array. Entry/note filters and pagination use IndexedDB metadata index stores, with keyed blind tokens for tags, mood, title/body search terms, and note search terms so sensitive searchable text is not stored as readable index data.
 - Existing full snapshot import/export APIs remain available for backup, restore, and partition flows.
-- The 10k-entry/10k-note benchmark baseline is recorded in `docs/benchmarks/local-first-10k-baseline-2026-07-11.md`.
+- The dated 10k-entry/10k-note baseline remains recorded in `docs/benchmarks/local-first-10k-baseline-2026-07-11.md`; the latest 2026-07-12 rerun is recorded in `docs/testing/TEST_RESULTS.md`.
 
 ## Rollback Notes
 
@@ -35,4 +41,4 @@
 - Web IndexedDB range/sort metadata such as dates, update timestamps, booleans, and opaque record IDs remains queryable metadata by design. Sensitive search/tag/mood terms are stored as keyed blind tokens, but physical browser-profile compromise should still be treated as high risk until OS/device protections are included in release validation.
 - Conflict handling for already-uploading local-first operations preserves the latest outbox state, but multi-device stale-write flows still need physical-device validation.
 - Diary cover images still hydrate eagerly because the existing book-cover UI paints them as CSS backgrounds. Converting those covers to media-aware image components is part of the remaining UI data-flow cleanup.
-- Real Google Drive OAuth, Supabase realtime, force-stop recovery, media upload crash recovery, SQLCipher migration, biometrics, and low-storage paths require Android emulator or physical-device validation.
+- Docker-backed Supabase/PostgreSQL validation, recovery/rotation force-stop checkpoints, locked/unlocked offline-online behavior, native deep-link privacy/routing, picker cancellation, unavailable-biometric fallback, recording discard, keyboard resize, Back behavior, notification no-loop, and status-bar icon-style toggling now have local or emulator evidence. Real Google Drive/OAuth breadth, Supabase staging/realtime smoke, real pending-outbox/media-upload crash recovery, biometric success/cancel/failure, visible OS permission prompts, SQLCipher and legacy-media migration under interruption/low storage, remaining primary-recovery permutations, and physical-device confirmation remain release risks.

@@ -284,7 +284,7 @@ Copy `.env.example` to `.env` for Google/Supabase-backed sync. Vite only exposes
 | Variable | Required for | Notes |
 | --- | --- | --- |
 | `VITE_GOOGLE_WEB_CLIENT_ID` | Google sign-in and Drive `appDataFolder` access | Use the OAuth Web application client ID, not the Android client ID. |
-| `VITE_SUPABASE_URL` | Encrypted sync | Supabase project URL. Apply `docs/supabase/001` through `docs/supabase/017` first. |
+| `VITE_SUPABASE_URL` | Encrypted sync | Supabase project URL. Apply `docs/supabase/001` through `docs/supabase/018` first. |
 | `VITE_SUPABASE_ANON_KEY` | Encrypted sync | Supabase anon key. |
 | `VITE_ENABLE_MD_FLOW_HOOKS` | Manual MD-021/MD-022 force-stop testing only | Never enable in release builds. |
 | `VITE_APP_VERSION` | Optional | Version recorded in backup/sync metadata where used. |
@@ -318,7 +318,9 @@ Additional suites:
 
 The automated suite covers repository semantics, local-first mutation/outbox atomicity, storage-backed query behavior, security hashing/recovery, rich-text sanitization, encrypted sync events, snapshots, partitioned restore, companion pairing, key rotation/revocation, media handling, backup utility validation, component behavior, and server API boundaries.
 
-Physical-device QA remains necessary for Google consent, Android biometrics, microphone behavior, notification permission, SQLite/legacy-media migration, app background privacy lock, Android clear-storage recovery, and real multi-device sync conflict/recovery scenarios.
+Latest audit status is recorded in [docs/testing/TEST_RESULTS.md](docs/testing/TEST_RESULTS.md), [docs/testing/BASELINE.md](docs/testing/BASELINE.md), and [docs/testing/KNOWN_RISKS.md](docs/testing/KNOWN_RISKS.md). As of 2026-07-12, `npm.cmd run test:all`, `benchmark:seed`, and `benchmark:run` passed locally; Docker-backed Supabase coverage applies migrations `001` through `018`; Android unit/lint passed; and emulator evidence covers the feasible non-secret native paths documented in [docs/testing/MANUAL_DEVICE_TESTS.md](docs/testing/MANUAL_DEVICE_TESTS.md).
+
+Physical-device QA remains necessary for full Google consent/Drive breadth, Android biometric success/cancel/failure, visible camera/microphone/speech/notification permission prompts, SQLCipher/legacy-media migration under interruption and low storage, real elapsed-time app background privacy lock, Android clear-storage recovery, real pending-outbox/media-upload resume, remaining primary-recovery permutations, and real multi-device sync conflict/recovery scenarios.
 
 ## Project Structure
 
@@ -345,7 +347,7 @@ Physical-device QA remains necessary for Google consent, Android biometrics, mic
 |   |-- local-first-performance.md   # current local-first refactor notes and remaining risks
 |   |-- mobile-capacitor.md           # native implementation notes
 |   |-- sync-and-supabase.md          # encrypted sync runbook
-|   `-- supabase/                     # ordered SQL migrations 001-017
+|   `-- supabase/                     # ordered SQL migrations 001-018
 |-- server.ts                         # Express/Vite development and static production server
 |-- vite.config.ts                    # Vite, React, Tailwind, alias, HMR config
 |-- capacitor.config.ts               # Capacitor app/native settings

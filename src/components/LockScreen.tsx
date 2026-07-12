@@ -1100,7 +1100,7 @@ export default function LockScreen({
         </AnimatePresence>
       </main>
 
-      <footer className="w-full max-w-sm lg:absolute lg:bottom-8 lg:left-8 lg:right-auto lg:max-w-none lg:items-start lg:text-left xl:left-10 text-center flex flex-col items-center gap-1 z-10 py-1 opacity-65">
+      <footer className="pointer-events-none w-full max-w-sm lg:absolute lg:bottom-8 lg:left-8 lg:right-auto lg:max-w-none lg:items-start lg:text-left xl:left-10 text-center flex flex-col items-center gap-1 z-10 py-1 opacity-65">
         <div className="flex items-center gap-1.5 bg-white/36 dark:bg-white/[0.05] px-3 py-1 rounded-full border border-brand-border/50 dark:border-white/10 text-[8px] sm:text-[9px] font-bold text-brand-plum dark:text-brand-text-muted uppercase tracking-widest backdrop-blur-xl">
           <Lock className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
           <span>Protected Access</span>

@@ -219,6 +219,7 @@ export default function NotesScreen({
               </div>
               <button
                 type="button"
+                data-testid="new-note-button"
                 onClick={() => {
                   setEditingNote(null);
                   setEditingTitle('');
@@ -264,6 +265,7 @@ export default function NotesScreen({
                   <button
                     key={note.id}
                     type="button"
+                    data-testid="note-card"
                     onClick={() => handleStartEdit(note)}
                     className={`w-full rounded-[20px] border p-4 text-left transition-all ${
                       isActive
@@ -335,6 +337,7 @@ export default function NotesScreen({
 
               <input
                 type="text"
+                data-testid="note-title-input"
                 value={editTitle}
                 onChange={(event) => setEditingTitle(event.target.value)}
                 placeholder="Note title..."
@@ -362,6 +365,7 @@ export default function NotesScreen({
                   html={editBody}
                   onChange={setEditingBody}
                   placeholder="Write your note..."
+                  testId="note-edit-editor"
                   className="min-h-[340px] w-full bg-transparent font-serif-diary text-2xl leading-[1.7] text-brand-plum outline-none dark:text-brand-text"
                 />
               </div>
@@ -369,6 +373,7 @@ export default function NotesScreen({
               <div className="mt-8 flex items-center justify-between border-t border-brand-border pt-5">
                 <button
                   type="button"
+                  data-testid="note-delete-button"
                   onClick={() => setShowConfirmDeleteId(editingNote.id)}
                   className="rounded-full border border-red-200 px-4 py-2 text-sm font-bold text-red-700 hover:bg-red-50"
                 >
@@ -388,7 +393,7 @@ export default function NotesScreen({
                 <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
                   <p className="text-sm font-semibold text-red-700">Delete this note permanently?</p>
                   <div className="mt-3 flex gap-2">
-                    <button type="button" onClick={() => handleDeleteNote(editingNote.id)} className="rounded-full bg-red-600 px-4 py-2 text-sm font-bold text-white">Confirm delete</button>
+                    <button type="button" data-testid="note-confirm-delete-button" onClick={() => handleDeleteNote(editingNote.id)} className="rounded-full bg-red-600 px-4 py-2 text-sm font-bold text-white">Confirm delete</button>
                     <button type="button" onClick={() => setShowConfirmDeleteId(null)} className="rounded-full border border-red-200 px-4 py-2 text-sm font-bold text-red-700">Cancel</button>
                   </div>
                 </div>
@@ -403,6 +408,7 @@ export default function NotesScreen({
                   html={quickThought}
                   onChange={setQuickThought}
                   placeholder="Jot down a quick thought, shopping list, or temporary idea..."
+                  testId="quick-note-editor"
                   className="min-h-[240px] w-full bg-transparent font-serif-diary text-2xl leading-relaxed text-brand-plum outline-none"
                 />
                 <div className="mt-5 flex items-center justify-between border-t border-brand-border pt-5">
@@ -477,6 +483,7 @@ export default function NotesScreen({
             html={quickThought}
             onChange={setQuickThought}
             placeholder="Jot down a quick thought, shopping list, or temporary idea..."
+            testId="quick-note-editor"
             className="w-full bg-transparent border-none text-sm text-brand-plum min-h-[80px]"
           />
           <div className="flex justify-between items-center border-t border-brand-rose-light/50 pt-3">
@@ -531,6 +538,7 @@ export default function NotesScreen({
           return (
             <article 
               key={note.id}
+              data-testid="note-card"
               className={`rounded-3xl p-5 border shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between group relative overflow-hidden ${
                 isDoubleWide ? 'sm:col-span-2' : ''
               } ${
@@ -582,6 +590,7 @@ export default function NotesScreen({
                     <Pin className={`w-3.5 h-3.5 ${note.isPinned ? 'fill-brand-pink text-brand-pink' : ''}`} />
                   </button>
                   <button 
+                    data-testid="note-edit-button"
                     onClick={() => handleStartEdit(note)}
                     className="p-1.5 text-brand-sage hover:bg-brand-blush-light rounded-lg transition-colors"
                   >
@@ -590,6 +599,7 @@ export default function NotesScreen({
                   
                   {showConfirmDeleteId !== note.id ? (
                     <button 
+                      data-testid="note-delete-button"
                       onClick={() => setShowConfirmDeleteId(note.id)}
                       className="p-1.5 text-brand-sage hover:text-red-600 rounded-lg transition-colors"
                     >
@@ -597,6 +607,7 @@ export default function NotesScreen({
                     </button>
                   ) : (
                     <button 
+                      data-testid="note-confirm-delete-button"
                       onClick={() => handleDeleteNote(note.id)}
                       className="px-2 py-1 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg text-[10px] font-bold transition-all"
                     >
@@ -641,6 +652,7 @@ export default function NotesScreen({
                   <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Note Title</label>
                   <input 
                     type="text" 
+                    data-testid="note-title-input"
                     value={editTitle}
                     onChange={(e) => setEditingTitle(e.target.value)}
                     placeholder="Enter title..."
@@ -680,6 +692,7 @@ export default function NotesScreen({
                       html={editBody}
                       onChange={setEditingBody}
                       placeholder="Note description..."
+                      testId="note-edit-editor"
                       className="w-full bg-transparent text-sm text-brand-plum min-h-[100px]"
                     />
                   </div>

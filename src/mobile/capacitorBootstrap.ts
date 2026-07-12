@@ -71,6 +71,31 @@ export const addNativeAppStateListener = (
   };
 };
 
+export const addNativeUrlOpenListener = (
+  handler: (event: { url: string }) => void,
+): (() => void) => {
+  if (!isCapacitorNative()) return () => undefined;
+  let listener: PluginListenerHandle | null = null;
+  let disposed = false;
+  void CapacitorApp.addListener('appUrlOpen', handler).then(handle => {
+    if (disposed) {
+      void handle.remove();
+      return;
+    }
+    listener = handle;
+  });
+  return () => {
+    disposed = true;
+    void listener?.remove();
+  };
+};
+
+export const getNativeLaunchUrl = async (): Promise<string | null> => {
+  if (!isCapacitorNative()) return null;
+  const launchUrl = await CapacitorApp.getLaunchUrl();
+  return launchUrl?.url || null;
+};
+
 export const exitNativeApp = async (): Promise<void> => {
   if (!isCapacitorNative()) {
     return;

@@ -51,8 +51,8 @@ describe('SyncedImage', () => {
 
     fireEvent.load(image);
 
+    await waitFor(() => expect(image).toHaveAttribute('data-image-state', 'ready'));
     expect(image).not.toHaveAttribute('aria-busy');
-    expect(image).toHaveAttribute('data-image-state', 'ready');
   });
 
   it('keeps the skeleton visible until a regular image finishes loading', () => {

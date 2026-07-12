@@ -2,6 +2,8 @@
 
 Dear Diary exposes lightweight development-only performance measurements through `measureAsync` and `measureSync` in `src/utils/performance.ts`.
 
+Latest audit rerun: on 2026-07-12, `npm.cmd run benchmark:seed` and `npm.cmd run benchmark:run` completed against the standard 100-diary, 10,000-entry, 10,000-note, 250-outbox fixture. The current timing table is recorded in `docs/testing/TEST_RESULTS.md`.
+
 ## Privacy
 
 Measurement metadata is redacted before it is recorded. Do not pass diary text, note text, titles, recovery material, tokens, keys, PINs, passphrases, media bytes, or raw media URIs. Metadata should be limited to counts, operation names, record types, booleans, and non-sensitive timing context.
@@ -62,4 +64,4 @@ Capture p50/p95 timings for:
 - media encryption and thumbnail generation
 - editor save-to-navigation and screen mount/render timing
 
-Record baseline numbers before a refactor in `docs/testing/BASELINE.md` or a dated performance report, then record final numbers with the same fixture and device profile. The current local-first 10k baseline is recorded in `docs/benchmarks/local-first-10k-baseline-2026-07-11.md`.
+Record baseline numbers before a refactor in `docs/testing/BASELINE.md` or a dated performance report, then record final numbers with the same fixture and device profile. The dated local-first 10k baseline is recorded in `docs/benchmarks/local-first-10k-baseline-2026-07-11.md`; the latest 2026-07-12 rerun is recorded in `docs/testing/TEST_RESULTS.md`.

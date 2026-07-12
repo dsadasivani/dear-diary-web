@@ -416,6 +416,7 @@ export default function HomeScreen({
             <motion.button 
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
+              data-testid="home-write-entry-button"
               onClick={() => onOpenNewEntryWithPrompt(activePrompt)}
               className="bg-brand-pink text-white px-7 py-3.5 rounded-full font-bold text-xs flex items-center gap-2 shadow-lg shadow-brand-pink/15 hover:bg-brand-pink-dark transition-all"
             >

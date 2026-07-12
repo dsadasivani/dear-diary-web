@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { access, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -177,6 +177,7 @@ const applyMigrations = async sql => {
     '015_fix_partition_restore_bundle_ambiguity.sql',
     '016_idempotent_key_rotation_finalize.sql',
     '017_guard_key_rotation_abort_race.sql',
+    '018_idempotent_primary_recovery_finalize.sql',
   ], 'expected the complete ordered Supabase migration set');
   for (const file of migrationFiles) {
     const sqlText = await readFile(path.join(migrationsDir, file), 'utf8');
@@ -269,6 +270,124 @@ const commitKeyPackage = async (sql, {
   return row;
 };
 
+const sha256Hex = value => createHash('sha256').update(value).digest('hex');
+
+const commitEvent = async (sql, {
+  primaryDeviceId,
+  afterSequence,
+  driveFileId,
+  operationId,
+  recordType = 'entry',
+  recordId,
+  baseRecordVersion,
+}) => {
+  const [row] = await sql`
+    select *
+    from public.commit_sync_object(
+      p_device_id => ${primaryDeviceId}::uuid,
+      p_after_sequence => ${afterSequence}::bigint,
+      p_drive_file_id => ${driveFileId},
+      p_object_kind => 'event',
+      p_sha256 => ${'b'.repeat(64)},
+      p_size_bytes => 128::bigint,
+      p_record_type => ${recordType},
+      p_record_id => ${recordId},
+      p_base_record_version => ${baseRecordVersion}::bigint,
+      p_operation_id => ${operationId}
+    )
+  `;
+  return row;
+};
+
+const commitMedia = async (sql, {
+  primaryDeviceId,
+  afterSequence,
+  driveFileId,
+  operationId,
+}) => {
+  const [row] = await sql`
+    select *
+    from public.commit_sync_object(
+      p_device_id => ${primaryDeviceId}::uuid,
+      p_after_sequence => ${afterSequence}::bigint,
+      p_drive_file_id => ${driveFileId},
+      p_object_kind => 'media',
+      p_sha256 => ${'c'.repeat(64)},
+      p_size_bytes => 1024::bigint,
+      p_operation_id => ${operationId}
+    )
+  `;
+  return row;
+};
+
+const testRequiredCapabilities = async adminSql => {
+  const requiredTables = [
+    'accounts',
+    'devices',
+    'sync_objects',
+    'pairing_sessions',
+    'primary_recovery_attempts',
+    'key_epoch_rotations',
+  ];
+  const rlsRows = await adminSql`
+    select c.relname, c.relrowsecurity
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relname in ${adminSql(requiredTables)}
+    order by c.relname
+  `;
+  assert.deepEqual(
+    rlsRows.map(row => `${row.relname}:${row.relrowsecurity}`),
+    requiredTables.sort().map(table => `${table}:true`),
+    'required Supabase tables must have RLS enabled',
+  );
+
+  const capabilityRows = await adminSql`
+    select p.proname
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname in ${adminSql([
+        'begin_device_key_rotation',
+        'begin_primary_mobile_recovery',
+        'commit_sync_object',
+        'create_pairing_session',
+        'finalize_device_key_rotation',
+        'finalize_primary_mobile_recovery',
+        'retire_sync_objects',
+      ])}
+    order by p.proname
+  `;
+  assert.deepEqual(
+    [...new Set(capabilityRows.map(row => row.proname))],
+    [
+      'begin_device_key_rotation',
+      'begin_primary_mobile_recovery',
+      'commit_sync_object',
+      'create_pairing_session',
+      'finalize_device_key_rotation',
+      'finalize_primary_mobile_recovery',
+      'retire_sync_objects',
+    ],
+    'required Supabase RPC capabilities are installed',
+  );
+
+  const syncColumns = await adminSql`
+    select column_name
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'sync_objects'
+      and column_name in ${adminSql(['operation_id', 'key_epoch', 'partition_key', 'retired_at'])}
+    order by column_name
+  `;
+  assert.deepEqual(
+    syncColumns.map(row => row.column_name),
+    ['key_epoch', 'operation_id', 'partition_key', 'retired_at'],
+    'sync object stale-schema capabilities are present',
+  );
+};
+
 const testRlsIsolation = async (port, adminSql) => {
   const a = await createAccount(port, userA, 'a@example.com', 'a');
   const b = await createAccount(port, userB, 'b@example.com', 'b');
@@ -306,6 +425,161 @@ const testRlsIsolation = async (port, adminSql) => {
 
   const allAccounts = await adminSql`select count(*)::int as count from public.accounts`;
   assert.equal(allAccounts[0].count, 2);
+};
+
+const testSyncObjectGuards = async port => {
+  const userId = '66666666-6666-4666-8666-666666666666';
+  const account = await createAccount(port, userId, 'sync-guards@example.com', 'sync-guards');
+
+  await asUser(port, userId, 'sync-guards@example.com', async sql => {
+    const first = await commitEvent(sql, {
+      primaryDeviceId: account.primaryDeviceId,
+      afterSequence: 0,
+      driveFileId: 'sync-guards-entry-v1',
+      operationId: 'sync-guards-op',
+      recordId: 'entry-sync-guards',
+      baseRecordVersion: 0,
+    });
+    assert.equal(first.sequence, '1');
+    assert.equal(first.record_version, '1');
+
+    const duplicate = await commitEvent(sql, {
+      primaryDeviceId: account.primaryDeviceId,
+      afterSequence: 0,
+      driveFileId: 'sync-guards-entry-duplicate',
+      operationId: 'sync-guards-op',
+      recordId: 'entry-sync-guards',
+      baseRecordVersion: 0,
+    });
+    assert.equal(duplicate.id, first.id, 'duplicate operation IDs return the original object');
+
+    await expectReject(
+      () => commitEvent(sql, {
+        primaryDeviceId: account.primaryDeviceId,
+        afterSequence: first.sequence,
+        driveFileId: 'sync-guards-entry-stale-record',
+        operationId: 'sync-guards-stale-record-op',
+        recordId: 'entry-sync-guards',
+        baseRecordVersion: 0,
+      }),
+      /stale_record_version/,
+      'stale record versions are rejected',
+    );
+
+    await expectReject(
+      () => commitMedia(sql, {
+        primaryDeviceId: account.primaryDeviceId,
+        afterSequence: 99,
+        driveFileId: 'sync-guards-future-sequence',
+        operationId: 'sync-guards-future-sequence-op',
+      }),
+      /future_sync_sequence/,
+      'future sync sequences are rejected',
+    );
+  });
+};
+
+const testPairingGuards = async (port, adminSql) => {
+  const userId = '77777777-7777-4777-8777-777777777777';
+  const account = await createAccount(port, userId, 'pairing@example.com', 'pairing');
+  const pairingCode = '135790';
+
+  await asUser(port, userId, 'pairing@example.com', async sql => {
+    const [session] = await sql`
+      select *
+      from public.create_pairing_session(
+        'pairing-public-key',
+        'Pairing Browser',
+        'web',
+        ${sha256Hex(pairingCode)},
+        now() + interval '5 minutes'
+      )
+    `;
+
+    await expectReject(
+      () => sql`
+        select public.approve_pairing_session(
+          ${session.id}::uuid,
+          ${account.primaryDeviceId}::uuid,
+          '000000',
+          0::bigint,
+          'pairing-wrong-code-key-package',
+          ${'d'.repeat(64)},
+          64::bigint
+        )
+      `,
+      /pairing_code_invalid/,
+      'pairing approval rejects wrong code digests',
+    );
+
+    const [approved] = await sql`
+      select public.approve_pairing_session(
+        ${session.id}::uuid,
+        ${account.primaryDeviceId}::uuid,
+        ${pairingCode},
+        0::bigint,
+        'pairing-approved-key-package',
+        ${'e'.repeat(64)},
+        64::bigint
+      ) as result
+    `;
+    assert.equal(approved.result.device.role, 'web_companion');
+    assert.equal(approved.result.key_object.object_kind, 'key_package');
+
+    await expectReject(
+      () => sql`
+        select public.approve_pairing_session(
+          ${session.id}::uuid,
+          ${account.primaryDeviceId}::uuid,
+          ${pairingCode},
+          1::bigint,
+          'pairing-replay-key-package',
+          ${'f'.repeat(64)},
+          64::bigint
+        )
+      `,
+      /pairing_session_already_approved/,
+      'pairing approval replay is rejected',
+    );
+  });
+
+  const [expiredSession] = await adminSql`
+    insert into public.pairing_sessions (
+      account_id,
+      requested_device_public_key,
+      requested_display_name,
+      requested_platform,
+      pairing_code_hash,
+      expires_at
+    )
+    values (
+      ${account.accountId}::uuid,
+      'expired-pairing-key',
+      'Expired Browser',
+      'web',
+      ${sha256Hex('246802')},
+      now() - interval '1 minute'
+    )
+    returning id
+  `;
+
+  await asUser(port, userId, 'pairing@example.com', async sql => {
+    await expectReject(
+      () => sql`
+        select public.approve_pairing_session(
+          ${expiredSession.id}::uuid,
+          ${account.primaryDeviceId}::uuid,
+          '246802',
+          1::bigint,
+          'pairing-expired-key-package',
+          ${'1'.repeat(64)},
+          64::bigint
+        )
+      `,
+      /pairing_session_expired/,
+      'expired pairing approvals are rejected',
+    );
+  });
 };
 
 const testRotationRpcGuards = async (port, adminSql) => {
@@ -514,6 +788,94 @@ const testConcurrentPrimaryRecoveries = async port => {
   });
 };
 
+const testPrimaryRecoveryFinalizeRetry = async port => {
+  const userId = '88888888-8888-4888-8888-888888888888';
+  const account = await createAccount(port, userId, 'recovery-retry@example.com', 'recovery-retry');
+
+  await asUser(port, userId, 'recovery-retry@example.com', async sql => {
+    const [pending] = await sql`
+      select public.begin_primary_mobile_recovery(
+        'google-recovery-retry',
+        'recovery-retry@example.com',
+        'Recovery Retry Phone',
+        'android',
+        'recovery-retry-public-key',
+        true,
+        ${account.primaryDeviceId}::uuid
+      ) as result
+    `;
+
+    const [finalized] = await sql`
+      select public.finalize_primary_mobile_recovery(
+        ${pending.result.attempt.id}::uuid,
+        ${pending.result.device.id}::uuid,
+        0::bigint
+      ) as result
+    `;
+    assert.equal(finalized.result.device.activation_state, 'active');
+
+    const [retry] = await sql`
+      select public.finalize_primary_mobile_recovery(
+        ${pending.result.attempt.id}::uuid,
+        ${pending.result.device.id}::uuid,
+        0::bigint
+      ) as result
+    `;
+    assert.equal(retry.result.attempt.status, 'finalized');
+    assert.equal(retry.result.account.active_primary_device_id, pending.result.device.id);
+  });
+};
+
+const testSyncObjectRetirement = async port => {
+  const userId = '99999999-9999-4999-8999-999999999999';
+  const account = await createAccount(port, userId, 'retention@example.com', 'retention');
+
+  await asUser(port, userId, 'retention@example.com', async sql => {
+    const event = await commitEvent(sql, {
+      primaryDeviceId: account.primaryDeviceId,
+      afterSequence: 0,
+      driveFileId: 'retention-event',
+      operationId: 'retention-event-op',
+      recordId: 'entry-retention',
+      baseRecordVersion: 0,
+    });
+    const media = await commitMedia(sql, {
+      primaryDeviceId: account.primaryDeviceId,
+      afterSequence: event.sequence,
+      driveFileId: 'retention-media',
+      operationId: 'retention-media-op',
+    });
+    const keyPackage = await commitKeyPackage(sql, {
+      primaryDeviceId: account.primaryDeviceId,
+      afterSequence: media.sequence,
+      driveFileId: 'retention-key-package',
+      operationId: 'retention-key-package-op',
+      keyEpoch: 1,
+    });
+
+    const retired = await sql`
+      select drive_file_id, object_kind, retired_at is not null as retired
+      from public.retire_sync_objects(
+        ${account.primaryDeviceId}::uuid,
+        array['retention-event', 'retention-media', 'retention-key-package']::text[]
+      )
+      order by drive_file_id
+    `;
+    assert.deepEqual(
+      retired.map(row => `${row.drive_file_id}:${row.object_kind}:${row.retired}`),
+      ['retention-event:event:true', 'retention-media:media:true'],
+      'GC retirement excludes key packages while retiring event/media objects',
+    );
+
+    const visible = await sql`
+      select drive_file_id
+      from public.list_sync_objects_after(${account.primaryDeviceId}::uuid, 0::bigint, 100)
+      order by drive_file_id
+    `;
+    assert.deepEqual(visible.map(row => row.drive_file_id), [keyPackage.drive_file_id]);
+  });
+};
+
 const main = async () => {
   let port;
   let adminSql;
@@ -522,11 +884,17 @@ const main = async () => {
     adminSql = connect(port);
     await installSupabaseCompat(adminSql);
     await applyMigrations(adminSql);
+    await applyMigrations(adminSql);
     await installRoleGrants(adminSql);
+    await testRequiredCapabilities(adminSql);
     await testRlsIsolation(port, adminSql);
+    await testSyncObjectGuards(port);
+    await testPairingGuards(port, adminSql);
     await testRotationRpcGuards(port, adminSql);
     await testConcurrentRotations(port, adminSql);
     await testConcurrentPrimaryRecoveries(port);
+    await testPrimaryRecoveryFinalizeRetry(port);
+    await testSyncObjectRetirement(port);
     console.log('Supabase integration tests passed.');
   } catch (error) {
     die(error.stack || error.message || String(error));

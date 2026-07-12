@@ -10,7 +10,8 @@ import ProfileAvatar from './components/ProfileAvatar';
 
 import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
 import type { RepositoryChange, SyncStatusSummary } from './repositories';
-import { addNativeAppStateListener, addNativeBackListener, exitNativeApp, syncNativeStatusBar } from './mobile/capacitorBootstrap';
+import { addNativeAppStateListener, addNativeBackListener, addNativeUrlOpenListener, exitNativeApp, getNativeLaunchUrl, syncNativeStatusBar } from './mobile/capacitorBootstrap';
+import { DearDiaryDeepLinkTarget, parseDearDiaryDeepLink } from './mobile/deepLinks';
 import { isAndroid, isNativePlatform } from './platform';
 
 import { secureAuthService } from './platform/security';
@@ -99,6 +100,12 @@ const isLikelyCellularConnection = (): boolean => {
   return connectionType === 'cellular' || ['slow-2g', '2g', '3g'].includes(effectiveType);
 };
 
+const isE2eAppMode = (): boolean => {
+  if (import.meta.env.VITE_DEAR_DIARY_E2E !== '1') return false;
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).has('e2eApp');
+};
+
 export default function App({ initialSettings, initialSecurity, initialUserProfile }: AppProps) {
   const isDesktop = useIsDesktop();
   const layout: ResponsiveLayout = isDesktop ? 'desktop' : 'mobile';
@@ -134,6 +141,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
   const [globalLoading, setGlobalLoading] = useState<GlobalLoadingState | null>(null);
   const loadingDepthRef = React.useRef(0);
+  const pendingDeepLinkRef = React.useRef<DearDiaryDeepLinkTarget | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
     setToast({ message, type });
@@ -364,6 +372,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       setUnlockedDiaryIds(new Set());
       setIsAuthenticated(true);
     }, 'Loading your latest local data.');
+    if (isE2eAppMode()) return;
     void resumePendingSyncWorkAfterUnlock()
       .then(syncAccount => {
         if (syncAccount) {
@@ -568,6 +577,82 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     }
     handleNavigate('diaries');
   };
+
+  const navigateToDeepLink = useCallback(async (target: DearDiaryDeepLinkTarget) => {
+    switch (target.kind) {
+      case 'home':
+        handleNavigate('home');
+        return;
+      case 'diaries':
+        handleNavigate('diaries');
+        return;
+      case 'diary':
+        handleNavigate('diaries', 'diaryDetail', target.diaryId, target.entryId || '');
+        return;
+      case 'entry': {
+        let diaryId = target.diaryId;
+        if (!diaryId) {
+          const entry = await diaryRepository.getEntry(target.entryId);
+          diaryId = entry?.diaryId || '';
+        }
+        if (!diaryId) {
+          showToast('That diary link is no longer available.', 'warning');
+          return;
+        }
+        handleNavigate('diaries', 'diaryDetail', diaryId, target.entryId);
+        return;
+      }
+      case 'notes':
+        handleNavigate('notes', 'list', '', '', '', target.noteId || '');
+        return;
+      case 'search':
+        setSearchInitialQuery(target.query || '');
+        handleNavigate('search');
+        return;
+      case 'stats':
+        handleNavigate('stats');
+        return;
+      case 'settings':
+        handleNavigate('stats', 'appSettings');
+        return;
+      default:
+        return;
+    }
+  }, []);
+
+  const handleDeepLinkUrl = useCallback((url: string) => {
+    const target = parseDearDiaryDeepLink(url);
+    if (!target) {
+      showToast('That Dear Diary link could not be opened.', 'warning');
+      return;
+    }
+    if (!isAuthenticated) {
+      pendingDeepLinkRef.current = target;
+      showToast('Unlock Dear Diary to continue.', 'info');
+      return;
+    }
+    void navigateToDeepLink(target);
+  }, [isAuthenticated, navigateToDeepLink]);
+
+  useEffect(() => {
+    if (!isNativePlatform()) return undefined;
+    let disposed = false;
+    void getNativeLaunchUrl().then(url => {
+      if (!disposed && url) handleDeepLinkUrl(url);
+    }).catch(() => undefined);
+    const removeListener = addNativeUrlOpenListener(({ url }) => handleDeepLinkUrl(url));
+    return () => {
+      disposed = true;
+      removeListener();
+    };
+  }, [handleDeepLinkUrl]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !pendingDeepLinkRef.current) return;
+    const target = pendingDeepLinkRef.current;
+    pendingDeepLinkRef.current = null;
+    void navigateToDeepLink(target);
+  }, [isAuthenticated, navigateToDeepLink]);
 
   useEffect(() => {
     setDiaryUnlockPin('');
@@ -1225,6 +1310,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                   <button
                     key={item.id}
                     type="button"
+                    data-testid={`nav-${item.id}`}
                     onClick={item.onClick}
                     className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-bold transition-all xl:gap-4 xl:rounded-2xl xl:px-4 xl:py-3 ${
                       item.active
@@ -1246,6 +1332,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               </div>
               <button
                 type="button"
+                data-testid="lock-app-button"
                 onClick={handleLockApp}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-sage px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark active:scale-[0.99]"
               >
@@ -1276,6 +1363,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 </form>
                 <button
                   type="button"
+                  data-testid="new-entry-button"
                   onClick={handleDesktopNewEntry}
                   className="inline-flex items-center gap-2 rounded-full bg-brand-sage px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark active:scale-[0.98] xl:px-5 xl:py-3"
                 >
@@ -1427,6 +1515,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           
           {/* Navigation Tabs */}
           <button 
+            data-testid="nav-home"
             onClick={() => handleNavigate('home')}
             className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
               activeTab === 'home' 
@@ -1439,6 +1528,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           </button>
 
           <button 
+            data-testid="nav-diaries"
             onClick={() => handleNavigate('diaries')}
             className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
               activeTab === 'diaries' 
@@ -1451,6 +1541,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           </button>
 
           <button 
+            data-testid="nav-notes"
             onClick={() => handleNavigate('notes')}
             className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
               activeTab === 'notes' 
@@ -1463,6 +1554,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           </button>
 
           <button 
+            data-testid="nav-search"
             onClick={() => handleNavigate('search')}
             className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
               activeTab === 'search' 
@@ -1475,6 +1567,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           </button>
 
           <button 
+            data-testid="nav-stats"
             onClick={() => handleNavigate('stats')}
             className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
               activeTab === 'stats' 
@@ -1490,6 +1583,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
           {/* Lock App Button (Interactive test action) */}
           <button 
+            data-testid="lock-app-button"
             onClick={handleLockApp}
             className="p-2 text-brand-sage hover:text-brand-pink transition-all rounded-full flex items-center justify-center hover:bg-brand-blush-light active:scale-95"
             title="Secure/Lock App Now"

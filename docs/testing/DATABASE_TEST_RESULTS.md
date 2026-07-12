@@ -1,12 +1,19 @@
 # Database Test Results
 
-Command: `npm.cmd run test:supabase`  
-Exit code: 0  
-Result: Supabase integration tests passed.
+- Command: `npm.cmd run test:supabase`
+- Exit code: 0
+- Date: 2026-07-12
+- Branch: `feature/local-first-performance`
+- Commit SHA: `34f74c0ccc270b6e245a1328cc6effd399e1bfbf` plus the uncommitted audit fixes in this working tree
+- Docker: Client `29.4.3`, Server `29.4.3`, Docker Desktop `4.74.0 (227015)`
 
-## Migration Behavior
+## Result
 
-The suite starts a real PostgreSQL 16 Docker container and applies the exact ordered migration set:
+Passed against a disposable Docker/PostgreSQL database.
+
+The suite installed the Supabase Auth compatibility shim, applied the real ordered migrations `001` through `018`, reapplied the same migrations to verify idempotency, installed authenticated-role grants, and completed all RLS/RPC/integrity assertions.
+
+## Migration Set
 
 1. `001_multi_device_sync.sql`
 2. `002_companion_pairing.sql`
@@ -25,30 +32,21 @@ The suite starts a real PostgreSQL 16 Docker container and applies the exact ord
 15. `015_fix_partition_restore_bundle_ambiguity.sql`
 16. `016_idempotent_key_rotation_finalize.sql`
 17. `017_guard_key_rotation_abort_race.sql`
+18. `018_idempotent_primary_recovery_finalize.sql`
 
-## Covered Scenarios
+## Coverage Verified
 
-- Clean installation of all migrations.
-- Exact migration filename/order assertion.
-- Basic RLS isolation for accounts and sync objects across two users.
-- RLS rejects cross-user account inserts.
-- Two-phase key rotation requires recovery and surviving companion key packages.
-- Key rotation finalization advances the account epoch and revokes the target device.
-- Key rotation finalization is retry-safe after server-side completion.
-- Key rotation finalization can repair an aborted-after-package state when committed packages are present.
-- Key rotation abort rejects attempts once next-epoch key packages have already committed.
-- Concurrent key rotations allow only one pending rotation.
-- Concurrent primary recoveries allow only one pending recovery.
-- Pending recovery devices cannot commit normal sync objects.
-- Aborted primary recovery allows a later recovery attempt.
+- Ordered migration application and idempotent reapplication.
+- Required RLS-enabled tables, RPC capability presence, and sync-object capability columns for stale-schema detection.
+- Cross-account RLS isolation for account and sync-object reads plus cross-user account insert denial.
+- Duplicate operation ID idempotency, stale record-version rejection, and future sequence rejection.
+- Pairing wrong-code digest rejection, approval success, approval replay rejection, and expired pairing rejection.
+- Key rotation begin/finalize guards, missing package rejection, abort-after-package rejection, aborted-then-finalized repair, finalized retry, target revocation, and revocation record creation.
+- Concurrent key-rotation and primary-recovery pending-slot protection.
+- Pending recovery devices cannot commit normal sync objects; aborted recovery allows a replacement pending recovery.
+- Primary recovery finalize retry returns the already-finalized state after server-side completion.
+- GC retirement retires event/media objects while preserving key packages and excluding retired objects from restore listings.
 
-## Schema Fixes Added
+## Remaining Database Notes
 
-- Migration `014` now creates `primary_recovery_attempts_one_pending_per_account`, a partial unique index on `primary_recovery_attempts(account_id)` where `status = 'pending'`.
-- Migration `015` disambiguates `get_partition_restore_bundle` return/internal column names to avoid `partition_key` ambiguity after companion pairing restore.
-- Migration `016` makes `finalize_device_key_rotation` retry-safe after a force-stop between server commit and client persistence.
-- Migration `017` prevents aborting rotations after next-epoch packages have committed and lets finalize repair that race state.
-
-## Remaining Database Gaps
-
-The suite is stronger but not exhaustive. It does not yet cover every table/policy combination listed in the audit request, all stale-schema upgrade paths, repeated finalize idempotency for every RPC, pairing-code expiry/digest replay in real HTTP mode, or full retention/garbage-collection object matrices. These gaps remain release blockers for the requested production-readiness standard.
+No local Docker/PostgreSQL release blocker remains. Production Supabase project validation still needs the normal staging smoke path before release, but the repository integration suite now passes locally.

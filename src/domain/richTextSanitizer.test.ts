@@ -25,6 +25,30 @@ test('removes executable HTML, URLs, images, SVG, iframes, styles, and event han
   assert.doesNotMatch(sanitized, /onclick|javascript:|img|svg|iframe|style|script|onerror|srcdoc/i);
 });
 
+test('removes dangerous rich-text payload variants without leaking executable text', () => {
+  const payloads = [
+    '<math><mtext><script>alert(1)</script></mtext></math>',
+    '<object data="javascript:alert(1)">fallback</object>',
+    '<embed src="javascript:alert(1)">',
+    '<p><ScRiPt>alert(1)</ScRiPt>Visible</p>',
+    '<div><span id="constructor">clobber</span><form name="body">form</form></div>',
+    '<iframe srcdoc="&lt;script&gt;alert(1)&lt;/script&gt;"></iframe><p>After</p>',
+    '<p><img src=x OnErRoR=alert(1)>Image text</p>',
+    '<p><a href="javas&#99;ript:alert(1)" onclick="alert(1)">Encoded</a></p>',
+    '<svg><style>*{display:none}</style><foreignObject><p>hidden</p></foreignObject></svg><p>Shown</p>',
+    '<div><b>Nested <i>safe</i></b><style>@import url(javascript:alert(1))</style></div>',
+  ];
+
+  payloads.forEach(payload => {
+    const sanitized = sanitizeRichTextHtml(payload);
+    assert.doesNotMatch(
+      sanitized,
+      /script|iframe|svg|math|object|embed|style|img|onerror|onclick|javascript:|srcdoc|id=|name=/i,
+      `payload was not fully sanitized: ${payload}`,
+    );
+  });
+});
+
 test('sanitizes entry, block, and note bodies', () => {
   const entry = sanitizeEntry({
     id: 'entry-1',

@@ -355,6 +355,59 @@ test('uses storage-backed page queries for entry and note screens', async () => 
   assert.equal(store.collectionReadCount('deardiary_notes'), 0);
 });
 
+test('search excludes locked diary entries when locked diary IDs are provided', async () => {
+  const repository = await createRepository();
+  const openDiary = await repository.createDiary({
+    name: 'Open diary',
+    emoji: 'O',
+    color: '#123456',
+    isLocked: false,
+  });
+  const lockedDiary = await repository.createDiary({
+    name: 'Locked diary',
+    emoji: 'L',
+    color: '#654321',
+    isLocked: true,
+  });
+  await repository.createEntry({
+    diaryId: openDiary.id,
+    date: '2026-07-10',
+    title: 'Public picnic',
+    body: '<p>ordinary visible memory</p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: ['shared'],
+    photoUris: [],
+  });
+  await repository.createEntry({
+    diaryId: lockedDiary.id,
+    date: '2026-07-11',
+    title: 'Private keyword',
+    body: '<p>secret locked diary body</p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: ['private'],
+    photoUris: [],
+  });
+
+  const exactLockedQuery = await repository.searchEntries({
+    query: 'secret locked diary body',
+    excludeDiaryIds: [lockedDiary.id],
+  });
+  const tagQuery = await repository.searchEntries({
+    tags: ['private'],
+    excludeDiaryIds: [lockedDiary.id],
+  });
+  const allVisible = await repository.searchEntries({
+    excludeDiaryIds: [lockedDiary.id],
+    limit: 10,
+  });
+
+  assert.deepEqual(exactLockedQuery.items, []);
+  assert.deepEqual(tagQuery.items, []);
+  assert.deepEqual(allVisible.items.map(entry => entry.diaryId), [openDiary.id]);
+});
+
 test('uses structured record commits for note CRUD without reading the full note collection', async () => {
   const store = new StructuredMemoryDataStore({ deardiary_notes: [] });
   const repository = await createRepository(store);

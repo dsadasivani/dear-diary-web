@@ -2,6 +2,8 @@
 
 Dear Diary now runs inside a Capacitor native shell while keeping the existing Vite React app as the UI. Android is the first supported native target. iOS support is dependency and script ready, but the iOS native project should be generated on macOS.
 
+Latest audit status: as of 2026-07-12, `npm.cmd run android:test` and `npm.cmd run android:lint` passed, the debug-hook Android build was reinstalled on two emulators, and emulator evidence now covers the feasible non-secret paths recorded in `docs/testing/MANUAL_DEVICE_TESTS.md`. The release verdict remains `NOT READY` until the real-device/provider checks in the release checklist are completed or explicitly accepted as non-blocking.
+
 ## Setup
 
 1. Install dependencies:
@@ -95,13 +97,13 @@ Missing Drive API enablement produces a clear API-disabled backup error. Revoked
 - The legacy media migration needs physical-device QA with large photo/audio libraries, interrupted launches, retry behavior, and low-storage cases.
 - Android is the complete background-backup target. iOS still uses local export/import until an equivalent native scheduler and authorization bridge are implemented.
 - Android Settings > Apps > Dear Diary > Clear storage is destructive. It deletes local diary data, encrypted SQLite, secure storage secrets, Preferences, Google backup link metadata, and the app PIN hash/salt. Android OS backup/device transfer is disabled to avoid restoring encrypted SQLite without its key; use Drive or a `.ddbackup` archive.
-- Native speech recognition depends on Android speech services and microphone permission. If unavailable, the app shows a graceful message; audio recording still works through the native recorder.
+- Native speech recognition depends on Android speech services and microphone permission. Emulator denial stability was checked without crash or private-content exposure, but visible OS prompt denial copy still needs real-device confirmation. If unavailable, the app shows a graceful message; audio recording still works through the native recorder.
 - Branded adaptive launcher icons, round icons, and light/dark splash assets are generated from the gold book-and-quill artwork. Verify the rendered assets on physical target densities before store release.
 
 ## Release Checklist
 
 - Complete physical-device upgrade QA for Preferences-to-SQLite and data-URI-to-file migrations, including interruption and low-storage cases.
-- Verify backup scheduling, interrupted resumable upload, token revocation, two-phase primary recovery, and two-phase companion revocation/key rotation with production-signed physical devices.
+- Verify backup scheduling, interrupted resumable upload, token revocation, remaining two-phase primary recovery permutations, and two-phase companion revocation/key rotation with production-signed physical devices. Emulator evidence already covers selected recovery/rotation force-stop checkpoints and row-state verification.
 - Verify native secure-storage failure behavior: encrypted SQLite initialization failure must show a secure-storage error and must not fall back to Preferences for runtime writes.
 - Add cloud/device recovery education for users who intentionally clear OS app storage.
 - Verify the generated production icons/splash on target densities and configure external signing credentials from `android/keystore.properties.example`.
@@ -112,6 +114,6 @@ Missing Drive API enablement produces a clear API-disabled backup error. Revoked
 - Encrypted Drive/local archive restore with correct, wrong, changed, and lost passphrases; verify legacy plaintext and legacy `.txt` compatibility.
 - Scheduled WorkManager execution under Doze, Wi-Fi/cellular policy, battery/storage constraints, revoked consent, expired upload sessions, and transient Drive failures.
 - Two-device lineage: replacement restore, safe merge with diary/entry/note conflicts, Keep Local cloud-write block, two-phase primary recovery, and companion revocation/key rotation.
-- Audio Note and Dictate Text with permissions denied, browser support absent, Android speech services disabled, and network loss during dictation.
+- Audio Note and Dictate Text with permissions denied, browser support absent, Android speech services disabled, and network loss during dictation. Emulator evidence covers basic denial stability and recording discard; visible runtime prompt copy and true call/background interruption remain physical-device checks.
 - Android Clear Storage followed by recovery from Drive and `.ddbackup`.
 - Production-signed OAuth SHA-1, release APK/AAB installation, adaptive/round launcher icons, light/dark splash rendering, and WebView debugging disabled.

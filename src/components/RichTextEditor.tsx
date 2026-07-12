@@ -7,9 +7,10 @@ interface RichTextEditorProps {
   onFocus?: () => void;
   placeholder?: string;
   className?: string;
+  testId?: string;
 }
 
-export default function RichTextEditor({ html, onChange, onFocus, placeholder, className }: RichTextEditorProps) {
+export default function RichTextEditor({ html, onChange, onFocus, placeholder, className, testId }: RichTextEditorProps) {
   const contentEditableRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export default function RichTextEditor({ html, onChange, onFocus, placeholder, c
       onFocus={onFocus}
       className={`focus:outline-none focus:ring-0 empty:before:content-[attr(data-placeholder)] empty:before:text-brand-plum/40 ${className}`}
       data-placeholder={placeholder}
+      data-testid={testId}
       suppressContentEditableWarning
     />
   );

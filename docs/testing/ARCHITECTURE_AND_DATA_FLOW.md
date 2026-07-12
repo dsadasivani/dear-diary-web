@@ -30,7 +30,7 @@ Background sync enters `EventSyncEngine.flushPendingOutbox` or polling/realtime 
 
 User writes persist through:
 
-`prepared` -> `media_uploading` -> `media_uploaded` -> `event_uploading` -> `event_uploaded` -> `metadata_committing` -> `committed` -> `applied`.
+`prepared` -> `media_uploading` -> `media_uploaded` -> `event_uploading` -> `event_uploaded` -> `metadata_committing` -> `committed` -> `applied`, with `failed` and `conflict_preserved` terminal states for retryable failures and preserved conflicts.
 
 Failed retryable operations persist `retryCount`, `lastErrorAt`, `nextRetryAt`, and `error`. Startup, polling, reauthorization, and new writes call `resumeUserWriteOutbox`; failed operations wait for bounded exponential backoff and do not block unrelated later operations.
 
@@ -53,6 +53,8 @@ Existing mobile-account recovery unwraps the latest recovery package, creates a 
 Server migration `014` now also prevents more than one pending primary recovery per account.
 
 The client writes a pending-primary-recovery journal to encrypted sync secret storage immediately after the server registers the pending primary. The journal stores derived local security config, Drive backup metadata, device keys, sessions, and the recovered root key, but not the recovery passphrase, PIN, or recovery-answer plaintext. On retry or unlock, the client resumes local restore, cursor update, stale-tail replay, or already-finalized cleanup before normal sync polling starts.
+
+Server migration `018` makes primary recovery finalization retry-safe after server-side completion, so a client that stops after the server commits recovery can retry finalize and receive the finalized account/device/attempt state.
 
 ## Companion Pairing
 

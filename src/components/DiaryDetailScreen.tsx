@@ -453,6 +453,7 @@ export default function DiaryDetailScreen({
           <div className="border-t border-brand-border p-5">
             <button
               type="button"
+              data-testid="diary-new-entry-button"
               onClick={() => onNewEntry(diary.id)}
               className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-sage px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark"
             >
@@ -470,6 +471,7 @@ export default function DiaryDetailScreen({
               <p className="mt-3 max-w-md text-sm leading-relaxed text-brand-text-muted">Every intimate story begins with a single silent word.</p>
               <button
                 type="button"
+                data-testid="diary-new-entry-button"
                 onClick={() => onNewEntry(diary.id)}
                 className="mt-7 inline-flex items-center gap-2 rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white"
               >
@@ -500,6 +502,7 @@ export default function DiaryDetailScreen({
                 </div>
                 <button
                   type="button"
+                  data-testid="entry-edit-button"
                   onClick={() => onEditEntry(activeEntry.id)}
                   className="inline-flex items-center gap-2 rounded-full bg-brand-pink px-5 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-pink-dark"
                 >
@@ -688,6 +691,7 @@ export default function DiaryDetailScreen({
         <div className="flex items-center gap-1.5 relative">
           {activeEntry && (
             <button 
+              data-testid="entry-edit-button"
               onClick={() => onEditEntry(activeEntry.id)}
               className="p-2 text-brand-pink hover:bg-brand-blush-light rounded-full transition-all"
               title="Edit Page"
@@ -697,6 +701,7 @@ export default function DiaryDetailScreen({
           )}
 
           <button 
+            data-testid="diary-new-entry-button"
             onClick={() => onNewEntry(diary.id)}
             className="bg-brand-pink text-white p-2.5 rounded-xl text-xs font-bold transition-transform hover:scale-105 active:scale-95 shadow-md shadow-brand-pink/15"
             title="New Page"
@@ -940,6 +945,7 @@ export default function DiaryDetailScreen({
           <motion.button
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
+            data-testid="diary-new-entry-button"
             onClick={() => onNewEntry(diary.id)}
             className="bg-brand-pink hover:bg-brand-pink-dark text-white px-8 py-3.5 rounded-full text-xs font-bold flex items-center gap-2 shadow-lg shadow-brand-pink/15 transition-all"
           >
@@ -1216,6 +1222,7 @@ export default function DiaryDetailScreen({
             <motion.button
               whileHover={{ scale: 1.04 }}
               whileTap={{ scale: 0.96 }}
+              data-testid="entry-edit-button"
               onClick={() => onEditEntry(activeEntry.id)}
               className="bg-brand-pink text-white hover:bg-brand-pink-dark px-8 py-3.5 rounded-full text-xs font-bold transition-all shadow-md shadow-brand-pink/15 flex items-center gap-2"
             >

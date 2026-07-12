@@ -21,6 +21,7 @@ export default defineConfig({
       NODE_ENV: 'development',
       PORT: '4173',
       HOST: '127.0.0.1',
+      VITE_DEAR_DIARY_E2E: '1',
     },
   },
   projects: [

@@ -1700,6 +1700,7 @@ export default function EntryEditorScreen({
           <div className="w-full pt-1">
             <input 
               type="text" 
+              data-testid="entry-title-input"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Give this moment a title..."
@@ -1839,6 +1840,7 @@ export default function EntryEditorScreen({
                   onChange={setBody}
                   onFocus={() => setActiveBlockId(null)}
                   placeholder="Write a brand-new moment reflection for this hourly block..."
+                  testId="entry-body-editor"
                   className={`rich-text-editor w-full text-lg leading-relaxed text-brand-plum focus:outline-none focus:ring-0 flex-grow min-h-[250px] ${
                     fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
                   }`}
@@ -2147,6 +2149,7 @@ export default function EntryEditorScreen({
 
               <input
                 type="text"
+                data-testid="entry-title-input"
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
                 placeholder="Title of your reflection..."
@@ -2264,6 +2267,7 @@ export default function EntryEditorScreen({
                     onChange={setBody}
                     onFocus={() => setActiveBlockId(null)}
                     placeholder="Write a brand-new moment reflection..."
+                    testId="entry-body-editor"
                     className={`rich-text-editor min-h-[360px] w-full text-2xl leading-[1.75] text-brand-plum outline-none dark:text-brand-text ${
                       fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
                     }`}
@@ -2381,12 +2385,12 @@ export default function EntryEditorScreen({
           <section className="max-w-4xl rounded-[24px] border border-red-100 bg-red-50/45 px-5 py-4">
             <p className="text-sm font-semibold text-red-700">Deleting this journal entry is irreversible.</p>
             {!showConfirmDelete ? (
-              <button type="button" onClick={() => setShowConfirmDelete(true)} className="mt-3 rounded-full border border-red-200 bg-white/65 px-4 py-2 text-sm font-bold text-red-700 hover:bg-red-100">
+              <button type="button" data-testid="entry-delete-button" onClick={() => setShowConfirmDelete(true)} className="mt-3 rounded-full border border-red-200 bg-white/65 px-4 py-2 text-sm font-bold text-red-700 hover:bg-red-100">
                 Delete Entry
               </button>
             ) : (
               <div className="mt-3 flex gap-2">
-                <button type="button" onClick={handleDeleteEntry} className="rounded-full bg-red-600 px-4 py-2 text-sm font-bold text-white shadow-sm">
+                <button type="button" data-testid="entry-confirm-delete-button" onClick={handleDeleteEntry} className="rounded-full bg-red-600 px-4 py-2 text-sm font-bold text-white shadow-sm">
                   Confirm Delete
                 </button>
                 <button type="button" onClick={() => setShowConfirmDelete(false)} className="rounded-full border border-red-200 px-4 py-2 text-sm font-bold text-red-700">
@@ -2503,6 +2507,7 @@ export default function EntryEditorScreen({
         <div className="w-full">
           <input 
             type="text" 
+            data-testid="entry-title-input"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Title your entry..."
@@ -2753,6 +2758,7 @@ export default function EntryEditorScreen({
                 onChange={setBody}
                 onFocus={() => setActiveBlockId(null)}
                 placeholder="Write a brand-new moment reflection..."
+                testId="entry-body-editor"
                 className={`rich-text-editor w-full text-base leading-relaxed text-brand-plum min-h-[180px] focus:outline-none focus:ring-0 ${
                   fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
                 }`}
@@ -2991,6 +2997,7 @@ export default function EntryEditorScreen({
 
           {!showConfirmDelete ? (
             <button
+              data-testid="entry-delete-button"
               onClick={() => setShowConfirmDelete(true)}
               className="py-2.5 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
             >
@@ -3008,6 +3015,7 @@ export default function EntryEditorScreen({
               </button>
               <button
                 type="button"
+                data-testid="entry-confirm-delete-button"
                 onClick={handleDeleteEntry}
                 className="flex-grow py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-colors"
               >

@@ -182,6 +182,7 @@ export default function DiariesScreen({
               <button
                 key={diary.id}
                 type="button"
+                data-testid="diary-card"
                 onClick={() => handleDiaryClick(diary)}
                 className="group relative min-h-[248px] overflow-hidden rounded-[28px] border border-brand-border bg-white/76 p-6 text-left shadow-[0_16px_44px_rgba(62,36,41,0.07)] transition-all hover:-translate-y-1 hover:bg-white hover:shadow-[0_24px_60px_rgba(62,36,41,0.11)] dark:bg-brand-card-bg/70"
               >
@@ -231,6 +232,7 @@ export default function DiariesScreen({
               <button
                 key={diary.id}
                 type="button"
+                data-testid="diary-card"
                 onClick={() => handleDiaryClick(diary)}
                 className="flex w-full items-center gap-5 px-6 py-5 text-left transition-colors hover:bg-brand-blush-light/40"
               >
@@ -331,6 +333,7 @@ export default function DiariesScreen({
                   {diaries.map((diary) => (
                     <motion.div
                       key={diary.id}
+                      data-testid="diary-card"
                       whileHover={{ y: -6 }}
                       transition={{ type: "spring", stiffness: 260, damping: 20 }}
                       onClick={() => handleDiaryClick(diary)}
@@ -446,6 +449,7 @@ export default function DiariesScreen({
                   {diaries.map((diary) => (
                     <motion.div
                       key={diary.id}
+                      data-testid="diary-card"
                       whileHover={{ x: 4, scale: 1.01 }}
                       onClick={() => handleDiaryClick(diary)}
                       className="group relative overflow-hidden bg-white dark:bg-brand-card-bg rounded-2xl p-4.5 cursor-pointer border border-brand-border/60 dark:border-brand-border/10 shadow-sm flex items-center justify-between transition-all select-none hover:shadow-md"

@@ -7,6 +7,8 @@ This runbook prepares repeatable Android/emulator state for the manual force-sto
 
 Use only a test Google account, test Supabase project, and disposable devices/emulators. Do not paste OAuth tokens, passphrases, root keys, or recovery answers into logs, screenshots, issues, or chat.
 
+Latest evidence: on 2026-07-12, the debug-hook flow was rerun on two Android emulators. The `md021:after-server-finalized` and selected MD-022 checkpoints resumed successfully, and `docs/testing/manual-supabase-verification-md021-md022.sql` passed all non-secret summary checks for MD-021, MD-022, and MD-023. Remaining unexecuted checkpoints in this runbook still need future evidence before the release verdict can move from `NOT READY`.
+
 ## Test Build
 
 Build a debug-inspectable APK with manual force-stop hooks enabled:

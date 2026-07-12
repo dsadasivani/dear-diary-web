@@ -26,10 +26,11 @@ Apply every file in `docs/supabase` in numeric order:
 015_fix_partition_restore_bundle_ambiguity.sql
 016_idempotent_key_rotation_finalize.sql
 017_guard_key_rotation_abort_race.sql
+018_idempotent_primary_recovery_finalize.sql
 ```
 
 `014` intentionally blocks legacy direct primary transfer, direct device revocation, and direct key-epoch rotation RPCs. New clients must use the two-phase flows.
-`015` through `017` harden partition restore and two-phase key-rotation retry/race behavior.
+`015` through `018` harden partition restore, two-phase key-rotation retry/race behavior, and primary-recovery finalize retries.
 
 ## Data Plane
 
@@ -68,6 +69,8 @@ Primary replacement is two-phase:
 
 On restore failure, the client calls `abort_primary_mobile_recovery`, clears local pending state, and does not revoke the old primary.
 
+If the server finalizes recovery but the client stops before persisting the response, retrying `finalize_primary_mobile_recovery` returns the finalized account/device/attempt state instead of failing the recovery.
+
 After `begin_primary_mobile_recovery` succeeds, the client stores a pending-primary-recovery journal in encrypted sync secret storage. The journal stores derived local security config, device key material, Supabase/Google sessions, and the recovered account root key, but never the recovery passphrase, local PIN, or recovery-answer plaintext. On app unlock or account-link retry, the client resumes restore, cursor update, stale-tail replay, or cleanup of an already-finalized recovery before normal sync polling starts.
 
 ## Device Revocation and Key Rotation
@@ -100,6 +103,7 @@ User writes are local-first. The repository sanitizes and validates payloads, ap
 - `committed`
 - `applied`
 - `failed`
+- `conflict_preserved`
 
 Normal saves do not require network availability and do not wait for Drive upload, Supabase metadata commit, remote pulls, media processing, snapshot compaction, or archive hydration. Successful remote commits acknowledge the local event by updating versions, cursors, media pointers, and outbox state without replaying the full mutation onto the local record.
 
@@ -126,11 +130,11 @@ npm run test:supabase
 npm run build
 ```
 
-`npm run test:supabase` requires Docker. It starts a disposable PostgreSQL container, installs a Supabase Auth compatibility shim, applies migrations `001` through `017`, and runs real RLS/RPC/concurrency assertions.
+`npm run test:supabase` requires Docker. It starts a disposable PostgreSQL container, installs a Supabase Auth compatibility shim, applies migrations `001` through `018`, and runs real RLS/RPC/concurrency assertions.
 
 Staging smoke tests should cover:
 
-- applying migrations `001` through `017` in order;
+- applying migrations `001` through `018` in order;
 - new account setup;
 - companion pairing;
 - partitioned restore;

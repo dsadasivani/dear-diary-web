@@ -38,6 +38,20 @@ The temporary fixture was removed after the run.
 | stats.dashboard | 15 | 1.65 | 2.60 | 3.57 | 3.57 | 2.53 |
 | outbox.scan | 15 | 0.01 | 0.03 | 0.37 | 0.37 | 0.06 |
 
+## 2026-07-12 Rerun
+
+The latest audit rerun used the same default fixture shape through `npm.cmd run benchmark:seed` and `npm.cmd run benchmark:run`. Full command evidence is recorded in `docs/testing/TEST_RESULTS.md`.
+
+| Operation | Count | Min ms | P50 ms | P95 ms | Max ms | Average ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| unlock.shell | 15 | 0.00 | 0.01 | 0.16 | 0.16 | 0.02 |
+| home.summary | 15 | 5.60 | 7.97 | 33.72 | 33.72 | 10.02 |
+| diary.detail.page | 15 | 0.78 | 1.11 | 16.72 | 16.72 | 2.15 |
+| notes.page | 15 | 0.14 | 0.17 | 0.76 | 0.76 | 0.24 |
+| search.query | 15 | 2.64 | 3.76 | 5.27 | 5.27 | 3.95 |
+| stats.dashboard | 15 | 2.50 | 3.72 | 6.27 | 6.27 | 3.79 |
+| outbox.scan | 15 | 0.01 | 0.05 | 0.64 | 0.64 | 0.09 |
+
 ## Notes
 
 - This runner is a deterministic Node benchmark over the generated fixture. It is useful for trend checks, but it does not replace browser render timing, Android SQLCipher timing, media decode timing, or physical-device sync validation.
