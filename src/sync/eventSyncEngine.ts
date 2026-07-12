@@ -69,6 +69,13 @@ import {
   type BackgroundArchiveHydrationResult,
 } from './ArchiveHydrationService';
 import { RemotePullService } from './RemotePullService';
+import {
+  pendingOutboxV2FromLegacy,
+  scheduleOutboxFailure,
+  type OutboxRepository,
+  type SyncOutboxOperationV2,
+} from './outbox';
+import { mapSupabaseError } from './errors';
 
 export type { BackgroundArchiveHydrationResult } from './ArchiveHydrationService';
 
@@ -149,11 +156,15 @@ export interface EventSyncEngineDependencies {
   backgroundArchiveBatchSize?: number;
   createThumbnail?: SyncThumbnailGenerator;
   syncHealthService?: SyncHealthService;
+  outboxRepository?: OutboxRepository;
+  outboxWorkerId?: string;
+  outboxLeaseDurationMs?: number;
 }
 
 export const DEFAULT_SNAPSHOT_INTERVAL_EVENTS = 100;
 const OUTBOX_RETRY_BASE_MS = 30_000;
 const OUTBOX_RETRY_MAX_MS = 30 * 60 * 1000;
+const DEFAULT_OUTBOX_LEASE_DURATION_MS = 2 * 60 * 1000;
 
 const nextOutboxRetryAt = (now: number, retryCount: number): number => {
   const delay = Math.min(
@@ -330,6 +341,9 @@ export class EventSyncEngine {
   private readonly syncHealthService: SyncHealthService;
   private readonly archiveHydrationService: ArchiveHydrationService;
   private readonly remotePullService: RemotePullService;
+  private readonly outboxRepository?: OutboxRepository;
+  private readonly outboxWorkerId: string;
+  private readonly outboxLeaseDurationMs: number;
   private lastMaintenanceAt = 0;
   private readonly resolvedMediaReferences = new Map<string, string>();
   private readonly localMediaReferences = new Map<string, string>();
@@ -356,6 +370,9 @@ export class EventSyncEngine {
     this.maintenance = dependencies.maintenance || performSyncMaintenance;
     this.maintenanceIntervalMs = dependencies.maintenanceIntervalMs || 24 * 60 * 60 * 1000;
     this.createThumbnail = dependencies.createThumbnail || createImageThumbnail;
+    this.outboxRepository = dependencies.outboxRepository;
+    this.outboxWorkerId = dependencies.outboxWorkerId || `sync-worker:${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+    this.outboxLeaseDurationMs = dependencies.outboxLeaseDurationMs || DEFAULT_OUTBOX_LEASE_DURATION_MS;
     this.syncHealthService = dependencies.syncHealthService || new SyncHealthService(repository, this.now);
     this.archiveHydrationService = new ArchiveHydrationService(repository, {
       download: this.download,
@@ -736,6 +753,10 @@ export class EventSyncEngine {
   private async resumeUserWriteOutbox(
     runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
   ): Promise<void> {
+    if (this.outboxRepository) {
+      await this.resumeLeasedUserWriteOutbox(runtime);
+      return;
+    }
     const operations = await this.repository.listSyncOutboxOperations([
       'prepared',
       'media_uploading',
@@ -1630,6 +1651,155 @@ export class EventSyncEngine {
 
   private async pullWithRuntime(runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>): Promise<void> {
     return this.remotePullService.pull(runtime);
+  }
+
+  private async resumeLeasedUserWriteOutbox(
+    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
+  ): Promise<void> {
+    const outboxRepository = this.outboxRepository!;
+    await this.mirrorLegacyOutboxOperations(runtime.state.accountId, outboxRepository);
+    while (true) {
+      let claimed = await outboxRepository.claimNextRunnable({
+        accountId: runtime.state.accountId,
+        workerId: this.outboxWorkerId,
+        now: this.now(),
+        leaseDurationMs: this.outboxLeaseDurationMs,
+      });
+      if (!claimed) return;
+
+      const legacyOperations = await this.repository.listSyncOutboxOperations();
+      const legacyOperation = legacyOperations.find(operation => operation.operationId === claimed!.operationId);
+      if (!legacyOperation || !legacyOperation.operation || legacyOperation.state === 'conflict_preserved') {
+        await this.transitionClaimedOutboxToSafetyStop(outboxRepository, claimed);
+        continue;
+      }
+
+      claimed = await this.transitionClaimedOutboxToPreparing(outboxRepository, claimed);
+      try {
+        await this.withOutboxLeaseHeartbeat(outboxRepository, claimed, () => (
+          this.executeUserWriteOutboxOperation(runtime, legacyOperation)
+        ));
+        await this.acknowledgeClaimedOutbox(outboxRepository, claimed);
+      } catch (error) {
+        const latest = await outboxRepository.getById(claimed.operationId);
+        if (latest?.leaseOwner === this.outboxWorkerId && latest.state === 'PREPARING') {
+          if (
+            legacyOperation.localApplied &&
+            error instanceof SupabaseControlPlaneError &&
+            (error.providerCode === 'stale_sync_sequence' || error.providerCode === 'stale_record_version')
+          ) {
+            await this.preserveLocalFirstConflict(runtime, legacyOperation, error);
+          } else if (!isAccountWideOutboxFailure(error)) {
+            await this.markOutboxOperationFailed(
+              legacyOperation.operationId,
+              error instanceof Error ? error.message : 'Encrypted sync write failed.',
+            ).catch(() => undefined);
+          }
+          const syncError = mapSupabaseError(error);
+          const failure = scheduleOutboxFailure(latest, syncError, this.now());
+          await outboxRepository.transition(
+            latest.operationId,
+            'PREPARING',
+            failure.state,
+            failure,
+            this.outboxWorkerId,
+          );
+        }
+        if (isAccountWideOutboxFailure(error)) throw error;
+      }
+    }
+  }
+
+  private async mirrorLegacyOutboxOperations(accountId: string, outboxRepository: OutboxRepository): Promise<void> {
+    const legacyOperations = await this.repository.listSyncOutboxOperations([
+      'prepared', 'media_uploading', 'media_uploaded', 'event_uploading', 'event_uploaded',
+      'metadata_committing', 'committed', 'applied', 'failed',
+    ]);
+    const legacyIds = new Set(legacyOperations.map(operation => operation.operationId));
+    for (const operation of legacyOperations) {
+      if (operation.accountId !== accountId || await outboxRepository.getById(operation.operationId)) continue;
+      const migratable = operation.dependsOnOperationId && !legacyIds.has(operation.dependsOnOperationId)
+        ? { ...operation, dependsOnOperationId: undefined }
+        : operation;
+      await outboxRepository.enqueue(pendingOutboxV2FromLegacy(migratable));
+    }
+  }
+
+  private transitionClaimedOutboxToPreparing(
+    outboxRepository: OutboxRepository,
+    operation: SyncOutboxOperationV2,
+  ): Promise<SyncOutboxOperationV2> {
+    if (operation.state === 'PREPARING') return Promise.resolve(operation);
+    if (operation.state !== 'PENDING' && operation.state !== 'RETRY_WAIT') {
+      throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+    }
+    return outboxRepository.transition(
+      operation.operationId,
+      operation.state,
+      'PREPARING',
+      { nextAttemptAt: this.now() },
+      this.outboxWorkerId,
+    );
+  }
+
+  private async acknowledgeClaimedOutbox(
+    outboxRepository: OutboxRepository,
+    operation: SyncOutboxOperationV2,
+  ): Promise<void> {
+    const transitions: Array<[SyncOutboxOperationV2['state'], SyncOutboxOperationV2['state']]> = [
+      ['PREPARING', 'READY_TO_COMMIT'],
+      ['READY_TO_COMMIT', 'COMMITTING'],
+      ['COMMITTING', 'COMMITTED'],
+      ['COMMITTED', 'ACKNOWLEDGED'],
+    ];
+    let current = operation;
+    for (const [expected, next] of transitions) {
+      current = await outboxRepository.transition(
+        current.operationId,
+        expected,
+        next,
+        next === 'ACKNOWLEDGED' ? { leaseOwner: undefined, leaseExpiresAt: undefined } : {},
+        this.outboxWorkerId,
+      );
+    }
+  }
+
+  private transitionClaimedOutboxToSafetyStop(
+    outboxRepository: OutboxRepository,
+    operation: SyncOutboxOperationV2,
+  ): Promise<SyncOutboxOperationV2> {
+    return outboxRepository.transition(
+      operation.operationId,
+      operation.state,
+      'SAFETY_STOP',
+      {
+        lastErrorCode: 'INVARIANT_VIOLATION',
+        lastErrorAt: this.now(),
+        leaseOwner: undefined,
+        leaseExpiresAt: undefined,
+      },
+      this.outboxWorkerId,
+    );
+  }
+
+  private async withOutboxLeaseHeartbeat<T>(
+    outboxRepository: OutboxRepository,
+    operation: SyncOutboxOperationV2,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const heartbeatMs = Math.max(1_000, Math.floor(this.outboxLeaseDurationMs / 3));
+    const timer = setInterval(() => {
+      void outboxRepository.renewLease(
+        operation.operationId,
+        this.outboxWorkerId,
+        this.now() + this.outboxLeaseDurationMs,
+      ).catch(error => reportUnexpectedError('sync.outbox.lease_renewal', error));
+    }, heartbeatMs);
+    try {
+      return await work();
+    } finally {
+      clearInterval(timer);
+    }
   }
 
   private async openRuntime() {

@@ -36,6 +36,6 @@ export type {
 } from './DiaryRepository';
 
 export const localDiaryRepository = new LocalDiaryRepository(localDataStore);
-export const eventSyncEngine = new EventSyncEngine(localDiaryRepository);
 export const outboxV2Repository = new PersistentOutboxRepository(localDataStore);
+export const eventSyncEngine = new EventSyncEngine(localDiaryRepository, { outboxRepository: outboxV2Repository });
 export const diaryRepository = createSyncingDiaryRepository(localDiaryRepository, eventSyncEngine);

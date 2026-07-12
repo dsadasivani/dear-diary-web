@@ -10,8 +10,8 @@ export interface OutboxRepository {
     expectedState: SyncOutboxOperationV2['state'],
     nextState: SyncOutboxOperationV2['state'],
     patch?: Partial<SyncOutboxOperationV2>,
+    expectedLeaseOwner?: string,
   ): Promise<SyncOutboxOperationV2>;
   getById(operationId: string): Promise<SyncOutboxOperationV2 | null>;
   listByAccount(accountId: string): Promise<SyncOutboxOperationV2[]>;
 }
-

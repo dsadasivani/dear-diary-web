@@ -22,7 +22,7 @@ export const pendingOutboxV2FromLegacy = (
   baseRecordVersion: operation.baseRecordVersion ?? 0,
   state: 'PENDING',
   retryCount: 0,
-  nextAttemptAt: operation.nextRetryAt || operation.updatedAt,
+  nextAttemptAt: operation.nextRetryAt || 0,
   dependencyOperationId: operation.dependsOnOperationId,
   createdAt: existing?.createdAt || operation.createdAt,
   updatedAt: operation.updatedAt,

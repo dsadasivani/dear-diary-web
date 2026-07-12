@@ -4,7 +4,8 @@ import type { SyncDevice, SyncObjectMetadata } from '../types';
 import { buildStorageBreakdown, EventSyncEngine, isAccountWideOutboxFailure, SyncConflictError } from './eventSyncEngine';
 import { SupabaseControlPlaneError, type SupabaseControlPlaneClient } from './supabaseControlPlane';
 import type { SyncSecrets } from './syncSecrets';
-import { createRepository } from './testSupport';
+import { createRepository, MemoryDataStore } from './testSupport';
+import { PersistentOutboxRepository } from './outbox';
 import { encodeCompanionKeyPackage, wrapRootKeyForCompanion } from './companionKeyPackage';
 import { generateDeviceKeyPair } from './deviceKeys';
 import { createSyncDomainEvent, encodeSyncDomainEvent } from './domainEvents';
@@ -759,7 +760,9 @@ test('resumes a committed outbox write by applying it idempotently before a new 
 });
 
 test('pullPending resumes a committed outbox write at startup', async () => {
-  const repository = await createRepository();
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
+  const outboxRepository = new PersistentOutboxRepository(store);
   await repository.saveLocalSyncAccountState({
     accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
     googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
@@ -808,7 +811,7 @@ test('pullPending resumes a committed outbox write at startup', async () => {
   } as unknown as SupabaseControlPlaneClient;
   const engine = new EventSyncEngine(repository, {
     isOnline: () => true,
-    now: () => 1,
+    now: () => 2,
     loadSecrets: async () => ({
       version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
@@ -818,10 +821,13 @@ test('pullPending resumes a committed outbox write at startup', async () => {
       userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
+    outboxRepository,
+    outboxWorkerId: 'startup-worker',
   });
 
   await engine.pullPending();
 
+  assert.equal((await outboxRepository.getById('outbox-startup-committed'))?.state, 'ACKNOWLEDGED');
   assert.equal((await repository.getNote(committedNote.id))?.title, 'Startup committed outbox');
   assert.equal((await repository.listSyncOutboxOperations()).length, 0);
   assert.ok(cursorUpdates.includes(3));

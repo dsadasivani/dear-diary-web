@@ -32,7 +32,7 @@ test('maps a legacy delete to a minimal pending V2 scheduling record', () => {
     baseRecordVersion: 4,
     state: 'PENDING',
     retryCount: 0,
-    nextAttemptAt: 20,
+    nextAttemptAt: 0,
     dependencyOperationId: undefined,
     createdAt: 10,
     updatedAt: 20,

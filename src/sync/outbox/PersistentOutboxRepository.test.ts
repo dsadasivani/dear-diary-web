@@ -72,3 +72,18 @@ test('compare-and-set transition rejects stale and invalid state changes', async
   await assert.rejects(repository.transition('op-1', 'PENDING', 'ACKNOWLEDGED'), (error: unknown) => error instanceof SyncError && error.code === 'INVARIANT_VIOLATION');
 });
 
+test('a worker cannot transition an operation after another worker reclaims its expired lease', async () => {
+  const repository = new PersistentOutboxRepository(new MemoryStore());
+  await repository.enqueue(operation('op-lease-owner'));
+  await repository.claimNextRunnable({ accountId: 'account-1', workerId: 'worker-a', now: 10, leaseDurationMs: 10 });
+  await repository.claimNextRunnable({ accountId: 'account-1', workerId: 'worker-b', now: 20, leaseDurationMs: 10 });
+
+  await assert.rejects(
+    repository.transition('op-lease-owner', 'PENDING', 'PREPARING', {}, 'worker-a'),
+    (error: unknown) => error instanceof SyncError && error.code === 'INVARIANT_VIOLATION',
+  );
+  assert.equal(
+    (await repository.transition('op-lease-owner', 'PENDING', 'PREPARING', {}, 'worker-b')).state,
+    'PREPARING',
+  );
+});

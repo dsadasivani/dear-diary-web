@@ -81,11 +81,16 @@ export class PersistentOutboxRepository implements OutboxRepository {
     expectedState: SyncOutboxOperationV2['state'],
     nextState: SyncOutboxOperationV2['state'],
     patch: Partial<SyncOutboxOperationV2> = {},
+    expectedLeaseOwner?: string,
   ): Promise<SyncOutboxOperationV2> {
     return this.exclusive(async () => {
       const operations = await this.read();
       const operation = operations[operationId];
-      if (!operation || operation.state !== expectedState) {
+      if (
+        !operation ||
+        operation.state !== expectedState ||
+        (expectedLeaseOwner !== undefined && operation.leaseOwner !== expectedLeaseOwner)
+      ) {
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       }
       assertAllowedOutboxTransition(expectedState, nextState);
@@ -132,4 +137,3 @@ export class PersistentOutboxRepository implements OutboxRepository {
     return result;
   }
 }
-
