@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs && node scripts/validate-production-config.mjs",
+    "build:release": "cross-env DEAR_DIARY_RELEASE_BUILD=true npm run build",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "node scripts/clean.mjs",
     "lint": "tsc --noEmit",
-    "test:unit": "npm run test:storage",
+    "test:unit": "npm run test:priority0 && npm run test:storage",
+    "test:priority0": "tsx --test src/infrastructure/http/executeRequest.test.ts && tsx --test src/sync/errors/SyncError.test.ts",
     "test:component": "vitest run",
     "test:server": "tsx --test server.test.ts",
     "test:supabase": "node scripts/supabase-integration-tests.mjs",
@@ -89,6 +91,7 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "cross-env": "^7.0.3"
   }
 }
