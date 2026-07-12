@@ -353,6 +353,8 @@ test('uses storage-backed page queries for entry and note screens', async () => 
 
   const searchPage = await repository.searchEntries({ diaryId: 'diary-default', hasPhotos: false, limit: 5 });
   assert.deepEqual(searchPage.items.map(item => item.id), ['entry-query-new', 'entry-query-old']);
+  const summarySearchPage = await repository.searchEntries({ diaryId: 'diary-default', includeBody: false, limit: 5 });
+  assert.equal('body' in summarySearchPage.items[0], false);
   const querySearchPage = await repository.searchEntries({
     diaryId: 'diary-default',
     query: 'newer',
@@ -363,12 +365,25 @@ test('uses storage-backed page queries for entry and note screens', async () => 
 
   const notePage = await repository.listNotes({ filter: 'pinned', limit: 5 });
   assert.deepEqual(notePage.items.map(item => item.id), ['note-query-pinned']);
+  assert.equal('body' in notePage.items[0], false);
   const noteSearchPage = await repository.searchNotes({ query: 'pinned', tags: ['keep'], limit: 5 });
   assert.deepEqual(noteSearchPage.items.map(item => item.id), ['note-query-pinned']);
-  assert.equal(store.entryQueryCount, 4);
+  assert.equal(store.entryQueryCount, 5);
   assert.equal(store.noteQueryCount, 2);
   assert.equal(store.collectionReadCount('deardiary_entries'), 0);
   assert.equal(store.collectionReadCount('deardiary_notes'), 0);
+});
+
+test('rebuilds structured projections without changing authoritative records', async () => {
+  const store = new StructuredMemoryDataStore({
+    deardiary_diaries: [], deardiary_entries: [], deardiary_notes: [],
+  });
+  const repository = await createRepository(store);
+  const note = await repository.createNote({ title: 'Projection source', body: '<p>Body</p>', isPinned: true, tags: ['safe'] });
+  const commitsBefore = store.structuredCommitCount;
+  await repository.rebuildDerivedProjections();
+  assert.ok(store.structuredCommitCount > commitsBefore);
+  assert.equal((await repository.getNote(note.id))?.title, 'Projection source');
 });
 
 test('search excludes locked diary entries when locked diary IDs are provided', async () => {

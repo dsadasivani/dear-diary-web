@@ -11,7 +11,7 @@ import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import SyncedImage from './SyncedImage';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 import { diaryRepository } from '../repositories';
-import type { GlobalStatistics } from '../repositories/DiaryRepository';
+import type { EntrySummary, GlobalStatistics, NoteSummary } from '../repositories/DiaryRepository';
 
 interface StatsScreenProps {
   diaries: Diary[];
@@ -41,8 +41,8 @@ export default function StatsScreen({
   onNavigate
 }: StatsScreenProps) {
   useScreenPerformance('stats');
-  const [entries, setEntries] = useState<Entry[]>(initialEntries);
-  const [notes, setNotes] = useState<Note[]>(initialNotes);
+  const [entries, setEntries] = useState<EntrySummary[]>(initialEntries);
+  const [notes, setNotes] = useState<NoteSummary[]>(initialNotes);
   const [globalStats, setGlobalStats] = useState<GlobalStatistics | null>(null);
   const [streak, setStreak] = useState<number>(0);
   const [totalPhotos, setTotalPhotos] = useState<number>(0);
@@ -58,13 +58,13 @@ export default function StatsScreen({
     const loadStatsData = async () => {
       const filters = { excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [] };
       const [entryPage, notePage, nextGlobalStats] = await Promise.all([
-        diaryRepository.searchEntries({ ...filters, limit: 10000 }),
-        diaryRepository.listNotes({ includeBody: true, limit: 10000 }),
+        diaryRepository.searchEntries({ ...filters, includeBody: false, limit: 10000 }),
+        diaryRepository.listNotes({ includeBody: false, limit: 10000 }),
         diaryRepository.getGlobalStatistics(filters),
       ]);
       if (cancelled) return;
       setEntries(entryPage.items);
-      setNotes(notePage.items as Note[]);
+      setNotes(notePage.items as NoteSummary[]);
       setGlobalStats(nextGlobalStats);
     };
     void loadStatsData();
@@ -83,6 +83,11 @@ export default function StatsScreen({
       unsubscribe();
     };
   }, [excludeDiaryKey]);
+
+  const selectPixelEntry = async (summary: EntrySummary, date: string): Promise<void> => {
+    setSelectedPixelDate(date);
+    setSelectedPixelEntry(await diaryRepository.getEntry(summary.id));
+  };
 
   // Dynamically extract all years where entries exist, plus current year
   const availableYears = React.useMemo(() => {
@@ -770,8 +775,7 @@ export default function StatsScreen({
                                 key={monthIdx}
                                 onClick={() => {
                                   if (entry) {
-                                    setSelectedPixelEntry(entry);
-                                    setSelectedPixelDate(`${selectedPixelYear}-${formattedM}-${formattedD}`);
+                                    void selectPixelEntry(entry, `${selectedPixelYear}-${formattedM}-${formattedD}`);
                                   } else {
                                     setSelectedPixelEntry(null);
                                     setSelectedPixelDate(`${selectedPixelYear}-${formattedM}-${formattedD}`);
@@ -850,8 +854,7 @@ export default function StatsScreen({
                             key={`day-${d}`}
                             onClick={() => {
                               if (entry) {
-                                setSelectedPixelEntry(entry);
-                                setSelectedPixelDate(targetDate);
+                                void selectPixelEntry(entry, targetDate);
                               } else {
                                 setSelectedPixelEntry(null);
                                 setSelectedPixelDate(targetDate);

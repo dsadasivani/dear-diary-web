@@ -29,11 +29,33 @@ const requestBackgroundFlush = (syncEngine: EventSyncEngine): void => {
   });
 };
 
+const SYNC_OVERRIDE_METHODS = [
+  'listDiaries', 'getDiary', 'listEntries', 'getEntry', 'getUserProfile',
+  'saveSettings', 'saveUserProfile', 'createDiary', 'updateDiary', 'deleteDiary',
+  'createEntry', 'updateEntry', 'deleteEntry', 'createNote', 'updateNote', 'deleteNote',
+] as const satisfies ReadonlyArray<keyof DiaryRepository>;
+
+const createBoundRepositoryDelegate = (target: DiaryRepository): DiaryRepository => {
+  const delegate: Record<PropertyKey, unknown> = {};
+  let source: object | null = target;
+  while (source && source !== Object.prototype) {
+    for (const property of Reflect.ownKeys(source)) {
+      if (property === 'constructor' || property in delegate) continue;
+      const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
+      if (!descriptor) continue;
+      if (typeof descriptor.value === 'function') delegate[property] = descriptor.value.bind(target);
+      else if ('value' in descriptor) delegate[property] = descriptor.value;
+    }
+    source = Reflect.getPrototypeOf(source);
+  }
+  return delegate as unknown as DiaryRepository;
+};
+
 export const createSyncingDiaryRepository = (
   localRepository: DiaryRepository,
   syncEngine: EventSyncEngine,
-): DiaryRepository => new Proxy(localRepository, {
-  get(target, property, receiver) {
+): DiaryRepository => {
+  const resolveOverride = (property: keyof DiaryRepository): unknown => {
     if (property === 'listDiaries') return async (): Promise<Diary[]> => (
       syncEngine.hydrateDiaries(await localRepository.listDiaries())
     );
@@ -245,7 +267,10 @@ export const createSyncingDiaryRepository = (
       return true;
     };
 
-    const value = Reflect.get(target, property, receiver);
-    return typeof value === 'function' ? value.bind(target) : value;
-  },
-});
+    return undefined;
+  };
+  const delegate = createBoundRepositoryDelegate(localRepository);
+  const mutableDelegate = delegate as unknown as Record<keyof DiaryRepository, unknown>;
+  for (const property of SYNC_OVERRIDE_METHODS) mutableDelegate[property] = resolveOverride(property);
+  return delegate;
+};

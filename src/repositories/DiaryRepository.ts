@@ -54,6 +54,7 @@ export interface NoteListOptions extends PageOptions {
 }
 
 export interface SearchFilters extends PageOptions {
+  includeBody?: boolean;
   query?: string;
   diaryId?: string;
   tags?: string[];
@@ -218,11 +219,13 @@ export interface DiaryRepository {
   updateNote(note: Note): Promise<Note | null>;
   deleteNote(id: string): Promise<boolean>;
 
+  searchEntries(filters: SearchFilters & { includeBody: false }): Promise<PageResult<EntrySummary>>;
   searchEntries(filters: SearchFilters): Promise<PageResult<Entry>>;
   searchNotes(filters: SearchFilters): Promise<PageResult<Note>>;
   getHomeSummary(options?: Pick<EntryListOptions, 'allowedDiaryIds' | 'excludeDiaryIds'>): Promise<HomeSummary>;
   getDiaryStatistics(diaryId: string): Promise<DiaryStatistics>;
   getGlobalStatistics(filters?: StatisticsFilters): Promise<GlobalStatistics>;
+  rebuildDerivedProjections(): Promise<void>;
   getMoodDistribution(filters?: StatisticsFilters): Promise<DistributionRow[]>;
   getTagDistribution(filters?: StatisticsFilters): Promise<DistributionRow[]>;
   getWritingHeatmap(filters?: StatisticsFilters): Promise<WritingHeatmapRow[]>;

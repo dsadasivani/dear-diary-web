@@ -569,7 +569,9 @@ export class LocalDiaryRepository implements DiaryRepository {
     }));
   }
 
-  async searchEntries(filters: SearchFilters): Promise<PageResult<Entry>> {
+  async searchEntries(filters: SearchFilters & { includeBody: false }): Promise<PageResult<EntrySummary>>;
+  async searchEntries(filters: SearchFilters): Promise<PageResult<Entry>>;
+  async searchEntries(filters: SearchFilters): Promise<PageResult<Entry | EntrySummary>> {
     await this.waitForWrites();
     return measureAsync('repository.query.entries.search', async () => {
       const query = filters.query?.trim().toLowerCase();
@@ -589,7 +591,9 @@ export class LocalDiaryRepository implements DiaryRepository {
         offset: filters.offset,
         sort: 'updated-desc',
       });
-      if (storedPage) return clone(storedPage);
+      if (storedPage) return filters.includeBody === false
+        ? { ...clone(storedPage), items: storedPage.items.map(entrySummary) }
+        : clone(storedPage);
 
       const entries = filterEntriesByDiaryAccess(await this.listEntries(), filters)
         .filter(entry => !filters.diaryId || entry.diaryId === filters.diaryId)
@@ -603,7 +607,10 @@ export class LocalDiaryRepository implements DiaryRepository {
           entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
           entry.moodName.toLowerCase().includes(query)
         ));
-      return clone(pageEntries(entries, filters, 'updated-desc'));
+      const page = pageEntries(entries, filters, 'updated-desc');
+      return filters.includeBody === false
+        ? { ...page, items: page.items.map(entrySummary) }
+        : clone(page);
     });
   }
 
@@ -1196,6 +1203,23 @@ export class LocalDiaryRepository implements DiaryRepository {
   async getSyncStatusSummary(): Promise<SyncStatusSummary> {
     const outbox = await this.listSyncOutboxOperations();
     return this.createSyncStatusSummary(outbox);
+  }
+
+  async rebuildDerivedProjections(): Promise<void> {
+    await this.waitForWrites();
+    if (!this.store.commitStructuredRecords) return;
+    const [diaries, entries, notes] = await Promise.all([
+      this.listDiaries(),
+      this.listEntries(),
+      this.listNotes(),
+    ]);
+    await this.store.commitStructuredRecords({
+      records: [
+        ...diaries.map(value => ({ key: STORAGE_KEYS.diaries, id: value.id, value })),
+        ...entries.map(value => ({ key: STORAGE_KEYS.entries, id: value.id, value })),
+        ...notes.map(value => ({ key: STORAGE_KEYS.notes, id: value.id, value })),
+      ],
+    });
   }
 
   async getSyncHealth(): Promise<SyncHealth> {
