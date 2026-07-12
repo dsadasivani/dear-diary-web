@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SyncObjectMetadata } from '../types';
-import { ORPHAN_GRACE_PERIOD_MS, planSyncMaintenance } from './syncMaintenance';
+import { ORPHAN_GRACE_PERIOD_MS, performSyncMaintenance, planSyncMaintenance } from './syncMaintenance';
+import { resetSyncRuntimeFlags } from './runtimeFlags';
 
 const object = (
   sequence: number,
@@ -155,4 +156,27 @@ test('uses a two-hour default grace period before retiring unreferenced remote m
 
   assert.equal(ORPHAN_GRACE_PERIOD_MS, 2 * 60 * 60 * 1000);
   assert.deepEqual(plan.mediaToRetire.map(item => item.driveFileId), ['old-enough-media']);
+});
+
+test('remote deletion cannot run while automatic garbage collection is disabled', async () => {
+  resetSyncRuntimeFlags();
+  let cloudCallCount = 0;
+  const plan = await performSyncMaintenance({
+    controlPlane: {
+      listSyncObjectsForMaintenance: async () => {
+        cloudCallCount += 1;
+        return [];
+      },
+      retireSyncObjects: async () => {
+        cloudCallCount += 1;
+        return [];
+      },
+    } as never,
+    primaryDeviceId: 'redacted-device',
+    googleSession: { accessToken: 'not-used' } as never,
+  });
+
+  assert.equal(cloudCallCount, 0);
+  assert.deepEqual(plan.driveFilesToDelete, []);
+  assert.deepEqual(plan.objectsToRetire, []);
 });

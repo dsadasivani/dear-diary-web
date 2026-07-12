@@ -47,6 +47,7 @@ import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
 import type { DriveSyncStatus } from '../sync/eventSyncEngine';
 import type { PreservedSyncConflict, SyncStatusSummary } from '../repositories';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import { exportPrivacySafeSyncDiagnostics, type SyncHealth } from '../sync/health/SyncHealth';
 
 interface AppSettingsScreenProps {
   initialSettings: AppSettings;
@@ -184,6 +185,7 @@ export default function AppSettingsScreen({
   const [isDriveSyncStatusLoading, setIsDriveSyncStatusLoading] = useState(false);
   const [driveSyncStatusError, setDriveSyncStatusError] = useState('');
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
+  const [syncHealth, setSyncHealth] = useState<SyncHealth | null>(null);
   const [syncStatusError, setSyncStatusError] = useState('');
   const [isRetryingSync, setIsRetryingSync] = useState(false);
   const [preservedConflicts, setPreservedConflicts] = useState<PreservedSyncConflict[]>([]);
@@ -264,20 +266,38 @@ export default function AppSettingsScreen({
   const refreshLocalSyncStatus = async (): Promise<void> => {
     if (!syncAccountState) {
       setSyncStatus(null);
+      setSyncHealth(await diaryRepository.getSyncHealth());
       setPreservedConflicts([]);
       return;
     }
     setSyncStatusError('');
     try {
-      const [status, conflicts] = await Promise.all([
+      const [status, health, conflicts] = await Promise.all([
         diaryRepository.getSyncStatusSummary(),
+        diaryRepository.getSyncHealth(),
         diaryRepository.listPreservedSyncConflicts(),
       ]);
       setSyncStatus(status);
+      setSyncHealth(health);
       setPreservedConflicts(conflicts);
     } catch (error: any) {
       setSyncStatusError(error?.message || 'Local sync status could not be loaded.');
     }
+  };
+
+  const exportSyncDiagnostics = (): void => {
+    if (!syncHealth) return;
+    const diagnostics = exportPrivacySafeSyncDiagnostics(
+      syncHealth,
+      import.meta.env.VITE_APP_VERSION || '0.0.0',
+      1,
+    );
+    const url = URL.createObjectURL(new Blob([JSON.stringify(diagnostics, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'dear-diary-sync-diagnostics.json';
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const runConflictAction = async (
@@ -328,7 +348,7 @@ export default function AppSettingsScreen({
   }, [activeTab, syncAccountState?.accountId]);
 
   useEffect(() => {
-    if (activeTab === 'backup' && syncAccountState) {
+    if (activeTab === 'backup') {
       void refreshLocalSyncStatus();
     }
   }, [activeTab, syncAccountState?.accountId]);
@@ -1455,6 +1475,41 @@ export default function AppSettingsScreen({
                           <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">{conflictSyncCount}</p>
                         </div>
                       </div>
+                      {syncHealth && (
+                        <div className="mt-3 rounded-xl border border-brand-border/40 bg-brand-card-bg/70 p-3 text-[10px]">
+                          <p className="font-bold uppercase tracking-wider text-brand-sage">Sync health</p>
+                          <p className="mt-2 font-bold text-brand-plum dark:text-brand-text">
+                            {syncHealth.integrityState === 'SAFETY_STOP'
+                              ? 'Synchronization paused for data safety'
+                              : syncHealth.conflictOperationCount > 0
+                                ? 'Conflict requires review'
+                                : syncHealth.authState === 'EXPIRED' || syncHealth.authState === 'MISSING'
+                                  ? 'Changes saved locally; sign-in required to synchronize'
+                                  : syncHealth.connectivityState === 'OFFLINE'
+                                    ? 'Changes saved locally; waiting for internet'
+                                    : syncHealth.pendingOperationCount > 0
+                                      ? 'Synchronization delayed; automatic retry scheduled'
+                                      : 'All changes saved locally and synchronized'}
+                          </p>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <span>Last push: {formatDateTime(syncHealth.lastSuccessfulPushAt)}</span>
+                            <span>Last pull: {formatDateTime(syncHealth.lastSuccessfulPullAt)}</span>
+                            <span>Oldest pending: {formatDateTime(syncHealth.oldestPendingOperationAt)}</span>
+                            <span>Auth: {syncHealth.authState}</span>
+                            <span>Realtime: {syncHealth.realtimeState}</span>
+                            <span>Integrity: {syncHealth.integrityState}</span>
+                            <span>Protocol: 1</span>
+                            <span>App: {import.meta.env.VITE_APP_VERSION || '0.0.0'}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={exportSyncDiagnostics}
+                            className="mt-3 rounded-lg border border-brand-border px-3 py-2 font-bold text-brand-sage"
+                          >
+                            Export privacy-safe diagnostics
+                          </button>
+                        </div>
+                      )}
                       {syncStatusError && (
                         <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] font-bold leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
                           {syncStatusError}

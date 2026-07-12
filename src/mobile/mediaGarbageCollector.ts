@@ -4,6 +4,7 @@ import { isNativePlatform } from '../platform';
 import type { StoredFileEntry } from '../platform/filesystem';
 import { parseSyncMediaReference } from '../sync/syncMedia';
 import type { SyncMediaPointer } from '../types';
+import { getSyncRuntimeFlags } from '../sync/runtimeFlags';
 
 const MEDIA_DIRECTORY = 'media';
 const DEFAULT_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -101,6 +102,9 @@ export const selectOrphanedMedia = (
 };
 
 export const pruneOrphanedMedia = async (minimumAgeMs = DEFAULT_GRACE_MS): Promise<MediaCleanupResult> => {
+  if (!getSyncRuntimeFlags().automaticGarbageCollectionEnabled) {
+    return { scanned: 0, removed: 0, retained: 0, reclaimedBytes: 0 };
+  }
   const referenced = await collectReferencedNames();
   for (const pointer of referenced.pointers) {
     if (

@@ -69,6 +69,9 @@ import {
   type ArchiveHydrationPolicyInput,
 } from './partitionHydrationPolicy';
 import { emitSyncTelemetry } from './syncTelemetry';
+import { getSyncRuntimeFlags } from './runtimeFlags';
+import { SyncError } from './errors';
+import { reportUnexpectedError } from '../infrastructure/telemetry/reportUnexpectedError';
 import { sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
 import { measureAsync } from '../utils/performance';
 
@@ -402,6 +405,9 @@ export class EventSyncEngine {
     recordId: string,
     payload: SyncPayload | null,
   ): Promise<SyncDomainEvent> {
+    if (!getSyncRuntimeFlags().syncWritesEnabled) {
+      return Promise.reject(new SyncError({ code: 'DEPENDENCY_BLOCKED', retryable: true }));
+    }
     return this.enqueue(() => measureAsync('sync.commitMutation', () => this.commitMutationUnlocked(recordType, operation, recordId, payload), {
       recordType,
       operation,
@@ -410,7 +416,22 @@ export class EventSyncEngine {
   }
 
   pullPending(): Promise<void> {
-    return this.enqueue(() => measureAsync('sync.pullPending', () => this.pullPendingUnlocked()));
+    if (!getSyncRuntimeFlags().remotePullEnabled) return Promise.resolve();
+    return this.enqueue(async () => {
+      await this.repository.updateSyncHealth({ lastPullAttemptAt: this.now() });
+      try {
+        await measureAsync('sync.pullPending', () => this.pullPendingUnlocked());
+        await this.repository.updateSyncHealth({ lastSuccessfulPullAt: this.now() });
+      } catch (error) {
+        const typed = error instanceof SyncError ? error : new SyncError({ code: 'UNKNOWN', cause: error });
+        await this.repository.updateSyncHealth({
+          lastErrorCode: typed.code,
+          lastErrorAt: this.now(),
+          integrityState: typed.safetyRelevant ? 'SAFETY_STOP' : 'WARNING',
+        });
+        throw typed;
+      }
+    });
   }
 
   requestOutboxFlush(delayMs = 0): void {
@@ -418,16 +439,32 @@ export class EventSyncEngine {
     this.outboxFlushTimer = setTimeout(() => {
       this.outboxFlushTimer = null;
       void this.flushPendingOutbox().catch(error => {
-        console.warn('Background encrypted sync flush failed:', error);
+        reportUnexpectedError('sync.outbox.background_flush', error);
       });
     }, delayMs);
   }
 
   flushPendingOutbox(): Promise<void> {
-    return this.enqueue(() => measureAsync('sync.outbox.flush', () => this.flushPendingOutboxUnlocked()));
+    if (!getSyncRuntimeFlags().syncWritesEnabled) return Promise.resolve();
+    return this.enqueue(async () => {
+      await this.repository.updateSyncHealth({ lastPushAttemptAt: this.now() });
+      try {
+        await measureAsync('sync.outbox.flush', () => this.flushPendingOutboxUnlocked());
+        await this.repository.updateSyncHealth({ lastSuccessfulPushAt: this.now() });
+      } catch (error) {
+        const typed = error instanceof SyncError ? error : new SyncError({ code: 'UNKNOWN', cause: error });
+        await this.repository.updateSyncHealth({
+          lastErrorCode: typed.code,
+          lastErrorAt: this.now(),
+          integrityState: typed.safetyRelevant ? 'SAFETY_STOP' : 'WARNING',
+        });
+        throw typed;
+      }
+    });
   }
 
   createSnapshot(): Promise<SyncObjectMetadata | null> {
+    if (!getSyncRuntimeFlags().snapshotCreationEnabled) return Promise.resolve(null);
     return this.enqueue(async () => {
       this.requireOnline();
       const runtime = await this.openRuntime();
@@ -516,6 +553,12 @@ export class EventSyncEngine {
   }
 
   hydrateBackgroundArchiveOnce(): Promise<BackgroundArchiveHydrationResult> {
+    if (!getSyncRuntimeFlags().archiveHydrationEnabled) {
+      return Promise.resolve({
+        decision: { allowed: false, reason: 'disabled_by_runtime_flag' },
+        hydratedPartitionKeys: [],
+      });
+    }
     return this.enqueue(async () => {
       const policyInput = await this.getArchiveHydrationPolicyInput();
       const decision = shouldBackgroundHydrateArchive(policyInput);
@@ -654,6 +697,7 @@ export class EventSyncEngine {
   }
 
   private async startRealtime(): Promise<void> {
+    if (!getSyncRuntimeFlags().realtimeEnabled) return;
     if (this.realtimeChannel) return;
     const runtime = await this.openRuntime();
     if (!this.pollTimer) return;

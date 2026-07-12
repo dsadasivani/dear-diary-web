@@ -16,6 +16,7 @@ import type {
   SyncRecordType,
   UserProfile,
 } from '../types';
+import type { SyncHealth, SyncHealthPatch } from '../sync/health/SyncHealth';
 
 export type NewDiary = Omit<Diary, 'id' | 'entryCount' | 'lastUpdated'>;
 export type NewEntry = Omit<Entry, 'id' | 'createdAt' | 'updatedAt' | 'wordCount' | 'photoCount'>;
@@ -256,6 +257,8 @@ export interface DiaryRepository {
   listSyncOutboxOperations(states?: SyncOutboxOperation['state'][]): Promise<SyncOutboxOperation[]>;
   removeSyncOutboxOperation(operationId: string): Promise<void>;
   getSyncStatusSummary(): Promise<SyncStatusSummary>;
+  getSyncHealth(): Promise<SyncHealth>;
+  updateSyncHealth(patch: SyncHealthPatch): Promise<SyncHealth>;
   listPreservedSyncConflicts(): Promise<PreservedSyncConflict[]>;
   markSyncConflictResolved(operationId: string): Promise<void>;
   deleteSyncConflictRecoveredCopy(operationId: string): Promise<boolean>;

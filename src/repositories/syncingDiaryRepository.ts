@@ -2,6 +2,7 @@ import type { AppSettings, Diary, Entry, Note, UserProfile } from '../types';
 import type { DiaryRepository, NewDiary, NewEntry, NewNote } from './DiaryRepository';
 import type { EventSyncEngine } from '../sync/eventSyncEngine';
 import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
+import { reportUnexpectedError } from '../infrastructure/telemetry/reportUnexpectedError';
 
 const createId = (prefix: string): string => {
   const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -24,7 +25,7 @@ const requestBackgroundFlush = (syncEngine: EventSyncEngine): void => {
     return;
   }
   void syncEngine.pullPending().catch(error => {
-    console.warn('Background encrypted sync flush failed:', error);
+    reportUnexpectedError('sync.repository.background_flush', error);
   });
 };
 

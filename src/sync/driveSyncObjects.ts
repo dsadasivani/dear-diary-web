@@ -1,5 +1,7 @@
 import type { GoogleAccountSession, SyncObjectKind } from '../types';
 import { measureAsync } from '../utils/performance';
+import { executeRequest } from '../infrastructure/http/executeRequest';
+import { mapDriveError } from './errors';
 
 const DRIVE_FILES_ENDPOINT = 'https://www.googleapis.com/drive/v3/files';
 const DRIVE_UPLOAD_ENDPOINT = 'https://www.googleapis.com/upload/drive/v3/files';
@@ -47,25 +49,16 @@ const requireDriveAccessToken = (session: GoogleAccountSession): string => {
   return session.accessToken;
 };
 
-const readDriveErrorDetail = async (response: Response): Promise<string> => {
-  const raw = await response.text().catch(() => '');
-  try {
-    return JSON.parse(raw)?.error?.message || raw;
-  } catch {
-    return raw;
-  }
-};
-
-const throwDriveError = async (response: Response): Promise<never> => {
-  const detail = await readDriveErrorDetail(response);
-  if (response.status === 401) {
-    throw new Error('Google Drive authorization expired. Reconnect encrypted sync and try again.');
-  }
-  if (response.status === 403) {
-    throw new Error(`Google Drive denied sync object access. ${detail || 'Check appDataFolder permission.'}`);
-  }
-  throw new Error(`Google Drive sync object request failed (${response.status}). ${detail}`);
-};
+const driveRequest = (
+  operation: 'upload' | 'download' | 'delete' | 'list',
+  url: string,
+  init: RequestInit = {},
+  isSuccessfulResponse?: (response: Response) => boolean,
+): Promise<Response> => executeRequest({
+  request: ({ signal }) => fetch(url, { ...init, signal }),
+  mapError: error => mapDriveError(error, operation),
+  isSuccessfulResponse,
+});
 
 const toAppProperties = (
   objectKind: SyncObjectKind,
@@ -127,7 +120,7 @@ export const uploadDriveSyncObject = async ({
     });
 
     const fields = encodeURIComponent('id,name,createdTime,modifiedTime,size,appProperties');
-    const response = await fetch(`${DRIVE_UPLOAD_ENDPOINT}?uploadType=multipart&fields=${fields}`, {
+    const response = await driveRequest('upload', `${DRIVE_UPLOAD_ENDPOINT}?uploadType=multipart&fields=${fields}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${requireDriveAccessToken(session)}`,
@@ -136,7 +129,6 @@ export const uploadDriveSyncObject = async ({
       body,
     });
 
-    if (!response.ok) await throwDriveError(response);
     return toSummary(await response.json());
   }, {
     objectKind,
@@ -158,7 +150,7 @@ const uploadDriveSyncObjectResumable = async (
 ): Promise<DriveSyncObjectSummary> => {
   return measureAsync('sync.drive.upload.resumable', async () => {
     const fields = encodeURIComponent('id,name,createdTime,modifiedTime,size,appProperties');
-    const start = await fetch(`${DRIVE_UPLOAD_ENDPOINT}?uploadType=resumable&fields=${fields}`, {
+    const start = await driveRequest('upload', `${DRIVE_UPLOAD_ENDPOINT}?uploadType=resumable&fields=${fields}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${requireDriveAccessToken(session)}`,
@@ -168,11 +160,10 @@ const uploadDriveSyncObjectResumable = async (
       },
       body: JSON.stringify(metadata),
     });
-    if (!start.ok) await throwDriveError(start);
     const location = start.headers.get('Location');
-    if (!location) throw new Error('Google Drive did not return a resumable upload session.');
+    if (!location) throw mapDriveError({ code: 'missing_resumable_location' }, 'upload');
 
-    const response = await fetch(location, {
+    const response = await driveRequest('upload', location, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${requireDriveAccessToken(session)}`,
@@ -181,7 +172,6 @@ const uploadDriveSyncObjectResumable = async (
       },
       body: bytes,
     });
-    if (!response.ok) await throwDriveError(response);
     return toSummary(await response.json());
   }, { objectKind, sizeBytes: bytes.byteLength });
 };
@@ -191,10 +181,9 @@ export const downloadDriveSyncObject = async (
   fileId: string,
 ): Promise<Uint8Array> => {
   return measureAsync('sync.drive.download', async () => {
-    const response = await fetch(`${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}?alt=media`, {
+    const response = await driveRequest('download', `${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}?alt=media`, {
       headers: { Authorization: `Bearer ${requireDriveAccessToken(session)}` },
     });
-    if (!response.ok) await throwDriveError(response);
     return new Uint8Array(await response.arrayBuffer());
   }, { hasFileId: Boolean(fileId) });
 };
@@ -204,11 +193,10 @@ export const deleteDriveSyncObject = async (
   fileId: string,
 ): Promise<void> => {
   await measureAsync('sync.drive.delete', async () => {
-    const response = await fetch(`${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}`, {
+    await driveRequest('delete', `${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${requireDriveAccessToken(session)}` },
-    });
-    if (!response.ok && response.status !== 404) await throwDriveError(response);
+    }, response => response.ok || response.status === 404);
   }, { hasFileId: Boolean(fileId) });
 };
 
@@ -226,10 +214,9 @@ export const listDriveSyncObjects = async (
         pageSize: '1000',
       });
       if (pageToken) params.set('pageToken', pageToken);
-      const response = await fetch(`${DRIVE_FILES_ENDPOINT}?${params.toString()}`, {
+      const response = await driveRequest('list', `${DRIVE_FILES_ENDPOINT}?${params.toString()}`, {
         headers: { Authorization: `Bearer ${requireDriveAccessToken(session)}` },
       });
-      if (!response.ok) await throwDriveError(response);
       const payload = await response.json();
       files.push(...(payload.files || []).map(toSummary));
       pageToken = payload.nextPageToken || undefined;
@@ -250,10 +237,9 @@ export const getDriveStorageQuota = async (
     const params = new URLSearchParams({
       fields: 'storageQuota(limit,usage,usageInDrive,usageInDriveTrash)',
     });
-    const response = await fetch(`${DRIVE_ABOUT_ENDPOINT}?${params.toString()}`, {
+    const response = await driveRequest('list', `${DRIVE_ABOUT_ENDPOINT}?${params.toString()}`, {
       headers: { Authorization: `Bearer ${requireDriveAccessToken(session)}` },
     });
-    if (!response.ok) await throwDriveError(response);
     const quota = (await response.json())?.storageQuota || {};
     return {
       limit: parseQuotaNumber(quota.limit),

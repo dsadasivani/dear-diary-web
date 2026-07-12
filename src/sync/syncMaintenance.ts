@@ -6,6 +6,8 @@ import {
 } from './driveSyncObjects';
 import type { SupabaseControlPlaneClient } from './supabaseControlPlane';
 import { emitSyncTelemetry } from './syncTelemetry';
+import { getSyncRuntimeFlags } from './runtimeFlags';
+import { SyncError } from './errors';
 
 export const SNAPSHOT_RETENTION_COUNT = 3;
 export const MANIFEST_RETENTION_COUNT = 3;
@@ -133,6 +135,16 @@ export const performSyncMaintenance = async (input: {
   now?: number;
   liveDriveFileIds?: Iterable<string>;
 }): Promise<SyncMaintenancePlan> => {
+  if (!getSyncRuntimeFlags().automaticGarbageCollectionEnabled) {
+    emitSyncTelemetry('sync.gc.skipped', { reason: 'disabled_by_runtime_flag' });
+    return {
+      objectsToRetire: [],
+      snapshotsToRetire: [],
+      eventsToRetire: [],
+      mediaToRetire: [],
+      driveFilesToDelete: [],
+    };
+  }
   const startedAt = Date.now();
   emitSyncTelemetry('sync.gc.start');
   const [metadata, driveFiles] = await Promise.all([
@@ -167,11 +179,8 @@ export const performSyncMaintenance = async (input: {
   ]);
   await Promise.all([...deleteIds].map(fileId => (
     deleteDriveSyncObject(input.googleSession, fileId).catch(error => {
-      emitSyncTelemetry('sync.gc.drive_delete_failed', {
-        fileId,
-        error: error?.message || 'Drive delete failed.',
-      }, 'warn');
-      console.warn('Encrypted sync object cleanup will be retried:', error);
+      const typed = error instanceof SyncError ? error : new SyncError({ code: 'UNKNOWN', cause: error });
+      emitSyncTelemetry('sync.gc.drive_delete_failed', { errorCode: typed.code }, 'warn');
     })
   )));
   emitSyncTelemetry('sync.gc.complete', {

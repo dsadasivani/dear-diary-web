@@ -37,6 +37,22 @@ class MemoryDataStore implements LocalDataStore {
   }
 }
 
+test('persists sync health across repository restarts without exposing it only through React state', async () => {
+  const store = new MemoryDataStore();
+  const first = new LocalDiaryRepository(store);
+  await first.updateSyncHealth({
+    authState: 'EXPIRED',
+    integrityState: 'WARNING',
+    lastErrorCode: 'AUTH_EXPIRED',
+  });
+
+  const restarted = new LocalDiaryRepository(store);
+  const health = await restarted.getSyncHealth();
+  assert.equal(health.authState, 'EXPIRED');
+  assert.equal(health.integrityState, 'WARNING');
+  assert.equal(health.lastErrorCode, 'AUTH_EXPIRED');
+});
+
 type StructuredTestRecord = { id: string };
 
 const cloneTestValue = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;

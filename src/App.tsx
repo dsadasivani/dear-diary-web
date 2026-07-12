@@ -25,6 +25,7 @@ import { createConfiguredSupabaseControlPlaneClient } from './sync/config';
 import { resumePendingDeviceKeyRotation } from './sync/deviceKeyRotation';
 import { loadSyncSecrets } from './sync/syncSecrets';
 import { restoreGoogleDriveSession } from './utils/googleAuth';
+import { reportUnexpectedError } from './infrastructure/telemetry/reportUnexpectedError';
 import { applyThemePreference, getLocalThemePreference, setLocalThemePreference } from './utils/themePreference';
 import { measureAsync } from './utils/performance';
 
@@ -526,14 +527,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   }), [applyRepositoryChange, isAuthenticated]);
 
   useEffect(() => {
-    const handleRejectedSyncWrite = (event: PromiseRejectionEvent) => {
-      const message = event.reason?.message || '';
-      if (!message.includes('online') && !message.includes('another device') && !message.includes('revoked')) return;
-      event.preventDefault();
-      showToast(message, 'warning');
+    const handleUnexpectedRejection = (event: PromiseRejectionEvent) => {
+      reportUnexpectedError('window.unhandledrejection', event.reason);
     };
-    window.addEventListener('unhandledrejection', handleRejectedSyncWrite);
-    return () => window.removeEventListener('unhandledrejection', handleRejectedSyncWrite);
+    window.addEventListener('unhandledrejection', handleUnexpectedRejection);
+    return () => window.removeEventListener('unhandledrejection', handleUnexpectedRejection);
   }, []);
 
   const [selectedPrompt, setSelectedPrompt] = useState<string>('');

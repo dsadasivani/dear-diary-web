@@ -22,6 +22,9 @@ import {
   encodePartitionSnapshotPayload,
   parsePartitionManifestPayload,
 } from './syncPartitioning';
+import { configureSyncRuntimeFlags } from './runtimeFlags';
+
+configureSyncRuntimeFlags({ snapshotCreationEnabled: true, archiveHydrationEnabled: true });
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);

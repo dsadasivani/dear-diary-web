@@ -58,6 +58,7 @@ import { calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
 import { CORE_PARTITION_KEY, filterSnapshotForPartition, isMonthPartitionKey, monthFromTimestamp, partitionKeyForRecordPayload } from '../sync/syncPartitioning';
 import { measureAsync } from '../utils/performance';
 import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
+import { createDefaultSyncHealth, type SyncHealth, type SyncHealthPatch } from '../sync/health/SyncHealth';
 
 const STORAGE_KEYS = {
   diaries: 'deardiary_diaries',
@@ -72,6 +73,7 @@ const STORAGE_KEYS = {
   syncMediaPointers: 'deardiary_sync_media_pointers',
   syncPartitionHydration: 'deardiary_sync_partition_hydration',
   syncOutbox: 'deardiary_sync_outbox',
+  syncHealth: 'deardiary_sync_health_v1',
 } as const;
 
 const ARCHIVE_HYDRATION_RETRY_BASE_MS = 5 * 60 * 1000;
@@ -1196,6 +1198,20 @@ export class LocalDiaryRepository implements DiaryRepository {
     return this.createSyncStatusSummary(outbox);
   }
 
+  async getSyncHealth(): Promise<SyncHealth> {
+    await this.waitForWrites();
+    return this.readJson<SyncHealth>(STORAGE_KEYS.syncHealth, createDefaultSyncHealth());
+  }
+
+  updateSyncHealth(patch: SyncHealthPatch): Promise<SyncHealth> {
+    return this.enqueueWrite(async () => {
+      const current = await this.readJson<SyncHealth>(STORAGE_KEYS.syncHealth, createDefaultSyncHealth());
+      const health: SyncHealth = { ...current, ...patch, updatedAt: Date.now() };
+      await this.writeJson(STORAGE_KEYS.syncHealth, health);
+      return clone(health);
+    });
+  }
+
   async listPreservedSyncConflicts(): Promise<PreservedSyncConflict[]> {
     const operations = await this.listSyncOutboxOperations(['conflict_preserved']);
     const conflicts = await Promise.all(operations.map(async operation => {
@@ -1743,6 +1759,25 @@ export class LocalDiaryRepository implements DiaryRepository {
     operationId?: string,
     contentRevision?: number,
   ): Promise<void> {
+    const operations = Object.values(outbox);
+    const pending = operations.filter(operation => operation.state !== 'applied' && operation.state !== 'conflict_preserved');
+    const currentHealth = await this.readJson<SyncHealth>(STORAGE_KEYS.syncHealth, createDefaultSyncHealth());
+    const localState = await this.readJson<LocalSyncAccountState | null>(STORAGE_KEYS.syncAccount, null);
+    await this.writeJson(STORAGE_KEYS.syncHealth, {
+      ...currentHealth,
+      accountId: localState?.accountId,
+      lastLocalWriteAt: operationId ? Date.now() : currentHealth.lastLocalWriteAt,
+      pendingOperationCount: pending.length,
+      processingOperationCount: pending.filter(operation => !['prepared', 'failed'].includes(operation.state)).length,
+      retryingOperationCount: pending.filter(operation => operation.state === 'failed' && Boolean(operation.nextRetryAt)).length,
+      blockedOperationCount: pending.filter(operation => Boolean(operation.dependsOnOperationId)).length,
+      conflictOperationCount: operations.filter(operation => operation.state === 'conflict_preserved').length,
+      failedOperationCount: operations.filter(isRetryableFailedOutboxOperation).length,
+      oldestPendingOperationAt: pending.length > 0 ? Math.min(...pending.map(operation => operation.createdAt)) : undefined,
+      localSequence: localState?.currentSyncSequence || currentHealth.localSequence,
+      connectivityState: typeof navigator !== 'undefined' && !navigator.onLine ? 'OFFLINE' : 'ONLINE',
+      updatedAt: Date.now(),
+    } satisfies SyncHealth);
     const backup = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, createDefaultDriveBackupSettings());
     const revision = contentRevision ?? backup.contentRevision ?? 0;
     this.emitChange(revision, {
