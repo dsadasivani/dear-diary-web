@@ -38,6 +38,19 @@ logging:
     correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "
 
 sync:
+  notification:
+    publisher:
+      enabled: ${SYNC_NOTIFICATION_PUBLISHER_ENABLED:false}
+      endpoint: ${SYNC_NOTIFICATION_PUBLISHER_ENDPOINT:https://disabled.invalid}
+      bearer-token: ${SYNC_NOTIFICATION_PUBLISHER_TOKEN:disabled}
+      timeout: ${SYNC_NOTIFICATION_PUBLISHER_TIMEOUT:5s}
+    worker:
+      enabled: ${SYNC_NOTIFICATION_WORKER_ENABLED:false}
+      poll-interval: ${SYNC_NOTIFICATION_WORKER_POLL_INTERVAL:5s}
+      lease-duration: ${SYNC_NOTIFICATION_WORKER_LEASE_DURATION:30s}
+      retry-base-delay: ${SYNC_NOTIFICATION_RETRY_BASE_DELAY:5s}
+      maximum-attempts: ${SYNC_NOTIFICATION_MAX_ATTEMPTS:10}
+      maximum-batch-size: ${SYNC_NOTIFICATION_MAX_BATCH_SIZE:100}
   object-store:
     enabled: ${SYNC_OBJECT_STORE_ENABLED:false}
     bucket: ${SYNC_OBJECT_STORE_BUCKET:disabled}

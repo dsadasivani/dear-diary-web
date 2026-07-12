@@ -18,6 +18,9 @@ import java.time.Clock;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Callable;
+import com.deardiary.sync.operation.InitiateOperationResponse;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -67,8 +70,12 @@ class OperationInitiationIntegrationTest {
         assertThat(repeated.existing()).isTrue();
         assertThat(repeated.status()).isEqualTo("OBJECTS_PENDING");
         assertThat(repeated.uploads()).hasSize(1);
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM sync_operations", Long.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM sync_operation_objects", Long.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM sync_operations WHERE operation_id = ?", Long.class, request.operationId()))
+            .isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM sync_operation_objects WHERE operation_id = ?", Long.class, request.operationId()))
+            .isEqualTo(1);
 
         var mismatched = request(request.operationId(), UUID.randomUUID(), request.objects().getFirst().objectKey(), 512);
         assertApiCode(() -> operations.initiate("operation-user", mismatched), "IDEMPOTENCY_MISMATCH");
@@ -94,6 +101,24 @@ class OperationInitiationIntegrationTest {
                 UUID.randomUUID(), UUID.randomUUID(), disabledKey, 512)),
             "SYNC_WRITES_DISABLED");
         jdbc.update("UPDATE sync_kill_switches SET engaged = FALSE, reason_code = NULL WHERE switch_name = 'SYNC_WRITES'");
+    }
+
+    @Test
+    void concurrentDuplicateInitiationCreatesOneMatchingOperation() throws Exception {
+        var request = request(UUID.randomUUID(), UUID.randomUUID(), keys.create(accountId).value(), 512);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var futures = executor.invokeAll(List.<Callable<InitiateOperationResponse>>of(
+                () -> operations.initiate("operation-user", request),
+                () -> operations.initiate("operation-user", request)));
+            var responses = futures.stream().map(future -> {
+                try { return future.get(); } catch (Exception error) { throw new RuntimeException(error); }
+            }).toList();
+            assertThat(responses).extracting(response -> response.existing())
+                .containsExactlyInAnyOrder(false, true);
+        }
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM sync_operations WHERE operation_id = ?", Long.class, request.operationId()))
+            .isEqualTo(1);
     }
 
     private static InitiateOperationRequest request(UUID operationId, UUID recordId, String objectKey, long size) {

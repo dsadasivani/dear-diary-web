@@ -105,6 +105,9 @@ public class OperationInitiationService {
     }
 
     private PersistedOperation persist(UUID accountId, InitiateOperationRequest request) {
+        jdbc.queryForObject(
+            "SELECT account_id FROM sync_accounts WHERE account_id = ? FOR UPDATE",
+            UUID.class, accountId);
         var existing = loadExisting(accountId, request.operationId());
         if (existing != null) {
             assertMatches(accountId, existing, request);

@@ -7,6 +7,8 @@ import com.deardiary.sync.common.ApiException;
 import com.deardiary.sync.device.DeviceAuthorizationService;
 import com.deardiary.sync.device.DeviceRegistrationRequest;
 import com.deardiary.sync.device.DeviceRegistrationService;
+import com.deardiary.sync.cursor.CursorService;
+import com.deardiary.sync.event.EventPullService;
 import com.deardiary.sync.objectstore.InMemoryEncryptedObjectStore;
 import com.deardiary.sync.objectstore.ObjectKey;
 import com.deardiary.sync.objectstore.ObjectKeyFactory;
@@ -16,13 +18,18 @@ import com.deardiary.sync.operation.OperationInitiationService;
 import com.deardiary.sync.operation.OperationObjectRequest;
 import com.deardiary.sync.operation.OperationQueryService;
 import com.deardiary.sync.protocol.ProtocolService;
+import com.deardiary.sync.notification.NotificationOutboxWorker;
+import com.deardiary.sync.notification.NotificationPublishException;
+import com.deardiary.sync.notification.NotificationWorkerProperties;
 import java.security.KeyPairGenerator;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +52,8 @@ class AtomicCommitIntegrationTest {
     private OperationQueryService queries;
     private InMemoryEncryptedObjectStore objectStore;
     private ObjectKeyFactory keys;
+    private EventPullService pulls;
+    private CursorService cursors;
     private UUID accountId;
     private UUID deviceId;
 
@@ -82,7 +91,10 @@ class AtomicCommitIntegrationTest {
         initiation = new OperationInitiationService(
             jdbc, transactionManager, deviceAuthorization, protocols, keys, objectStore, Clock.systemUTC());
         commits = new OperationCommitService(jdbc, transactionManager, protocols, objectStore, Clock.systemUTC());
-        queries = new OperationQueryService(jdbc, new com.deardiary.sync.account.AccountAuthorizationService(jdbc));
+        var accounts = new com.deardiary.sync.account.AccountAuthorizationService(jdbc);
+        queries = new OperationQueryService(jdbc, accounts);
+        pulls = new EventPullService(jdbc, accounts, objectStore);
+        cursors = new CursorService(jdbc, transactionManager, deviceAuthorization, Clock.systemUTC());
     }
 
     @Test
@@ -185,6 +197,70 @@ class AtomicCommitIntegrationTest {
 
         assertThat(count("sync_events")).isZero();
         assertThat(count("sync_notification_outbox")).isZero();
+    }
+
+    @Test
+    void eventPullIsBoundedOrderedAndAccountScopedWhileCursorIsMonotonic() {
+        for (var index = 0; index < 3; index += 1) {
+            var operation = initiate(deviceId, UUID.randomUUID(), 0);
+            objectStore.markUploaded(operation.objectKey());
+            commits.commit("commit-user", operation.operationId());
+        }
+
+        var firstPage = pulls.pull("commit-user", 0, 2);
+        var secondPage = pulls.pull("commit-user", 2, 2);
+
+        assertThat(firstPage.events()).extracting(event -> event.sequence()).containsExactly(1L, 2L);
+        assertThat(firstPage.currentSequence()).isEqualTo(3);
+        assertThat(firstPage.hasMore()).isTrue();
+        assertThat(secondPage.events()).extracting(event -> event.sequence()).containsExactly(3L);
+        assertThat(secondPage.hasMore()).isFalse();
+        assertThat(firstPage.events()).allSatisfy(event -> {
+            assertThat(event.downloadUrl()).isNotNull();
+            assertThat(event.downloadExpiresAt()).isAfter(java.time.Instant.now());
+        });
+        assertApiCode(() -> pulls.pull("another-user", 0, 2), "ACCOUNT_NOT_FOUND");
+        assertApiCode(() -> pulls.pull("commit-user", 0, 101), "INVALID_CURSOR");
+
+        assertThat(cursors.acknowledge("commit-user", deviceId, 2).lastAppliedSequence()).isEqualTo(2);
+        assertThat(cursors.acknowledge("commit-user", deviceId, 2).lastAppliedSequence()).isEqualTo(2);
+        assertApiCode(() -> cursors.acknowledge("commit-user", deviceId, 1), "CURSOR_REGRESSION");
+        assertApiCode(() -> cursors.acknowledge("commit-user", deviceId, 4), "CURSOR_AHEAD");
+
+        jdbc.update("UPDATE sync_devices SET device_status = 'REVOKED', revoked_at = CURRENT_TIMESTAMP WHERE device_id = ?", deviceId);
+        assertApiCode(() -> cursors.acknowledge("commit-user", deviceId, 3), "DEVICE_REVOKED");
+    }
+
+    @Test
+    void notificationWorkerPublishesAfterCommitAndRetriesWithoutAffectingCommittedTruth() {
+        var operation = initiate(deviceId, UUID.randomUUID(), 0);
+        objectStore.markUploaded(operation.objectKey());
+        commits.commit("commit-user", operation.operationId());
+        var published = new CopyOnWriteArrayList<com.deardiary.sync.notification.SyncNotification>();
+        var properties = new NotificationWorkerProperties(
+            true, Duration.ofSeconds(30), Duration.ofSeconds(1), 3, 100);
+        var worker = new NotificationOutboxWorker(
+            jdbc, new DataSourceTransactionManager(dataSource), published::add, properties, Clock.systemUTC());
+
+        assertThat(worker.runOnce()).isTrue();
+        assertThat(worker.runOnce()).isFalse();
+        assertThat(published).hasSize(1);
+        assertThat(published.getFirst().sequence()).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sync_notification_outbox WHERE sequence = 1", String.class)).isEqualTo("PUBLISHED");
+        assertThat(count("sync_events")).isEqualTo(1);
+
+        var retryOperation = initiate(deviceId, UUID.randomUUID(), 0);
+        objectStore.markUploaded(retryOperation.objectKey());
+        commits.commit("commit-user", retryOperation.operationId());
+        var failingWorker = new NotificationOutboxWorker(
+            jdbc, new DataSourceTransactionManager(dataSource),
+            notification -> { throw new NotificationPublishException("TEST_UNAVAILABLE", true, null); },
+            properties, Clock.systemUTC());
+        assertThat(failingWorker.runOnce()).isTrue();
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sync_notification_outbox WHERE sequence = 2", String.class)).isEqualTo("RETRY_WAIT");
+        assertThat(count("sync_events")).isEqualTo(2);
     }
 
     private Initiated initiate(UUID committingDeviceId, UUID recordId, long baseVersion) {
