@@ -17,7 +17,9 @@ npm run backend:bootRun
 Runtime database configuration is supplied through `SYNC_DB_URL`, `SYNC_DB_USERNAME`, and `SYNC_DB_PASSWORD`.
 No production credentials are committed or required for unit tests.
 
-The API currently exposes only `/actuator/health`. All `/api/v2/**` routes fail closed until JWT authentication and their contracts are implemented.
+The API exposes `/actuator/health` without authentication. All `/api/v2/**` routes fail closed unless
+`SYNC_JWT_ENABLED=true` and a valid Supabase issuer/JWKS configuration is supplied. Only tokens with a
+non-empty subject and the `authenticated` role are accepted; anonymous and service-role tokens are rejected.
 
 Flyway owns the PostgreSQL schema through 16 ordered migrations in `src/main/resources/db/migration`.
 The migration integration test uses PostgreSQL 16 through Testcontainers and skips only when Docker is unavailable.

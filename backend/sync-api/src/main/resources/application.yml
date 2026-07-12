@@ -36,3 +36,11 @@ management:
 logging:
   pattern:
     correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "
+
+sync:
+  security:
+    jwt:
+      enabled: ${SYNC_JWT_ENABLED:false}
+      issuer-uri: ${SYNC_JWT_ISSUER_URI:disabled}
+      jwk-set-uri: ${SYNC_JWT_JWK_SET_URI:}
+      audience: ${SYNC_JWT_AUDIENCE:}

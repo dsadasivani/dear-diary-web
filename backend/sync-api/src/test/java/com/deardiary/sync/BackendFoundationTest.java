@@ -26,6 +26,7 @@ class BackendFoundationTest {
     @Test
     void failsClosedForUnimplementedApiRoutes() throws Exception {
         mockMvc.perform(get("/api/v2/sync/protocol"))
-            .andExpect(status().isForbidden());
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value("AUTH_INVALID"));
     }
 }
