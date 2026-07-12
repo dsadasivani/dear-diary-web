@@ -47,7 +47,12 @@ import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
 import type { DriveSyncStatus } from '../sync/eventSyncEngine';
 import type { PreservedSyncConflict, SyncStatusSummary } from '../repositories';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
-import { exportPrivacySafeSyncDiagnostics, type SyncHealth } from '../sync/health/SyncHealth';
+import {
+  exportPrivacySafeSyncDiagnostics,
+  formatSyncHealthAge,
+  getSyncHealthStatusMessage,
+  type SyncHealth,
+} from '../sync/health/SyncHealth';
 
 interface AppSettingsScreenProps {
   initialSettings: AppSettings;
@@ -1479,22 +1484,14 @@ export default function AppSettingsScreen({
                         <div className="mt-3 rounded-xl border border-brand-border/40 bg-brand-card-bg/70 p-3 text-[10px]">
                           <p className="font-bold uppercase tracking-wider text-brand-sage">Sync health</p>
                           <p className="mt-2 font-bold text-brand-plum dark:text-brand-text">
-                            {syncHealth.integrityState === 'SAFETY_STOP'
-                              ? 'Synchronization paused for data safety'
-                              : syncHealth.conflictOperationCount > 0
-                                ? 'Conflict requires review'
-                                : syncHealth.authState === 'EXPIRED' || syncHealth.authState === 'MISSING'
-                                  ? 'Changes saved locally; sign-in required to synchronize'
-                                  : syncHealth.connectivityState === 'OFFLINE'
-                                    ? 'Changes saved locally; waiting for internet'
-                                    : syncHealth.pendingOperationCount > 0
-                                      ? 'Synchronization delayed; automatic retry scheduled'
-                                      : 'All changes saved locally and synchronized'}
+                            {getSyncHealthStatusMessage(syncHealth)}
                           </p>
                           <div className="mt-3 grid grid-cols-2 gap-2">
+                            <span>Saved locally: {formatDateTime(syncHealth.lastLocalWriteAt)}</span>
                             <span>Last push: {formatDateTime(syncHealth.lastSuccessfulPushAt)}</span>
                             <span>Last pull: {formatDateTime(syncHealth.lastSuccessfulPullAt)}</span>
-                            <span>Oldest pending: {formatDateTime(syncHealth.oldestPendingOperationAt)}</span>
+                            <span>Pending: {syncHealth.pendingOperationCount}</span>
+                            <span>Oldest pending age: {formatSyncHealthAge(syncHealth.oldestPendingOperationAt)}</span>
                             <span>Auth: {syncHealth.authState}</span>
                             <span>Realtime: {syncHealth.realtimeState}</span>
                             <span>Integrity: {syncHealth.integrityState}</span>
