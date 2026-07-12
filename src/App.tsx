@@ -8,7 +8,7 @@ import {
 import OverlayPortal from './components/OverlayPortal';
 import ProfileAvatar from './components/ProfileAvatar';
 
-import { AppSettings, Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
+import { AppSettings, Diary, Entry, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
 import type { RepositoryChange, SyncStatusSummary } from './repositories';
 import { addNativeAppStateListener, addNativeBackListener, addNativeUrlOpenListener, exitNativeApp, getNativeLaunchUrl, syncNativeStatusBar } from './mobile/capacitorBootstrap';
 import { DearDiaryDeepLinkTarget, parseDearDiaryDeepLink } from './mobile/deepLinks';
@@ -177,7 +177,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   // Active data states (refreshed from storage on updates)
   const [diaries, setDiaries] = useState<Diary[]>([]);
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [notes, setNotes] = useState<Note[]>([]);
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
   const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
@@ -204,10 +203,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   // Reload data from the async repository. SQLite is authoritative on native.
   const reloadData = async () => {
     await measureAsync('app.reloadData', async () => {
-    const [storedDiaries, storedEntries, storedNotes, storedProfile, storedSettings, storedSecurity, storedArchiveMonths, storedSyncStatus] = await Promise.all([
+    const [storedDiaries, storedEntries, storedProfile, storedSettings, storedSecurity, storedArchiveMonths, storedSyncStatus] = await Promise.all([
       diaryRepository.listDiaries(),
       diaryRepository.listEntries(),
-      diaryRepository.listNotes(),
       diaryRepository.getUserProfile(),
       diaryRepository.getSettings(),
       diaryRepository.getSecurityConfig(),
@@ -216,7 +214,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     ]);
     setDiaries(storedDiaries);
     setEntries(storedEntries);
-    setNotes(storedNotes);
     setUserProfile(storedProfile);
     setHomeStreak(calculateStreak(storedEntries));
     const currentTheme = getLocalThemePreference(storedSettings.theme || 'light');
@@ -284,13 +281,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         setEntries(prev => prev.filter(entry => entry.diaryId !== change.diaryId));
         break;
       case 'note-created':
-        setNotes(prev => [...prev.filter(note => note.id !== change.note.id), change.note]);
-        break;
       case 'note-updated':
-        setNotes(prev => prev.map(note => note.id === change.note.id ? change.note : note));
-        break;
       case 'note-deleted':
-        setNotes(prev => prev.filter(note => note.id !== change.noteId));
         break;
       case 'settings-updated': {
         const currentTheme = getLocalThemePreference(change.settings.theme || 'light');
@@ -1133,8 +1125,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         return (
           <StatsScreen 
             diaries={diaries}
-            initialEntries={accessibleEntries}
-            initialNotes={notes}
             excludeDiaryIds={lockedDiaryIds}
             archiveMonths={archiveMonths}
             layout={layout}

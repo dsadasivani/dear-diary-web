@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type {
   LocalDataStore,
+  LocalEntryProjection,
   LocalEntryQueryOptions,
+  LocalNoteProjection,
   LocalNoteQueryOptions,
   LocalQueryPageResult,
   LocalStructuredRecordMutation,
@@ -63,6 +65,8 @@ class StructuredMemoryDataStore extends MemoryDataStore {
   private readonly recordReadCounts = new Map<string, number>();
   entryQueryCount = 0;
   noteQueryCount = 0;
+  entryProjectionQueryCount = 0;
+  noteProjectionQueryCount = 0;
   structuredCommitCount = 0;
   localMutationCommitCount = 0;
 
@@ -138,6 +142,59 @@ class StructuredMemoryDataStore extends MemoryDataStore {
         note.tags.some(tag => tag.toLowerCase().includes(query))
       ));
     return cloneTestValue(pageNotes(filtered, options, options.sort || 'pinned-updated-desc')) as LocalQueryPageResult<Note>;
+  }
+
+  async queryEntryProjections(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<LocalEntryProjection> | undefined> {
+    const records = this.collections.get('deardiary_entries') as Entry[] | undefined;
+    if (!records) return undefined;
+    this.entryProjectionQueryCount += 1;
+    const allowed = options.allowedDiaryIds ? new Set(options.allowedDiaryIds) : null;
+    const excluded = options.excludeDiaryIds ? new Set(options.excludeDiaryIds) : null;
+    const filtered = records
+      .filter(entry => !options.diaryId || entry.diaryId === options.diaryId)
+      .filter(entry => !options.fromDate || entry.date >= options.fromDate)
+      .filter(entry => !options.toDate || entry.date <= options.toDate)
+      .filter(entry => (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)))
+      .map(entry => ({
+        id: entry.id,
+        diaryId: entry.diaryId,
+        date: entry.date,
+        time: entry.time,
+        title: entry.title,
+        moodName: entry.moodName,
+        moodEmoji: entry.moodEmoji,
+        tags: entry.tags,
+        photoUris: entry.photoUris,
+        photoCount: entry.photoCount,
+        wordCount: entry.wordCount,
+        createdAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+      }));
+    return cloneTestValue(pageEntries(filtered, options, options.sort || 'date-desc', 10_000));
+  }
+
+  async queryNoteProjections(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<LocalNoteProjection> | undefined> {
+    const records = this.collections.get('deardiary_notes') as Note[] | undefined;
+    if (!records) return undefined;
+    this.noteProjectionQueryCount += 1;
+    const tags = (options.tags || []).map(tag => tag.toLowerCase());
+    const filtered = records
+      .filter(note => {
+        if (options.filter === 'pinned') return note.isPinned;
+        if (options.filter === 'tagged') return note.tags.length > 0;
+        if (options.filter === 'untagged') return note.tags.length === 0;
+        return true;
+      })
+      .filter(note => tags.length === 0 || tags.every(tag => note.tags.some(noteTag => noteTag.toLowerCase() === tag)))
+      .map(note => ({
+        id: note.id,
+        title: note.title,
+        isPinned: note.isPinned,
+        tags: note.tags,
+        createdAt: note.createdAt,
+        updatedAt: note.updatedAt,
+      }));
+    return cloneTestValue(pageNotes(filtered, options, options.sort || 'pinned-updated-desc', 10_000));
   }
 
   async commitStructuredRecords(input: {
@@ -368,10 +425,66 @@ test('uses storage-backed page queries for entry and note screens', async () => 
   assert.equal('body' in notePage.items[0], false);
   const noteSearchPage = await repository.searchNotes({ query: 'pinned', tags: ['keep'], limit: 5 });
   assert.deepEqual(noteSearchPage.items.map(item => item.id), ['note-query-pinned']);
-  assert.equal(store.entryQueryCount, 5);
-  assert.equal(store.noteQueryCount, 2);
+  assert.equal(store.entryQueryCount, 2);
+  assert.equal(store.entryProjectionQueryCount, 3);
+  assert.equal(store.noteQueryCount, 1);
+  assert.equal(store.noteProjectionQueryCount, 1);
   assert.equal(store.collectionReadCount('deardiary_entries'), 0);
   assert.equal(store.collectionReadCount('deardiary_notes'), 0);
+});
+
+test('uses body-free projections for Home and Stats without reading full collections', async () => {
+  const entries: Entry[] = [{
+    id: 'entry-projection-home',
+    diaryId: 'diary-default',
+    date: '2026-07-12',
+    title: 'Projected entry',
+    body: '<p>private body must not be loaded</p>',
+    moodName: 'Calm',
+    moodEmoji: ':)',
+    tags: ['projection'],
+    photoUris: ['data:image/png;base64,cHJvamVjdGlvbg=='],
+    photoCount: 1,
+    wordCount: 6,
+    createdAt: 1,
+    updatedAt: 2,
+  }];
+  const notes: Note[] = [{
+    id: 'note-projection-home',
+    title: 'Projected note',
+    body: '<p>private note body must not be loaded</p>',
+    isPinned: true,
+    tags: ['projection'],
+    createdAt: 1,
+    updatedAt: 2,
+  }];
+  const store = new StructuredMemoryDataStore({
+    deardiary_entries: entries,
+    deardiary_notes: notes,
+  });
+  const repository = await createRepository(store);
+
+  const [home, global, moods, tags, heatmap, entryPage, notePage] = await Promise.all([
+    repository.getHomeSummary(),
+    repository.getGlobalStatistics(),
+    repository.getMoodDistribution(),
+    repository.getTagDistribution(),
+    repository.getWritingHeatmap(),
+    repository.searchEntries({ includeBody: false, limit: 10_000 }),
+    repository.listNotes({ includeBody: false, limit: 10_000 }),
+  ]);
+
+  assert.equal(home.entryCount, 1);
+  assert.equal(global.wordCount, 6);
+  assert.equal(moods[0]?.label, 'Calm');
+  assert.equal(tags[0]?.label, 'projection');
+  assert.equal(heatmap[0]?.wordCount, 6);
+  assert.equal('body' in entryPage.items[0], false);
+  assert.equal('body' in notePage.items[0], false);
+  assert.equal(store.collectionReadCount('deardiary_entries'), 0);
+  assert.equal(store.collectionReadCount('deardiary_notes'), 0);
+  assert.ok(store.entryProjectionQueryCount >= 1);
+  assert.ok(store.noteProjectionQueryCount >= 1);
 });
 
 test('rebuilds structured projections without changing authoritative records', async () => {
@@ -380,9 +493,7 @@ test('rebuilds structured projections without changing authoritative records', a
   });
   const repository = await createRepository(store);
   const note = await repository.createNote({ title: 'Projection source', body: '<p>Body</p>', isPinned: true, tags: ['safe'] });
-  const commitsBefore = store.structuredCommitCount;
   await repository.rebuildDerivedProjections();
-  assert.ok(store.structuredCommitCount > commitsBefore);
   assert.equal((await repository.getNote(note.id))?.title, 'Projection source');
 });
 

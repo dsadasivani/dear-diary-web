@@ -5,7 +5,7 @@ import {
   Settings, Award, ArrowRight,
   Sparkles, X, Calendar, Grid, ChevronDown
 } from 'lucide-react';
-import { Diary, Entry, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
+import { Diary, Entry, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { calculateStreak } from '../domain/journalCatalog';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import SyncedImage from './SyncedImage';
@@ -15,8 +15,6 @@ import type { EntrySummary, GlobalStatistics, NoteSummary } from '../repositorie
 
 interface StatsScreenProps {
   diaries: Diary[];
-  initialEntries?: Entry[];
-  initialNotes?: Note[];
   excludeDiaryIds?: string[];
   archiveMonths?: PartitionHydrationState[];
   layout?: ResponsiveLayout;
@@ -33,16 +31,14 @@ interface StatsScreenProps {
 
 export default function StatsScreen({
   diaries,
-  initialEntries = [],
-  initialNotes = [],
   excludeDiaryIds = [],
   archiveMonths = [],
   layout = 'mobile',
   onNavigate
 }: StatsScreenProps) {
   useScreenPerformance('stats');
-  const [entries, setEntries] = useState<EntrySummary[]>(initialEntries);
-  const [notes, setNotes] = useState<NoteSummary[]>(initialNotes);
+  const [entries, setEntries] = useState<EntrySummary[]>([]);
+  const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [globalStats, setGlobalStats] = useState<GlobalStatistics | null>(null);
   const [streak, setStreak] = useState<number>(0);
   const [totalPhotos, setTotalPhotos] = useState<number>(0);

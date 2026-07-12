@@ -35,14 +35,14 @@ const localDateString = (date: Date): string => (
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 );
 
-export const getTodayWordCount = (entries: Entry[]): number => {
+export const getTodayWordCount = (entries: Array<Pick<Entry, 'date' | 'wordCount'>>): number => {
   const today = localDateString(new Date());
   return entries
     .filter(entry => entry.date === today)
     .reduce((sum, entry) => sum + (entry.wordCount || 0), 0);
 };
 
-export const calculateStreak = (entries: Entry[]): number => {
+export const calculateStreak = (entries: Array<Pick<Entry, 'date'>>): number => {
   if (entries.length === 0) return 0;
 
   const today = new Date();

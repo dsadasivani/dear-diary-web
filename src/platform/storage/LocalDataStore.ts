@@ -41,6 +41,15 @@ export interface LocalNoteQueryOptions extends LocalQueryPageOptions {
   tags?: string[];
 }
 
+export type LocalEntryProjection = Pick<Entry,
+  'id' | 'diaryId' | 'date' | 'time' | 'title' | 'moodName' | 'moodEmoji' | 'tags' |
+  'photoUris' | 'photoCount' | 'wordCount' | 'createdAt' | 'updatedAt'
+>;
+
+export type LocalNoteProjection = Pick<Note,
+  'id' | 'title' | 'isPinned' | 'tags' | 'createdAt' | 'updatedAt'
+>;
+
 export interface LocalDataStore {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
@@ -62,4 +71,6 @@ export interface LocalDataStore {
   }): Promise<void>;
   queryEntries?(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<Entry> | undefined>;
   queryNotes?(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<Note> | undefined>;
+  queryEntryProjections?(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<LocalEntryProjection> | undefined>;
+  queryNoteProjections?(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<LocalNoteProjection> | undefined>;
 }

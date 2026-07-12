@@ -16,7 +16,12 @@ import type {
   SyncRecordType,
   UserProfile,
 } from '../types';
-import type { LocalDataStore, LocalStructuredRecordMutation } from '../platform/storage';
+import type {
+  LocalDataStore,
+  LocalEntryProjection,
+  LocalNoteProjection,
+  LocalStructuredRecordMutation,
+} from '../platform/storage';
 import type {
   AcknowledgeLocalMutationInput,
   ApplyLocalMutationWithOutboxInput,
@@ -130,7 +135,7 @@ const isRetryableFailedOutboxOperation = (operation: SyncOutboxOperation): boole
   operation.state === 'failed' && operation.nextRetryAt !== Number.MAX_SAFE_INTEGER
 );
 
-const entrySummary = (entry: Entry): EntrySummary => ({
+const entrySummary = (entry: LocalEntryProjection): EntrySummary => ({
   id: entry.id,
   diaryId: entry.diaryId,
   date: entry.date,
@@ -145,7 +150,7 @@ const entrySummary = (entry: Entry): EntrySummary => ({
   updatedAt: entry.updatedAt,
 });
 
-const noteSummary = (note: Note): NoteSummary => ({
+const noteSummary = (note: LocalNoteProjection): NoteSummary => ({
   id: note.id,
   title: note.title,
   isPinned: note.isPinned,
@@ -154,10 +159,10 @@ const noteSummary = (note: Note): NoteSummary => ({
   updatedAt: note.updatedAt,
 });
 
-const filterEntriesByDiaryAccess = (
-  entries: Entry[],
+const filterEntriesByDiaryAccess = <T extends Pick<Entry, 'diaryId'>>(
+  entries: T[],
   options: Pick<EntryListOptions | SearchFilters | StatisticsFilters, 'allowedDiaryIds' | 'excludeDiaryIds'> = {},
-): Entry[] => {
+): T[] => {
   const allowed = options.allowedDiaryIds ? new Set(options.allowedDiaryIds) : null;
   const excluded = options.excludeDiaryIds ? new Set(options.excludeDiaryIds) : null;
   return entries.filter(entry => (
@@ -166,7 +171,10 @@ const filterEntriesByDiaryAccess = (
   ));
 };
 
-const sortEntries = (entries: Entry[], sort: EntryListOptions['sort'] = 'date-desc'): Entry[] => {
+const sortEntries = <T extends Pick<Entry, 'id' | 'date' | 'createdAt' | 'updatedAt'>>(
+  entries: T[],
+  sort: EntryListOptions['sort'] = 'date-desc',
+): T[] => {
   const sorted = [...entries];
   if (sort === 'date-asc') return sorted.sort((left, right) => left.date.localeCompare(right.date) || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
   if (sort === 'updated-desc') return sorted.sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
@@ -174,10 +182,23 @@ const sortEntries = (entries: Entry[], sort: EntryListOptions['sort'] = 'date-de
   return sorted.sort((left, right) => right.date.localeCompare(left.date) || right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
 };
 
-const matchesDateRange = (entry: Entry, filters: Pick<SearchFilters | StatisticsFilters, 'fromDate' | 'toDate'>): boolean => (
+const matchesDateRange = (entry: Pick<Entry, 'date'>, filters: Pick<SearchFilters | StatisticsFilters, 'fromDate' | 'toDate'>): boolean => (
   (!filters.fromDate || entry.date >= filters.fromDate) &&
   (!filters.toDate || entry.date <= filters.toDate)
 );
+
+const tagDistributionFromEntries = (entries: Array<Pick<Entry, 'tags'>>): DistributionRow[] => {
+  const counts = new Map<string, DistributionRow>();
+  entries.forEach(entry => {
+    entry.tags.forEach(tag => {
+      const key = tag.toLowerCase();
+      const row = counts.get(key) || { key, label: tag, count: 0 };
+      row.count += 1;
+      counts.set(key, row);
+    });
+  });
+  return [...counts.values()].sort((left, right) => right.count - left.count);
+};
 
 export class LocalDiaryRepository implements DiaryRepository {
   private writeTail: Promise<void> = Promise.resolve();
@@ -334,6 +355,12 @@ export class LocalDiaryRepository implements DiaryRepository {
     options: Pick<EntryListOptions, 'allowedDiaryIds' | 'excludeDiaryIds'> = {},
   ): Promise<EntrySummary[]> {
     await this.waitForWrites();
+    const projectedPage = await this.store.queryEntryProjections?.({
+      ...options,
+      sort: 'updated-desc',
+      limit,
+    });
+    if (projectedPage) return projectedPage.items.map(entrySummary);
     const storedPage = await this.store.queryEntries?.({
       ...options,
       sort: 'updated-desc',
@@ -347,6 +374,10 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   async listEntriesByDiary(diaryId: string, options: EntryListOptions = {}): Promise<PageResult<Entry | EntrySummary>> {
     await this.waitForWrites();
+    if (!options.includeBody) {
+      const projectedPage = await this.store.queryEntryProjections?.({ ...options, diaryId });
+      if (projectedPage) return { ...projectedPage, items: projectedPage.items.map(entrySummary) };
+    }
     const storedPage = await this.store.queryEntries?.({
       ...options,
       diaryId,
@@ -368,6 +399,10 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   async listEntriesByMonth(diaryId: string, yearMonth: string, options: EntryListOptions = {}): Promise<PageResult<Entry | EntrySummary>> {
     await this.waitForWrites();
+    if (!options.includeBody) {
+      const projectedPage = await this.store.queryEntryProjections?.({ ...options, diaryId, yearMonth });
+      if (projectedPage) return { ...projectedPage, items: projectedPage.items.map(entrySummary) };
+    }
     const storedPage = await this.store.queryEntries?.({
       ...options,
       diaryId,
@@ -458,6 +493,10 @@ export class LocalDiaryRepository implements DiaryRepository {
   async listNotes(options: NoteListOptions): Promise<PageResult<Note | NoteSummary>>;
   async listNotes(options?: NoteListOptions): Promise<Note[] | PageResult<Note | NoteSummary>> {
     await this.waitForWrites();
+    if (options && !options.includeBody) {
+      const projectedPage = await this.store.queryNoteProjections?.({ ...options, sort: 'pinned-updated-desc' });
+      if (projectedPage) return { ...projectedPage, items: projectedPage.items.map(noteSummary) };
+    }
     if (options && !options.query) {
       const storedPage = await this.store.queryNotes?.({
         ...options,
@@ -574,6 +613,13 @@ export class LocalDiaryRepository implements DiaryRepository {
   async searchEntries(filters: SearchFilters): Promise<PageResult<Entry | EntrySummary>> {
     await this.waitForWrites();
     return measureAsync('repository.query.entries.search', async () => {
+      if (filters.includeBody === false) {
+        const projectedPage = await this.store.queryEntryProjections?.({
+          ...filters,
+          sort: 'updated-desc',
+        });
+        if (projectedPage) return { ...projectedPage, items: projectedPage.items.map(entrySummary) };
+      }
       const query = filters.query?.trim().toLowerCase();
       const tags = filters.tags?.map(tag => tag.toLowerCase()) || [];
       const storedPage = await this.store.queryEntries?.({
@@ -652,14 +698,16 @@ export class LocalDiaryRepository implements DiaryRepository {
     options: Pick<EntryListOptions, 'allowedDiaryIds' | 'excludeDiaryIds'> = {},
   ): Promise<HomeSummary> {
     return measureAsync('repository.query.homeSummary', async () => {
-      const [diaries, entries, notes, profile] = await Promise.all([
+      const [diaries, projectedEntries, projectedNotes, profile] = await Promise.all([
         this.listDiaries(),
-        this.listEntries(),
-        this.readCollection<Note>(STORAGE_KEYS.notes, []),
+        this.readAllEntryProjections(options),
+        this.readAllNoteProjections(),
         this.getUserProfile(),
       ]);
+      const entries = projectedEntries || await this.listEntries();
+      const notes = projectedNotes || await this.readCollection<Note>(STORAGE_KEYS.notes, []);
       const visibleEntries = filterEntriesByDiaryAccess(entries, options);
-      const commonTags = await this.getTagDistribution(options);
+      const commonTags = tagDistributionFromEntries(visibleEntries);
       return {
         profile,
         recentDiaries: clone(diaries)
@@ -686,7 +734,8 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   async getDiaryStatistics(diaryId: string): Promise<DiaryStatistics> {
-    const entries = (await this.listEntries()).filter(entry => entry.diaryId === diaryId);
+    const entries = await this.readAllEntryProjections({ diaryId })
+      || (await this.listEntries()).filter(entry => entry.diaryId === diaryId);
     return {
       diaryId,
       entryCount: entries.length,
@@ -701,11 +750,13 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   async getGlobalStatistics(filters: StatisticsFilters = {}): Promise<GlobalStatistics> {
-    const [diaries, entries, notes] = await Promise.all([
+    const [diaries, projectedEntries, projectedNotes] = await Promise.all([
       this.listDiaries(),
-      this.listEntries(),
-      this.readCollection<Note>(STORAGE_KEYS.notes, []),
+      this.readAllEntryProjections(filters),
+      this.readAllNoteProjections(),
     ]);
+    const entries = projectedEntries || await this.listEntries();
+    const notes = projectedNotes || await this.readCollection<Note>(STORAGE_KEYS.notes, []);
     const filteredEntries = filterEntriesByDiaryAccess(entries, filters).filter(entry => matchesDateRange(entry, filters));
     return {
       entryCount: filteredEntries.length,
@@ -718,7 +769,8 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   async getMoodDistribution(filters: StatisticsFilters = {}): Promise<DistributionRow[]> {
     const counts = new Map<string, DistributionRow>();
-    filterEntriesByDiaryAccess(await this.listEntries(), filters)
+    const entries = await this.readAllEntryProjections(filters) || await this.listEntries();
+    filterEntriesByDiaryAccess(entries, filters)
       .filter(entry => matchesDateRange(entry, filters))
       .forEach(entry => {
         const key = entry.moodName || 'Reflective';
@@ -731,23 +783,16 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   async getTagDistribution(filters: StatisticsFilters = {}): Promise<DistributionRow[]> {
-    const counts = new Map<string, DistributionRow>();
-    filterEntriesByDiaryAccess(await this.listEntries(), filters)
-      .filter(entry => matchesDateRange(entry, filters))
-      .forEach(entry => {
-        entry.tags.forEach(tag => {
-          const key = tag.toLowerCase();
-          const row = counts.get(key) || { key, label: tag, count: 0 };
-          row.count += 1;
-          counts.set(key, row);
-        });
-      });
-    return [...counts.values()].sort((left, right) => right.count - left.count);
+    const entries = await this.readAllEntryProjections(filters) || await this.listEntries();
+    return tagDistributionFromEntries(
+      filterEntriesByDiaryAccess(entries, filters).filter(entry => matchesDateRange(entry, filters)),
+    );
   }
 
   async getWritingHeatmap(filters: StatisticsFilters = {}): Promise<WritingHeatmapRow[]> {
     const rows = new Map<string, WritingHeatmapRow>();
-    filterEntriesByDiaryAccess(await this.listEntries(), filters)
+    const entries = await this.readAllEntryProjections(filters) || await this.listEntries();
+    filterEntriesByDiaryAccess(entries, filters)
       .filter(entry => matchesDateRange(entry, filters))
       .forEach(entry => {
         const row = rows.get(entry.date) || { date: entry.date, count: 0, wordCount: 0 };
@@ -1207,19 +1252,16 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   async rebuildDerivedProjections(): Promise<void> {
     await this.waitForWrites();
-    if (!this.store.commitStructuredRecords) return;
     const [diaries, entries, notes] = await Promise.all([
       this.listDiaries(),
       this.listEntries(),
       this.listNotes(),
     ]);
-    await this.store.commitStructuredRecords({
-      records: [
-        ...diaries.map(value => ({ key: STORAGE_KEYS.diaries, id: value.id, value })),
-        ...entries.map(value => ({ key: STORAGE_KEYS.entries, id: value.id, value })),
-        ...notes.map(value => ({ key: STORAGE_KEYS.notes, id: value.id, value })),
-      ],
-    });
+    await this.store.setItems(this.serializeItems({
+      [STORAGE_KEYS.diaries]: diaries,
+      [STORAGE_KEYS.entries]: entries,
+      [STORAGE_KEYS.notes]: notes,
+    }));
   }
 
   async getSyncHealth(): Promise<SyncHealth> {
@@ -1649,6 +1691,42 @@ export class LocalDiaryRepository implements DiaryRepository {
     const next = records.map(item => item.id === record.id ? clone(record) : item);
     if (!records.some(item => item.id === record.id)) next.push(clone(record));
     return next;
+  }
+
+  private async readAllEntryProjections(
+    options: Pick<EntryListOptions | SearchFilters | StatisticsFilters,
+      'allowedDiaryIds' | 'excludeDiaryIds'> & Partial<Pick<EntryListOptions, 'sort'>> &
+      Partial<Pick<SearchFilters, 'diaryId' | 'fromDate' | 'toDate' | 'mood' | 'hasPhotos' | 'tags'>> = {},
+  ): Promise<LocalEntryProjection[] | null> {
+    if (!this.store.queryEntryProjections) return null;
+    const items: LocalEntryProjection[] = [];
+    let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+    do {
+      const page = await this.store.queryEntryProjections({ ...options, cursor, limit: 1_000 });
+      if (!page) return null;
+      items.push(...page.items);
+      cursor = page.nextCursor;
+      if (cursor && seenCursors.has(cursor)) throw new Error('Entry projection pagination did not advance.');
+      if (cursor) seenCursors.add(cursor);
+    } while (cursor);
+    return items;
+  }
+
+  private async readAllNoteProjections(): Promise<LocalNoteProjection[] | null> {
+    if (!this.store.queryNoteProjections) return null;
+    const items: LocalNoteProjection[] = [];
+    let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+    do {
+      const page = await this.store.queryNoteProjections({ cursor, limit: 1_000 });
+      if (!page) return null;
+      items.push(...page.items);
+      cursor = page.nextCursor;
+      if (cursor && seenCursors.has(cursor)) throw new Error('Note projection pagination did not advance.');
+      if (cursor) seenCursors.add(cursor);
+    } while (cursor);
+    return items;
   }
 
   private entryPageForOptions(page: PageResult<Entry>, options: Pick<EntryListOptions, 'includeBody'>): PageResult<Entry | EntrySummary> {

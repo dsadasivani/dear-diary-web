@@ -1,5 +1,5 @@
 const DATABASE_NAME = 'dear_diary_secure_v1';
-const DATABASE_VERSION = 5;
+const DATABASE_VERSION = 6;
 const KEY_STORE = 'keys';
 const WRAPPING_KEY_ID = 'root';
 const QUERY_INDEX_KEY_ID = 'query_index_hmac';
@@ -9,6 +9,8 @@ export const WEB_RECORD_STORES = {
   diaries: 'repository_diaries',
   entries: 'repository_entries',
   notes: 'repository_notes',
+  entryProjections: 'repository_entry_projections',
+  noteProjections: 'repository_note_projections',
   metadata: 'repository_metadata',
   outbox: 'repository_outbox',
   versions: 'repository_versions',

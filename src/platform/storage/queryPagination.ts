@@ -52,8 +52,8 @@ const compareCursorValues = (
   return 0;
 };
 
-export const normalizePageLimit = (limit?: number): number => (
-  Math.max(1, Math.min(limit || 50, MAX_PAGE_LIMIT))
+export const normalizePageLimit = (limit?: number, maxLimit = MAX_PAGE_LIMIT): number => (
+  Math.max(1, Math.min(limit || 50, maxLimit))
 );
 
 export const encodeKeysetCursor = (
@@ -151,8 +151,9 @@ const pageSortedRecords = <T>(
   valuesForItem: (item: T) => CursorValue[],
   directions: Array<'asc' | 'desc'>,
   makeCursor: (item: T) => string,
+  maxLimit = MAX_PAGE_LIMIT,
 ): { items: T[]; nextCursor?: string; total: number } => {
-  const limit = normalizePageLimit(options.limit);
+  const limit = normalizePageLimit(options.limit, maxLimit);
   let start = Math.max(0, options.offset || 0);
   if (cursor.kind === 'offset') {
     start = cursor.offset || start;
@@ -173,10 +174,11 @@ const pageSortedRecords = <T>(
   };
 };
 
-export const pageEntries = <T extends Entry>(
+export const pageEntries = <T extends Pick<Entry, 'id' | 'date' | 'createdAt' | 'updatedAt'>>(
   entries: T[],
   options: PageCursorOptions,
   sort: EntrySortKey = 'date-desc',
+  maxLimit = MAX_PAGE_LIMIT,
 ): { items: T[]; nextCursor?: string; total: number } => {
   const sorted = [...entries].sort((left, right) => compareEntriesForSort(left, right, sort));
   return pageSortedRecords(
@@ -186,13 +188,15 @@ export const pageEntries = <T extends Entry>(
     entry => entryCursorValues(entry, sort),
     entrySortDirections(sort),
     entry => encodeKeysetCursor('entry', sort, entryCursorValues(entry, sort)),
+    maxLimit,
   );
 };
 
-export const pageNotes = <T extends Note>(
+export const pageNotes = <T extends Pick<Note, 'id' | 'isPinned' | 'updatedAt'>>(
   notes: T[],
   options: PageCursorOptions,
   sort: NoteSortKey = 'pinned-updated-desc',
+  maxLimit = MAX_PAGE_LIMIT,
 ): { items: T[]; nextCursor?: string; total: number } => {
   const sorted = [...notes].sort((left, right) => compareNotesForSort(left, right, sort));
   return pageSortedRecords(
@@ -202,5 +206,6 @@ export const pageNotes = <T extends Note>(
     note => noteCursorValues(note, sort),
     noteSortDirections(sort),
     note => encodeKeysetCursor('note', sort, noteCursorValues(note, sort)),
+    maxLimit,
   );
 };

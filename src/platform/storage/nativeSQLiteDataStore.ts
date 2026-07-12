@@ -4,7 +4,9 @@ import { Preferences } from '@capacitor/preferences';
 import type { Diary, Entry, LocalSyncAccountState, Note, PartitionHydrationState, SyncMediaPointer, SyncOutboxOperation } from '../../types';
 import type {
   LocalDataStore,
+  LocalEntryProjection,
   LocalEntryQueryOptions,
+  LocalNoteProjection,
   LocalNoteQueryOptions,
   LocalQueryPageResult,
   LocalStructuredRecordMutation,
@@ -1704,6 +1706,97 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         transaction,
       );
     }
+  }
+
+  async queryEntryProjections(
+    options: LocalEntryQueryOptions,
+  ): Promise<LocalQueryPageResult<LocalEntryProjection> | undefined> {
+    return measureAsync('sqlite.query.entryProjections', async () => {
+      const db = await this.ensureInitialized();
+      if (!await this.isStructuredCollectionReady(db, 'deardiary_entries', 'entries')) return undefined;
+      const sort = options.sort || 'date-desc';
+      const { whereClause, params } = this.buildEntryQuery(options);
+      const cursor = decodePageCursor(options.cursor, 'entry', sort);
+      const keyset = cursor.kind === 'keyset' ? this.entryKeysetClause(sort, cursor.values) : null;
+      const queryWhereClause = keyset ? this.combineWhereClauses(whereClause, keyset.clause) : whereClause;
+      const queryParams = keyset ? [...params, ...keyset.params] : params;
+      const limit = Math.max(1, Math.min(options.limit || 50, 10_000));
+      const offset = cursor.kind === 'offset' ? (cursor.offset || options.offset || 0) : 0;
+      const total = await this.countRows(db, 'entries', whereClause, params);
+      const result = await db.query(
+        `SELECT id, diary_id AS diaryId, date, time, title, mood_name AS moodName,
+                mood_emoji AS moodEmoji, tags_json AS tagsJson, photo_uris_json AS photoUrisJson,
+                photo_count AS photoCount, word_count AS wordCount, created_at AS createdAt,
+                updated_at AS updatedAt
+         FROM entries${queryWhereClause} ORDER BY ${this.entryOrderBy(sort)}
+         LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
+        cursor.kind === 'offset' ? [...queryParams, limit + 1, offset] : [...queryParams, limit + 1],
+      );
+      const items = (result.values || []).map(row => ({
+        id: String(row.id),
+        diaryId: String(row.diaryId),
+        date: String(row.date),
+        time: row.time === null || row.time === undefined ? undefined : String(row.time),
+        title: String(row.title || ''),
+        moodName: String(row.moodName || ''),
+        moodEmoji: String(row.moodEmoji || ''),
+        tags: safeJsonParse<string[]>(String(row.tagsJson || '[]')) || [],
+        photoUris: safeJsonParse<string[]>(String(row.photoUrisJson || '[]')) || [],
+        photoCount: Number(row.photoCount || 0),
+        wordCount: Number(row.wordCount || 0),
+        createdAt: Number(row.createdAt || 0),
+        updatedAt: Number(row.updatedAt || 0),
+      } satisfies LocalEntryProjection));
+      const pageItems = items.slice(0, limit);
+      return {
+        items: pageItems,
+        nextCursor: items.length > limit && pageItems.length > 0
+          ? encodeKeysetCursor('entry', sort, entryCursorValues(pageItems[pageItems.length - 1], sort))
+          : undefined,
+        total,
+      };
+    }, { filters: this.redactedQueryMetadata(options) });
+  }
+
+  async queryNoteProjections(
+    options: LocalNoteQueryOptions,
+  ): Promise<LocalQueryPageResult<LocalNoteProjection> | undefined> {
+    return measureAsync('sqlite.query.noteProjections', async () => {
+      const db = await this.ensureInitialized();
+      if (!await this.isStructuredCollectionReady(db, 'deardiary_notes', 'notes')) return undefined;
+      const sort = options.sort || 'pinned-updated-desc';
+      const { whereClause, params } = this.buildNoteQuery(options);
+      const cursor = decodePageCursor(options.cursor, 'note', sort);
+      const keyset = cursor.kind === 'keyset' ? this.noteKeysetClause(sort, cursor.values) : null;
+      const queryWhereClause = keyset ? this.combineWhereClauses(whereClause, keyset.clause) : whereClause;
+      const queryParams = keyset ? [...params, ...keyset.params] : params;
+      const limit = Math.max(1, Math.min(options.limit || 50, 10_000));
+      const offset = cursor.kind === 'offset' ? (cursor.offset || options.offset || 0) : 0;
+      const total = await this.countRows(db, 'notes', whereClause, params);
+      const result = await db.query(
+        `SELECT id, title, is_pinned AS isPinned, tags_json AS tagsJson,
+                created_at AS createdAt, updated_at AS updatedAt
+         FROM notes${queryWhereClause} ORDER BY ${this.noteOrderBy(sort)}
+         LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
+        cursor.kind === 'offset' ? [...queryParams, limit + 1, offset] : [...queryParams, limit + 1],
+      );
+      const items = (result.values || []).map(row => ({
+        id: String(row.id),
+        title: String(row.title || ''),
+        isPinned: Number(row.isPinned || 0) === 1,
+        tags: safeJsonParse<string[]>(String(row.tagsJson || '[]')) || [],
+        createdAt: Number(row.createdAt || 0),
+        updatedAt: Number(row.updatedAt || 0),
+      } satisfies LocalNoteProjection));
+      const pageItems = items.slice(0, limit);
+      return {
+        items: pageItems,
+        nextCursor: items.length > limit && pageItems.length > 0
+          ? encodeKeysetCursor('note', sort, noteCursorValues(pageItems[pageItems.length - 1], sort))
+          : undefined,
+        total,
+      };
+    }, { filters: this.redactedQueryMetadata(options) });
   }
 
   private async syncOutboxV2(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {

@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { WebLocalDataStore } from './webLocalDataStore';
+import { LocalDiaryRepository } from '../../repositories/localDiaryRepository';
 import {
   getPlainIndexRecords,
   REPOSITORY_STORE,
@@ -79,6 +80,12 @@ test('web local data store reads repository collections from encrypted record st
     (await store.queryEntries({ diaryId: 'diary-default', limit: 1 }))?.items.map(entry => entry.id),
     ['entry-structured-1'],
   );
+  const projection = (await store.queryEntryProjections({ diaryId: 'diary-default', limit: 1 }))?.items[0];
+  assert.equal(projection?.title, 'Structured');
+  assert.equal('body' in (projection || {}), false);
+  const persistedProjection = await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.entryProjections)
+    .getItem('entry-structured-1');
+  assert.equal('body' in JSON.parse(persistedProjection!), false);
   assert.deepEqual(JSON.parse((await store.getItem('deardiary_entries'))!), entries);
   assert.deepEqual(
     JSON.parse((await store.getItem('deardiary_sync_record_versions'))!),
@@ -160,6 +167,7 @@ test('structured repository writes roll back record stores and compatibility row
   assert.deepEqual(JSON.parse((await store.getItem('deardiary_entries'))!), oldEntries);
   const compatibility = await new WebEncryptedKeyValueStore(REPOSITORY_STORE).getItem('deardiary_entries');
   assert.deepEqual(JSON.parse(compatibility!), oldEntries);
+  assert.equal((await store.queryEntryProjections({ limit: 1 }))?.items[0]?.title, 'Old');
 });
 
 test('web structured record mutations update one encrypted record without rewriting the collection', async () => {
@@ -184,11 +192,48 @@ test('web structured record mutations update one encrypted record without rewrit
   await store.putStructuredRecord('deardiary_entries', entry.id, entry);
   assert.deepEqual(await store.getStructuredRecord('deardiary_entries', entry.id), entry);
   assert.deepEqual((await store.queryEntries({ limit: 1 }))?.items.map(item => item.id), [entry.id]);
+  assert.deepEqual((await store.queryEntryProjections({ limit: 1 }))?.items.map(item => item.id), [entry.id]);
   assert.equal(await new WebEncryptedKeyValueStore(REPOSITORY_STORE).getItem('deardiary_entries'), null);
 
   await store.deleteStructuredRecord('deardiary_entries', entry.id);
   assert.equal(await store.getStructuredRecord('deardiary_entries', entry.id), null);
   assert.deepEqual(await store.getStructuredCollection('deardiary_entries'), []);
+  assert.deepEqual((await store.queryEntryProjections({ limit: 1 }))?.items, []);
+});
+
+test('projection rebuild removes stale rows and restores missing body-free summaries', async () => {
+  const store = new WebLocalDataStore();
+  await store.clear();
+  const entry = {
+    id: 'entry-projection-rebuild',
+    diaryId: 'diary-default',
+    date: '2026-07-12',
+    title: 'Authoritative projection source',
+    body: '<p>private authoritative body</p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: ['rebuild'],
+    photoUris: [],
+    photoCount: 0,
+    wordCount: 3,
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  await store.setItem('deardiary_entries', JSON.stringify([entry]));
+  const projectionStore = new WebEncryptedKeyValueStore(WEB_RECORD_STORES.entryProjections);
+  await projectionStore.removeItem(entry.id);
+  await projectionStore.setItem('entry-stale-projection', JSON.stringify({
+    id: 'entry-stale-projection', diaryId: 'diary-default', date: '2026-01-01', title: 'Stale',
+    moodName: '', moodEmoji: '', tags: [], photoUris: [], photoCount: 0, wordCount: 0,
+    createdAt: 1, updatedAt: 1,
+  }));
+
+  await new LocalDiaryRepository(store).rebuildDerivedProjections();
+
+  const rebuilt = await store.queryEntryProjections({ limit: 10 });
+  assert.deepEqual(rebuilt?.items.map(item => item.id), [entry.id]);
+  assert.equal(rebuilt?.items[0]?.title, entry.title);
+  assert.equal('body' in (rebuilt?.items[0] || {}), false);
 });
 
 test('web entry queries use IndexedDB metadata indexes instead of full collection scans', async () => {
