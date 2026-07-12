@@ -10,6 +10,7 @@ import type {
   LocalStructuredRecordMutation,
 } from './LocalDataStore';
 import { measureAsync } from '../../utils/performance';
+import type { SyncOutboxOperationV2 } from '../../sync/outbox/SyncOutboxOperationV2';
 import {
   decodePageCursor,
   encodeKeysetCursor,
@@ -21,7 +22,7 @@ import {
 
 const DATABASE_NAME = 'dear_diary_local';
 const DATABASE_VERSION = 1;
-const STORAGE_SCHEMA_VERSION = 6;
+const STORAGE_SCHEMA_VERSION = 7;
 const SECURE_STORAGE_PREFIX = 'deardiary_';
 const SQLITE_SECRET_KEY = 'sqlite_encryption_secret_v1';
 const MIGRATION_META_KEY = 'legacy_preferences_migrated_at';
@@ -52,6 +53,7 @@ const STRUCTURED_COMPATIBILITY_KEYS = [
   'deardiary_sync_media_pointers',
   'deardiary_sync_partition_hydration',
   'deardiary_sync_outbox',
+  'deardiary_sync_outbox_v2',
 ] as const;
 
 const now = (): number => Date.now();
@@ -158,6 +160,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         DELETE FROM sync_media_pointers;
         DELETE FROM sync_partition_hydration;
         DELETE FROM sync_outbox;
+        DELETE FROM sync_outbox_v2;
         DELETE FROM storage_meta;
       `);
       await this.setMeta(db, 'storage_schema_version', String(STORAGE_SCHEMA_VERSION));
@@ -568,6 +571,32 @@ export class NativeSQLiteDataStore implements LocalDataStore {
 
       CREATE INDEX IF NOT EXISTS idx_sync_outbox_state_retry ON sync_outbox(state, next_retry_at);
       CREATE INDEX IF NOT EXISTS idx_sync_outbox_record ON sync_outbox(record_type, record_id);
+
+      CREATE TABLE IF NOT EXISTS sync_outbox_v2 (
+        operation_id TEXT PRIMARY KEY NOT NULL,
+        account_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        record_type TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        operation_type TEXT NOT NULL,
+        base_record_version INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL,
+        lease_owner TEXT,
+        lease_expires_at INTEGER,
+        dependency_operation_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        raw_json TEXT NOT NULL,
+        CHECK (record_type IN ('DIARY', 'ENTRY', 'NOTE', 'SETTINGS', 'PROFILE')),
+        CHECK (operation_type IN ('UPSERT', 'DELETE'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_sync_outbox_v2_runnable
+        ON sync_outbox_v2(account_id, state, next_attempt_at, lease_expires_at);
+      CREATE INDEX IF NOT EXISTS idx_sync_outbox_v2_record
+        ON sync_outbox_v2(account_id, record_type, record_id, created_at);
     `);
 
     await this.migrateRelationalIntegritySchema(db);
@@ -1009,6 +1038,8 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         return this.readJsonMapRows(db, 'SELECT partition_key AS key, raw_json FROM sync_partition_hydration ORDER BY rowid;', compatibilityValue);
       case 'deardiary_sync_outbox':
         return this.readJsonMapRows(db, 'SELECT operation_id AS key, raw_json FROM sync_outbox ORDER BY created_at, rowid;', compatibilityValue);
+      case 'deardiary_sync_outbox_v2':
+        return this.readJsonMapRows(db, 'SELECT operation_id AS key, raw_json FROM sync_outbox_v2 ORDER BY created_at, rowid;', compatibilityValue);
       case 'deardiary_security':
       case 'deardiary_drive_backup':
       case 'deardiary_diary_viewmode': {
@@ -1394,6 +1425,9 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       case 'deardiary_sync_outbox':
         await db.run('DELETE FROM sync_outbox;');
         break;
+      case 'deardiary_sync_outbox_v2':
+        await db.run('DELETE FROM sync_outbox_v2;');
+        break;
       case 'deardiary_security':
       case 'deardiary_drive_backup':
       case 'deardiary_diary_viewmode':
@@ -1469,6 +1503,9 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         break;
       case 'deardiary_sync_outbox':
         await this.syncOutbox(db, value, transaction);
+        break;
+      case 'deardiary_sync_outbox_v2':
+        await this.syncOutboxV2(db, value, transaction);
         break;
       case 'deardiary_security':
       case 'deardiary_drive_backup':
@@ -1664,6 +1701,44 @@ export class NativeSQLiteDataStore implements LocalDataStore {
           operation.updatedAt || now(),
           rawJson,
         ],
+        transaction,
+      );
+    }
+  }
+
+  private async syncOutboxV2(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+    const operations = safeJsonParse<Record<string, SyncOutboxOperationV2>>(value);
+    if (!operations || typeof operations !== 'object') return;
+    const incomingKeys = new Set(Object.keys(operations));
+    const existingRows = (await db.query('SELECT operation_id, raw_json FROM sync_outbox_v2;')).values || [];
+    const existingByKey = new Map(existingRows.map(row => [String(row.operation_id), String(row.raw_json)]));
+    for (const row of existingRows) {
+      const operationId = String(row.operation_id);
+      if (!incomingKeys.has(operationId)) await db.run('DELETE FROM sync_outbox_v2 WHERE operation_id = ?;', [operationId], transaction);
+    }
+    for (const [operationId, operation] of Object.entries(operations)) {
+      if (!operation?.operationId) continue;
+      const rawJson = JSON.stringify(operation);
+      if (existingByKey.get(operationId) === rawJson) continue;
+      await db.run(
+        `INSERT INTO sync_outbox_v2 (
+          operation_id, account_id, device_id, record_type, record_id, operation_type,
+          base_record_version, state, retry_count, next_attempt_at, lease_owner,
+          lease_expires_at, dependency_operation_id, created_at, updated_at, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(operation_id) DO UPDATE SET
+          account_id = excluded.account_id, device_id = excluded.device_id,
+          record_type = excluded.record_type, record_id = excluded.record_id,
+          operation_type = excluded.operation_type, base_record_version = excluded.base_record_version,
+          state = excluded.state, retry_count = excluded.retry_count,
+          next_attempt_at = excluded.next_attempt_at, lease_owner = excluded.lease_owner,
+          lease_expires_at = excluded.lease_expires_at,
+          dependency_operation_id = excluded.dependency_operation_id,
+          updated_at = excluded.updated_at, raw_json = excluded.raw_json;`,
+        [operationId, operation.accountId, operation.deviceId, operation.recordType, operation.recordId,
+          operation.operationType, operation.baseRecordVersion, operation.state, operation.retryCount,
+          operation.nextAttemptAt, operation.leaseOwner || null, operation.leaseExpiresAt || null,
+          operation.dependencyOperationId || null, operation.createdAt, operation.updatedAt, rawJson],
         transaction,
       );
     }

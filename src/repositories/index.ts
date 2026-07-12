@@ -2,6 +2,7 @@ import { localDataStore } from '../platform/storage';
 import { LocalDiaryRepository } from './localDiaryRepository';
 import { EventSyncEngine } from '../sync/eventSyncEngine';
 import { createSyncingDiaryRepository } from './syncingDiaryRepository';
+import { PersistentOutboxRepository } from '../sync/outbox';
 
 export type {
   AcknowledgeLocalMutationInput,
@@ -36,4 +37,5 @@ export type {
 
 export const localDiaryRepository = new LocalDiaryRepository(localDataStore);
 export const eventSyncEngine = new EventSyncEngine(localDiaryRepository);
+export const outboxV2Repository = new PersistentOutboxRepository(localDataStore);
 export const diaryRepository = createSyncingDiaryRepository(localDiaryRepository, eventSyncEngine);
