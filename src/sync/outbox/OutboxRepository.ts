@@ -5,6 +5,7 @@ export interface OutboxRepository {
   claimNextRunnable(input: { accountId: string; workerId: string; now: number; leaseDurationMs: number }): Promise<SyncOutboxOperationV2 | null>;
   renewLease(operationId: string, workerId: string, leaseExpiresAt: number): Promise<boolean>;
   releaseLease(operationId: string, workerId: string): Promise<void>;
+  releaseExpiredLeases(accountId: string, now: number): Promise<number>;
   transition(
     operationId: string,
     expectedState: SyncOutboxOperationV2['state'],

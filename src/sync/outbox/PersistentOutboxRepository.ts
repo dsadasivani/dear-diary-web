@@ -76,6 +76,26 @@ export class PersistentOutboxRepository implements OutboxRepository {
     });
   }
 
+  releaseExpiredLeases(accountId: string, now: number): Promise<number> {
+    return this.exclusive(async () => {
+      const operations = await this.read();
+      let released = 0;
+      Object.entries(operations).forEach(([operationId, operation]) => {
+        if (
+          operation.accountId === accountId &&
+          operation.leaseOwner &&
+          (operation.leaseExpiresAt || 0) <= now
+        ) {
+          const { leaseOwner: _owner, leaseExpiresAt: _expiry, ...rest } = operation;
+          operations[operationId] = { ...rest, updatedAt: now };
+          released += 1;
+        }
+      });
+      if (released > 0) await this.write(operations);
+      return released;
+    });
+  }
+
   transition(
     operationId: string,
     expectedState: SyncOutboxOperationV2['state'],

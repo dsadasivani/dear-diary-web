@@ -1514,6 +1514,9 @@ export default function AppSettingsScreen({
                       )}
                       {preservedConflicts.length > 0 && (
                         <div className="mt-3 space-y-2">
+                          <p className="text-[9px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+                            Conflict centre
+                          </p>
                           {preservedConflicts.map(conflict => {
                             const payload = conflict.operation.payload as { title?: string } | null | undefined;
                             const recoveredTitle = conflict.recoveredRecord && 'title' in conflict.recoveredRecord

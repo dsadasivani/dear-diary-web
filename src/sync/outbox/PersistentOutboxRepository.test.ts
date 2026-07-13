@@ -40,6 +40,17 @@ test('persists operations and recovers an expired lease after restart', async ()
   assert.equal((await restarted.claimNextRunnable({ accountId: 'account-1', workerId: 'worker-b', now: 20, leaseDurationMs: 10 }))?.leaseOwner, 'worker-b');
 });
 
+test('bootstrap can release every expired account lease without touching active leases', async () => {
+  const repository = new PersistentOutboxRepository(new MemoryStore());
+  await repository.enqueue(operation('expired'));
+  await repository.enqueue(operation('active', 2));
+  await repository.claimNextRunnable({ accountId: 'account-1', workerId: 'worker-a', now: 10, leaseDurationMs: 10 });
+  await repository.claimNextRunnable({ accountId: 'account-1', workerId: 'worker-b', now: 10, leaseDurationMs: 20 });
+  assert.equal(await repository.releaseExpiredLeases('account-1', 20), 1);
+  assert.equal((await repository.getById('expired'))?.leaseOwner, undefined);
+  assert.equal((await repository.getById('active'))?.leaseOwner, 'worker-b');
+});
+
 test('concurrent workers cannot claim the same operation', async () => {
   const repository = new PersistentOutboxRepository(new MemoryStore());
   await repository.enqueue(operation('op-1'));

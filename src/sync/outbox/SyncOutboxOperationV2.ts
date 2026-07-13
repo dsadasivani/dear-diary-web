@@ -26,6 +26,7 @@ export interface SyncOutboxOperationV2 {
   encryptedEventSizeBytes?: number;
   encryptedEventSchemaVersion?: number;
   keyEpoch?: number;
+  partitionKey?: string;
   remoteSequence?: number;
   remoteRecordVersion?: number;
   dependencyOperationId?: string;
@@ -39,4 +40,3 @@ export interface SyncOutboxOperationV2 {
 export const TERMINAL_OUTBOX_V2_STATES: ReadonlySet<SyncOutboxStateV2> = new Set([
   'ACKNOWLEDGED', 'SUPERSEDED',
 ]);
-

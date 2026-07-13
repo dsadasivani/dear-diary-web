@@ -194,6 +194,12 @@ Important sync behavior:
 - Primary mobile recovery and companion revocation are two-phase flows so old devices are not revoked until restore/package distribution succeeds.
 - See [docs/sync-and-supabase.md](docs/sync-and-supabase.md) for the operational runbook.
 
+The controlled Sync V2 client runtime lives under `src/sync/v2`. It provides protocol bootstrap,
+leased operation processing, bounded and verified object transfer, lost-response reconciliation,
+ordered atomic replay, persistent safety stops, and stable conflict records. Configure its Spring
+Boot endpoint with `VITE_SYNC_V2_API_URL`. The existing Supabase/Drive engine remains available while
+the explicit V1-to-V2 account migration workflow is still disabled.
+
 Google Drive integration uses the scope:
 
 ```text
