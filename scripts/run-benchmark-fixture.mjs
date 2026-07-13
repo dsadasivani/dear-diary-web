@@ -46,6 +46,8 @@ const diaries = fixture.diaries || [];
 const entries = fixture.entries || [];
 const notes = fixture.notes || [];
 const outbox = Object.values(fixture.syncOutbox || {});
+const syncEvents = fixture.syncEvents || [];
+const mediaReferences = fixture.mediaReferences || [];
 const firstDiaryId = diaries[0]?.id || '';
 const currentDate = '2026-07-11';
 
@@ -112,6 +114,22 @@ const results = [
       .filter(operation => operation.state !== 'applied' && operation.state !== 'conflict_preserved')
       .sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0));
   }),
+  measure('event.replay.metadata', () => {
+    let expected = 1;
+    const versions = new Map();
+    syncEvents.forEach(event => {
+      if (event.sequence !== expected) throw new Error('Benchmark event sequence gap.');
+      versions.set(event.recordId, Math.max(versions.get(event.recordId) || 0, event.recordVersion));
+      expected += 1;
+    });
+    return versions;
+  }),
+  measure('projection.rebuild', () => entries.map(entry => ({
+    id: entry.id, diaryId: entry.diaryId, date: entry.date, title: entry.title,
+    wordCount: entry.wordCount, photoCount: entry.photoCount, updatedAt: entry.updatedAt,
+  }))),
+  measure('snapshot.export_import', () => JSON.parse(JSON.stringify({ diaries, entries, notes, mediaReferences }))),
+  measure('media.reference.page', () => mediaReferences.slice(0, 100)),
 ];
 
 console.table(results.map(result => ({

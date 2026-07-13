@@ -93,9 +93,22 @@ class DeviceAndProtocolIntegrationTest {
         assertThat(protocol.featureFlags().snapshotCreationEnabled()).isFalse();
         assertThat(protocol.featureFlags().garbageCollectionEnabled()).isFalse();
         assertThat(protocol.featureFlags().keyRotationEnabled()).isFalse();
+        assertThat(protocol.featureFlags().mediaUploadEnabled()).isTrue();
+        assertThat(protocol.featureFlags().archiveHydrationEnabled()).isTrue();
+        assertThat(protocol.syncV2RolloutPercentage()).isZero();
 
         jdbc.update("UPDATE sync_kill_switches SET engaged = TRUE, reason_code = 'TEST' WHERE switch_name = 'SYNC_WRITES'");
         assertThat(protocols.current().featureFlags().syncWritesEnabled()).isFalse();
+
+        jdbc.update("UPDATE sync_kill_switches SET engaged = TRUE, reason_code = 'TEST' WHERE switch_name = 'MEDIA_UPLOAD'");
+        assertThat(protocols.current().featureFlags().mediaUploadEnabled()).isFalse();
+
+        jdbc.update("UPDATE sync_protocol_config SET emergency_mode = TRUE WHERE config_id = 1");
+        var emergency = protocols.current();
+        assertThat(emergency.emergencyMode()).isTrue();
+        assertThat(emergency.featureFlags().syncWritesEnabled()).isFalse();
+        assertThat(emergency.featureFlags().remotePullEnabled()).isTrue();
+        assertThat(emergency.featureFlags().archiveHydrationEnabled()).isFalse();
     }
 
     private static String publicKey() throws Exception {

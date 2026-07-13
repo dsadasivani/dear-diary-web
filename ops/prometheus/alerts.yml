@@ -1,0 +1,70 @@
+groups:
+  - name: dear-diary-integrity-critical
+    rules:
+      - alert: SyncHashMismatch
+        expr: increase(deardiary_sync_integrity_hash_mismatch_total[5m]) + increase(sync_object_validation_failure_total{error_code=~".*HASH.*"}[5m]) > 0
+        for: 0m
+        labels: { severity: critical }
+        annotations: { summary: "Encrypted sync object hash mismatch detected" }
+      - alert: SyncInvariantViolation
+        expr: increase(deardiary_sync_integrity_invariant_failure_total[5m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "A sync invariant stopped unsafe processing" }
+      - alert: SyncSequenceRegression
+        expr: increase(deardiary_sync_pull_failure_total{error_code="SEQUENCE_REGRESSION"}[5m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "Remote sequence regression detected" }
+      - alert: SyncUnexpectedDecryptionFailure
+        expr: increase(deardiary_sync_integrity_decryption_failure_total[5m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "Unexpected event decryption failure detected" }
+      - alert: SyncCommittedObjectMissing
+        expr: increase(sync_object_validation_failure_total{error_code="OBJECT_MISSING"}[5m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "Committed encrypted object is missing" }
+      - alert: SyncDatabaseCorruption
+        expr: increase(sync_database_corruption_total[5m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "Database corruption was detected" }
+  - name: dear-diary-operational
+    rules:
+      - alert: SyncCommitSuccessRateLow
+        expr: sum(rate(sync_operation_commit_total{outcome="success"}[15m])) / clamp_min(sum(rate(sync_operation_commit_total[15m])), 0.001) < 0.99
+        for: 10m
+        labels: { severity: warning }
+      - alert: SyncNotificationBacklog
+        expr: sync_notification_outbox_depth > 1000
+        for: 15m
+        labels: { severity: warning }
+      - alert: SyncObjectStorageErrors
+        expr: rate(sync_object_storage_error_total[5m]) > 0.1
+        for: 10m
+        labels: { severity: warning }
+      - alert: SyncDatabaseTransactionLatency
+        expr: histogram_quantile(0.95, sum by (le) (rate(sync_database_transaction_duration_seconds_bucket[10m]))) > 1
+        for: 10m
+        labels: { severity: warning }
+      - alert: SyncAuthenticationFailureSpike
+        expr: rate(sync_authentication_failure_total[5m]) > 1
+        for: 10m
+        labels: { severity: warning }
+      - alert: SyncOutboxAgeHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(deardiary_outbox_oldest_age_ms_bucket[15m]))) > 900000
+        for: 15m
+        labels: { severity: warning }
+      - alert: SyncCrashFreeSessionsLow
+        expr: 1 - (sum(rate(deardiary_session_crash_total[1h])) / clamp_min(sum(rate(deardiary_session_start_total[1h])), 0.001)) < 0.998
+        for: 30m
+        labels: { severity: warning }
+      - alert: SyncDatabaseOpenFailureSpike
+        expr: rate(deardiary_database_open_failure_total[10m]) > 0.01
+        for: 10m
+        labels: { severity: warning }
+      - alert: SyncObjectStorageRateLimited
+        expr: rate(sync_object_storage_error_total{status="429"}[5m]) > 0.05
+        for: 10m
+        labels: { severity: warning }
+      - alert: SyncObjectStorage5xx
+        expr: rate(sync_object_storage_error_total{status=~"5.."}[5m]) > 0.05
+        for: 10m
+        labels: { severity: warning }

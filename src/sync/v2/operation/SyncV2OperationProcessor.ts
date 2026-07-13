@@ -11,6 +11,9 @@ import type { SyncInvariantValidator } from '../domain/SyncInvariantValidator';
 import type { PersistentSafetyStopStore } from '../safety/PersistentSafetyStopStore';
 import { BoundedObjectTransfer, sha256Hex, type TransferObject } from './BoundedObjectTransfer';
 import type { OperationAcknowledgmentStore } from './PersistentOperationAcknowledgmentStore';
+import { NOOP_TELEMETRY, type Telemetry } from '../../../infrastructure/telemetry/Telemetry';
+import { NOOP_SYNC_FAULT_INJECTOR, type SyncFaultInjector } from '../faults/SyncFaultInjector';
+import { InjectedSyncCrash } from '../faults/SyncFaultInjector';
 
 export interface PreparedSyncV2Operation {
   partitionKey: string;
@@ -56,6 +59,8 @@ export class SyncV2OperationProcessor {
     private readonly validator: SyncInvariantValidator,
     private readonly safetyStop: PersistentSafetyStopStore,
     private readonly options: SyncV2OperationProcessorOptions,
+    private readonly telemetry: Telemetry = NOOP_TELEMETRY,
+    private readonly faults: SyncFaultInjector = NOOP_SYNC_FAULT_INJECTOR,
   ) {
     this.now = options.now || Date.now;
     this.leaseDurationMs = options.leaseDurationMs || 30_000;
@@ -70,13 +75,23 @@ export class SyncV2OperationProcessor {
       leaseDurationMs: this.leaseDurationMs,
     });
     if (!claimed) return false;
+    const span = this.telemetry.startSpan('outbox.operation', {
+      operation_type: claimed.operationType, record_type: claimed.recordType, outbox_state: claimed.state,
+    });
     try {
       this.validator.validateOperation(claimed, this.options.accountId, this.options.deviceId);
       await this.process(claimed);
+      this.telemetry.counter('deardiary.sync.push.success', 1, { operation_type: claimed.operationType });
+      span.end();
     } catch (error) {
-      await this.handleFailure(claimed, isSyncError(error)
+      if (error instanceof InjectedSyncCrash) throw error;
+      const typed = isSyncError(error)
         ? error
-        : new SyncError({ code: 'UNKNOWN', safetyRelevant: true, cause: error }));
+        : new SyncError({ code: 'UNKNOWN', safetyRelevant: true, cause: error });
+      this.telemetry.counter('deardiary.sync.push.failure', 1, { error_code: typed.code, retryable: typed.retryable });
+      if (typed.code === 'INVARIANT_VIOLATION') this.telemetry.counter('deardiary.sync.integrity.invariant_failure', 1);
+      span.end(typed.code);
+      await this.handleFailure(claimed, typed);
     }
     return true;
   }
@@ -122,6 +137,7 @@ export class SyncV2OperationProcessor {
         sha256: await sha256Hex(object.bytes),
         sizeBytes: object.bytes.byteLength,
       })));
+      await this.faults.hit('BEFORE_UPLOAD_INITIATE');
       const initiated = await this.api.initiateOperation({
         operationId: operation.operationId,
         deviceId: operation.deviceId,
@@ -135,7 +151,10 @@ export class SyncV2OperationProcessor {
         partitionKey: prepared.partitionKey,
         objects,
       });
+      await this.faults.hit('AFTER_UPLOAD_INITIATE');
+      await this.faults.hit('DURING_OBJECT_UPLOAD');
       await this.transfer.upload(prepared.objects, initiated.uploads);
+      await this.faults.hit('AFTER_OBJECT_UPLOAD_BEFORE_LOCAL_PERSIST');
       operation = await this.outbox.transition(
         operation.operationId, 'UPLOADING', 'READY_TO_COMMIT', {}, this.options.workerId,
       );
@@ -155,6 +174,7 @@ export class SyncV2OperationProcessor {
     }
     if (operation.state === 'COMMITTED') {
       this.validator.validateOperation(operation, this.options.accountId, this.options.deviceId);
+      await this.faults.hit('AFTER_COMMIT_RESPONSE_BEFORE_LOCAL_ACK');
       await this.acknowledgments.acknowledge(operation, {
         status: 'COMMITTED',
         operationId: operation.operationId,
@@ -165,15 +185,25 @@ export class SyncV2OperationProcessor {
   }
 
   private async commitOrReconcile(operationId: string): Promise<SyncV2CommitResult> {
+    const commitSpan = this.telemetry.startSpan('operation.commit');
     try {
-      return await this.api.commitOperation(operationId);
+      await this.faults.hit('BEFORE_REMOTE_COMMIT');
+      const result = await this.api.commitOperation(operationId);
+      await this.faults.hit('AFTER_REMOTE_COMMIT_BEFORE_RESPONSE');
+      commitSpan.end();
+      return result;
     } catch (error) {
+      if (error instanceof InjectedSyncCrash) throw error;
       const typed = isSyncError(error) ? error : new SyncError({ code: 'UNKNOWN', cause: error });
       if (!typed.retryable && typed.code !== 'REQUEST_TIMEOUT') throw typed;
+      commitSpan.end(typed.code);
+      const reconcileSpan = this.telemetry.startSpan('operation.reconcile');
       const status = await this.api.getOperation(operationId);
       if (status.status === 'COMMITTED' && status.sequence !== null && status.recordVersion !== null) {
+        reconcileSpan.end();
         return { status: status.status, operationId, sequence: status.sequence, recordVersion: status.recordVersion };
       }
+      reconcileSpan.end(typed.code);
       throw typed;
     }
   }

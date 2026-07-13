@@ -23,6 +23,16 @@ server:
     include-stacktrace: never
 
 management:
+  tracing:
+    enabled: ${SYNC_TRACING_ENABLED:true}
+    sampling:
+      probability: ${SYNC_TRACING_SAMPLE_PROBABILITY:0.1}
+  otlp:
+    tracing:
+      endpoint: ${SYNC_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
+  metrics:
+    tags:
+      application: ${spring.application.name}
   endpoints:
     web:
       exposure:
@@ -34,10 +44,11 @@ management:
       show-details: never
 
 logging:
-  pattern:
-    correlation: "[${spring.application.name:},%X{traceId:-},%X{spanId:-}] "
+  config: classpath:logback-spring.xml
 
 sync:
+  observability:
+    gauge-interval: ${SYNC_OBSERVABILITY_GAUGE_INTERVAL:30s}
   notification:
     publisher:
       enabled: ${SYNC_NOTIFICATION_PUBLISHER_ENABLED:false}

@@ -108,9 +108,9 @@ public class S3EncryptedObjectStore implements EncryptedObjectStore {
     private ObjectStoreException map(Exception error) {
         if (error instanceof S3Exception s3) {
             var status = s3.statusCode();
-            if (status == 404) return new ObjectStoreException("OBJECT_MISSING", false, error);
-            if (status == 429 || status >= 500) return new ObjectStoreException("OBJECT_STORE_UNAVAILABLE", true, error);
-            if (status == 507) return new ObjectStoreException("STORAGE_QUOTA_EXCEEDED", false, error);
+            if (status == 404) return new ObjectStoreException("OBJECT_MISSING", false, status, error);
+            if (status == 429 || status >= 500) return new ObjectStoreException("OBJECT_STORE_UNAVAILABLE", true, status, error);
+            if (status == 507) return new ObjectStoreException("STORAGE_QUOTA_EXCEEDED", false, status, error);
         }
         return new ObjectStoreException("OBJECT_STORE_UNAVAILABLE", true, error);
     }

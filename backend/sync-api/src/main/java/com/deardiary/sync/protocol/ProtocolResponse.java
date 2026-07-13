@@ -8,6 +8,10 @@ public record ProtocolResponse(
     int snapshotSchemaVersion,
     long maximumEventBytes,
     long maximumMediaBytes,
+    String minimumSupportedAppVersion,
+    int syncV2RolloutPercentage,
+    int rolloutSaltVersion,
+    boolean emergencyMode,
     FeatureFlags featureFlags
 ) {
     public record FeatureFlags(
@@ -16,6 +20,11 @@ public record ProtocolResponse(
         boolean realtimeEnabled,
         boolean snapshotCreationEnabled,
         boolean garbageCollectionEnabled,
-        boolean keyRotationEnabled
+        boolean mediaUploadEnabled,
+        boolean archiveHydrationEnabled,
+        boolean keyRotationEnabled,
+        boolean deviceRevocationEnabled,
+        boolean primaryRecoveryEnabled,
+        boolean companionPairingEnabled
     ) {}
 }

@@ -6,6 +6,9 @@ import type { SyncInvariantValidator } from '../domain/SyncInvariantValidator';
 import type { PersistentSafetyStopStore } from '../safety/PersistentSafetyStopStore';
 import type { BoundedObjectTransfer } from '../operation/BoundedObjectTransfer';
 import type { DecryptedSyncV2Event, SyncV2ReplayStore } from './PersistentReplayStore';
+import { NOOP_TELEMETRY, type Telemetry } from '../../../infrastructure/telemetry/Telemetry';
+import { NOOP_SYNC_FAULT_INJECTOR, type SyncFaultInjector } from '../faults/SyncFaultInjector';
+import { InjectedSyncCrash } from '../faults/SyncFaultInjector';
 
 export interface SyncV2EventDecryptor {
   hasKeyEpoch(keyEpoch: number): Promise<boolean>;
@@ -35,6 +38,8 @@ export class RemoteEventPuller {
     private readonly safetyStop: PersistentSafetyStopStore,
     private readonly health: SyncHealthStore,
     private readonly options: RemoteEventPullerOptions,
+    private readonly telemetry: Telemetry = NOOP_TELEMETRY,
+    private readonly faults: SyncFaultInjector = NOOP_SYNC_FAULT_INJECTOR,
   ) {
     this.pageSize = Math.min(100, Math.max(1, options.pageSize || 100));
     this.replayBatchSize = Math.min(this.pageSize, Math.max(1, options.replayBatchSize || 25));
@@ -46,6 +51,7 @@ export class RemoteEventPuller {
       throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
     }
     await this.health.updateSyncHealth({ lastPullAttemptAt: this.now() });
+    const span = this.telemetry.startSpan('events.pull');
     try {
       let after = await this.replay.getLastAppliedSequence();
       while (true) {
@@ -54,15 +60,22 @@ export class RemoteEventPuller {
         this.validator.validateReplayPage(page.events, after);
         for (let index = 0; index < page.events.length; index += this.replayBatchSize) {
           const envelopes = page.events.slice(index, index + this.replayBatchSize);
+          await this.faults.hit('BEFORE_REMOTE_DOWNLOAD');
           const bytes = await this.transfer.download(envelopes);
+          await this.faults.hit('AFTER_REMOTE_DOWNLOAD');
+          await this.faults.hit('AFTER_HASH_VERIFICATION');
           const decoded = await Promise.all(envelopes.map(async (event, eventIndex) => {
             this.validateEnvelope(event);
             if (!await this.decryptor.hasKeyEpoch(event.keyEpoch)) {
               throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', safetyRelevant: true });
             }
-            return { envelope: event, event: await this.decryptor.decrypt(bytes[eventIndex], event.keyEpoch) };
+            const decrypted = await this.decryptor.decrypt(bytes[eventIndex], event.keyEpoch);
+            await this.faults.hit('AFTER_DECRYPTION');
+            return { envelope: event, event: decrypted };
           }));
+          await this.faults.hit('DURING_EVENT_APPLY');
           after = await this.replay.applyBatch(decoded);
+          await this.faults.hit('AFTER_LOCAL_COMMIT_BEFORE_SERVER_ACK');
           await this.api.acknowledgeCursor(this.options.deviceId, after);
         }
         if (page.events.length === 0) await this.api.acknowledgeCursor(this.options.deviceId, after);
@@ -74,14 +87,22 @@ export class RemoteEventPuller {
         lastSuccessfulPullAt: this.now(),
         integrityState: 'HEALTHY',
       });
+      this.telemetry.counter('deardiary.sync.pull.success', 1);
+      this.telemetry.gauge('deardiary.sync.sequence_lag', 0, { sequence_lag_bucket: '0' });
+      span.end();
       return after;
     } catch (error) {
+      if (error instanceof InjectedSyncCrash) throw error;
       const typed = isSyncError(error)
         ? error
         : new SyncError({ code: 'UNKNOWN', safetyRelevant: true, cause: error });
       if (typed.safetyRelevant) {
         await this.safetyStop.engage(this.options.accountId, typed.code, `pull:${typed.code}`);
       }
+      this.telemetry.counter('deardiary.sync.pull.failure', 1, { error_code: typed.code, retryable: typed.retryable });
+      if (typed.code === 'HASH_MISMATCH') this.telemetry.counter('deardiary.sync.integrity.hash_mismatch', 1);
+      if (typed.code === 'DECRYPTION_FAILED') this.telemetry.counter('deardiary.sync.integrity.decryption_failure', 1);
+      span.end(typed.code);
       await this.health.updateSyncHealth({
         integrityState: typed.safetyRelevant ? 'SAFETY_STOP' : 'WARNING',
         lastErrorCode: typed.code,

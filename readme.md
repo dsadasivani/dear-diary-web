@@ -200,6 +200,10 @@ ordered atomic replay, persistent safety stops, and stable conflict records. Con
 Boot endpoint with `VITE_SYNC_V2_API_URL`. The existing Supabase/Drive engine remains available while
 the explicit V1-to-V2 account migration workflow is still disabled.
 
+Production dashboards, alerts, privacy-safe telemetry, emergency switches, canary rollout controls,
+security CI, fault injection, randomized convergence tests, and performance procedures are documented
+in [docs/production-operations.md](docs/production-operations.md).
+
 Google Drive integration uses the scope:
 
 ```text

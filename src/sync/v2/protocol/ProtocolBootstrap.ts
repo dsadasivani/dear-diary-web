@@ -5,6 +5,7 @@ import { SyncError } from '../../errors';
 import type { SyncV2ApiClient } from '../api/SyncV2ApiClient';
 import type { SyncV2Protocol } from '../api/SyncV2ApiTypes';
 import type { PersistentSafetyStopStore } from '../safety/PersistentSafetyStopStore';
+import { isCanaryEnabled, isVersionAtLeast, type RuntimeControlStore } from './RuntimeControlStore';
 
 const RUNTIME_KEY = 'deardiary_sync_v2_runtime';
 
@@ -50,21 +51,35 @@ export class ProtocolBootstrap {
     private readonly safetyStop: PersistentSafetyStopStore,
     private readonly clientProtocolVersion: number,
     private readonly now: () => number = Date.now,
+    private readonly appVersion = '0.0.0',
+    private readonly rolloutPseudonym = 'local-default',
+    private readonly controls?: RuntimeControlStore,
   ) {}
 
   async initialize(): Promise<ProtocolBootstrapResult> {
     const runtime = await this.runtimeStore.load();
     if (!runtime) throw new SyncError({ code: 'AUTH_INVALID', userActionRequired: true });
-    const protocol = await this.api.getProtocol();
+    let protocol: SyncV2Protocol;
+    try {
+      protocol = await this.api.getProtocol();
+      await this.controls?.save(protocol);
+    } catch (error) {
+      if (!this.controls) throw error;
+      protocol = this.controls.asProtocol(await this.controls.loadSafeFallback());
+    }
     const readCompatible = this.clientProtocolVersion >= protocol.minimumReadProtocolVersion;
     const writeCompatible = this.clientProtocolVersion >= protocol.minimumWriteProtocolVersion;
     if (runtime.deviceStatus !== 'ACTIVE') throw new SyncError({ code: 'DEVICE_REVOKED', userActionRequired: true });
     await this.outbox.releaseExpiredLeases(runtime.accountId, this.now());
     const stopped = await this.safetyStop.get(runtime.accountId);
     const schemaCompatible = runtime.eventSchemaVersion === protocol.eventSchemaVersion;
-    const upgradeRequired = !readCompatible || !writeCompatible || !schemaCompatible;
-    const pullAllowed = protocol.featureFlags.remotePullEnabled && readCompatible && schemaCompatible && !stopped;
-    const writesAllowed = protocol.featureFlags.syncWritesEnabled && !upgradeRequired && !stopped;
+    const appCompatible = isVersionAtLeast(this.appVersion, protocol.minimumSupportedAppVersion);
+    const rolloutEligible = await isCanaryEnabled(
+      this.rolloutPseudonym, protocol.syncV2RolloutPercentage, protocol.rolloutSaltVersion,
+    );
+    const upgradeRequired = !readCompatible || !writeCompatible || !schemaCompatible || !appCompatible;
+    const pullAllowed = rolloutEligible && protocol.featureFlags.remotePullEnabled && readCompatible && schemaCompatible && !stopped;
+    const writesAllowed = rolloutEligible && protocol.featureFlags.syncWritesEnabled && !upgradeRequired && !stopped;
     await this.health.updateSyncHealth({
       accountId: runtime.accountId,
       localSequence: runtime.lastAppliedSequence,

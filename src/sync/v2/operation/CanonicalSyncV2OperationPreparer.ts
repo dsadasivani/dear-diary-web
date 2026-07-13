@@ -2,6 +2,8 @@ import { sanitizeEntry, sanitizeNote } from '../../../domain/richTextSanitizer';
 import { SyncError } from '../../errors';
 import type { SyncOutboxOperationV2 } from '../../outbox';
 import type { PreparedSyncV2Operation, SyncV2OperationPreparer } from './SyncV2OperationProcessor';
+import { NOOP_SYNC_FAULT_INJECTOR, type SyncFaultInjector } from '../faults/SyncFaultInjector';
+import { NOOP_TELEMETRY, type Telemetry } from '../../../infrastructure/telemetry/Telemetry';
 
 export interface CanonicalEventPreparationDependencies {
   eventSchemaVersion: number;
@@ -27,12 +29,18 @@ const sanitizedPayload = (operation: SyncOutboxOperationV2, payload: unknown | n
 };
 
 export class CanonicalSyncV2OperationPreparer implements SyncV2OperationPreparer {
-  constructor(private readonly dependencies: CanonicalEventPreparationDependencies) {}
+  constructor(
+    private readonly dependencies: CanonicalEventPreparationDependencies,
+    private readonly faults: SyncFaultInjector = NOOP_SYNC_FAULT_INJECTOR,
+    private readonly telemetry: Telemetry = NOOP_TELEMETRY,
+  ) {}
 
   async prepare(operation: SyncOutboxOperationV2): Promise<PreparedSyncV2Operation> {
+    const loadSpan = this.telemetry.startSpan('record.load', { record_type: operation.recordType });
     const authoritative = operation.operationType === 'DELETE'
       ? null
       : await this.dependencies.loadAuthoritativeRecord(operation);
+    loadSpan.end();
     if (operation.operationType === 'UPSERT' && authoritative === null) {
       throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
     }
@@ -57,7 +65,11 @@ export class CanonicalSyncV2OperationPreparer implements SyncV2OperationPreparer
       payload,
     };
     await this.dependencies.validateEvent(event);
+    const encryptionSpan = this.telemetry.startSpan('event.encrypt', { record_type: operation.recordType });
+    await this.faults.hit('BEFORE_EVENT_ENCRYPTION');
     const encrypted = await this.dependencies.encryptEvent(event, keyEpoch);
+    await this.faults.hit('AFTER_EVENT_ENCRYPTION');
+    encryptionSpan.end();
     return {
       partitionKey,
       keyEpoch,

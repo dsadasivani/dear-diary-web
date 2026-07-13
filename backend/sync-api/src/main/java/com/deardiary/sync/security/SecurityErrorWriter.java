@@ -6,21 +6,25 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Map;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 
 @Component
 public class SecurityErrorWriter {
     private final ObjectMapper objectMapper;
+    private final MeterRegistry meters;
 
-    public SecurityErrorWriter(ObjectMapper objectMapper) {
+    public SecurityErrorWriter(ObjectMapper objectMapper, MeterRegistry meters) {
         this.objectMapper = objectMapper;
+        this.meters = meters;
     }
 
     public void writeUnauthorized(
             HttpServletRequest request,
             HttpServletResponse response,
             Exception ignored) throws IOException {
+        meters.counter("sync_authentication_failure_total", "type", "unauthorized").increment();
         write(request, response, HttpServletResponse.SC_UNAUTHORIZED, new ApiErrorResponse(
             "AUTH_INVALID",
             "A valid user access token is required.",
@@ -35,6 +39,7 @@ public class SecurityErrorWriter {
             HttpServletRequest request,
             HttpServletResponse response,
             Exception ignored) throws IOException {
+        meters.counter("sync_authentication_failure_total", "type", "forbidden").increment();
         write(request, response, HttpServletResponse.SC_FORBIDDEN, new ApiErrorResponse(
             "ACCESS_DENIED",
             "The authenticated user cannot access this resource.",

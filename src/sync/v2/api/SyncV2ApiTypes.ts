@@ -4,7 +4,12 @@ export interface SyncV2FeatureFlags {
   realtimeEnabled: boolean;
   snapshotCreationEnabled: boolean;
   garbageCollectionEnabled: boolean;
+  mediaUploadEnabled: boolean;
+  archiveHydrationEnabled: boolean;
   keyRotationEnabled: boolean;
+  deviceRevocationEnabled: boolean;
+  primaryRecoveryEnabled: boolean;
+  companionPairingEnabled: boolean;
 }
 
 export interface SyncV2Protocol {
@@ -15,6 +20,10 @@ export interface SyncV2Protocol {
   snapshotSchemaVersion: number;
   maximumEventBytes: number;
   maximumMediaBytes: number;
+  minimumSupportedAppVersion: string;
+  syncV2RolloutPercentage: number;
+  rolloutSaltVersion: number;
+  emergencyMode: boolean;
   featureFlags: SyncV2FeatureFlags;
 }
 

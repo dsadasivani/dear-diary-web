@@ -7,6 +7,7 @@ on:
       - main
       - feature/dear-diary-v2
       - feature/local-first-performance
+      - feature/production-sync-v2
 
 jobs:
   backend:
@@ -33,11 +34,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - run: npm run test:v2-client
       - run: npm run test:storage
       - run: npm run test:component
       - run: npm run test:server
       - run: npm run build
       - run: npm run scan:secrets
+      - run: npm run test:ops
+      - run: npm audit --audit-level=high
 
   supabase:
     runs-on: ubuntu-latest

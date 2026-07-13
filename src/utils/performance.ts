@@ -1,4 +1,5 @@
 export type MeasureMetadata = Record<string, unknown>;
+import type { Telemetry } from '../infrastructure/telemetry/Telemetry';
 
 interface MeasurementSample {
   name: string;
@@ -20,6 +21,36 @@ const MAX_METADATA_VALUE_LENGTH = 80;
 const aggregates = new Map<string, AggregateMeasurement>();
 const samples: MeasurementSample[] = [];
 const MAX_SAMPLES = 500;
+let productionTelemetry: Telemetry | null = null;
+
+export const setPerformanceTelemetry = (telemetry: Telemetry | null): void => { productionTelemetry = telemetry; };
+
+const telemetryMetricFor = (name: string): string | undefined => {
+  if (name.startsWith('repository.local.') || name === 'repository.local.mutationWithOutbox') return 'deardiary.local_write.duration_ms';
+  if (name === 'repository.initialize' || name.startsWith('sqlite.bridge')) return 'deardiary.database.open.duration_ms';
+  if (name.includes('outbox.operation')) return 'deardiary.outbox.operation.duration_ms';
+  if (name.includes('sync.pull')) return 'deardiary.sync.cycle.duration_ms';
+  if (name.includes('query.homeSummary')) return 'deardiary.screen.home.load_ms';
+  if (name.includes('query.entries.list')) return 'deardiary.screen.diary.load_ms';
+  if (name.includes('search')) return 'deardiary.screen.search.duration_ms';
+  if (name.includes('stats') || name.includes('Statistics')) return 'deardiary.screen.stats.duration_ms';
+  if (name.includes('crypto.encrypt')) return 'deardiary.media.encrypt.duration_ms';
+  if (name.includes('drive.upload')) return 'deardiary.media.upload.duration_ms';
+  if (name.includes('drive.download')) return 'deardiary.media.download.duration_ms';
+  return undefined;
+};
+
+const emitProductionMeasurement = (name: string, durationMs: number, succeeded: boolean): void => {
+  const metric = telemetryMetricFor(name);
+  if (!metric || !productionTelemetry) return;
+  productionTelemetry.histogram(metric, durationMs);
+  if (metric === 'deardiary.local_write.duration_ms') {
+    productionTelemetry.counter(succeeded ? 'deardiary.local_write.success' : 'deardiary.local_write.failure', 1);
+  }
+  if (metric === 'deardiary.database.open.duration_ms') {
+    productionTelemetry.counter(succeeded ? 'deardiary.database.open.success' : 'deardiary.database.open.failure', 1);
+  }
+};
 
 const isProduction = (): boolean => {
   try {
@@ -122,16 +153,19 @@ export const measureAsync = async <T>(
   operation: () => Promise<T>,
   metadata?: MeasureMetadata,
 ): Promise<T> => {
-  if (!isEnabled()) return operation();
+  const localMeasurementEnabled = isEnabled();
+  if (!localMeasurementEnabled && !productionTelemetry) return operation();
   const startedAt = now();
+  let succeeded = false;
   try {
-    return await operation();
+    const result = await operation();
+    succeeded = true;
+    return result;
   } finally {
-    recordMeasurement({
-      name,
-      durationMs: now() - startedAt,
-      metadata: sanitizeMeasurementMetadata(metadata),
-      startedAt,
+    const durationMs = now() - startedAt;
+    emitProductionMeasurement(name, durationMs, succeeded);
+    if (localMeasurementEnabled) recordMeasurement({
+      name, durationMs, metadata: sanitizeMeasurementMetadata(metadata), startedAt,
     });
   }
 };

@@ -23,6 +23,8 @@ const diaryCount = numberArg('diaries', 100);
 const entryCount = numberArg('entries', 10_000);
 const noteCount = numberArg('notes', 10_000);
 const outboxCount = numberArg('outbox', 250);
+const mediaCount = numberArg('media', 10_000);
+const syncEventCount = numberArg('sync-events', 10_000);
 
 const moods = [
   ['Joyful', '😊'],
@@ -119,6 +121,20 @@ const syncOutbox = Object.fromEntries(Array.from({ length: outboxCount }, (_, in
   },
 ]));
 
+const mediaReferences = Array.from({ length: mediaCount }, (_, index) => ({
+  mediaId: `bench-media-${index + 1}`,
+  objectKey: `bench-object-${index + 1}`,
+  sizeBytes: 64 * 1024 + (index % 128) * 1024,
+}));
+
+const syncEvents = Array.from({ length: syncEventCount }, (_, index) => ({
+  sequence: index + 1,
+  eventId: `bench-event-${index + 1}`,
+  operationId: `bench-remote-operation-${index + 1}`,
+  recordId: `bench-note-${(index % Math.max(1, noteCount)) + 1}`,
+  recordVersion: Math.floor(index / Math.max(1, noteCount)) + 1,
+}));
+
 const fixture = {
   version: 1,
   generatedAt: new Date().toISOString(),
@@ -142,9 +158,11 @@ const fixture = {
     joinedDate: '07/2026',
   },
   syncOutbox,
+  mediaReferences,
+  syncEvents,
 };
 
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, `${JSON.stringify(fixture, null, 2)}\n`, 'utf8');
 console.log(`Wrote ${output}`);
-console.log(`Seed contains ${diaries.length} diaries, ${entries.length} entries, ${notes.length} notes, ${outboxCount} outbox operations.`);
+console.log(`Seed contains ${diaries.length} diaries, ${entries.length} entries, ${notes.length} notes, ${outboxCount} outbox operations, ${mediaCount} media references, and ${syncEventCount} sync events.`);

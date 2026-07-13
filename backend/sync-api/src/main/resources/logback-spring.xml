@@ -1,0 +1,11 @@
+<configuration>
+    <springProperty scope="context" name="application" source="spring.application.name" defaultValue="dear-diary-sync-api"/>
+    <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <includeMdcKeyName>correlationId</includeMdcKeyName>
+        </encoder>
+    </appender>
+    <root level="INFO"><appender-ref ref="JSON"/></root>
+</configuration>
