@@ -11,6 +11,11 @@ import type {
   SyncV2OperationStatus,
   SyncV2Protocol,
   SyncV2Snapshot,
+  SyncV2KeyPackage,
+  SyncV2Migration,
+  SyncV2Pairing,
+  SyncV2Recovery,
+  SyncV2Rotation,
 } from './SyncV2ApiTypes';
 
 export type SyncV2AccessTokenProvider = () => Promise<string>;
@@ -97,6 +102,98 @@ export class SyncV2ApiClient {
       `/api/v2/sync/snapshots/latest?partitionKey=account&snapshotSchemaVersion=${snapshotSchemaVersion}`,
       { method: 'GET' },
     );
+  }
+
+  beginMigration(request: { migrationId: string; deviceId: string; baselineDigest: string; baselineSequence: number }): Promise<SyncV2Migration> {
+    return this.json('/api/v2/sync/migrations/begin', { method: 'POST', body: JSON.stringify(request) });
+  }
+
+  advanceMigration(migrationId: string, request: {
+    deviceId: string; nextStatus: string; validationDigest?: string; snapshotId?: string;
+  }): Promise<SyncV2Migration> {
+    return this.json(`/api/v2/sync/migrations/${encodeURIComponent(migrationId)}/advance`, {
+      method: 'POST', body: JSON.stringify(request),
+    });
+  }
+
+  getMigration(migrationId: string): Promise<SyncV2Migration> {
+    return this.json(`/api/v2/sync/migrations/${encodeURIComponent(migrationId)}`, { method: 'GET' });
+  }
+
+  rollbackMigration(migrationId: string, deviceId: string): Promise<SyncV2Migration> {
+    return this.json(`/api/v2/sync/migrations/${encodeURIComponent(migrationId)}/rollback?deviceId=${encodeURIComponent(deviceId)}`, { method: 'POST' });
+  }
+
+  createPairing(request: Record<string, unknown>): Promise<SyncV2Pairing> {
+    return this.json('/api/v2/sync/pairings', { method: 'POST', body: JSON.stringify(request) });
+  }
+
+  approvePairing(pairingId: string, request: Record<string, unknown>): Promise<SyncV2Pairing> {
+    return this.json(`/api/v2/sync/pairings/${encodeURIComponent(pairingId)}/approve`, { method: 'POST', body: JSON.stringify(request) });
+  }
+
+  registerPairingPackage(pairingId: string, approverDeviceId: string): Promise<SyncV2Pairing> {
+    return this.json(`/api/v2/sync/pairings/${encodeURIComponent(pairingId)}/register-package?approverDeviceId=${encodeURIComponent(approverDeviceId)}`, { method: 'POST' });
+  }
+
+  getPairing(pairingId: string, requestedDeviceId: string): Promise<SyncV2Pairing> {
+    return this.json(`/api/v2/sync/pairings/${encodeURIComponent(pairingId)}?requestedDeviceId=${encodeURIComponent(requestedDeviceId)}`, { method: 'GET' });
+  }
+
+  completePairing(pairingId: string, request: Record<string, unknown>): Promise<SyncV2Pairing> {
+    return this.json(`/api/v2/sync/pairings/${encodeURIComponent(pairingId)}/complete`, { method: 'POST', body: JSON.stringify(request) });
+  }
+
+  initiateKeyPackage(request: Record<string, unknown>): Promise<SyncV2KeyPackage> {
+    return this.json('/api/v2/sync/key-packages/initiate', { method: 'POST', body: JSON.stringify(request) });
+  }
+
+  registerKeyPackage(keyPackageId: string, creatorDeviceId: string): Promise<SyncV2KeyPackage> {
+    return this.json(`/api/v2/sync/key-packages/${encodeURIComponent(keyPackageId)}/register?creatorDeviceId=${encodeURIComponent(creatorDeviceId)}`, { method: 'POST' });
+  }
+
+  getLatestRecoveryPackage(): Promise<SyncV2KeyPackage> {
+    return this.json('/api/v2/sync/key-packages/recovery/latest', { method: 'GET' });
+  }
+
+  beginRecovery(request: Record<string, unknown>): Promise<SyncV2Recovery> {
+    return this.json('/api/v2/sync/recovery/begin', { method: 'POST', body: JSON.stringify(request) });
+  }
+
+  approveRecovery(attemptId: string, recoveryDeviceId: string): Promise<SyncV2Recovery> {
+    return this.json(`/api/v2/sync/recovery/approve?attemptId=${encodeURIComponent(attemptId)}&recoveryDeviceId=${encodeURIComponent(recoveryDeviceId)}`, { method: 'POST' });
+  }
+
+  getRecoveryPackage(attemptId: string, recoveryDeviceId: string): Promise<SyncV2Recovery> {
+    return this.json(`/api/v2/sync/recovery/package?attemptId=${encodeURIComponent(attemptId)}&recoveryDeviceId=${encodeURIComponent(recoveryDeviceId)}`, { method: 'GET' });
+  }
+
+  markRecoveryKeyPersisted(attemptId: string, request: Record<string, unknown>): Promise<SyncV2Recovery> {
+    return this.json(`/api/v2/sync/recovery/key-persisted?attemptId=${encodeURIComponent(attemptId)}`, { method: 'POST', body: JSON.stringify(request) });
+  }
+
+  finalizeRecovery(attemptId: string, recoveryDeviceId: string): Promise<SyncV2Recovery> {
+    return this.json(`/api/v2/sync/recovery/finalize?attemptId=${encodeURIComponent(attemptId)}&recoveryDeviceId=${encodeURIComponent(recoveryDeviceId)}`, { method: 'POST' });
+  }
+
+  beginRotation(rotationId: string, deviceId: string): Promise<SyncV2Rotation> {
+    return this.json('/api/v2/sync/rotations/begin', { method: 'POST', body: JSON.stringify({ rotationId, deviceId }) });
+  }
+
+  advanceRotation(rotationId: string, deviceId: string, nextStatus: string): Promise<SyncV2Rotation> {
+    return this.json(`/api/v2/sync/rotations/${encodeURIComponent(rotationId)}/advance`, { method: 'POST', body: JSON.stringify({ deviceId, nextStatus }) });
+  }
+
+  commitRotationEpoch(rotationId: string, deviceId: string): Promise<SyncV2Rotation> {
+    return this.json(`/api/v2/sync/rotations/${encodeURIComponent(rotationId)}/commit-epoch?deviceId=${encodeURIComponent(deviceId)}`, { method: 'POST' });
+  }
+
+  markRotationLocalCommitted(rotationId: string, deviceId: string, possessionSignature: string): Promise<SyncV2Rotation> {
+    return this.json(`/api/v2/sync/rotations/${encodeURIComponent(rotationId)}/local-committed`, { method: 'POST', body: JSON.stringify({ deviceId, possessionSignature }) });
+  }
+
+  getRotation(rotationId: string): Promise<SyncV2Rotation> {
+    return this.json(`/api/v2/sync/rotations/${encodeURIComponent(rotationId)}`, { method: 'GET' });
   }
 
   private async json<T>(path: string, init: RequestInit): Promise<T> {

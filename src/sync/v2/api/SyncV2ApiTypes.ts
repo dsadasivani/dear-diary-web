@@ -135,3 +135,65 @@ export interface SyncV2Snapshot {
   downloadUrl: string | null;
   downloadExpiresAt: string | null;
 }
+
+export type SyncV2MigrationStatus =
+  | 'PRECHECK' | 'DRAINING_V1' | 'VALIDATING_LOCAL_STATE' | 'CREATING_V2_SNAPSHOT'
+  | 'UPLOADING_V2_SNAPSHOT' | 'REGISTERING_V2_ACCOUNT' | 'VERIFYING_V2_RESTORE'
+  | 'V2_ACTIVE' | 'V1_READ_ONLY' | 'FAILED' | 'ROLLED_BACK';
+
+export interface SyncV2Migration {
+  migrationId: string;
+  status: SyncV2MigrationStatus;
+  baselineDigest: string;
+  validationDigest: string | null;
+  baselineSequence: number;
+  activatedSequence: number | null;
+  snapshotId: string | null;
+  v1Mode: 'READ_WRITE' | 'READ_ONLY';
+}
+
+export interface SyncV2Pairing {
+  pairingId: string;
+  requestedDeviceId: string;
+  status: 'REQUESTED' | 'APPROVED' | 'KEY_PACKAGE_PENDING' | 'KEY_PACKAGE_AVAILABLE' | 'COMPLETED' | 'EXPIRED' | 'REJECTED';
+  keyEpoch: number;
+  keyPackageId: string | null;
+  objectKey: string | null;
+  sha256: string | null;
+  sizeBytes: number | null;
+  downloadUrl: string | null;
+  downloadExpiresAt: string | null;
+  upload: SyncV2UploadInstruction | null;
+  expiresAt: string;
+}
+
+export interface SyncV2KeyPackage {
+  keyPackageId: string;
+  targetDeviceId: string;
+  keyEpoch: number;
+  purpose: 'DEVICE' | 'RECOVERY';
+  status: string;
+  objectKey: string;
+  sha256: string;
+  sizeBytes: number;
+  downloadUrl: string | null;
+  downloadExpiresAt: string | null;
+  upload: SyncV2UploadInstruction | null;
+}
+
+export interface SyncV2Recovery {
+  recoveryAttemptId: string;
+  recoveryDeviceId: string;
+  status: 'NONE' | 'REQUESTED' | 'APPROVED' | 'KEY_PACKAGE_PENDING' | 'KEY_PACKAGE_AVAILABLE' | 'LOCAL_KEY_PERSISTED' | 'FINALIZING' | 'COMPLETED' | 'FAILED';
+  validationSnapshotId: string | null;
+  expiresAt: string | null;
+  recoveryPackage: SyncV2KeyPackage | null;
+}
+
+export interface SyncV2Rotation {
+  rotationId: string;
+  initiatedByDeviceId: string;
+  fromKeyEpoch: number;
+  toKeyEpoch: number;
+  status: 'PREPARING' | 'NEW_KEY_CREATED' | 'KEY_PACKAGES_CREATED' | 'SERVER_EPOCH_PENDING' | 'SERVER_EPOCH_COMMITTED' | 'LOCAL_STATE_COMMITTED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+}

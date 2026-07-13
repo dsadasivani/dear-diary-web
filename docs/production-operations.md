@@ -39,3 +39,30 @@ key epoch, schema, account, partition, and through-sequence before atomically in
 cursor. A failed or interrupted import leaves the previous local state unchanged. Monthly partial V2
 snapshot restore remains disabled because the current V2 event API uses one global cursor; enabling it
 without partition cursors could skip events.
+
+## Advanced workflow operations
+
+Migration is deliberately one-way after authoritative V2 activity. The persistent migration journal drains V1,
+compares canonical digests, creates and restores a V2 snapshot in temporary state, then activates V2 before making
+V1 read-only. Never manually force `V1_READ_ONLY`; rollback is rejected once the account sequence advances after
+V2 activation. V1 remote data is retained and is never automatically deleted.
+
+Keep `companion_pairing_enabled`, `primary_recovery_enabled`, and `key_rotation_enabled` false, with their matching
+kill switches engaged, until the feature has passed staging recovery drills. Pairing requires an active primary,
+an expiring challenge, signed approval, and target-device possession proof. Recovery does not revoke the prior
+primary until the replacement has persisted the root key, decrypted/restored a validation snapshot, and acknowledged
+the current cursor. Rotation creates packages for all active devices and a recovery package before atomically
+advancing the server epoch; revoked devices are excluded. Crashed workflows resume from their server and encrypted
+local journals. Monitor `sync_advanced_workflow_total` by workflow, action, and outcome.
+
+## Garbage collection operations
+
+GC has three independent gates: `SYNC_GC_WORKER_ENABLED=true`, `garbage_collection_enabled=true`, and an open
+`GARBAGE_COLLECTION` kill switch. Start with `SYNC_GC_DRY_RUN=true` and review candidate metrics and reference
+queries for at least one full retention window. Production defaults retain tombstoned objects for 30 days and then
+quarantine them for another 30 days before deletion. Accounts in safety stop or active recovery/rotation are skipped.
+
+Review `deardiary_sync_gc_candidates_total`, `deardiary_sync_gc_quarantined_total`, and
+`deardiary_sync_gc_deleted_total`, plus `sync_gc_audit`, before disabling dry-run. To stop deletion immediately,
+engage the database kill switch or disable the worker; quarantined objects remain recoverable until their delayed
+deletion succeeds. Do not delete object-store data directly or delegate eligibility to mobile clients.

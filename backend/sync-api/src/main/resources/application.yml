@@ -49,6 +49,14 @@ logging:
 sync:
   observability:
     gauge-interval: ${SYNC_OBSERVABILITY_GAUGE_INTERVAL:30s}
+  garbage-collection:
+    enabled: ${SYNC_GC_WORKER_ENABLED:false}
+    dry-run: ${SYNC_GC_DRY_RUN:true}
+    poll-interval: ${SYNC_GC_POLL_INTERVAL:1h}
+    retention: ${SYNC_GC_RETENTION:30d}
+    quarantine-delay: ${SYNC_GC_QUARANTINE_DELAY:30d}
+    maximum-batch-size: ${SYNC_GC_MAX_BATCH_SIZE:25}
+    maximum-attempts: ${SYNC_GC_MAX_ATTEMPTS:10}
   notification:
     publisher:
       enabled: ${SYNC_NOTIFICATION_PUBLISHER_ENABLED:false}

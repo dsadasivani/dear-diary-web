@@ -58,6 +58,23 @@ public class SyncObservabilityAspect {
         return observe(joinPoint, "sync_object_storage_request_total", "sync_object_storage_request_duration");
     }
 
+    @Around("execution(public * com.deardiary.sync.migration.MigrationService.*(..)) || "
+        + "execution(public * com.deardiary.sync.pairing.PairingService.*(..)) || "
+        + "execution(public * com.deardiary.sync.recovery.RecoveryService.*(..)) || "
+        + "execution(public * com.deardiary.sync.rotation.RotationService.*(..))")
+    public Object advancedWorkflow(ProceedingJoinPoint joinPoint) throws Throwable {
+        var workflow = joinPoint.getSignature().getDeclaringType().getSimpleName().replace("Service", "").toLowerCase();
+        var action = joinPoint.getSignature().getName();
+        try {
+            var result = joinPoint.proceed();
+            meters.counter("sync_advanced_workflow_total", "workflow", workflow, "action", action, "outcome", "success").increment();
+            return result;
+        } catch (Throwable error) {
+            meters.counter("sync_advanced_workflow_total", "workflow", workflow, "action", action, "outcome", "failure").increment();
+            throw error;
+        }
+    }
+
     private Object observe(ProceedingJoinPoint joinPoint, String counter, String timer) throws Throwable {
         var started = System.nanoTime();
         var outcome = "success";

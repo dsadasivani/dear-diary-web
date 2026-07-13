@@ -21,7 +21,7 @@ The API exposes `/actuator/health` without authentication. All `/api/v2/**` rout
 `SYNC_JWT_ENABLED=true` and a valid Supabase issuer/JWKS configuration is supplied. Only tokens with a
 non-empty subject and the `authenticated` role are accepted; anonymous and service-role tokens are rejected.
 
-Flyway owns the PostgreSQL schema through 20 ordered migrations in `src/main/resources/db/migration`.
+Flyway owns the PostgreSQL schema through 21 ordered migrations in `src/main/resources/db/migration`.
 The migration integration test uses PostgreSQL 16 through Testcontainers and skips only when Docker is unavailable.
 
 The authenticated Sync V2 API provides device registration and protocol negotiation, operation initiation,
@@ -34,6 +34,19 @@ after object size and SHA-256 verification and an atomic database activation. Re
 hash, encrypted object kind, key epoch, schema, account, partition, and through-sequence before atomically
 replacing an empty V2 state and its cursor. Partial partition restore is intentionally unavailable while V2
 uses a single global event cursor.
+
+Advanced workflows expose durable server state machines for controlled V1-to-V2 migration, trusted-device
+companion pairing, passphrase-wrapped primary recovery, and account-key rotation. Pairing uses short-lived
+challenge/response requests and target-bound encrypted packages. Recovery activates the replacement primary
+only after a local-key possession proof, verified snapshot restore, and cursor acknowledgment. Rotation advances
+the server epoch atomically only after packages exist for every active device plus recovery, and excludes revoked
+devices. The related protocol flags and kill switches remain disabled by default.
+
+Remote object deletion is server-authoritative. The optional garbage-collection worker requires its own process
+switch, the runtime protocol flag, and the global kill switch to be open. It defaults to dry-run, considers only
+committed retired objects without live/pending/snapshot/key-package references, blocks accounts in safety stop or
+active recovery/rotation, quarantines for a configurable delay, processes bounded batches, retries failures, and
+records every destructive transition in `sync_gc_audit`.
 
 Committed operations enqueue notification hints in the same database transaction. The optional notification
 worker claims bounded batches with expiring leases, retries transient publishing failures with backoff, and

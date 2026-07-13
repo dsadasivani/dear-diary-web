@@ -17,3 +17,4 @@ export * from './faults/SyncFaultInjector';
 export * from './snapshot/PersistentSyncV2SnapshotStore';
 export * from './snapshot/SyncV2SnapshotCodec';
 export * from './snapshot/SyncV2SnapshotCoordinator';
+export * from './advanced/AdvancedWorkflowCoordinators';
