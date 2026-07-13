@@ -200,6 +200,11 @@ ordered atomic replay, persistent safety stops, and stable conflict records. Con
 Boot endpoint with `VITE_SYNC_V2_API_URL`. The existing Supabase/Drive engine remains available while
 the explicit V1-to-V2 account migration workflow is still disabled.
 
+Sync V2 account snapshots use encrypted, restart-resumable upload journals and become available only
+after the backend verifies object metadata and atomically registers a retained reference. Restore is
+limited to an empty V2 state, verifies all integrity and identity metadata, and commits canonical state
+with its global cursor in one local transaction before later events are pulled.
+
 Production dashboards, alerts, privacy-safe telemetry, emergency switches, canary rollout controls,
 security CI, fault injection, randomized convergence tests, and performance procedures are documented
 in [docs/production-operations.md](docs/production-operations.md).

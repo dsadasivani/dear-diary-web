@@ -12,6 +12,8 @@ export const CLIENT_METRICS = [
   'deardiary.screen.search.duration_ms', 'deardiary.screen.stats.duration_ms',
   'deardiary.media.encrypt.duration_ms', 'deardiary.media.upload.duration_ms',
   'deardiary.media.download.duration_ms', 'deardiary.media.decode.duration_ms',
+  'deardiary.sync.snapshot_create.success', 'deardiary.sync.snapshot_create.failure',
+  'deardiary.sync.snapshot_restore.success', 'deardiary.sync.snapshot_restore.failure',
 ] as const;
 
 export const SYNC_TRACE_SPANS = [
@@ -20,4 +22,5 @@ export const SYNC_TRACE_SPANS = [
   'operation.commit', 'operation.reconcile', 'local.acknowledge', 'events.pull',
   'metadata.fetch', 'object.download', 'hash.verify', 'event.decrypt', 'event.validate',
   'event.apply', 'cursor.persist', 'cursor.acknowledge',
+  'snapshot.create', 'snapshot.restore',
 ] as const;

@@ -1,6 +1,7 @@
 node_modules/
 .gradle/
 build/
+backend/sync-api/bin/
 dist/
 coverage/
 benchmarks/

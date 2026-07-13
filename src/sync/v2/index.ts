@@ -14,3 +14,6 @@ export * from './safety/PersistentSafetyStopStore';
 export * from './SyncV2RuntimeCoordinator';
 export * from './observability/SyncV2Diagnostics';
 export * from './faults/SyncFaultInjector';
+export * from './snapshot/PersistentSyncV2SnapshotStore';
+export * from './snapshot/SyncV2SnapshotCodec';
+export * from './snapshot/SyncV2SnapshotCoordinator';

@@ -37,7 +37,7 @@ export interface TelemetryExporter {
   export(envelopes: TelemetryEnvelope[]): Promise<void>;
 }
 
-const safeName = /^(deardiary|sync|protocol|auth|outbox|record|event|events|object|operation|local|cursor|metadata|hash)(\.[a-z0-9_]+)+$/;
+const safeName = /^(deardiary|sync|protocol|auth|outbox|record|event|events|object|operation|local|cursor|metadata|hash|snapshot)(\.[a-z0-9_]+)+$/;
 
 export class PrivacySafeTelemetry implements Telemetry {
   private readonly sessionId = crypto.randomUUID();

@@ -25,3 +25,17 @@ version reshuffles the cohort and is not part of a normal percentage increase.
 
 The minimum app and read/write protocol versions are independent controls. Raising them blocks cloud
 activity but does not block local reading or local-first editing.
+
+## Snapshot operations
+
+Keep `snapshot_creation_enabled` and the `SNAPSHOT_CREATION` kill switch disabled until the V2 canary
+has stable ordered replay and object-storage metrics. Creation exports one account-wide canonical
+partition at the current global sequence, encrypts it locally, and retains only encrypted upload bytes
+in the restart journal. The server exposes a snapshot only after its object metadata is verified and
+the snapshot plus its object reference are committed atomically.
+
+Restore is accepted only into an empty V2 state. Clients verify encrypted size, SHA-256, object kind,
+key epoch, schema, account, partition, and through-sequence before atomically installing state and the
+cursor. A failed or interrupted import leaves the previous local state unchanged. Monthly partial V2
+snapshot restore remains disabled because the current V2 event API uses one global cursor; enabling it
+without partition cursors could skip events.

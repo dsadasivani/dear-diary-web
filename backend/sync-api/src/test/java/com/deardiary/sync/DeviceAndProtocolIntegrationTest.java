@@ -88,7 +88,8 @@ class DeviceAndProtocolIntegrationTest {
         var protocol = protocols.current();
 
         assertThat(protocol.currentProtocolVersion()).isEqualTo(2);
-        assertThat(protocol.maximumEventBytes()).isEqualTo(10_485_760);
+          assertThat(protocol.maximumEventBytes()).isEqualTo(10_485_760);
+          assertThat(protocol.maximumSnapshotBytes()).isEqualTo(104_857_600);
         assertThat(protocol.featureFlags().syncWritesEnabled()).isTrue();
         assertThat(protocol.featureFlags().snapshotCreationEnabled()).isFalse();
         assertThat(protocol.featureFlags().garbageCollectionEnabled()).isFalse();

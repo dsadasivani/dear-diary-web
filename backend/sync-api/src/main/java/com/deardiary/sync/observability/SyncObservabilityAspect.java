@@ -33,6 +33,21 @@ public class SyncObservabilityAspect {
         return observe(joinPoint, "sync_event_pull_total", "sync_event_pull_duration");
     }
 
+    @Around("execution(* com.deardiary.sync.snapshot.SnapshotService.initiate(..))")
+    public Object snapshotInitiate(ProceedingJoinPoint joinPoint) throws Throwable {
+        return observe(joinPoint, "sync_snapshot_initiate_total", "sync_snapshot_initiate_duration");
+    }
+
+    @Around("execution(* com.deardiary.sync.snapshot.SnapshotService.register(..))")
+    public Object snapshotRegister(ProceedingJoinPoint joinPoint) throws Throwable {
+        return observe(joinPoint, "sync_snapshot_register_total", "sync_snapshot_register_duration");
+    }
+
+    @Around("execution(* com.deardiary.sync.snapshot.SnapshotService.latest(..))")
+    public Object snapshotRestoreLookup(ProceedingJoinPoint joinPoint) throws Throwable {
+        return observe(joinPoint, "sync_snapshot_lookup_total", "sync_snapshot_lookup_duration");
+    }
+
     @Around("execution(* com.deardiary.sync.device.DeviceRegistrationService.register(..))")
     public Object deviceRegistration(ProceedingJoinPoint joinPoint) throws Throwable {
         return observe(joinPoint, "sync_device_registration_total", "sync_device_registration_duration");

@@ -26,7 +26,7 @@ const runtime = (): SyncV2LocalRuntime => ({
 const protocol = (): SyncV2Protocol => ({
   minimumReadProtocolVersion: 2, minimumWriteProtocolVersion: 3,
   currentProtocolVersion: 3, eventSchemaVersion: 2, snapshotSchemaVersion: 1,
-  maximumEventBytes: 1024, maximumMediaBytes: 4096,
+  maximumEventBytes: 1024, maximumMediaBytes: 4096, maximumSnapshotBytes: 8192,
   minimumSupportedAppVersion: '0.0.0', syncV2RolloutPercentage: 100,
   rolloutSaltVersion: 1, emergencyMode: false,
   featureFlags: {

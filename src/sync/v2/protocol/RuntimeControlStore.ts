@@ -13,6 +13,7 @@ export interface CachedRuntimeControls {
   snapshotSchemaVersion: number;
   maximumEventBytes: number;
   maximumMediaBytes: number;
+  maximumSnapshotBytes: number;
   syncV2RolloutPercentage: number;
   rolloutSaltVersion: number;
   emergencyMode: boolean;
@@ -37,7 +38,7 @@ export const EMERGENCY_RUNTIME_CONTROLS: CachedRuntimeControls = {
   featureFlags: destructiveOff(), minimumSupportedAppVersion: '0.0.0',
   minimumReadProtocolVersion: Number.MAX_SAFE_INTEGER, minimumWriteProtocolVersion: Number.MAX_SAFE_INTEGER,
   currentProtocolVersion: 1, eventSchemaVersion: 1, snapshotSchemaVersion: 1,
-  maximumEventBytes: 0, maximumMediaBytes: 0,
+  maximumEventBytes: 0, maximumMediaBytes: 0, maximumSnapshotBytes: 0,
   syncV2RolloutPercentage: 0, rolloutSaltVersion: 1, emergencyMode: true, fetchedAt: 0,
 };
 
@@ -56,6 +57,7 @@ export class RuntimeControlStore {
       snapshotSchemaVersion: protocol.snapshotSchemaVersion,
       maximumEventBytes: protocol.maximumEventBytes,
       maximumMediaBytes: protocol.maximumMediaBytes,
+      maximumSnapshotBytes: protocol.maximumSnapshotBytes,
       syncV2RolloutPercentage: protocol.syncV2RolloutPercentage,
       rolloutSaltVersion: protocol.rolloutSaltVersion,
       emergencyMode: protocol.emergencyMode,
@@ -68,7 +70,12 @@ export class RuntimeControlStore {
     const raw = await this.store.getItem(STORAGE_KEY);
     if (!raw) return EMERGENCY_RUNTIME_CONTROLS;
     const cached = JSON.parse(raw) as CachedRuntimeControls;
-    return { ...cached, featureFlags: destructiveOff({ remotePullEnabled: cached.featureFlags.remotePullEnabled }), emergencyMode: true };
+    return {
+      ...cached,
+      maximumSnapshotBytes: cached.maximumSnapshotBytes || 0,
+      featureFlags: destructiveOff({ remotePullEnabled: cached.featureFlags.remotePullEnabled }),
+      emergencyMode: true,
+    };
   }
 
   asProtocol(controls: CachedRuntimeControls): SyncV2Protocol {
@@ -80,6 +87,7 @@ export class RuntimeControlStore {
       snapshotSchemaVersion: controls.snapshotSchemaVersion,
       maximumEventBytes: controls.maximumEventBytes,
       maximumMediaBytes: controls.maximumMediaBytes,
+      maximumSnapshotBytes: controls.maximumSnapshotBytes,
       minimumSupportedAppVersion: controls.minimumSupportedAppVersion,
       syncV2RolloutPercentage: controls.syncV2RolloutPercentage,
       rolloutSaltVersion: controls.rolloutSaltVersion,

@@ -7,7 +7,8 @@ import {
   type SyncOutboxOperationV2,
 } from './SyncOutboxOperationV2';
 
-const STORAGE_KEY = 'deardiary_sync_outbox_v2';
+export const SYNC_V2_OUTBOX_STORAGE_KEY = 'deardiary_sync_outbox_v2';
+const STORAGE_KEY = SYNC_V2_OUTBOX_STORAGE_KEY;
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 export class PersistentOutboxRepository implements OutboxRepository {

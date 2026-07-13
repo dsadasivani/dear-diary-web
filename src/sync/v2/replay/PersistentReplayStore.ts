@@ -4,11 +4,17 @@ import type { SyncV2RemoteEvent } from '../api/SyncV2ApiTypes';
 import type { DecryptedSyncV2EventMetadata, SyncInvariantValidator } from '../domain/SyncInvariantValidator';
 import type { SyncV2LocalRuntime } from '../protocol/ProtocolBootstrap';
 
-const RECORDS_KEY = 'deardiary_sync_v2_records';
-const VERSIONS_KEY = 'deardiary_sync_v2_record_versions';
-const APPLIED_KEY = 'deardiary_sync_v2_applied_events';
-const MEDIA_KEY = 'deardiary_sync_v2_media_pointers';
-const RUNTIME_KEY = 'deardiary_sync_v2_runtime';
+export const SYNC_V2_RECORDS_KEY = 'deardiary_sync_v2_records';
+export const SYNC_V2_VERSIONS_KEY = 'deardiary_sync_v2_record_versions';
+export const SYNC_V2_APPLIED_KEY = 'deardiary_sync_v2_applied_events';
+export const SYNC_V2_MEDIA_KEY = 'deardiary_sync_v2_media_pointers';
+export const SYNC_V2_RUNTIME_KEY = 'deardiary_sync_v2_runtime';
+
+const RECORDS_KEY = SYNC_V2_RECORDS_KEY;
+const VERSIONS_KEY = SYNC_V2_VERSIONS_KEY;
+const APPLIED_KEY = SYNC_V2_APPLIED_KEY;
+const MEDIA_KEY = SYNC_V2_MEDIA_KEY;
+const RUNTIME_KEY = SYNC_V2_RUNTIME_KEY;
 
 export interface DecryptedSyncV2Event extends DecryptedSyncV2EventMetadata {
   payload: unknown | null;

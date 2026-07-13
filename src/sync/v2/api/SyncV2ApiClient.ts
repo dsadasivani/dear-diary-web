@@ -4,10 +4,13 @@ import { SyncError } from '../../errors';
 import type {
   InitiateSyncV2OperationRequest,
   InitiateSyncV2OperationResponse,
+  InitiateSyncV2SnapshotRequest,
+  InitiateSyncV2SnapshotResponse,
   PullSyncV2EventsResponse,
   SyncV2CommitResult,
   SyncV2OperationStatus,
   SyncV2Protocol,
+  SyncV2Snapshot,
 } from './SyncV2ApiTypes';
 
 export type SyncV2AccessTokenProvider = () => Promise<string>;
@@ -35,6 +38,11 @@ const API_CODE_MAP: Record<string, ConstructorParameters<typeof SyncError>[0]['c
   SEQUENCE_GAP: 'SEQUENCE_GAP',
   CURSOR_AHEAD: 'SEQUENCE_REGRESSION',
   CURSOR_REGRESSION: 'SEQUENCE_REGRESSION',
+  SNAPSHOT_NOT_FOUND: 'OBJECT_MISSING',
+  SNAPSHOT_SEQUENCE_STALE: 'SEQUENCE_CONFLICT',
+  SNAPSHOT_CREATION_DISABLED: 'SERVER_UNAVAILABLE',
+  SNAPSHOT_PARTITION_UNSUPPORTED: 'PROTOCOL_INCOMPATIBLE',
+  SNAPSHOT_DEVICE_MISMATCH: 'DEVICE_REVOKED',
 };
 
 export class SyncV2ApiClient {
@@ -71,6 +79,24 @@ export class SyncV2ApiClient {
       method: 'POST',
       body: JSON.stringify({ lastAppliedSequence }),
     });
+  }
+
+  initiateSnapshot(request: InitiateSyncV2SnapshotRequest): Promise<InitiateSyncV2SnapshotResponse> {
+    return this.json('/api/v2/sync/snapshots/initiate', { method: 'POST', body: JSON.stringify(request) });
+  }
+
+  registerSnapshot(snapshotId: string, deviceId: string): Promise<SyncV2Snapshot> {
+    return this.json(
+      `/api/v2/sync/snapshots/${encodeURIComponent(snapshotId)}/register?deviceId=${encodeURIComponent(deviceId)}`,
+      { method: 'POST' },
+    );
+  }
+
+  getLatestSnapshot(snapshotSchemaVersion: number): Promise<SyncV2Snapshot> {
+    return this.json(
+      `/api/v2/sync/snapshots/latest?partitionKey=account&snapshotSchemaVersion=${snapshotSchemaVersion}`,
+      { method: 'GET' },
+    );
   }
 
   private async json<T>(path: string, init: RequestInit): Promise<T> {

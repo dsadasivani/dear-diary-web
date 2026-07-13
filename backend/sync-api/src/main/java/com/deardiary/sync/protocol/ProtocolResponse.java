@@ -8,6 +8,7 @@ public record ProtocolResponse(
     int snapshotSchemaVersion,
     long maximumEventBytes,
     long maximumMediaBytes,
+    long maximumSnapshotBytes,
     String minimumSupportedAppVersion,
     int syncV2RolloutPercentage,
     int rolloutSaltVersion,

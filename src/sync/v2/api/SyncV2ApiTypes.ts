@@ -20,6 +20,7 @@ export interface SyncV2Protocol {
   snapshotSchemaVersion: number;
   maximumEventBytes: number;
   maximumMediaBytes: number;
+  maximumSnapshotBytes: number;
   minimumSupportedAppVersion: string;
   syncV2RolloutPercentage: number;
   rolloutSaltVersion: number;
@@ -100,4 +101,37 @@ export interface PullSyncV2EventsResponse {
   events: SyncV2RemoteEvent[];
   currentSequence: number;
   hasMore: boolean;
+}
+
+export interface InitiateSyncV2SnapshotRequest {
+  snapshotId: string;
+  deviceId: string;
+  throughSequence: number;
+  partitionKey: 'account';
+  sha256: string;
+  sizeBytes: number;
+  keyEpoch: number;
+  snapshotSchemaVersion: number;
+  protocolVersion: number;
+}
+
+export interface InitiateSyncV2SnapshotResponse {
+  snapshotId: string;
+  status: string;
+  existing: boolean;
+  upload: SyncV2UploadInstruction;
+}
+
+export interface SyncV2Snapshot {
+  snapshotId: string;
+  status: string;
+  throughSequence: number;
+  partitionKey: 'account';
+  objectKey: string;
+  sha256: string;
+  sizeBytes: number;
+  keyEpoch: number;
+  snapshotSchemaVersion: number;
+  downloadUrl: string | null;
+  downloadExpiresAt: string | null;
 }
