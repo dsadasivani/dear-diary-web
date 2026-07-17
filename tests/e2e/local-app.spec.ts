@@ -26,8 +26,9 @@ const createFirstPin = async (page: Page) => {
   await expect(saveRecoveryButton).toBeEnabled();
   await saveRecoveryButton.click();
   const enterDiaryButton = page.getByRole('button', { name: /enter dear diary/i });
-  await expect(enterDiaryButton).toBeVisible();
-  await enterDiaryButton.click();
+  if (await enterDiaryButton.count() && await enterDiaryButton.isVisible()) {
+    await enterDiaryButton.click();
+  }
 };
 
 const unlockWithPin = async (page: Page) => {

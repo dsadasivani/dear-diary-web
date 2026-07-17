@@ -291,8 +291,7 @@ export default function LockScreen({
         setSecurity(configuredSecurity);
         onSecurityChange(configuredSecurity);
         setPin('');
-        setShowBackupChoice(true);
-        setSuccessMsg('PIN ready. Connect Google to create or restore your encrypted account.');
+        await completeUnlock(configuredSecurity, pendingSetupPin);
         return;
       }
     } else {
@@ -679,7 +678,7 @@ export default function LockScreen({
               "{SANCTUARY_QUOTES[quoteIndex]}"
             </p>
             <p className="mt-3 text-lg font-medium text-brand-text-muted dark:text-[#EADCD1]/62">- Sanctuary Note</p>
-            <button onClick={(e) => { e.stopPropagation(); setQuoteIndex(prev => (prev + 1) % SANCTUARY_QUOTES.length); }} className="pointer-events-auto mt-5 inline-flex items-center gap-2 rounded-full border border-brand-border/50 bg-white/38 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-brand-text-muted transition-all hover:border-brand-pink/35 hover:text-brand-pink dark:border-white/10 dark:bg-white/5" title="Cycle note">
+            <button onClick={(e) => { e.stopPropagation(); setQuoteIndex(prev => (prev + 1) % SANCTUARY_QUOTES.length); }} className="pointer-events-auto mt-5 inline-flex items-center gap-2 rounded-full border border-brand-border/50 bg-white/38 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-brand-text-muted transition-all hover:border-brand-pink/35 hover:text-brand-pink dark:border-white/10 dark:bg-white/5" title="Cycle note">
               <Sparkles className="h-3 w-3" />
               Another note
             </button>
@@ -694,7 +693,7 @@ export default function LockScreen({
       <header className="w-full max-w-sm lg:absolute lg:left-8 lg:right-auto lg:top-8 lg:max-w-none xl:left-10 flex justify-between items-center z-10">
         <div className="flex items-center gap-2 bg-white/55 dark:bg-white/[0.06] backdrop-blur-xl px-3.5 py-1.5 rounded-full border border-brand-border/50 dark:border-white/10 shadow-sm">
           <BookOpen className="w-3.5 h-3.5 text-brand-pink" />
-          <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#3E2429] dark:text-[#EADCD1]">Dear Diary</span>
+          <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#3E2429] dark:text-[#EADCD1]">Dear Diary</span>
         </div>
         <motion.button onClick={toggleTheme} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} className="w-9 h-9 rounded-full bg-white/55 dark:bg-white/[0.06] border border-brand-border/50 dark:border-white/10 backdrop-blur-xl flex items-center justify-center text-brand-plum hover:text-brand-pink transition-colors shadow-sm cursor-pointer lg:fixed lg:right-8 lg:top-8" title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}>
           {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-200" />}
@@ -726,12 +725,12 @@ export default function LockScreen({
                   <div className="w-16 h-16 rounded-full bg-white/70 dark:bg-white/[0.06] border border-brand-border/65 dark:border-white/10 backdrop-blur-md flex items-center justify-center shadow-[0_16px_45px_rgba(62,36,41,0.1)] relative">
                     <Lock className="w-6 h-6 text-brand-plum/85 dark:text-brand-text/80 group-hover:text-brand-pink transition-colors stroke-[1.5]" />
                   </div>
-                  <span className="text-[10px] font-bold tracking-[0.2em] text-brand-text-muted uppercase">Tap to Unlock</span>
+                  <span className="text-xs font-bold tracking-[0.2em] text-brand-text-muted uppercase">Tap to Unlock</span>
                 </motion.button>
               </div>
 
               <div className="w-full max-w-xs bg-white dark:bg-[#1A1517]/35 border border-brand-border dark:border-white/10 px-4 py-4 rounded-2xl shadow-md text-center flex flex-col gap-2 lg:hidden">
-                <p className="text-[9px] font-bold tracking-[0.2em] text-brand-pink uppercase">Sanctuary Note</p>
+                <p className="text-xs font-bold tracking-[0.2em] text-brand-pink uppercase">Sanctuary Note</p>
                 <p className="font-serif-diary text-base text-brand-plum dark:text-brand-text leading-snug">{SANCTUARY_QUOTES[quoteIndex]}</p>
                 <button onClick={(e) => { e.stopPropagation(); setQuoteIndex(prev => (prev + 1) % SANCTUARY_QUOTES.length); }} className="self-center p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 text-brand-text-muted hover:text-brand-pink transition-all" title="Cycle Inspiration">
                   <Sparkles className="w-3.5 h-3.5 animate-pulse" />
@@ -760,7 +759,7 @@ export default function LockScreen({
                       <span className="lg:hidden">Dear Diary</span>
                       <span className="hidden lg:inline">{security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete' ? 'Welcome Back' : setupTitle}</span>
                     </h1>
-                    <p className="text-[8px] sm:text-[9px] lg:text-base lg:font-normal lg:normal-case lg:tracking-normal font-bold tracking-[0.25em] text-brand-pink/85 dark:text-brand-pink-dark uppercase">
+                    <p className="text-xs sm:text-xs lg:text-base lg:font-normal lg:normal-case lg:tracking-normal font-bold tracking-[0.25em] text-brand-pink/85 dark:text-brand-pink-dark uppercase">
                       <span className="lg:hidden">Private Access</span>
                       <span className="hidden lg:inline text-brand-text-muted dark:text-[#EADCD1]/70">{security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete' ? 'Your sanctuary is currently locked.' : setupCopy}</span>
                     </p>
@@ -775,7 +774,7 @@ export default function LockScreen({
                           />
                         ))}
                       </div>
-                      <p className="mt-1.5 text-[10px] font-bold text-brand-sage">{setupProgressLabel}</p>
+                      <p className="mt-1.5 text-xs font-bold text-brand-sage">{setupProgressLabel}</p>
                     </div>
                   )}
                 </div>
@@ -785,7 +784,7 @@ export default function LockScreen({
                     <ShieldCheck className="w-4 h-4" />
                   </span>
                   <h2 className="text-xs sm:text-sm font-bold text-[#2C1D21] dark:text-[#ECE6E1]">{setupTitle}</h2>
-                  <p className="text-[10px] sm:text-[11px] text-brand-text-muted mt-1 leading-relaxed max-w-[260px] mx-auto">{setupCopy}</p>
+                  <p className="text-xs sm:text-xs text-brand-text-muted mt-1 leading-relaxed max-w-[260px] mx-auto">{setupCopy}</p>
                 </div>
 
                 {setupStep === 'complete' ? (
@@ -821,13 +820,13 @@ export default function LockScreen({
                 ) : showBackupChoice ? (
                   <div className="flex flex-col gap-3">
                     {!syncSetupSelection ? (
-                      <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage/8 p-3 text-left text-[10px] leading-relaxed text-brand-text-muted">
+                      <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage/8 p-3 text-left text-xs leading-relaxed text-brand-text-muted">
                         Dear Diary uses Google only to identify your account. Your diary remains encrypted before it is synchronized.
                       </div>
                     ) : (
                       <>
                         <div className="rounded-2xl border border-brand-sage/20 bg-white/50 p-3 text-left dark:bg-white/[0.04]">
-                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-brand-sage">
+                          <p className="text-xs font-black uppercase tracking-[0.16em] text-brand-sage">
                             Google Account
                           </p>
                           <p className="mt-1 truncate text-xs font-bold text-brand-plum dark:text-brand-text">
@@ -837,7 +836,7 @@ export default function LockScreen({
                             <button
                               type="button"
                               onClick={resetGoogleSetupSelection}
-                              className="mt-2 text-[10px] font-bold text-brand-pink hover:text-brand-pink-dark"
+                              className="mt-2 text-xs font-bold text-brand-pink hover:text-brand-pink-dark"
                             >
                               Use a different Google account
                             </button>
@@ -845,11 +844,11 @@ export default function LockScreen({
                         </div>
                         {needsSyncRecoveryQuestion && (
                           <div className="flex flex-col gap-2 rounded-2xl border border-brand-pink/20 bg-brand-pink/5 p-3">
-                            <p className="text-left text-[10px] leading-relaxed text-brand-text-muted">
+                            <p className="text-left text-xs leading-relaxed text-brand-text-muted">
                               Finish the offline recovery question for this device before {isRecoveringSyncAccount ? 'restoring' : 'creating'} the encrypted account.
                             </p>
                             <label className="flex flex-col gap-1 text-left">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-brand-sage">Security Question</span>
+                              <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">Security Question</span>
                               <select
                                 value={questionId}
                                 onChange={(event) => { setQuestionId(event.target.value); setError(''); }}
@@ -864,7 +863,7 @@ export default function LockScreen({
                             </label>
                             {isCustomRecoveryQuestion && (
                               <label className="flex flex-col gap-1 text-left">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-brand-sage">Custom Question</span>
+                                <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">Custom Question</span>
                                 <input
                                   type="text"
                                   value={customRecoveryQuestion}
@@ -876,7 +875,7 @@ export default function LockScreen({
                               </label>
                             )}
                             <label className="flex flex-col gap-1 text-left">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-brand-sage">Security Answer</span>
+                              <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">Security Answer</span>
                               <div className="relative">
                                 <input
                                   type={showRecoveryAnswer ? 'text' : 'password'}
@@ -894,7 +893,7 @@ export default function LockScreen({
                           </div>
                         )}
                         <label className="flex flex-col gap-1 text-left">
-                          <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">
+                          <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
                             {isRecoveringSyncAccount ? 'Existing Recovery Passphrase' : 'New 8-Digit Recovery Passphrase'}
                           </span>
                           <div className="relative">
@@ -921,7 +920,7 @@ export default function LockScreen({
                         </label>
                         {isCreatingSyncAccount && (
                           <label className="flex flex-col gap-1 text-left">
-                            <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Confirm 8-Digit Passphrase</span>
+                            <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Confirm 8-Digit Passphrase</span>
                             <input
                               type={showRecoveryPassphrase ? 'text' : 'password'}
                               inputMode="numeric"
@@ -938,7 +937,7 @@ export default function LockScreen({
                             />
                           </label>
                         )}
-                        <div className="rounded-2xl border border-brand-pink/15 bg-brand-pink/5 p-3 text-left text-[10px] leading-relaxed text-brand-text-muted">
+                        <div className="rounded-2xl border border-brand-pink/15 bg-brand-pink/5 p-3 text-left text-xs leading-relaxed text-brand-text-muted">
                           {isRecoveringSyncAccount
                             ? 'Use the recovery passphrase you created when this encrypted account was first set up.'
                             : 'This 8-digit recovery passphrase protects your encrypted diary. Keep it somewhere safe.'}
@@ -958,8 +957,8 @@ export default function LockScreen({
                               <LoaderCircle className="h-4 w-4 animate-spin" />
                             </span>
                             <div className="min-w-0">
-                              <p className="text-[11px] font-extrabold text-brand-plum dark:text-brand-text">{accountSetupProgressMessage}</p>
-                              <p className="mt-0.5 text-[10px] font-semibold leading-relaxed text-brand-text-muted">{accountSetupProgressDetail}</p>
+                              <p className="text-xs font-extrabold text-brand-plum dark:text-brand-text">{accountSetupProgressMessage}</p>
+                              <p className="mt-0.5 text-xs font-semibold leading-relaxed text-brand-text-muted">{accountSetupProgressDetail}</p>
                             </div>
                           </div>
                           <div className="mt-3 grid grid-cols-5 gap-1.5">
@@ -968,7 +967,7 @@ export default function LockScreen({
                               const isActive = index === accountSetupProgressIndex;
                               return (
                                 <div key={step.key} className="min-w-0">
-                                  <div className={`mx-auto flex h-6 w-6 items-center justify-center rounded-full border text-[9px] font-black transition-colors ${
+                                  <div className={`mx-auto flex h-6 w-6 items-center justify-center rounded-full border text-xs font-black transition-colors ${
                                     isComplete
                                       ? 'border-brand-sage bg-brand-sage text-white'
                                       : isActive
@@ -977,7 +976,7 @@ export default function LockScreen({
                                   }`}>
                                     {isComplete ? <Check className="h-3 w-3" /> : isActive ? <LoaderCircle className="h-3 w-3 animate-spin" /> : index + 1}
                                   </div>
-                                  <p className={`mt-1 truncate text-center text-[8px] font-black uppercase tracking-[0.08em] ${
+                                  <p className={`mt-1 truncate text-center text-xs font-black uppercase tracking-[0.08em] ${
                                     isComplete || isActive ? 'text-brand-sage' : 'text-brand-text-muted/70'
                                   }`}>{step.label}</p>
                                 </div>
@@ -999,13 +998,13 @@ export default function LockScreen({
                         : !syncSetupSelection ? 'Connect Google Account' : isRecoveringSyncAccount ? 'Restore Encrypted Account' : 'Create Encrypted Account'}
                     </button>
                     {error && (
-                      <p className="text-[11px] font-bold text-brand-rose flex justify-center items-center gap-1">
+                      <p className="text-xs font-bold text-brand-rose flex justify-center items-center gap-1">
                         <AlertCircle className="w-3 h-3" />
                         <span>{error}</span>
                       </p>
                     )}
                     {successMsg && !error && !isLinkingBackup && (
-                      <p className="text-[11px] font-bold text-brand-sage flex justify-center items-center gap-1">
+                      <p className="text-xs font-bold text-brand-sage flex justify-center items-center gap-1">
                         <Check className="w-3 h-3" />
                         <span>{successMsg}</span>
                       </p>
@@ -1014,7 +1013,7 @@ export default function LockScreen({
                 ) : showRecoveryForm ? (
                   <div className="flex flex-col gap-3">
                     <label className="flex flex-col gap-1 text-left">
-                      <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Security Question</span>
+                      <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Security Question</span>
                       <select value={questionId} onChange={(e) => { setQuestionId(e.target.value); setError(''); }} className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink">
                         {SECURITY_RECOVERY_QUESTIONS.map(q => (
                           <option key={q.id} value={q.id}>{q.question}</option>
@@ -1024,12 +1023,12 @@ export default function LockScreen({
                     </label>
                     {isCustomRecoveryQuestion && (
                       <label className="flex flex-col gap-1 text-left">
-                        <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Custom Question</span>
+                        <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Custom Question</span>
                         <input type="text" value={customRecoveryQuestion} onChange={(e) => setCustomRecoveryQuestion(e.target.value)} className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" placeholder="Type your security question" />
                       </label>
                     )}
                     <label className="flex flex-col gap-1 text-left">
-                      <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Answer</span>
+                      <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Answer</span>
                       <div className="relative">
                         <input type={showRecoveryAnswer ? 'text' : 'password'} value={recoveryAnswer} onChange={(e) => setRecoveryAnswer(e.target.value)} className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" placeholder="Enter a memorable answer" />
                         <button type="button" onClick={() => setShowRecoveryAnswer(prev => !prev)} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink" title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}>
@@ -1054,7 +1053,7 @@ export default function LockScreen({
                               setPin('');
                               setError('');
                             }}
-                            className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+                            className={`py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
                               selectedPinLength === length
                                 ? 'bg-brand-pink text-white shadow-sm'
                                 : 'text-brand-sage hover:text-brand-plum'
@@ -1073,7 +1072,7 @@ export default function LockScreen({
                           return (
                             <div key={i} className="relative flex items-center justify-center">
                               <div className={`w-3 h-3 rounded-full border-2 transition-all lg:h-3.5 lg:w-3.5 ${hasDigit ? 'bg-brand-pink border-brand-pink shadow-md' : 'border-brand-text-muted/25 bg-transparent lg:border-brand-plum/45 dark:lg:border-[#EADCD1]/55'}`} />
-                              {hasDigit && showPin && <span className="absolute text-[8px] font-black text-white leading-none">{pin[i]}</span>}
+                              {hasDigit && showPin && <span className="absolute text-xs font-black text-white leading-none">{pin[i]}</span>}
                             </div>
                           );
                         })}
@@ -1081,13 +1080,13 @@ export default function LockScreen({
                       <div className="min-h-[16px] text-center flex flex-col items-center mt-1">
                         <AnimatePresence mode="wait">
                           {error && (
-                            <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-[11px] font-bold text-brand-rose flex items-center gap-1">
+                            <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-xs font-bold text-brand-rose flex items-center gap-1">
                               <AlertCircle className="w-3 h-3 flex-shrink-0" />
                               <span>{error}</span>
                             </motion.p>
                           )}
                           {successMsg && !error && (
-                            <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-[11px] font-bold text-brand-sage flex items-center gap-1">
+                            <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-xs font-bold text-brand-sage flex items-center gap-1">
                               <Check className="w-3.5 h-3.5 text-brand-sage" />
                               <span>{successMsg}</span>
                             </motion.p>
@@ -1103,18 +1102,18 @@ export default function LockScreen({
                         </motion.button>
                       ))}
                       <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => { pin.length > 0 ? handleClear() : setShowPin(!showPin); }} className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex flex-col items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5">
-                        {pin.length > 0 ? <span className="text-[10px] font-bold uppercase tracking-wider text-brand-pink">Clear</span> : <>{showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}<span className="text-[7px] font-bold tracking-wider uppercase text-brand-text-muted mt-1">Reveal</span></>}
+                        {pin.length > 0 ? <span className="text-xs font-bold uppercase tracking-wider text-brand-pink">Clear</span> : <>{showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}<span className="text-xs font-bold tracking-wider uppercase text-brand-text-muted mt-1">Reveal</span></>}
                       </motion.button>
                       <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress('0')} className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5">
                         <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">0</span>
                       </motion.button>
                       <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={handleBackspace} disabled={pin.length === 0} className={`w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex flex-col items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5 ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}>
                         <Delete className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
-                        <span className="text-[7px] font-bold tracking-wider uppercase text-brand-text-muted mt-1">Erase</span>
+                        <span className="text-xs font-bold tracking-wider uppercase text-brand-text-muted mt-1">Erase</span>
                       </motion.button>
                     </div>
 
-                    <button onClick={handleSubmit} disabled={!isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength)} className={`w-full py-3.5 lg:py-3 rounded-2xl font-bold text-[11px] sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}>
+                    <button onClick={handleSubmit} disabled={!isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength)} className={`w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}>
                       {security.isPinCreated ? 'Unlock Diary' : setupStep === 'confirm' ? 'Confirm PIN' : 'Continue'}
                     </button>
 
@@ -1122,7 +1121,7 @@ export default function LockScreen({
                       <label className="mt-1 flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-brand-border/55 bg-white/35 px-4 py-3 text-left dark:border-white/10 dark:bg-white/[0.03]">
                         <span>
                           <span className="block text-xs font-bold text-brand-plum dark:text-brand-text">Show clock before PIN</span>
-                          <span className="mt-0.5 block text-[10px] leading-relaxed text-brand-text-muted">Use the quiet ambient lock screen when the app opens.</span>
+                          <span className="mt-0.5 block text-xs leading-relaxed text-brand-text-muted">Use the quiet ambient lock screen when the app opens.</span>
                         </span>
                         <input
                           type="checkbox"
@@ -1137,13 +1136,13 @@ export default function LockScreen({
                 )}
 
                 {error && showRecoveryForm && (
-                  <p className="text-[11px] font-bold text-brand-rose flex justify-center items-center gap-1">
+                  <p className="text-xs font-bold text-brand-rose flex justify-center items-center gap-1">
                     <AlertCircle className="w-3 h-3" />
                     <span>{error}</span>
                   </p>
                 )}
                 {successMsg && showRecoveryForm && !error && (
-                  <p className="text-[11px] font-bold text-brand-sage flex justify-center items-center gap-1">
+                  <p className="text-xs font-bold text-brand-sage flex justify-center items-center gap-1">
                     <Check className="w-3 h-3" />
                     <span>{successMsg}</span>
                   </p>
@@ -1151,7 +1150,7 @@ export default function LockScreen({
 
                 {security.isPinCreated && !requiresRecoverySetup && !isResetting && (
                   <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
-                    <button onClick={() => { triggerHaptic(15); setRecoveryMode('choosing'); }} className="text-[10px] sm:text-[11px] font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors">
+                    <button onClick={() => { triggerHaptic(15); setRecoveryMode('choosing'); }} className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors">
                       Forgot security passcode PIN?
                     </button>
                   </div>
@@ -1170,12 +1169,12 @@ export default function LockScreen({
                           <div className="mt-3 flex w-full flex-col gap-3">
                             <p className="mx-auto mb-3 max-w-[260px] text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">Choose a verified recovery method to create a new passcode.</p>
                             <button onClick={() => { setRecoveryMode('question'); setRecoveryAnswer(''); }} className="group w-full rounded-2xl border border-brand-border/65 bg-white/45 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-pink/40 hover:bg-brand-pink/8 dark:border-white/10 dark:bg-white/[0.04] dark:hover:bg-white/[0.07]">
-                              <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-brand-pink">Recovery Method</span>
+                              <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-pink">Recovery Method</span>
                               <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">Answer Security Question</span>
                             </button>
                             {(security.linkedGoogleUserId || security.linkedGoogleUid) && (
                               <button onClick={handleVerifyGoogleReset} disabled={isResetting} className="group w-full rounded-2xl border border-brand-sage/30 bg-brand-sage/12 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-sage/55 hover:bg-brand-sage/18 disabled:opacity-50 dark:border-brand-sage/35 dark:bg-brand-sage/10">
-                                <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-brand-sage dark:text-brand-sage-light">Linked Account</span>
+                                <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-sage dark:text-brand-sage-light">Linked Account</span>
                                 <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">Verify Google Account</span>
                               </button>
                             )}
@@ -1208,7 +1207,7 @@ export default function LockScreen({
                                     setResetNewPin('');
                                     setResetConfirmPin('');
                                   }}
-                                  className={`py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${
+                                  className={`py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all ${
                                     resetPinLength === length ? 'bg-brand-pink text-white shadow-sm' : 'text-brand-sage hover:text-brand-plum dark:text-[#EADCD1]/70'
                                   }`}
                                 >
@@ -1223,9 +1222,9 @@ export default function LockScreen({
                         )}
 
                         {(error || successMsg) && (
-                          <p className={`mt-4 text-[11px] font-bold ${error ? 'text-brand-rose' : 'text-brand-sage'}`}>{error || successMsg}</p>
+                          <p className={`mt-4 text-xs font-bold ${error ? 'text-brand-rose' : 'text-brand-sage'}`}>{error || successMsg}</p>
                         )}
-                        <button onClick={() => { triggerHaptic(10); setRecoveryMode(null); setRecoveryVerifiedBy(null); setError(''); setSuccessMsg(''); }} className="mt-7 w-full py-2 text-[10px] font-black uppercase tracking-[0.18em] text-brand-text-muted transition-colors hover:text-brand-plum dark:hover:text-[#ECE6E1]">
+                        <button onClick={() => { triggerHaptic(10); setRecoveryMode(null); setRecoveryVerifiedBy(null); setError(''); setSuccessMsg(''); }} className="mt-7 w-full py-2 text-xs font-black uppercase tracking-[0.18em] text-brand-text-muted transition-colors hover:text-brand-plum dark:hover:text-[#ECE6E1]">
                           Cancel
                         </button>
                       </motion.div>
@@ -1239,11 +1238,11 @@ export default function LockScreen({
       </main>
 
       <footer className="pointer-events-none w-full max-w-sm lg:absolute lg:bottom-8 lg:left-8 lg:right-auto lg:max-w-none lg:items-start lg:text-left xl:left-10 text-center flex flex-col items-center gap-1 z-10 py-1 opacity-65">
-        <div className="flex items-center gap-1.5 bg-white/36 dark:bg-white/[0.05] px-3 py-1 rounded-full border border-brand-border/50 dark:border-white/10 text-[8px] sm:text-[9px] font-bold text-brand-plum dark:text-brand-text-muted uppercase tracking-widest backdrop-blur-xl">
+        <div className="flex items-center gap-1.5 bg-white/36 dark:bg-white/[0.05] px-3 py-1 rounded-full border border-brand-border/50 dark:border-white/10 text-xs sm:text-xs font-bold text-brand-plum dark:text-brand-text-muted uppercase tracking-widest backdrop-blur-xl">
           <Lock className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
           <span>Protected Access</span>
         </div>
-        <p className="text-[8px] sm:text-[9px] text-brand-text-muted max-w-[260px] leading-normal font-medium lg:hidden">
+        <p className="text-xs sm:text-xs text-brand-text-muted max-w-[260px] leading-normal font-medium lg:hidden">
           Your recovery passphrase protects your diary before encrypted backup begins.
         </p>
       </footer>

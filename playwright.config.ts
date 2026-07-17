@@ -19,6 +19,7 @@ export default defineConfig({
     timeout: 120_000,
     env: {
       NODE_ENV: 'development',
+      DISABLE_HMR: 'true',
       PORT: '4173',
       HOST: '127.0.0.1',
       VITE_DEAR_DIARY_E2E: '1',
