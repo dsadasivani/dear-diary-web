@@ -21,11 +21,11 @@ The API exposes `/actuator/health` without authentication. All `/api/v2/**` rout
 `SYNC_JWT_ENABLED=true` and a valid Supabase issuer/JWKS configuration is supplied. Only tokens with a
 non-empty subject and the `authenticated` role are accepted; anonymous and service-role tokens are rejected.
 
-Flyway owns the PostgreSQL schema through 21 ordered migrations in `src/main/resources/db/migration`.
+Flyway owns the PostgreSQL schema through 25 ordered migrations in `src/main/resources/db/migration`.
 The migration integration test uses PostgreSQL 16 through Testcontainers and skips only when Docker is unavailable.
 
 The authenticated Sync V2 API provides device registration and protocol negotiation, operation initiation,
-atomic idempotent commit and reconciliation, gap-checked ordered event pull, and monotonic per-device cursor
+atomic idempotent commit and reconciliation, gap-checked ordered event pull, monotonic per-device cursor
 acknowledgement under `/api/v2/sync/**`. Encrypted payloads remain in the configured object store; the database
 contains synchronization metadata and immutable object references.
 
@@ -39,8 +39,9 @@ Advanced workflows expose durable server state machines for controlled V1-to-V2 
 companion pairing, passphrase-wrapped primary recovery, and account-key rotation. Pairing uses short-lived
 challenge/response requests and target-bound encrypted packages. Recovery activates the replacement primary
 only after a local-key possession proof, verified snapshot restore, and cursor acknowledgment. Rotation advances
-the server epoch atomically only after packages exist for every active device plus recovery, and excludes revoked
-devices. The related protocol flags and kill switches remain disabled by default.
+the server epoch atomically only after packages exist for every remaining active device plus recovery, revokes the
+selected companion in the same transaction, and lets remaining devices prove application of their new package.
+Key rotation and secure device revocation are enabled by migration V25 and retain independent emergency kill switches.
 
 Remote object deletion is server-authoritative. The optional garbage-collection worker requires its own process
 switch, the runtime protocol flag, and the global kill switch to be open. It defaults to dry-run, considers only

@@ -883,6 +883,7 @@ test('primary recovery falls back to legacy snapshot when partitioned manifest r
 
 test('primary recovery finalizes after partition restore and stale tail replay', async () => {
   const repository = await createRepository();
+  await repository.saveSecurityConfig(recoveredSecurityConfig);
   const accountRootKey = crypto.getRandomValues(new Uint8Array(32));
   const recoveryBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
     accountRootKey,
@@ -1103,7 +1104,7 @@ test('primary recovery finalizes after partition restore and stale tail replay',
     supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
     recoveryPassphrase: 'a sufficiently long passphrase',
     localPin: '1234',
-    recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+    recoveryQuestion: { questionId: 'first-pet', answer: '' },
     repository,
     controlPlane,
     displayName: 'Phone',
@@ -1116,6 +1117,7 @@ test('primary recovery finalizes after partition restore and stale tail replay',
   assert.deepEqual(callOrder, ['cursor:5', 'finalize:5', 'cursor:6', 'finalize:6']);
   assert.equal((await repository.getNote(tailNote.id))?.title, 'Tail note');
   assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 6);
+  assert.equal((await repository.getSecurityConfig()).recoveryAnswerHash, recoveredSecurityConfig.recoveryAnswerHash);
 });
 
 test('primary recovery restores partition snapshots encrypted with older key epochs', async () => {

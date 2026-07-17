@@ -69,6 +69,7 @@ const STRUCTURED_COLLECTIONS: Record<string, StructuredStorageSpec> = {
   deardiary_sync_media_pointers: { kind: 'map', storeName: WEB_RECORD_STORES.mediaPointers },
   deardiary_sync_partition_hydration: { kind: 'map', storeName: WEB_RECORD_STORES.partitions },
   deardiary_sync_outbox: { kind: 'map', storeName: WEB_RECORD_STORES.outbox },
+  deardiary_sync_outbox_v2: { kind: 'map', storeName: WEB_RECORD_STORES.outboxV2 },
 };
 
 const metadataKeyForCollection = (key: string): string => `structured:${key}`;
@@ -309,6 +310,7 @@ export class WebLocalDataStore implements LocalDataStore {
     records: LocalStructuredRecordMutation[];
     items?: Record<string, string>;
     outboxOperation: import('../../types').SyncOutboxOperation;
+    outboxV2Operation: import('../../sync/outbox/SyncOutboxOperationV2').SyncOutboxOperationV2;
   }): Promise<void> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback) {
@@ -323,10 +325,17 @@ export class WebLocalDataStore implements LocalDataStore {
       input.outboxOperation.operationId,
       input.outboxOperation,
     );
+    this.appendStructuredMapPut(
+      batch,
+      'deardiary_sync_outbox_v2',
+      input.outboxV2Operation.operationId,
+      input.outboxV2Operation,
+    );
     await commitEncryptedStoreBatch(batch);
     input.records.forEach(record => removeLegacyLocalStorageItem(record.key));
     Object.keys(input.items || {}).forEach(removeLegacyLocalStorageItem);
     removeLegacyLocalStorageItem('deardiary_sync_outbox');
+    removeLegacyLocalStorageItem('deardiary_sync_outbox_v2');
   }
 
   async queryEntries(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<Entry> | undefined> {

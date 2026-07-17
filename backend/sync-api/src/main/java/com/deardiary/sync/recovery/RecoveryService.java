@@ -169,7 +169,7 @@ public class RecoveryService {
             updateStatus(account.accountId(), "FINALIZING", state.snapshotId(), null);
             jdbc.update("""
                 UPDATE sync_devices SET device_status = 'REVOKED', revoked_at = ?
-                WHERE account_id = ? AND device_role = 'PRIMARY' AND device_id <> ? AND device_status = 'ACTIVE'
+                WHERE account_id = ? AND device_id <> ? AND device_status IN ('ACTIVE', 'RECOVERY_PENDING')
                 """, now, account.accountId(), recoveryDeviceId);
             jdbc.update("""
                 UPDATE sync_devices SET device_status = 'ACTIVE', revoked_at = NULL, last_seen_at = ?

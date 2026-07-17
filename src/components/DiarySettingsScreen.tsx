@@ -24,7 +24,7 @@ export default function DiarySettingsScreen({
   const [selectedColor, setSelectedColor] = useState<string>(diary.color);
   const [isLocked, setIsLocked] = useState<boolean>(diary.isLocked);
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'look' | 'settings'>('look');
+  const [activeTab, setActiveTab] = useState<'look' | 'settings'>('settings');
 
   // Cover decoration states
   const [selectedFoilIcons, setSelectedFoilIcons] = useState<string[]>(diary.foilIcons || []);
@@ -74,7 +74,7 @@ export default function DiarySettingsScreen({
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="font-serif-diary text-xl font-bold text-brand-plum">Diary Settings</h1>
+          <h1 className="font-serif-diary text-xl font-bold text-brand-plum">Journal Settings</h1>
         </div>
         <button 
           onClick={handleSave}
@@ -135,7 +135,7 @@ export default function DiarySettingsScreen({
           {[
             { 
               id: 'look' as const, 
-              label: 'Design & Aesthetics', 
+              label: 'Appearance',
               icon: Palette,
               activeBg: 'bg-brand-pink',
               activeShadow: 'shadow-[0_4px_12px_rgba(181,66,97,0.25)]',
@@ -143,7 +143,7 @@ export default function DiarySettingsScreen({
             },
             { 
               id: 'settings' as const, 
-              label: 'Identity & Security', 
+              label: 'Basics & Privacy',
               icon: ShieldCheck,
               activeBg: 'bg-brand-sage',
               activeShadow: 'shadow-[0_4px_12px_rgba(69,98,80,0.25)]',
@@ -212,6 +212,8 @@ export default function DiarySettingsScreen({
                       onClick={() => setSelectedColor(color.hex)}
                       className="aspect-square rounded-xl relative flex items-center justify-center shadow-sm transition-transform hover:scale-105"
                       style={{ backgroundColor: color.hex }}
+                      aria-label={`Use ${color.name} cover color`}
+                      aria-pressed={selectedColor === color.hex}
                     >
                       {selectedColor === color.hex && (
                         <Check className="w-5 h-5 text-white stroke-[3px]" />
@@ -233,6 +235,8 @@ export default function DiarySettingsScreen({
                       key={emoji}
                       type="button"
                       onClick={() => setSelectedEmoji(emoji)}
+                      aria-label={`Use ${emoji} as journal icon`}
+                      aria-pressed={selectedEmoji === emoji}
                       className={`w-11 h-11 text-xl flex items-center justify-center rounded-xl transition-all ${
                         selectedEmoji === emoji 
                           ? 'bg-brand-sage-light dark:bg-brand-sage-light/10 text-brand-sage-dark border-2 border-brand-sage scale-110' 
@@ -300,12 +304,12 @@ export default function DiarySettingsScreen({
               {/* Name Input Card */}
               <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Diary Title</label>
+                  <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Journal Name</label>
                   <input 
                     type="text" 
                     value={diaryName}
                     onChange={(e) => setDiaryName(e.target.value)}
-                    placeholder="Diary Name"
+                    placeholder="Journal name"
                     className="w-full bg-transparent border-b border-brand-border py-2 text-base text-brand-plum font-serif-diary focus:outline-none focus:border-brand-pink transition-colors"
                   />
                 </div>
@@ -318,14 +322,15 @@ export default function DiarySettingsScreen({
                     <Lock className="w-4 h-4" />
                   </span>
                   <div>
-                    <h3 className="text-sm font-bold text-brand-plum">Private Diary Lock</h3>
-                    <p className="text-[11px] text-brand-sage mt-0.5">Require your app PIN to open this diary</p>
+                    <h3 className="text-sm font-bold text-brand-plum">Private Journal Lock</h3>
+                    <p className="text-[11px] text-brand-sage mt-0.5">Require your app PIN to open this journal</p>
                   </div>
                 </div>
 
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input 
                     type="checkbox" 
+                    aria-label="Require the app PIN to open this journal"
                     checked={isLocked}
                     onChange={(e) => setIsLocked(e.target.checked)}
                     className="sr-only peer" 
@@ -341,7 +346,7 @@ export default function DiarySettingsScreen({
                   <h3 className="text-sm font-bold">Danger Zone</h3>
                 </div>
                 <p className="text-xs text-red-600/90 leading-relaxed">
-                  Deleting this diary is permanent. It will cascade and delete all associated journal entries, logs, and photo databases records.
+                  Deleting this journal permanently removes its entries and memories from this device and synced backups.
                 </p>
 
                 {!showConfirmDelete ? (
@@ -351,7 +356,7 @@ export default function DiarySettingsScreen({
                     className="py-2.5 rounded-full bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
                   >
                     <Trash2 className="w-4 h-4" />
-                    Delete Diary
+                    Delete Journal
                   </button>
                 ) : (
                   <div className="flex flex-col gap-2">

@@ -1,4 +1,4 @@
-import type { CompanionKeyPackage } from '../types';
+import type { CompanionKeyPackage, CompanionPinVerifier } from '../types';
 import { ACCOUNT_ROOT_KEY_BYTES } from './e2eeKeyPackage';
 import {
   fingerprintDevicePublicKey,
@@ -48,7 +48,11 @@ export const wrapRootKeyForCompanion = async (
   accountRootKey: Uint8Array,
   accountId: string,
   targetDevicePublicKey: string,
-  options: { keyEpoch?: number; accountRootKeys?: Record<number, Uint8Array> } = {},
+  options: {
+    keyEpoch?: number;
+    accountRootKeys?: Record<number, Uint8Array>;
+    pinVerifier?: CompanionPinVerifier;
+  } = {},
 ): Promise<CompanionKeyPackage> => {
   if (accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Account root key length is invalid.');
   Object.entries(options.accountRootKeys || {}).forEach(([epoch, key]) => {
@@ -92,6 +96,27 @@ export const wrapRootKeyForCompanion = async (
   const wrappedEpochRootKeys = options.accountRootKeys
     ? await Promise.all(epochRootKeys.map(entry => wrapEpochRootKey(entry.keyEpoch, entry.rootKey)))
     : undefined;
+  let wrappedPinVerifier: CompanionKeyPackage['wrappedPinVerifier'];
+  if (options.pinVerifier) {
+    const verifier = options.pinVerifier;
+    if (
+      verifier.version !== 1 ||
+      !verifier.pinHash ||
+      !verifier.pinSalt ||
+      (verifier.pinLength !== 4 && verifier.pinLength !== 8)
+    ) throw new Error('Companion PIN verifier is invalid.');
+    const verifierNonce = crypto.getRandomValues(new Uint8Array(12));
+    const additionalData = encoder.encode(`${accountId}:${targetDevicePublicKeySha256}:pin-verifier:v1`);
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: verifierNonce, additionalData },
+      wrappingKey,
+      encoder.encode(JSON.stringify(verifier)),
+    ));
+    wrappedPinVerifier = {
+      nonce: bytesToBase64(verifierNonce),
+      ciphertext: bytesToBase64(ciphertext),
+    };
+  }
   return {
     version: 1,
     packageKind: 'companion_root_key',
@@ -105,6 +130,7 @@ export const wrapRootKeyForCompanion = async (
     nonce: primaryWrapped.nonce,
     wrappedRootKey: primaryWrapped.wrappedRootKey,
     wrappedEpochRootKeys,
+    wrappedPinVerifier,
     createdAt: new Date().toISOString(),
   };
 };
@@ -113,7 +139,12 @@ export const unwrapRootKeysForCompanion = async (
   keyPackage: CompanionKeyPackage,
   targetDevicePublicKey: string,
   targetDevicePrivateKey: string,
-): Promise<{ keyEpoch: number; accountRootKey: Uint8Array; accountRootKeys: Record<number, Uint8Array> }> => {
+): Promise<{
+  keyEpoch: number;
+  accountRootKey: Uint8Array;
+  accountRootKeys: Record<number, Uint8Array>;
+  pinVerifier?: CompanionPinVerifier;
+}> => {
   if (
     keyPackage.version !== 1 ||
     keyPackage.packageKind !== 'companion_root_key' ||
@@ -161,10 +192,32 @@ export const unwrapRootKeysForCompanion = async (
         wrapped.wrappedRootKey,
       );
     }
+    let pinVerifier: CompanionPinVerifier | undefined;
+    if (keyPackage.wrappedPinVerifier) {
+      const additionalData = encoder.encode(`${keyPackage.accountId}:${fingerprint}:pin-verifier:v1`);
+      const plaintext = await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: base64ToBytes(keyPackage.wrappedPinVerifier.nonce),
+          additionalData,
+        },
+        wrappingKey,
+        base64ToBytes(keyPackage.wrappedPinVerifier.ciphertext),
+      );
+      const candidate = JSON.parse(decoder.decode(plaintext)) as CompanionPinVerifier;
+      if (
+        candidate.version !== 1 ||
+        !candidate.pinHash ||
+        !candidate.pinSalt ||
+        (candidate.pinLength !== 4 && candidate.pinLength !== 8)
+      ) throw new Error('Companion PIN verifier is invalid.');
+      pinVerifier = candidate;
+    }
     return {
       keyEpoch,
       accountRootKey: accountRootKeys[keyEpoch] || accountRootKey,
       accountRootKeys,
+      pinVerifier,
     };
   } catch {
     throw new Error('Companion key package authentication failed.');

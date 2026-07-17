@@ -551,6 +551,27 @@ test('classifies account-wide outbox failures separately from record failures', 
   assert.equal(isAccountWideOutboxFailure(new Error('local media file missing')), false);
 });
 
+test('routes lifecycle work through an installed Sync V2 runtime delegate', async () => {
+  const repository = await createRepository();
+  const engine = new EventSyncEngine(repository);
+  const calls: string[] = [];
+  const delegate = {
+    async start() { calls.push('start'); },
+    async stop() { calls.push('stop'); },
+    async pullPending() { calls.push('pull'); },
+    async flushPendingOutbox() { calls.push('flush'); },
+    requestOutboxFlush(delayMs = 0) { calls.push(`request:${delayMs}`); },
+  };
+  engine.installRuntimeDelegate(delegate);
+  engine.startPolling();
+  await engine.pullPending();
+  await engine.flushPendingOutbox();
+  engine.requestOutboxFlush(25);
+  engine.stopPolling();
+  await Promise.resolve();
+  assert.deepEqual(calls, ['start', 'pull', 'flush', 'request:25', 'stop']);
+});
+
 test('resumes a media-uploaded outbox write without reuploading media', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({

@@ -1,6 +1,6 @@
 import type { LocalDataStore } from '../../../platform/storage';
 import type { SyncV2ApiClient } from '../api/SyncV2ApiClient';
-import type { SyncV2MigrationStatus, SyncV2UploadInstruction } from '../api/SyncV2ApiTypes';
+import type { SyncV2MigrationStatus, SyncV2Pairing, SyncV2UploadInstruction } from '../api/SyncV2ApiTypes';
 import { NOOP_SYNC_FAULT_INJECTOR, type SyncFaultInjector } from '../faults/SyncFaultInjector';
 import { sha256Hex } from '../operation/BoundedObjectTransfer';
 
@@ -40,6 +40,7 @@ export class SyncV2MigrationCoordinator {
       baselineSequence(): Promise<number>;
       createSnapshot(): Promise<{ snapshotId: string }>;
       verifyTemporaryRestore(snapshotId: string): Promise<string>;
+      activateV2?(): Promise<void>;
     },
   ) {}
 
@@ -65,6 +66,7 @@ export class SyncV2MigrationCoordinator {
       state.status = remote.status;
       await this.journal.save(state);
     }
+    await this.local.activateV2?.();
     await this.journal.clear();
   }
 
@@ -112,31 +114,43 @@ export class SyncV2PairingCoordinator {
     private readonly api: PairingApi,
     private readonly journal: WorkflowJournalStore<PairingJournal>,
     private readonly crypto: {
-      createDeviceKey(): Promise<{ publicKey: string; privateKeyHandle: string }>;
+      createDeviceKey(): Promise<{ signingPublicKey: string; encryptionPublicKey: string; privateKeyHandle: string }>;
       randomChallenge(): Promise<string>;
       sign(privateKeyHandle: string, message: string): Promise<string>;
       approvalSignature(message: string): Promise<string>;
       encryptKeyPackage(requestedPublicKey: string): Promise<Uint8Array>;
-      decryptAndPersist(privateKeyHandle: string, encrypted: Uint8Array): Promise<void>;
+      decryptAndPersist(privateKeyHandle: string, encrypted: Uint8Array, requestedPublicKey: string): Promise<void>;
     },
     private readonly transfer: {
       upload(bytes: Uint8Array, instruction: SyncV2UploadInstruction): Promise<void>;
-      download(url: string): Promise<Uint8Array>;
+      download(pairing: Pick<SyncV2Pairing, 'downloadUrl' | 'sha256' | 'sizeBytes'>): Promise<Uint8Array>;
     },
     private readonly approvalJournal: WorkflowJournalStore<PairingApprovalJournal>,
   ) {}
 
-  async request(requestedDeviceId: string, platform: string): Promise<{ pairingId: string; pairingCode: string }> {
+  async request(requestedDeviceId: string, platform: string): Promise<{ pairingId: string; pairingCode: string; requestedDeviceId: string }> {
     const existing = await this.journal.load();
-    if (existing) return { pairingId: existing.pairingId, pairingCode: existing.pairingCode };
+    if (existing) return {
+      pairingId: existing.pairingId,
+      pairingCode: existing.pairingCode,
+      requestedDeviceId: existing.requestedDeviceId,
+    };
     const key = await this.crypto.createDeviceKey();
     const pairingId = crypto.randomUUID();
     const pairingCode = String(Math.floor(Math.random() * 100_000_000)).padStart(8, '0');
     const challenge = await this.crypto.randomChallenge();
     const codeHash = await sha256Hex(new TextEncoder().encode(pairingCode));
     await this.journal.save({ pairingId, requestedDeviceId, privateKeyHandle: key.privateKeyHandle, pairingCode, challenge });
-    await this.api.createPairing({ pairingId, requestedDeviceId, requestedDevicePublicKey: key.publicKey, platform, codeHash, challenge });
-    return { pairingId, pairingCode };
+    await this.api.createPairing({
+      pairingId,
+      requestedDeviceId,
+      requestedDeviceSigningPublicKey: key.signingPublicKey,
+      requestedDeviceEncryptionPublicKey: key.encryptionPublicKey,
+      platform,
+      codeHash,
+      challenge,
+    });
+    return { pairingId, pairingCode, requestedDeviceId };
   }
 
   async approve(input: {
@@ -173,17 +187,22 @@ export class SyncV2PairingCoordinator {
     await this.approvalJournal.clear();
   }
 
-  async complete(): Promise<void> {
+  async complete(afterComplete?: (pairing: SyncV2Pairing) => Promise<void>): Promise<void> {
     const state = await this.journal.load();
     if (!state) throw new Error('No pairing is in progress.');
     const remote = await this.api.getPairing(state.pairingId, state.requestedDeviceId);
     if (!remote.downloadUrl || !remote.keyPackageId) throw new Error('Pairing package is not available.');
-    await this.crypto.decryptAndPersist(state.privateKeyHandle, await this.transfer.download(remote.downloadUrl));
+    await this.crypto.decryptAndPersist(
+      state.privateKeyHandle,
+      await this.transfer.download(remote),
+      remote.requestedDeviceEncryptionPublicKey,
+    );
     const message = `pairing-complete:${state.pairingId}:${remote.keyPackageId}`;
-    await this.api.completePairing(state.pairingId, {
+    const completed = await this.api.completePairing(state.pairingId, {
       requestedDeviceId: state.requestedDeviceId,
       possessionSignature: await this.crypto.sign(state.privateKeyHandle, message),
     });
+    await afterComplete?.(completed);
     await this.journal.clear();
   }
 }
@@ -252,6 +271,7 @@ interface RotationJournal {
   encryptedKeyHandle: string;
   packages?: RotationPackageJournal[];
   packagesUploaded: boolean;
+  revokedDeviceId?: string;
 }
 type RotationApi = Pick<SyncV2ApiClient,
   'beginRotation' | 'advanceRotation' | 'initiateKeyPackage' | 'registerKeyPackage'
@@ -274,18 +294,21 @@ export class SyncV2RotationCoordinator {
     private readonly faults: SyncFaultInjector = NOOP_SYNC_FAULT_INJECTOR,
   ) {}
 
-  async run(deviceId: string): Promise<void> {
+  async run(deviceId: string, revokedDeviceId?: string): Promise<void> {
     let state = await this.journal.load();
     let remote;
     if (!state) {
       const rotationId = crypto.randomUUID();
-      remote = await this.api.beginRotation(rotationId, deviceId);
+      remote = await this.api.beginRotation(rotationId, deviceId, revokedDeviceId);
       const encryptedKeyHandle = await this.local.createEncryptedAccountKey(remote.toKeyEpoch);
-      state = { rotationId, deviceId, toEpoch: remote.toKeyEpoch, encryptedKeyHandle, packagesUploaded: false };
+      state = { rotationId, deviceId, toEpoch: remote.toKeyEpoch, encryptedKeyHandle, packagesUploaded: false, revokedDeviceId };
       await this.journal.save(state);
       await this.faults.hit('AFTER_KEY_CREATION');
     } else {
       remote = await this.api.getRotation(state.rotationId);
+      if ((state.revokedDeviceId || undefined) !== (revokedDeviceId || state.revokedDeviceId || undefined)) {
+        throw new Error('A different companion revocation is already in progress.');
+      }
     }
     if (remote.status === 'PREPARING') remote = await this.api.advanceRotation(state.rotationId, deviceId, 'NEW_KEY_CREATED');
     if (!state.packagesUploaded) {

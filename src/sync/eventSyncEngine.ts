@@ -320,11 +320,20 @@ export class SyncConflictError extends Error {
   }
 }
 
+export interface SyncRuntimeDelegate {
+  start(): void | Promise<void>;
+  stop(): void | Promise<void>;
+  pullPending(): Promise<void>;
+  flushPendingOutbox(): Promise<void>;
+  requestOutboxFlush(delayMs?: number): void;
+}
+
 export class EventSyncEngine {
   private operationTail: Promise<void> = Promise.resolve();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private outboxFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private realtimeClient: SupabaseClient | null = null;
+  private runtimeDelegate: SyncRuntimeDelegate | null = null;
   private realtimeChannel: RealtimeChannel | null = null;
   private readonly isOnline: () => boolean;
   private readonly loadSecrets: () => Promise<SyncSecrets | null>;
@@ -405,7 +414,15 @@ export class EventSyncEngine {
     }));
   }
 
+  installRuntimeDelegate(delegate: SyncRuntimeDelegate | null): void {
+    if (this.runtimeDelegate === delegate) return;
+    if (this.runtimeDelegate) void this.runtimeDelegate.stop();
+    this.stopLegacyPolling();
+    this.runtimeDelegate = delegate;
+  }
+
   pullPending(): Promise<void> {
+    if (this.runtimeDelegate) return this.runtimeDelegate.pullPending();
     if (!getSyncRuntimeFlags().remotePullEnabled) return Promise.resolve();
     return this.enqueue(() => this.syncHealthService.track(
       'PULL',
@@ -414,6 +431,10 @@ export class EventSyncEngine {
   }
 
   requestOutboxFlush(delayMs = 0): void {
+    if (this.runtimeDelegate) {
+      this.runtimeDelegate.requestOutboxFlush(delayMs);
+      return;
+    }
     if (this.outboxFlushTimer) return;
     this.outboxFlushTimer = setTimeout(() => {
       this.outboxFlushTimer = null;
@@ -424,6 +445,7 @@ export class EventSyncEngine {
   }
 
   flushPendingOutbox(): Promise<void> {
+    if (this.runtimeDelegate) return this.runtimeDelegate.flushPendingOutbox();
     if (!getSyncRuntimeFlags().syncWritesEnabled) return Promise.resolve();
     return this.enqueue(() => this.syncHealthService.track(
       'PUSH',
@@ -593,6 +615,10 @@ export class EventSyncEngine {
   }
 
   startPolling(intervalMs = 90_000): void {
+    if (this.runtimeDelegate) {
+      void this.runtimeDelegate.start();
+      return;
+    }
     if (this.pollTimer) return;
     void this.pullPending().catch(error => console.warn('Initial encrypted sync pull failed:', error));
     void this.ensurePartitionedSync().catch(error => console.warn('Partitioned sync migration will be retried:', error));
@@ -608,6 +634,14 @@ export class EventSyncEngine {
   }
 
   stopPolling(): void {
+    if (this.runtimeDelegate) {
+      void this.runtimeDelegate.stop();
+      return;
+    }
+    this.stopLegacyPolling();
+  }
+
+  private stopLegacyPolling(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
     if (this.realtimeClient && this.realtimeChannel) {

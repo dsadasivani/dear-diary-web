@@ -2,6 +2,7 @@ package com.deardiary.sync.pairing;
 
 import jakarta.validation.Valid;
 import java.util.UUID;
+import java.util.List;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,6 +19,10 @@ public class PairingController {
     public PairingController(PairingService pairings) { this.pairings = pairings; }
     @PostMapping PairingResponse create(Authentication auth, @Valid @RequestBody PairingRequests.Create request) {
         return pairings.create(auth.getName(), request);
+    }
+    @GetMapping("/pending") List<PairingResponse> pending(Authentication auth,
+            @RequestParam UUID approverDeviceId) {
+        return pairings.listPending(auth.getName(), approverDeviceId);
     }
     @PostMapping("/{id}/approve") PairingResponse approve(Authentication auth, @PathVariable UUID id,
             @Valid @RequestBody PairingRequests.Approve request) { return pairings.approve(auth.getName(), id, request); }

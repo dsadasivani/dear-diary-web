@@ -542,10 +542,10 @@ export default function DiaryDetailScreen({
                   className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage disabled:opacity-30"
                 >
                   <ChevronLeft className="h-5 w-5" />
-                  Previous
+                  Older Entry
                 </button>
                 <span className="text-xs font-bold uppercase tracking-[0.18em] text-brand-text-muted">
-                  Page {activeEntryIndex + 1} of {filteredEntries.length}
+                  {activeEntryIndex + 1} of {filteredEntries.length}
                 </span>
                 <button
                   type="button"
@@ -553,7 +553,7 @@ export default function DiaryDetailScreen({
                   disabled={activeEntryIndex === 0}
                   className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage disabled:opacity-30"
                 >
-                  Next
+                  Newer Entry
                   <ChevronRight className="h-5 w-5" />
                 </button>
               </footer>
@@ -680,6 +680,7 @@ export default function DiaryDetailScreen({
         <div className="flex items-center gap-2">
           <button 
             onClick={onBack}
+            aria-label="Back to journals"
             className="p-2 text-brand-plum hover:bg-brand-blush-light rounded-full transition-all active:scale-95"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -731,7 +732,7 @@ export default function DiaryDetailScreen({
                   className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-xl transition-all text-left w-full"
                 >
                   <Settings className="w-4 h-4 text-brand-pink" />
-                  <span>Diary Cover Settings</span>
+                  <span>Journal Settings</span>
                 </button>
               </div>
             </>
@@ -981,6 +982,7 @@ export default function DiaryDetailScreen({
             <div className="flex items-center justify-between w-full max-w-[280px]">
               <button 
                 onClick={handlePrev}
+                aria-label="Older Entry"
                 disabled={activeEntryIndex === filteredEntries.length - 1}
                 className={`p-2 rounded-xl transition-all ${
                   activeEntryIndex === filteredEntries.length - 1 
@@ -997,6 +999,7 @@ export default function DiaryDetailScreen({
               
               <button 
                 onClick={handleNext}
+                aria-label="Newer Entry"
                 disabled={activeEntryIndex === 0}
                 className={`p-2 rounded-xl transition-all ${
                   activeEntryIndex === 0 
@@ -1008,8 +1011,8 @@ export default function DiaryDetailScreen({
               </button>
             </div>
             
-            {/* Page position slider dots indicator */}
-            <div className="flex gap-1.5 justify-center py-1.5 max-w-full overflow-x-auto no-scrollbar">
+            {/* A bounded position indicator avoids one tiny control for every entry. */}
+            <div className="hidden">
               {filteredEntries.map((_, idx) => (
                 <button
                   key={idx}

@@ -196,7 +196,7 @@ public class SnapshotService {
                 reference_kind, created_sequence, created_at
             ) VALUES (?, ?, 'ACCOUNT', ?, 'SNAPSHOT', ?, ?)
             ON CONFLICT DO NOTHING
-            """, accountId, snapshot.objectKey(), accountId, Math.max(1, snapshot.sequence()), now);
+            """, accountId, snapshot.objectKey(), accountId.toString(), Math.max(1, snapshot.sequence()), now);
         return new SnapshotRow(snapshot.snapshotId(), snapshot.sequence(), snapshot.partitionKey(),
             snapshot.objectKey(), snapshot.sha256(), snapshot.sizeBytes(), snapshot.keyEpoch(),
             snapshot.schemaVersion(), "AVAILABLE", snapshot.deviceId());

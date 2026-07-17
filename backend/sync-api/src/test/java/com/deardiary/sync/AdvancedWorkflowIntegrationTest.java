@@ -5,14 +5,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.deardiary.sync.account.AccountAuthorizationService;
 import com.deardiary.sync.common.ApiException;
+import com.deardiary.sync.cursor.CursorService;
 import com.deardiary.sync.device.DeviceAuthorizationService;
 import com.deardiary.sync.device.DeviceRegistrationRequest;
 import com.deardiary.sync.device.DeviceRegistrationService;
+import com.deardiary.sync.device.DeviceManagementService;
 import com.deardiary.sync.migration.AdvanceMigrationRequest;
 import com.deardiary.sync.migration.BeginMigrationRequest;
 import com.deardiary.sync.migration.MigrationService;
 import com.deardiary.sync.keypackage.KeyPackageRequest;
 import com.deardiary.sync.keypackage.KeyPackageService;
+import com.deardiary.sync.keypackage.ApplyDeviceKeyPackageRequest;
 import com.deardiary.sync.objectstore.InMemoryEncryptedObjectStore;
 import com.deardiary.sync.objectstore.ObjectKey;
 import com.deardiary.sync.objectstore.ObjectKeyFactory;
@@ -93,13 +96,24 @@ class AdvancedWorkflowIntegrationTest {
         var code = "12345678";
         var codeHash = sha256(code.getBytes(StandardCharsets.UTF_8));
         pairings.create("advanced-user", new PairingRequests.Create(pairingId, companionId,
-            Base64.getEncoder().encodeToString(companionKey.getPublic().getEncoded()), "test", codeHash,
+            Base64.getEncoder().encodeToString(companionKey.getPublic().getEncoded()), "e".repeat(32), "test", codeHash,
             Base64.getEncoder().encodeToString(challenge)));
         var approvalMessage = pairingId + ":" + companionId + ":" + Base64.getEncoder().encodeToString(challenge) + ":" + codeHash;
-        var approved = pairings.approve("advanced-user", pairingId, new PairingRequests.Approve(
-            primaryDeviceId, code, sign(primaryKey, approvalMessage), UUID.randomUUID(), "a".repeat(64), 7, 1));
+        var firstPackageId = UUID.randomUUID();
+        pairings.approve("advanced-user", pairingId, new PairingRequests.Approve(
+            primaryDeviceId, code, sign(primaryKey, approvalMessage), firstPackageId, "a".repeat(64), 7, 1));
         assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?", String.class, companionId))
             .isEqualTo("RECOVERY_PENDING");
+        assertThat(pairings.listPending("advanced-user", primaryDeviceId))
+            .extracting(pairing -> pairing.pairingId())
+            .containsExactly(pairingId);
+        jdbc.update("UPDATE sync_pairing_requests SET expires_at = requested_at + INTERVAL '1 second' WHERE pairing_id = ?", pairingId);
+        var retriedPackageId = UUID.randomUUID();
+        var approved = pairings.approve("advanced-user", pairingId, new PairingRequests.Approve(
+            primaryDeviceId, code, sign(primaryKey, approvalMessage), retriedPackageId, "b".repeat(64), 8, 1));
+        assertThat(approved.keyPackageId()).isEqualTo(retriedPackageId);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sync_key_packages WHERE pairing_id = ?", Integer.class, pairingId))
+            .isEqualTo(1);
         objectStore.markUploaded(new ObjectKey(approved.objectKey()));
         var available = pairings.registerPackage("advanced-user", pairingId, primaryDeviceId);
         var completion = "pairing-complete:" + pairingId + ":" + available.keyPackageId();
@@ -109,6 +123,12 @@ class AdvancedWorkflowIntegrationTest {
             .isEqualTo("ACTIVE");
         assertThat(jdbc.queryForObject("SELECT pairing_status FROM sync_pairing_requests", String.class))
             .isEqualTo("COMPLETED");
+        var listed = new DeviceManagementService(jdbc, devices).list("advanced-user", primaryDeviceId);
+        assertThat(listed).anySatisfy(device -> {
+            assertThat(device.deviceId()).isEqualTo(companionId);
+            assertThat(device.deviceRole()).isEqualTo("COMPANION");
+            assertThat(device.encryptionPublicKey()).isEqualTo("e".repeat(32));
+        });
     }
 
     @Test
@@ -116,7 +136,8 @@ class AdvancedWorkflowIntegrationTest {
         var migrations = new MigrationService(jdbc, transactions, devices, clock);
         var migrationId = UUID.randomUUID();
         var digest = "b".repeat(64);
-        migrations.begin("advanced-user", new BeginMigrationRequest(migrationId, primaryDeviceId, digest, 0));
+        // The V1 baseline and the newly registered V2 account have independent sequence spaces.
+        migrations.begin("advanced-user", new BeginMigrationRequest(migrationId, primaryDeviceId, digest, 7));
         advance(migrations, migrationId, "DRAINING_V1", null, null);
         advance(migrations, migrationId, "VALIDATING_LOCAL_STATE", null, null);
         advance(migrations, migrationId, "CREATING_V2_SNAPSHOT", digest, null);
@@ -144,6 +165,17 @@ class AdvancedWorkflowIntegrationTest {
         createAndRegisterPackage(packages, objectStore, UUID.randomUUID(), primaryDeviceId, 1,
             "RECOVERY", null);
         var recovery = new RecoveryService(jdbc, transactions, accounts, protocols, packages, clock);
+        var companionDevice = UUID.randomUUID();
+        var now = OffsetDateTime.now(clock);
+        jdbc.update("""
+            INSERT INTO sync_devices (device_id, account_id, device_public_key, device_role, device_status,
+                registered_at, last_seen_at, created_protocol_version)
+            VALUES (?, ?, ?, 'COMPANION', 'ACTIVE', ?, ?, 2)
+            """, companionDevice, accountId, KeyPairGenerator.getInstance("EC").generateKeyPair().getPublic().getEncoded(), now, now);
+        jdbc.update("""
+            INSERT INTO sync_device_cursors (account_id, device_id, last_applied_sequence, last_acknowledged_at)
+            VALUES (?, ?, 0, ?)
+            """, accountId, companionDevice, now);
         var recoveredKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
         var recoveredDevice = UUID.randomUUID();
         var attempt = UUID.randomUUID();
@@ -155,8 +187,12 @@ class AdvancedWorkflowIntegrationTest {
         var snapshotId = insertAvailableSnapshot();
         recovery.markLocalKeyPersisted("advanced-user", attempt, new RecoveryRequests.Persisted(
             recoveredDevice, snapshotId, sign(recoveredKey, "recovery-key-persisted:" + attempt + ":" + snapshotId)));
+        var cursors = new CursorService(jdbc, transactions, devices, clock);
+        assertThat(cursors.acknowledge("advanced-user", recoveredDevice, 0).lastAppliedSequence()).isZero();
         assertThat(recovery.finalizeRecovery("advanced-user", attempt, recoveredDevice).status()).isEqualTo("COMPLETED");
         assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?", String.class, primaryDeviceId))
+            .isEqualTo("REVOKED");
+        assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?", String.class, companionDevice))
             .isEqualTo("REVOKED");
         assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?", String.class, recoveredDevice))
             .isEqualTo("ACTIVE");
@@ -185,6 +221,69 @@ class AdvancedWorkflowIntegrationTest {
         var completed = rotations.advance("advanced-user", rotationId,
             new RotationRequests.Advance(primaryDeviceId, "COMPLETED"));
         assertThat(completed.status()).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void revocationExcludesTargetFromNewEpochAndCommitsStatusAtomically() throws Exception {
+        enable("key_rotation_enabled", "KEY_ROTATION");
+        enable("device_revocation_enabled", "DEVICE_REVOCATION");
+        var companionId = UUID.randomUUID();
+        var companionKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
+        var remainingCompanionId = UUID.randomUUID();
+        var remainingCompanionKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
+        var now = OffsetDateTime.now(clock);
+        jdbc.update("""
+            INSERT INTO sync_devices (device_id, account_id, device_public_key, device_role, device_status,
+                registered_at, last_seen_at, created_protocol_version)
+            VALUES (?, ?, ?, 'COMPANION', 'ACTIVE', ?, ?, 2)
+            """, companionId, accountId, companionKey.getPublic().getEncoded(), now, now);
+        jdbc.update("""
+            INSERT INTO sync_devices (device_id, account_id, device_public_key, device_role, device_status,
+                registered_at, last_seen_at, created_protocol_version)
+            VALUES (?, ?, ?, 'COMPANION', 'ACTIVE', ?, ?, 2)
+            """, remainingCompanionId, accountId, remainingCompanionKey.getPublic().getEncoded(), now, now);
+        jdbc.update("""
+            INSERT INTO sync_device_cursors (account_id, device_id, last_applied_sequence, last_acknowledged_at)
+            VALUES (?, ?, 0, ?)
+            """, accountId, companionId, now);
+        jdbc.update("""
+            INSERT INTO sync_device_cursors (account_id, device_id, last_applied_sequence, last_acknowledged_at)
+            VALUES (?, ?, 0, ?)
+            """, accountId, remainingCompanionId, now);
+
+        var objectStore = new InMemoryEncryptedObjectStore();
+        var protocols = new ProtocolService(jdbc);
+        var packages = new KeyPackageService(jdbc, transactions, devices, accounts,
+            new ObjectKeyFactory(), objectStore, clock, protocols);
+        var rotations = new RotationService(jdbc, transactions, devices, protocols, clock);
+        var rotationId = UUID.randomUUID();
+        var begun = rotations.begin("advanced-user", new RotationRequests.Begin(
+            rotationId, primaryDeviceId, companionId));
+        assertThat(begun.revokedDeviceId()).isEqualTo(companionId);
+        rotations.advance("advanced-user", rotationId, new RotationRequests.Advance(primaryDeviceId, "NEW_KEY_CREATED"));
+        assertApiCode(() -> createAndRegisterPackage(packages, objectStore, UUID.randomUUID(), companionId, 2,
+            "DEVICE", rotationId), "KEY_PACKAGE_TARGET_REVOKED");
+        var remainingPackageId = UUID.randomUUID();
+        createAndRegisterPackage(packages, objectStore, remainingPackageId, remainingCompanionId, 2,
+            "DEVICE", rotationId);
+        createAndRegisterPackage(packages, objectStore, UUID.randomUUID(), primaryDeviceId, 2,
+            "RECOVERY", rotationId);
+        rotations.advance("advanced-user", rotationId, new RotationRequests.Advance(primaryDeviceId, "KEY_PACKAGES_CREATED"));
+        rotations.advance("advanced-user", rotationId, new RotationRequests.Advance(primaryDeviceId, "SERVER_EPOCH_PENDING"));
+
+        rotations.commitServerEpoch("advanced-user", rotationId, primaryDeviceId);
+
+        assertThat(jdbc.queryForObject("SELECT current_key_epoch FROM sync_accounts WHERE account_id = ?",
+            Integer.class, accountId)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?",
+            String.class, companionId)).isEqualTo("REVOKED");
+        assertApiCode(() -> devices.requireActiveDevice("advanced-user", companionId), "DEVICE_REVOKED");
+        var available = packages.availableForDevice("advanced-user", remainingCompanionId);
+        assertThat(available).extracting(item -> item.keyPackageId()).containsExactly(remainingPackageId);
+        var applied = packages.applyDevicePackage("advanced-user", remainingPackageId,
+            new ApplyDeviceKeyPackageRequest(remainingCompanionId,
+                sign(remainingCompanionKey, "key-package-applied:" + remainingPackageId + ":2")));
+        assertThat(applied.status()).isEqualTo("APPLIED");
     }
 
     private void advance(MigrationService service, UUID id, String status, String digest, UUID snapshotId) {
@@ -231,4 +330,12 @@ class AdvancedWorkflowIntegrationTest {
     private String sha256(byte[] value) throws Exception {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
     }
+
+    private void assertApiCode(ThrowingAction action, String code) {
+        assertThatThrownBy(action::run)
+            .isInstanceOfSatisfying(ApiException.class, error -> assertThat(error.code()).isEqualTo(code));
+    }
+
+    @FunctionalInterface
+    private interface ThrowingAction { void run() throws Exception; }
 }

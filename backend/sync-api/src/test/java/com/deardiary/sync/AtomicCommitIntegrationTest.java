@@ -166,7 +166,7 @@ class AtomicCommitIntegrationTest {
 
     @Test
     void missingObjectRollsBackEveryAuthoritativeCommitSideEffect() {
-        var operation = initiate(deviceId, UUID.randomUUID(), 0);
+        var operation = initiate(deviceId, "note-" + UUID.randomUUID(), 0);
 
         assertApiCode(() -> commits.commit("commit-user", operation.operationId()), "OBJECT_MISSING");
 
@@ -264,6 +264,10 @@ class AtomicCommitIntegrationTest {
     }
 
     private Initiated initiate(UUID committingDeviceId, UUID recordId, long baseVersion) {
+        return initiate(committingDeviceId, recordId.toString(), baseVersion);
+    }
+
+    private Initiated initiate(UUID committingDeviceId, String recordId, long baseVersion) {
         var operationId = UUID.randomUUID();
         var objectKey = keys.create(accountId);
         initiation.initiate("commit-user", new InitiateOperationRequest(

@@ -16,6 +16,8 @@ import type {
   SyncV2Pairing,
   SyncV2Recovery,
   SyncV2Rotation,
+  SyncV2DeviceRegistration,
+  SyncV2Device,
 } from './SyncV2ApiTypes';
 
 export type SyncV2AccessTokenProvider = () => Promise<string>;
@@ -55,12 +57,30 @@ export class SyncV2ApiClient {
   private readonly baseUrl: string;
 
   constructor(private readonly config: SyncV2ApiClientConfig) {
-    this.fetcher = config.fetch || fetch;
+    const configuredFetcher = config.fetch;
+    this.fetcher = configuredFetcher
+      ? (input, init) => configuredFetcher(input, init)
+      : (input, init) => globalThis.fetch(input, init);
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
   }
 
   getProtocol(): Promise<SyncV2Protocol> {
     return this.json('/api/v2/sync/protocol', { method: 'GET' });
+  }
+
+  registerDevice(request: {
+    deviceId: string;
+    devicePublicKey: string;
+    deviceRole: 'PRIMARY' | 'COMPANION';
+    protocolVersion: number;
+    appVersion: string;
+    initialKeyEpoch: number;
+  }): Promise<SyncV2DeviceRegistration> {
+    return this.json('/api/v2/sync/devices', { method: 'POST', body: JSON.stringify(request) });
+  }
+
+  listDevices(requestingDeviceId: string): Promise<SyncV2Device[]> {
+    return this.json(`/api/v2/sync/devices?requestingDeviceId=${encodeURIComponent(requestingDeviceId)}`, { method: 'GET' });
   }
 
   initiateOperation(request: InitiateSyncV2OperationRequest): Promise<InitiateSyncV2OperationResponse> {
@@ -128,6 +148,10 @@ export class SyncV2ApiClient {
     return this.json('/api/v2/sync/pairings', { method: 'POST', body: JSON.stringify(request) });
   }
 
+  listPendingPairings(approverDeviceId: string): Promise<SyncV2Pairing[]> {
+    return this.json(`/api/v2/sync/pairings/pending?approverDeviceId=${encodeURIComponent(approverDeviceId)}`, { method: 'GET' });
+  }
+
   approvePairing(pairingId: string, request: Record<string, unknown>): Promise<SyncV2Pairing> {
     return this.json(`/api/v2/sync/pairings/${encodeURIComponent(pairingId)}/approve`, { method: 'POST', body: JSON.stringify(request) });
   }
@@ -156,6 +180,20 @@ export class SyncV2ApiClient {
     return this.json('/api/v2/sync/key-packages/recovery/latest', { method: 'GET' });
   }
 
+  getRecoveryStatus(): Promise<SyncV2Recovery> {
+    return this.json('/api/v2/sync/recovery', { method: 'GET' });
+  }
+
+  listDeviceKeyPackages(deviceId: string): Promise<SyncV2KeyPackage[]> {
+    return this.json(`/api/v2/sync/key-packages/device?deviceId=${encodeURIComponent(deviceId)}`, { method: 'GET' });
+  }
+
+  applyDeviceKeyPackage(keyPackageId: string, deviceId: string, possessionSignature: string): Promise<SyncV2KeyPackage> {
+    return this.json(`/api/v2/sync/key-packages/${encodeURIComponent(keyPackageId)}/apply`, {
+      method: 'POST', body: JSON.stringify({ deviceId, possessionSignature }),
+    });
+  }
+
   beginRecovery(request: Record<string, unknown>): Promise<SyncV2Recovery> {
     return this.json('/api/v2/sync/recovery/begin', { method: 'POST', body: JSON.stringify(request) });
   }
@@ -176,8 +214,10 @@ export class SyncV2ApiClient {
     return this.json(`/api/v2/sync/recovery/finalize?attemptId=${encodeURIComponent(attemptId)}&recoveryDeviceId=${encodeURIComponent(recoveryDeviceId)}`, { method: 'POST' });
   }
 
-  beginRotation(rotationId: string, deviceId: string): Promise<SyncV2Rotation> {
-    return this.json('/api/v2/sync/rotations/begin', { method: 'POST', body: JSON.stringify({ rotationId, deviceId }) });
+  beginRotation(rotationId: string, deviceId: string, revokedDeviceId?: string): Promise<SyncV2Rotation> {
+    return this.json('/api/v2/sync/rotations/begin', {
+      method: 'POST', body: JSON.stringify({ rotationId, deviceId, revokedDeviceId }),
+    });
   }
 
   advanceRotation(rotationId: string, deviceId: string, nextStatus: string): Promise<SyncV2Rotation> {

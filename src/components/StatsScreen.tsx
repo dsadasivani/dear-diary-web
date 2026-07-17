@@ -276,7 +276,7 @@ export default function StatsScreen({
   const hasUnhydratedArchives = archiveMonths.some(month => month.status !== 'hydrated');
   const entryScopeLabel = hasUnhydratedArchives ? 'Downloaded Entries' : 'Total Entries';
   const photoScopeLabel = hasUnhydratedArchives ? 'Downloaded Photos' : 'Visual Memories';
-  const scopeHint = 'Stats reflect downloaded memories. Restore older archive months to complete these totals.';
+  const scopeHint = 'Insights reflect entries available on this device. Restore older archive months to complete these totals.';
 
   if (layout === 'desktop') {
     const dominantMood = moodData[0];
@@ -285,7 +285,7 @@ export default function StatsScreen({
       <div className="space-y-7 pb-8">
         <header className="flex flex-wrap items-start justify-between gap-5 xl:gap-6">
           <div>
-            <h1 className="font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">Your Reflections</h1>
+            <h1 className="font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">Insights</h1>
             <p className="mt-2 max-w-2xl text-lg leading-relaxed text-brand-text-muted">
               Taking a moment to observe the journey of your thoughts over time.
             </p>
@@ -472,9 +472,10 @@ export default function StatsScreen({
           <span className="p-2 bg-brand-sage-light/20 text-brand-sage rounded-full">
             <BarChart2 className="w-5 h-5" />
           </span>
-          <h1 className="font-serif-diary text-3xl text-brand-plum tracking-tight font-bold">Reflections Hub</h1>
+          <h1 className="font-serif-diary text-3xl text-brand-plum tracking-tight font-bold">Insights</h1>
         </div>
         <button 
+          aria-label="Open settings"
           onClick={() => onNavigate('stats', 'appSettings')}
           className="p-2 text-brand-sage hover:bg-brand-blush-light rounded-full transition-all"
         >
@@ -861,7 +862,7 @@ export default function StatsScreen({
                             }`}
                             title={entry ? `${entry.title} (${entry.moodEmoji} ${entry.moodName})` : 'No reflection logged'}
                           >
-                            <span className="text-[10px] font-bold text-brand-text/60 self-start">
+                            <span className="text-[10px] font-bold text-brand-text/75 self-start">
                               {d}
                             </span>
                             {entry ? (

@@ -92,6 +92,10 @@ export class SyncV2SnapshotCoordinator {
   }
 
   async restoreLatest(): Promise<number> {
+    return (await this.restoreLatestWithMetadata()).throughSequence;
+  }
+
+  async restoreLatestWithMetadata(): Promise<SyncV2Snapshot> {
     const span = this.telemetry.startSpan('snapshot.restore');
     try {
       const snapshot = await this.api.getLatestSnapshot(this.options.snapshotSchemaVersion);
@@ -116,7 +120,7 @@ export class SyncV2SnapshotCoordinator {
       await this.api.acknowledgeCursor(this.options.deviceId, snapshot.throughSequence);
       this.telemetry.counter('deardiary.sync.snapshot_restore.success', 1);
       span.end();
-      return snapshot.throughSequence;
+      return snapshot;
     } catch (error) {
       if (error instanceof InjectedSyncCrash) throw error;
       const typed = isSyncError(error)

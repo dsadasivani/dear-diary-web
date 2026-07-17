@@ -127,7 +127,7 @@ export default function SearchScreen({
               body: richTextHtmlToPlainText(entry.body),
               date: entry.date,
               tags: entry.tags,
-              diaryName: diaryNamesById[entry.diaryId] || 'Unknown Diary',
+              diaryName: diaryNamesById[entry.diaryId] || 'Unknown Journal',
               photoCount: entry.photoCount,
               rawObj: entry,
             });
@@ -235,8 +235,8 @@ export default function SearchScreen({
         <div>
           <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Date range</h2>
           <div className="mt-4 space-y-3">
-            <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className="w-full rounded-xl border border-brand-border bg-white/70 px-4 py-3 text-sm font-bold text-brand-plum outline-none" />
-            <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className="w-full rounded-xl border border-brand-border bg-white/70 px-4 py-3 text-sm font-bold text-brand-plum outline-none" />
+            <label className="block text-xs font-bold text-brand-text-muted">From date<input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className="mt-1 w-full rounded-xl border border-brand-border bg-white/70 px-4 py-3 text-sm font-bold text-brand-plum outline-none" /></label>
+            <label className="block text-xs font-bold text-brand-text-muted">To date<input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className="mt-1 w-full rounded-xl border border-brand-border bg-white/70 px-4 py-3 text-sm font-bold text-brand-plum outline-none" /></label>
           </div>
         </div>
 
@@ -477,6 +477,7 @@ export default function SearchScreen({
               <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">From Date</span>
               <input 
                 type="date" 
+                aria-label="From date"
                 value={fromDate}
                 onChange={(e) => setFromDate(e.target.value)}
                 className="bg-brand-bg border border-brand-rose-light text-xs font-serif-diary p-2 rounded-xl focus:outline-none"
@@ -486,6 +487,7 @@ export default function SearchScreen({
               <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">To Date</span>
               <input 
                 type="date" 
+                aria-label="To date"
                 value={toDate}
                 onChange={(e) => setToDate(e.target.value)}
                 className="bg-brand-bg border border-brand-rose-light text-xs font-serif-diary p-2 rounded-xl focus:outline-none"
@@ -615,7 +617,7 @@ export default function SearchScreen({
                   : 'bg-brand-blush-light text-brand-pink-dark'
               }`}>
                 {item.type === 'entry' ? <BookOpen className="w-3 h-3" /> : <FileText className="w-3 h-3" />}
-                {item.type === 'entry' ? `Diary: ${item.diaryName}` : 'Quick Note'}
+                {item.type === 'entry' ? `Journal: ${item.diaryName}` : 'Note'}
               </span>
               <span className="text-[10px] text-brand-sage font-semibold">{item.date}</span>
             </div>

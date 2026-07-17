@@ -260,6 +260,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     records: LocalStructuredRecordMutation[];
     items?: Record<string, string>;
     outboxOperation: SyncOutboxOperation;
+    outboxV2Operation: SyncOutboxOperationV2;
   }): Promise<void> {
     await measureAsync('sqlite.structured.localMutationAndOutbox', () => this.enqueueWrite(async () => {
       const db = await this.ensureInitialized();
@@ -274,6 +275,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         }
         if (input.items) await this.writeSerializedItemsInTransaction(db, input.items, false);
         await this.upsertOutboxOperation(db, input.outboxOperation, false);
+        await this.upsertOutboxV2Operation(db, input.outboxV2Operation, false);
         await db.commitTransaction();
       } catch (error) {
         await db.rollbackTransaction().catch(() => undefined);
@@ -1813,28 +1815,37 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       if (!operation?.operationId) continue;
       const rawJson = JSON.stringify(operation);
       if (existingByKey.get(operationId) === rawJson) continue;
-      await db.run(
-        `INSERT INTO sync_outbox_v2 (
-          operation_id, account_id, device_id, record_type, record_id, operation_type,
-          base_record_version, state, retry_count, next_attempt_at, lease_owner,
-          lease_expires_at, dependency_operation_id, created_at, updated_at, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(operation_id) DO UPDATE SET
-          account_id = excluded.account_id, device_id = excluded.device_id,
-          record_type = excluded.record_type, record_id = excluded.record_id,
-          operation_type = excluded.operation_type, base_record_version = excluded.base_record_version,
-          state = excluded.state, retry_count = excluded.retry_count,
-          next_attempt_at = excluded.next_attempt_at, lease_owner = excluded.lease_owner,
-          lease_expires_at = excluded.lease_expires_at,
-          dependency_operation_id = excluded.dependency_operation_id,
-          updated_at = excluded.updated_at, raw_json = excluded.raw_json;`,
-        [operationId, operation.accountId, operation.deviceId, operation.recordType, operation.recordId,
-          operation.operationType, operation.baseRecordVersion, operation.state, operation.retryCount,
-          operation.nextAttemptAt, operation.leaseOwner || null, operation.leaseExpiresAt || null,
-          operation.dependencyOperationId || null, operation.createdAt, operation.updatedAt, rawJson],
-        transaction,
-      );
+      await this.upsertOutboxV2Operation(db, operation, transaction);
     }
+  }
+
+  private async upsertOutboxV2Operation(
+    db: SQLiteDBConnection,
+    operation: SyncOutboxOperationV2,
+    transaction = true,
+  ): Promise<void> {
+    await db.run(
+      `INSERT INTO sync_outbox_v2 (
+        operation_id, account_id, device_id, record_type, record_id, operation_type,
+        base_record_version, state, retry_count, next_attempt_at, lease_owner,
+        lease_expires_at, dependency_operation_id, created_at, updated_at, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(operation_id) DO UPDATE SET
+        account_id = excluded.account_id, device_id = excluded.device_id,
+        record_type = excluded.record_type, record_id = excluded.record_id,
+        operation_type = excluded.operation_type, base_record_version = excluded.base_record_version,
+        state = excluded.state, retry_count = excluded.retry_count,
+        next_attempt_at = excluded.next_attempt_at, lease_owner = excluded.lease_owner,
+        lease_expires_at = excluded.lease_expires_at,
+        dependency_operation_id = excluded.dependency_operation_id,
+        updated_at = excluded.updated_at, raw_json = excluded.raw_json;`,
+      [operation.operationId, operation.accountId, operation.deviceId, operation.recordType, operation.recordId,
+        operation.operationType, operation.baseRecordVersion, operation.state, operation.retryCount,
+        operation.nextAttemptAt, operation.leaseOwner || null, operation.leaseExpiresAt || null,
+        operation.dependencyOperationId || null, operation.createdAt, operation.updatedAt,
+        JSON.stringify(operation)],
+      transaction,
+    );
   }
 
   private async syncDiaries(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {

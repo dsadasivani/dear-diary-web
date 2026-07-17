@@ -34,7 +34,7 @@ public class CursorService {
         if (requestedSequence < 0) {
             throw new ApiException("INVALID_CURSOR", HttpStatus.BAD_REQUEST, "The device cursor is invalid.");
         }
-        var device = devices.requireActiveDevice(ownerSubject, deviceId);
+        var device = devices.requireCursorDevice(ownerSubject, deviceId);
         return transactions.execute(status -> acknowledgeInTransaction(device.accountId(), deviceId, requestedSequence));
     }
 
@@ -45,11 +45,24 @@ public class CursorService {
         var accountSequence = jdbc.queryForObject(
             "SELECT current_sequence FROM sync_accounts WHERE account_id = ? FOR UPDATE",
             Long.class, accountId);
-        var deviceStatus = jdbc.queryForObject("""
-            SELECT device_status FROM sync_devices
-            WHERE account_id = ? AND device_id = ? FOR UPDATE
-            """, String.class, accountId, deviceId);
-        if (!"ACTIVE".equals(deviceStatus)) {
+        var deviceAuthorization = jdbc.queryForObject("""
+            SELECT d.device_status,
+                   EXISTS (
+                       SELECT 1 FROM sync_recovery_state r
+                       WHERE r.account_id = d.account_id
+                         AND r.recovery_device_id = d.device_id
+                         AND r.recovery_status IN (
+                             'REQUESTED', 'APPROVED', 'KEY_PACKAGE_PENDING',
+                             'KEY_PACKAGE_AVAILABLE', 'LOCAL_KEY_PERSISTED', 'FINALIZING'
+                         )
+                   ) AS active_recovery
+            FROM sync_devices d
+            WHERE d.account_id = ? AND d.device_id = ? FOR UPDATE
+            """, (rs, row) -> new Object[] { rs.getString("device_status"), rs.getBoolean("active_recovery") },
+            accountId, deviceId);
+        var cursorAuthorized = "ACTIVE".equals(deviceAuthorization[0])
+            || ("RECOVERY_PENDING".equals(deviceAuthorization[0]) && Boolean.TRUE.equals(deviceAuthorization[1]));
+        if (!cursorAuthorized) {
             throw new ApiException("DEVICE_REVOKED", HttpStatus.FORBIDDEN,
                 "The device is no longer authorized.", false, true, Map.of());
         }

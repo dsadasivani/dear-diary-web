@@ -61,7 +61,7 @@ class OperationInitiationIntegrationTest {
 
     @Test
     void duplicateInitiationReturnsTheExistingMatchingOperation() {
-        var request = request(UUID.randomUUID(), UUID.randomUUID(), keys.create(accountId).value(), 512);
+        var request = request(UUID.randomUUID(), "note-" + UUID.randomUUID(), keys.create(accountId).value(), 512);
 
         var first = operations.initiate("operation-user", request);
         var repeated = operations.initiate("operation-user", request);
@@ -122,6 +122,10 @@ class OperationInitiationIntegrationTest {
     }
 
     private static InitiateOperationRequest request(UUID operationId, UUID recordId, String objectKey, long size) {
+        return request(operationId, recordId.toString(), objectKey, size);
+    }
+
+    private static InitiateOperationRequest request(UUID operationId, String recordId, String objectKey, long size) {
         return new InitiateOperationRequest(
             operationId, deviceId, "ENTRY", recordId, "UPSERT", 0,
             2, 2, 1, "2026-07",

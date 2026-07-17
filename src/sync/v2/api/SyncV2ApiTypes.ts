@@ -28,6 +28,25 @@ export interface SyncV2Protocol {
   featureFlags: SyncV2FeatureFlags;
 }
 
+export interface SyncV2DeviceRegistration {
+  accountId: string;
+  deviceId: string;
+  deviceRole: 'PRIMARY' | 'COMPANION';
+  deviceStatus: 'ACTIVE' | 'RECOVERY_PENDING' | 'REVOKED';
+  created: boolean;
+}
+
+export interface SyncV2Device {
+  deviceId: string;
+  deviceRole: 'PRIMARY' | 'COMPANION';
+  deviceStatus: 'ACTIVE' | 'RECOVERY_PENDING' | 'REVOKED';
+  platform: string;
+  encryptionPublicKey: string | null;
+  registeredAt: string;
+  lastSeenAt: string;
+  lastAppVersion: string | null;
+}
+
 export interface SyncV2OperationObject {
   objectKey: string;
   objectKind: 'EVENT' | 'MEDIA' | 'THUMBNAIL';
@@ -153,8 +172,12 @@ export interface SyncV2Migration {
 }
 
 export interface SyncV2Pairing {
+  accountId: string;
   pairingId: string;
   requestedDeviceId: string;
+  requestedDeviceEncryptionPublicKey: string;
+  platform: string;
+  challenge: string;
   status: 'REQUESTED' | 'APPROVED' | 'KEY_PACKAGE_PENDING' | 'KEY_PACKAGE_AVAILABLE' | 'COMPLETED' | 'EXPIRED' | 'REJECTED';
   keyEpoch: number;
   keyPackageId: string | null;
@@ -164,6 +187,7 @@ export interface SyncV2Pairing {
   downloadUrl: string | null;
   downloadExpiresAt: string | null;
   upload: SyncV2UploadInstruction | null;
+  requestedAt: string;
   expiresAt: string;
 }
 
@@ -193,6 +217,7 @@ export interface SyncV2Recovery {
 export interface SyncV2Rotation {
   rotationId: string;
   initiatedByDeviceId: string;
+  revokedDeviceId: string | null;
   fromKeyEpoch: number;
   toKeyEpoch: number;
   status: 'PREPARING' | 'NEW_KEY_CREATED' | 'KEY_PACKAGES_CREATED' | 'SERVER_EPOCH_PENDING' | 'SERVER_EPOCH_COMMITTED' | 'LOCAL_STATE_COMMITTED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';

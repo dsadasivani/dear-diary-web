@@ -139,7 +139,7 @@ export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
       throw new SyncError({ code: 'SCHEMA_INCOMPATIBLE', safetyRelevant: true });
     }
     for (const [key, version] of Object.entries(state.recordVersions)) {
-      if (!/^(DIARY|ENTRY|NOTE|SETTINGS|PROFILE):[^:]+$/.test(key) || !Number.isInteger(version) || version < 1) {
+      if (!/^(DIARY|ENTRY|NOTE|SETTINGS|PROFILE|SECURITY):[^:]+$/.test(key) || !Number.isInteger(version) || version < 0) {
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       }
     }

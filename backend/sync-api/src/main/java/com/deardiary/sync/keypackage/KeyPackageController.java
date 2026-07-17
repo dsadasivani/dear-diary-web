@@ -2,6 +2,7 @@ package com.deardiary.sync.keypackage;
 
 import jakarta.validation.Valid;
 import java.util.UUID;
+import java.util.List;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,5 +24,12 @@ public class KeyPackageController {
             @RequestParam UUID creatorDeviceId) { return packages.register(auth.getName(), id, creatorDeviceId); }
     @GetMapping("/recovery/latest") KeyPackageResponse latestRecovery(Authentication auth) {
         return packages.latestRecovery(auth.getName());
+    }
+    @GetMapping("/device") List<KeyPackageResponse> devicePackages(Authentication auth, @RequestParam UUID deviceId) {
+        return packages.availableForDevice(auth.getName(), deviceId);
+    }
+    @PostMapping("/{id}/apply") KeyPackageResponse apply(Authentication auth, @PathVariable UUID id,
+            @Valid @RequestBody ApplyDeviceKeyPackageRequest request) {
+        return packages.applyDevicePackage(auth.getName(), id, request);
     }
 }

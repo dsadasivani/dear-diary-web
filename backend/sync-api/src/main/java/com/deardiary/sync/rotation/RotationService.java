@@ -52,18 +52,21 @@ public class RotationService {
             var epoch = lockAccount(device.accountId());
             var existing = loadOptional(device.accountId(), request.rotationId(), true);
             if (existing != null) {
-                if (!existing.deviceId().equals(request.deviceId()) || existing.fromEpoch() != epoch) {
+                if (!existing.deviceId().equals(request.deviceId()) || existing.fromEpoch() != epoch
+                        || !java.util.Objects.equals(existing.revokedDeviceId(), request.revokedDeviceId())) {
                     throw invalid("IDEMPOTENCY_MISMATCH");
                 }
                 return response(existing);
             }
+            if (request.revokedDeviceId() != null) requireRevocableCompanion(device.accountId(), request.revokedDeviceId());
             var now = OffsetDateTime.now(clock);
             jdbc.update("""
                 INSERT INTO sync_key_rotations (
                     account_id, rotation_id, initiated_by_device_id, from_key_epoch,
-                    to_key_epoch, rotation_status, initiated_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'PREPARING', ?, ?)
-                """, device.accountId(), request.rotationId(), request.deviceId(), epoch, epoch + 1, now, now);
+                    to_key_epoch, revoked_device_id, rotation_status, initiated_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'PREPARING', ?, ?)
+                """, device.accountId(), request.rotationId(), request.deviceId(), epoch, epoch + 1,
+                request.revokedDeviceId(), now, now);
             return response(load(device.accountId(), request.rotationId(), false));
         });
     }
@@ -104,6 +107,12 @@ public class RotationService {
             var now = OffsetDateTime.now(clock);
             jdbc.update("UPDATE sync_accounts SET current_key_epoch = ?, updated_at = ? WHERE account_id = ?",
                 row.toEpoch(), now, device.accountId());
+            if (row.revokedDeviceId() != null) {
+                jdbc.update("""
+                    UPDATE sync_devices SET device_status = 'REVOKED', revoked_at = ?, last_seen_at = ?
+                    WHERE account_id = ? AND device_id = ? AND device_status = 'ACTIVE'
+                    """, now, now, device.accountId(), row.revokedDeviceId());
+            }
             update(device.accountId(), rotationId, "SERVER_EPOCH_COMMITTED", false);
             return response(load(device.accountId(), rotationId, false));
         });
@@ -139,19 +148,25 @@ public class RotationService {
     }
 
     private void requireCompletePackages(UUID accountId, RotationRow row) {
-        var activeDevices = jdbc.queryForObject("SELECT count(*) FROM sync_devices WHERE account_id = ? AND device_status = 'ACTIVE'",
-            Long.class, accountId);
-        var devicePackages = jdbc.queryForObject("""
-            SELECT count(DISTINCT target_device_id) FROM sync_key_packages
-            WHERE account_id = ? AND rotation_id = ? AND key_epoch = ?
-              AND package_purpose = 'DEVICE' AND package_status = 'AVAILABLE'
-            """, Long.class, accountId, row.rotationId(), row.toEpoch());
+        var missingDevicePackages = jdbc.queryForObject("""
+            SELECT count(*) FROM sync_devices d
+            WHERE d.account_id = ? AND d.device_status = 'ACTIVE'
+              AND (?::uuid IS NULL OR d.device_id <> ?::uuid)
+              AND NOT EXISTS (
+                SELECT 1 FROM sync_key_packages k
+                WHERE k.account_id = d.account_id AND k.target_device_id = d.device_id
+                  AND k.rotation_id = ? AND k.key_epoch = ?
+                  AND k.package_purpose = 'DEVICE' AND k.package_status = 'AVAILABLE'
+              )
+              AND d.device_id <> ?
+            """, Long.class, accountId, row.revokedDeviceId(), row.revokedDeviceId(),
+            row.rotationId(), row.toEpoch(), row.deviceId());
         var recoveryPackages = jdbc.queryForObject("""
             SELECT count(*) FROM sync_key_packages
             WHERE account_id = ? AND rotation_id = ? AND key_epoch = ?
               AND package_purpose = 'RECOVERY' AND package_status = 'AVAILABLE'
             """, Long.class, accountId, row.rotationId(), row.toEpoch());
-        if (!activeDevices.equals(devicePackages) || recoveryPackages == 0) throw new ApiException(
+        if (missingDevicePackages != 0 || recoveryPackages == 0) throw new ApiException(
             "KEY_PACKAGES_INCOMPLETE", HttpStatus.CONFLICT,
             "Every active device and recovery path must have a new key package.", true, false, Map.of());
     }
@@ -165,6 +180,16 @@ public class RotationService {
     private void requirePrimary(UUID account, UUID device) { var role = jdbc.queryForObject(
         "SELECT device_role FROM sync_devices WHERE account_id = ? AND device_id = ?", String.class, account, device);
         if (!"PRIMARY".equals(role)) throw invalid("KEY_ROTATION_FORBIDDEN"); }
+    private void requireRevocableCompanion(UUID account, UUID device) {
+        if (!protocols.current().featureFlags().deviceRevocationEnabled()) throw new ApiException(
+            "DEVICE_REVOCATION_DISABLED", HttpStatus.SERVICE_UNAVAILABLE,
+            "Device revocation is temporarily disabled.", true, false, Map.of());
+        var rows = jdbc.query("SELECT device_role, device_status FROM sync_devices WHERE account_id = ? AND device_id = ?",
+            (rs, n) -> new String[] { rs.getString(1), rs.getString(2) }, account, device);
+        if (rows.isEmpty() || !"COMPANION".equals(rows.getFirst()[0]) || !"ACTIVE".equals(rows.getFirst()[1])) {
+            throw invalid("DEVICE_NOT_REVOCABLE");
+        }
+    }
     private void requireInitiator(RotationRow row, UUID device) { if (!row.deviceId().equals(device)) throw invalid("KEY_ROTATION_FORBIDDEN"); }
     private void update(UUID account, UUID rotation, String state, boolean finalized) { var now = OffsetDateTime.now(clock); jdbc.update("""
         UPDATE sync_key_rotations SET rotation_status = ?, finalized_at = CASE WHEN ? THEN ? ELSE finalized_at END, updated_at = ?
@@ -173,10 +198,10 @@ public class RotationService {
     private RotationRow load(UUID account, UUID id, boolean lock) { var row = loadOptional(account, id, lock);
         if (row == null) throw invalid("KEY_ROTATION_NOT_FOUND"); return row; }
     private RotationRow loadOptional(UUID account, UUID id, boolean lock) { var rows = jdbc.query("""
-        SELECT rotation_id, initiated_by_device_id, from_key_epoch, to_key_epoch, rotation_status
+        SELECT rotation_id, initiated_by_device_id, revoked_device_id, from_key_epoch, to_key_epoch, rotation_status
         FROM sync_key_rotations WHERE account_id = ? AND rotation_id = ?
         """ + (lock ? " FOR UPDATE" : ""), (rs, n) -> new RotationRow(rs.getObject(1, UUID.class),
-            rs.getObject(2, UUID.class), rs.getInt(3), rs.getInt(4), rs.getString(5)), account, id);
+            rs.getObject(2, UUID.class), rs.getObject(3, UUID.class), rs.getInt(4), rs.getInt(5), rs.getString(6)), account, id);
         return rows.isEmpty() ? null : rows.getFirst(); }
     private boolean later(String status) { return Set.of("LOCAL_STATE_COMMITTED", "COMPLETED").contains(status); }
     private void verify(byte[] publicKey, String message, String signature) { try { var verifier = Signature.getInstance("SHA256withECDSA");
@@ -184,8 +209,8 @@ public class RotationService {
         verifier.update(message.getBytes(StandardCharsets.UTF_8));
         if (!verifier.verify(Base64.getDecoder().decode(signature))) throw invalid("INVALID_ROTATION_PROOF");
         } catch (ApiException e) { throw e; } catch (Exception e) { throw invalid("INVALID_ROTATION_PROOF"); } }
-    private RotationResponse response(RotationRow row) { return new RotationResponse(row.rotationId(), row.deviceId(), row.fromEpoch(), row.toEpoch(), row.status()); }
+    private RotationResponse response(RotationRow row) { return new RotationResponse(row.rotationId(), row.deviceId(), row.revokedDeviceId(), row.fromEpoch(), row.toEpoch(), row.status()); }
     private ApiException invalid(String code) { return new ApiException(code, HttpStatus.CONFLICT,
         "The key rotation state is invalid.", false, true, Map.of()); }
-    private record RotationRow(UUID rotationId, UUID deviceId, int fromEpoch, int toEpoch, String status) {}
+    private record RotationRow(UUID rotationId, UUID deviceId, UUID revokedDeviceId, int fromEpoch, int toEpoch, String status) {}
 }

@@ -262,7 +262,7 @@ export default function AppSettingsScreen({
       setDriveSyncStatus(await eventSyncEngine.getDriveSyncStatus());
     } catch (error: any) {
       setDriveSyncStatus(null);
-      setDriveSyncStatusError(error?.message || 'Drive sync status could not be loaded.');
+      setDriveSyncStatusError(error?.message || 'Sync & Backup status could not be loaded.');
     } finally {
       setIsDriveSyncStatusLoading(false);
     }
@@ -748,7 +748,7 @@ export default function AppSettingsScreen({
             },
             { 
               id: 'security' as const, 
-              label: 'Security', 
+              label: 'Privacy & Security',
               icon: ShieldCheck, 
               activeBg: 'bg-brand-sage', 
               activeShadow: 'shadow-[0_4px_12px_rgba(69,98,80,0.25)]', 
@@ -756,7 +756,7 @@ export default function AppSettingsScreen({
             },
             {
               id: 'backup' as const,
-              label: 'Backup',
+              label: 'Sync & Backup',
               icon: Cloud,
               activeBg: 'bg-brand-pink',
               activeShadow: 'shadow-[0_4px_12px_rgba(181,66,97,0.25)]',
@@ -764,7 +764,7 @@ export default function AppSettingsScreen({
             },
             { 
               id: 'customize' as const, 
-              label: 'Customize', 
+              label: 'Appearance & Writing',
               icon: Palette, 
               activeBg: 'bg-brand-pink-dark', 
               activeShadow: 'shadow-[0_4px_12px_rgba(117,31,53,0.25)]', 
@@ -1399,9 +1399,9 @@ export default function AppSettingsScreen({
                   <div className="flex min-w-0 items-center gap-3">
                     <span className="p-2.5 rounded-2xl bg-brand-pink/10 text-brand-pink"><CloudLightning className="w-4 h-4" /></span>
                     <div className="min-w-0">
-                      <h3 className="text-xs font-bold text-brand-plum dark:text-brand-text">Cloud Storage</h3>
+                      <h3 className="text-xs font-bold text-brand-plum dark:text-brand-text">Sync & Backup Storage</h3>
                       <p className="text-[10px] text-brand-text-muted truncate">
-                        {syncAccountState?.googleEmail || 'Cloud sync is not configured'}
+                        {syncAccountState?.googleEmail || 'Sync & Backup is not configured'}
                       </p>
                     </div>
                   </div>
@@ -1410,8 +1410,8 @@ export default function AppSettingsScreen({
                     onClick={() => void refreshDriveSyncStatus()}
                     disabled={!syncAccountState || isDriveSyncStatusLoading}
                     className="h-9 w-9 shrink-0 rounded-full border border-brand-border text-brand-sage flex items-center justify-center disabled:opacity-40"
-                    title="Refresh Drive sync status"
-                    aria-label="Refresh Drive sync status"
+                    title="Refresh Sync & Backup status"
+                    aria-label="Refresh Sync & Backup status"
                   >
                     <RefreshCw className={`h-4 w-4 ${isDriveSyncStatusLoading ? 'animate-spin' : ''}`} />
                   </button>
@@ -1495,7 +1495,6 @@ export default function AppSettingsScreen({
                             <span>Auth: {syncHealth.authState}</span>
                             <span>Realtime: {syncHealth.realtimeState}</span>
                             <span>Integrity: {syncHealth.integrityState}</span>
-                            <span>Protocol: 1</span>
                             <span>App: {import.meta.env.VITE_APP_VERSION || '0.0.0'}</span>
                           </div>
                           <button
@@ -1667,7 +1666,7 @@ export default function AppSettingsScreen({
                     <p className="text-brand-plum mt-1">{syncAccountState ? 'Connected' : 'Not connected'}</p>
                   </div>
                   <div className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3">
-                    <p className="text-brand-sage font-bold">Cloud sync</p>
+                    <p className="text-brand-sage font-bold">Sync & Backup</p>
                     <p className="text-brand-plum mt-1">{driveSyncStatusError ? 'Needs attention' : driveSyncStatus ? 'Ready' : 'Checking'}</p>
                   </div>
                   <div className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3">

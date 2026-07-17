@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 const APP_PIN = '1234';
 
@@ -12,6 +13,7 @@ const enterPin = async (page: Page, pin: string) => {
 };
 
 const createFirstPin = async (page: Page) => {
+  await page.getByRole('button', { name: /start private setup/i }).click();
   await expect(page.getByRole('button', { name: /^1$/ })).toBeVisible();
   await enterPin(page, APP_PIN);
   await page.getByRole('button', { name: /continue/i }).click();
@@ -23,6 +25,9 @@ const createFirstPin = async (page: Page) => {
   const saveRecoveryButton = page.getByRole('button', { name: /save recovery question/i });
   await expect(saveRecoveryButton).toBeEnabled();
   await saveRecoveryButton.click();
+  const enterDiaryButton = page.getByRole('button', { name: /enter dear diary/i });
+  await expect(enterDiaryButton).toBeVisible();
+  await enterDiaryButton.click();
 };
 
 const unlockWithPin = async (page: Page) => {
@@ -57,10 +62,22 @@ const fillEditor = async (editor: Locator, text: string) => {
   await editor.fill(text);
 };
 
-const clickIfVisible = async (locator: Locator) => {
-  if (await locator.count() === 0) return;
-  const first = locator.first();
-  if (await first.isVisible()) await first.click();
+const lockFromProfileMenu = async (page: Page) => {
+  const profileMenuButton = page.getByTestId('profile-menu-button');
+  if (await profileMenuButton.count() && await profileMenuButton.isVisible()) {
+    await profileMenuButton.click();
+  }
+  await page.getByTestId('lock-app-button').click();
+};
+
+const openSettings = async (page: Page) => {
+  const profileMenuButton = page.getByTestId('profile-menu-button');
+  if (await profileMenuButton.count() && await profileMenuButton.isVisible()) {
+    await profileMenuButton.click();
+    await page.getByRole('dialog', { name: 'Profile menu' }).getByRole('button', { name: 'Settings', exact: true }).click();
+    return;
+  }
+  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
 };
 
 const openNoteForEditing = async (page: Page, title: string) => {
@@ -113,7 +130,7 @@ test('local app persists IndexedDB state, supports keyboard navigation, shows of
     await page.evaluate(() => window.dispatchEvent(new Event('offline')));
     await expect(page.getByText('Offline. Synced changes are paused.')).toBeVisible();
 
-    await page.getByTestId('lock-app-button').click();
+    await lockFromProfileMenu(page);
     await expect(page.getByRole('button', { name: /tap to unlock/i }).or(page.getByRole('button', { name: /^1$/ }))).toBeVisible();
     await context.setOffline(false);
     await page.reload();
@@ -132,7 +149,7 @@ test('local app persists IndexedDB state, supports keyboard navigation, shows of
   await page.evaluate(() => window.dispatchEvent(new Event('offline')));
   await expect(page.getByText('Offline. Synced changes are paused.')).toBeVisible();
 
-  await page.getByTestId('lock-app-button').click();
+  await lockFromProfileMenu(page);
   await expect(page.getByRole('button', { name: /tap to unlock/i }).or(page.getByRole('button', { name: /^1$/ }))).toBeVisible();
   await expect(page.getByText('E2E Private Keyword')).toHaveCount(0);
 });
@@ -140,7 +157,9 @@ test('local app persists IndexedDB state, supports keyboard navigation, shows of
 test('local app creates, edits, and deletes a quick note through the UI', async ({ page }) => {
   await setupUnlockedLocalApp(page);
   await page.getByTestId('nav-notes').click();
-  await clickIfVisible(page.getByTestId('new-note-button'));
+  const newNoteButton = page.getByTestId('new-note-button');
+  await expect(newNoteButton).toBeVisible();
+  await newNoteButton.click();
 
   const noteTitle = 'E2E UI note created body';
   const updatedTitle = 'E2E UI note updated';
@@ -161,6 +180,18 @@ test('local app creates, edits, and deletes a quick note through the UI', async 
   await expect(page.getByText(updatedTitle)).toHaveCount(0);
 });
 
+test('local app creates a journal without requiring appearance customization', async ({ page }) => {
+  await setupUnlockedLocalApp(page);
+  await page.getByTestId('nav-diaries').click();
+  await page.getByRole('button', { name: 'New Journal', exact: true }).click();
+
+  await expect(page.getByRole('button', { name: /Customize appearance \(optional\)/i })).toBeVisible();
+  await page.getByPlaceholder('e.g., Evening Reflections').fill('E2E Minimal Journal');
+  await page.getByRole('button', { name: 'Create Journal', exact: true }).click();
+
+  await expect(page.getByTestId('diary-card').filter({ hasText: 'E2E Minimal Journal' }).first()).toBeVisible();
+});
+
 test('local app creates, edits, and deletes a diary entry through the UI', async ({ page }) => {
   await setupUnlockedLocalApp(page);
   await page.getByTestId('nav-diaries').click();
@@ -171,13 +202,16 @@ test('local app creates, edits, and deletes a diary entry through the UI', async
   const updatedTitle = 'E2E UI entry updated';
   await page.getByTestId('entry-title-input').fill(entryTitle);
   await fillEditor(page.getByTestId('entry-body-editor'), 'Created entry body from Playwright.');
-  await page.getByRole('button', { name: /save entry|^save$/i }).click();
+  await page.getByRole('button', { name: /close editor|my journal/i }).first().click();
+  await expect(page.getByRole('dialog', { name: /leave this entry/i })).toBeVisible();
+  await page.getByRole('button', { name: /save and leave/i }).click();
   await expect(page.getByText(entryTitle).first()).toBeVisible();
 
   await page.getByTestId('entry-edit-button').first().click();
   await page.getByTestId('entry-title-input').fill(updatedTitle);
   await fillEditor(page.getByTestId('entry-body-editor'), 'Updated entry body from Playwright.');
-  await page.getByRole('button', { name: /save entry|^save$/i }).click();
+  await expect(page.getByRole('status').filter({ hasText: /saved at/i })).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: /close editor|my journal/i }).first().click();
   await expect(page.getByText(updatedTitle).first()).toBeVisible();
 
   await page.getByTestId('entry-edit-button').first().click();
@@ -198,4 +232,37 @@ test('local app renders sanitized content and archive availability without execu
   expect(xssFlag).toBeUndefined();
 
   await expect(page.getByText(/Searching downloaded memories first/)).toBeVisible();
+});
+
+test('@accessibility authenticated primary destinations have no serious or critical axe violations', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await setupUnlockedLocalApp(page);
+
+  const destinations = [
+    { name: 'Today', open: async () => undefined },
+    { name: 'Journals', open: async () => page.getByTestId('nav-diaries').click() },
+    { name: 'New Journal', open: async () => page.getByRole('button', { name: 'New Journal' }).click() },
+    { name: 'Notes', open: async () => page.getByTestId('nav-notes').click() },
+    { name: 'Insights', open: async () => page.getByTestId('nav-stats').click() },
+    { name: 'Search', open: async () => openSearch(page) },
+    { name: 'Settings', open: async () => openSettings(page) },
+  ];
+
+  const expectCurrentScreenAccessible = async (name: string) => {
+    await page.waitForTimeout(400);
+    const results = await new AxeBuilder({ page }).analyze();
+    const blocking = results.violations.filter(violation => violation.impact === 'serious' || violation.impact === 'critical');
+    expect(blocking, `${name}: ${blocking.map(violation => violation.id).join(', ')}`).toEqual([]);
+  };
+
+  for (const destination of destinations) {
+    await destination.open();
+    await expectCurrentScreenAccessible(destination.name);
+  }
+
+  await page.getByTestId('nav-diaries').click();
+  await page.getByTestId('diary-card').filter({ hasText: 'E2E Open Diary' }).first().click();
+  await expectCurrentScreenAccessible('Journal reader');
+  await page.getByTestId('diary-new-entry-button').first().click();
+  await expectCurrentScreenAccessible('Entry editor');
 });

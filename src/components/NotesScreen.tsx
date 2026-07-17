@@ -39,6 +39,7 @@ export default function NotesScreen({
   
   // Note creation inputs
   const [quickThought, setQuickThought] = useState<string>('');
+  const [isCreatingNote, setIsCreatingNote] = useState(false);
   const [selectedTag, setSelectedTag] = useState<string>('ideas');
   
   // Note editing state
@@ -105,6 +106,7 @@ export default function NotesScreen({
     });
     
     setQuickThought('');
+    setIsCreatingNote(false);
     await loadNotes();
   };
 
@@ -330,7 +332,7 @@ export default function NotesScreen({
                     className="inline-flex items-center gap-2 rounded-full border border-brand-border px-4 py-2 text-sm font-bold text-brand-sage hover:bg-brand-blush-light"
                   >
                     <BookOpen className="h-4 w-4" />
-                    Add to Diary
+                    Convert to Entry
                   </button>
                 </div>
               </div>
@@ -413,6 +415,7 @@ export default function NotesScreen({
                 />
                 <div className="mt-5 flex items-center justify-between border-t border-brand-border pt-5">
                   <select
+                    aria-label="Quick note tag"
                     value={selectedTag}
                     onChange={(event) => setSelectedTag(event.target.value)}
                     className="rounded-full border border-brand-border bg-white px-4 py-2 text-sm font-bold text-brand-sage outline-none"
@@ -434,7 +437,7 @@ export default function NotesScreen({
   return (
     <div className="flex flex-col gap-6 font-sans">
       {/* Header */}
-      <header className="flex justify-between items-center bg-brand-bg/95 backdrop-blur-md sticky top-0 py-3 z-30">
+      <header className="sr-only">
         <div className="flex items-center gap-3">
           <span className="p-2 bg-brand-sage-light/20 text-brand-sage rounded-full">
             <ClipboardList className="w-5 h-5" />
@@ -453,8 +456,12 @@ export default function NotesScreen({
       )}
 
       {/* Quick Thought Textarea Input Card */}
-      <section aria-label="Jot a quick note" className="w-full">
-        <h2 className="font-serif-diary text-2xl font-bold text-brand-plum mb-3">Quick Notes</h2>
+      <section aria-label="Create a note" className="w-full">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div><h2 className="font-serif-diary text-2xl font-semibold text-brand-plum">Your notes</h2><p className="text-sm text-brand-text-muted">Small thoughts, lists, and ideas.</p></div>
+          <button type="button" data-testid="new-note-button" onClick={() => setIsCreatingNote(value => !value)} className="min-h-11 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white"><Plus className="mr-2 inline h-4 w-4" />New Note</button>
+        </div>
+        {isCreatingNote && (
         <div className="bg-brand-sage-light/10 rounded-3xl p-4 border border-brand-sage-light/45 flex flex-col gap-3 relative focus-within:border-brand-sage transition-all duration-300 shadow-sm">
           <div className="flex items-center gap-2 pb-2 mb-2 border-b border-brand-rose-light/50">
             <button 
@@ -482,9 +489,9 @@ export default function NotesScreen({
           <RichTextEditor 
             html={quickThought}
             onChange={setQuickThought}
-            placeholder="Jot down a quick thought, shopping list, or temporary idea..."
+              placeholder="Write a note…"
             testId="quick-note-editor"
-            className="w-full bg-transparent border-none text-sm text-brand-plum min-h-[80px]"
+            className="w-full bg-transparent border-none text-base text-brand-plum min-h-[96px]"
           />
           <div className="flex justify-between items-center border-t border-brand-rose-light/50 pt-3">
             <div className="flex items-center gap-2">
@@ -509,6 +516,7 @@ export default function NotesScreen({
             </button>
           </div>
         </div>
+        )}
       </section>
 
       {/* Navigation Filter pills */}
@@ -529,7 +537,7 @@ export default function NotesScreen({
       </div>
 
       {/* Notes List (Bento-style responsive asymmetrical grid layout) */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <section className="grid grid-cols-1 gap-3">
         {filteredNotes.map((note, idx) => {
           const isErrand = note.tags.some(t => t === 'errands');
           // Double-width for third note in bento list
@@ -539,8 +547,8 @@ export default function NotesScreen({
             <article 
               key={note.id}
               data-testid="note-card"
-              className={`rounded-3xl p-5 border shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between group relative overflow-hidden ${
-                isDoubleWide ? 'sm:col-span-2' : ''
+              className={`rounded-2xl p-5 border shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between group relative overflow-hidden ${
+                isDoubleWide ? '' : ''
               } ${
                 isErrand 
                   ? 'bg-brand-sage-light/25 border-brand-sage-light' 
@@ -585,6 +593,7 @@ export default function NotesScreen({
                 <div className="flex items-center gap-1">
                   <button 
                     onClick={() => handleTogglePin(note)}
+                    aria-label={note.isPinned ? `Unpin ${note.title}` : `Pin ${note.title}`}
                     className="p-1.5 text-brand-sage hover:bg-brand-blush-light rounded-lg transition-colors"
                   >
                     <Pin className={`w-3.5 h-3.5 ${note.isPinned ? 'fill-brand-pink text-brand-pink' : ''}`} />
@@ -592,6 +601,7 @@ export default function NotesScreen({
                   <button 
                     data-testid="note-edit-button"
                     onClick={() => handleStartEdit(note)}
+                    aria-label={`Edit ${note.title}`}
                     className="p-1.5 text-brand-sage hover:bg-brand-blush-light rounded-lg transition-colors"
                   >
                     <Edit className="w-3.5 h-3.5" />
@@ -601,6 +611,7 @@ export default function NotesScreen({
                     <button 
                       data-testid="note-delete-button"
                       onClick={() => setShowConfirmDeleteId(note.id)}
+                      aria-label={`Delete ${note.title}`}
                       className="p-1.5 text-brand-sage hover:text-red-600 rounded-lg transition-colors"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -621,7 +632,7 @@ export default function NotesScreen({
                   className="flex items-center gap-1 text-brand-sage font-bold text-[10px] uppercase tracking-wider hover:text-brand-pink transition-colors p-1"
                 >
                   <BookOpen className="w-3.5 h-3.5" />
-                  Convert to Diary
+                  Convert to Entry
                 </button>
               </div>
             </article>

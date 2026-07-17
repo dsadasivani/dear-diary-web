@@ -154,7 +154,7 @@ public class OperationCommitService {
                    partition_key, committed_sequence, committed_record_version
             FROM sync_operations WHERE account_id = ? AND operation_id = ? FOR UPDATE
             """, (rs, row) -> new OperationRow(
-                rs.getObject(1, UUID.class), rs.getString(2), rs.getObject(3, UUID.class),
+                rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
                 rs.getString(4), rs.getLong(5), rs.getString(6), rs.getInt(7), rs.getInt(8),
                 rs.getInt(9), rs.getString(10), nullableLong(rs, 11), nullableLong(rs, 12)),
             accountId, operationId);
@@ -163,7 +163,7 @@ public class OperationCommitService {
         return rows.getFirst();
     }
 
-    private long lockCurrentVersion(UUID accountId, String recordType, UUID recordId) {
+    private long lockCurrentVersion(UUID accountId, String recordType, String recordId) {
         var versions = jdbc.query("""
             SELECT current_version FROM sync_record_versions
             WHERE account_id = ? AND record_type = ? AND record_id = ? FOR UPDATE
@@ -256,7 +256,7 @@ public class OperationCommitService {
 
     private record AccountRow(UUID accountId, long currentSequence, int currentKeyEpoch, String status, int minimumWriteProtocol) {}
     private record OperationRow(
-        UUID deviceId, String recordType, UUID recordId, String operationType,
+        UUID deviceId, String recordType, String recordId, String operationType,
         long baseRecordVersion, String status, int protocolVersion, int eventSchemaVersion,
         int keyEpoch, String partitionKey, Long committedSequence, Long committedRecordVersion
     ) {}

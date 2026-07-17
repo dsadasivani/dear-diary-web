@@ -3,6 +3,7 @@ import { LocalDiaryRepository } from './localDiaryRepository';
 import { EventSyncEngine } from '../sync/eventSyncEngine';
 import { createSyncingDiaryRepository } from './syncingDiaryRepository';
 import { PersistentOutboxRepository } from '../sync/outbox';
+import { SyncV2ApplicationLifecycle } from '../sync/v2/SyncV2ApplicationLifecycle';
 
 export type {
   AcknowledgeLocalMutationInput,
@@ -39,3 +40,9 @@ export const localDiaryRepository = new LocalDiaryRepository(localDataStore);
 export const outboxV2Repository = new PersistentOutboxRepository(localDataStore);
 export const eventSyncEngine = new EventSyncEngine(localDiaryRepository, { outboxRepository: outboxV2Repository });
 export const diaryRepository = createSyncingDiaryRepository(localDiaryRepository, eventSyncEngine);
+export const syncV2Application = new SyncV2ApplicationLifecycle(
+  localDataStore,
+  localDiaryRepository,
+  outboxV2Repository,
+  eventSyncEngine,
+);

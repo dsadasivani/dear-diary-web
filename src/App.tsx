@@ -7,6 +7,13 @@ import {
 
 import OverlayPortal from './components/OverlayPortal';
 import ProfileAvatar from './components/ProfileAvatar';
+import {
+  AppHeader,
+  CreateActionSheet,
+  MobileBottomNavigation,
+  NavigationRail,
+  ProfileActionSheet,
+} from './components/AppShellPrimitives';
 
 import { AppSettings, Diary, Entry, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
 import type { RepositoryChange, SyncStatusSummary } from './repositories';
@@ -15,9 +22,9 @@ import { DearDiaryDeepLinkTarget, parseDearDiaryDeepLink } from './mobile/deepLi
 import { isAndroid, isNativePlatform } from './platform';
 
 import { secureAuthService } from './platform/security';
-import { diaryRepository, eventSyncEngine } from './repositories';
+import { diaryRepository, eventSyncEngine, syncV2Application } from './repositories';
 import { isValidPin, unlockWithPin } from './domain/security';
-import useIsDesktop from './hooks/useIsDesktop';
+import useResponsiveLayout from './hooks/useResponsiveLayout';
 import { calculateStreak } from './domain/journalCatalog';
 import { shouldLockAfterBackground } from './domain/privacyLock';
 import { loadPendingPrimaryRecovery, resumePendingPrimaryRecovery } from './sync/accountBootstrap';
@@ -108,8 +115,8 @@ const isE2eAppMode = (): boolean => {
 };
 
 export default function App({ initialSettings, initialSecurity, initialUserProfile }: AppProps) {
-  const isDesktop = useIsDesktop();
-  const layout: ResponsiveLayout = isDesktop ? 'desktop' : 'mobile';
+  const layout: ResponsiveLayout = useResponsiveLayout();
+  const isDesktop = layout === 'desktop';
 
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -123,6 +130,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
   const [currentScreen, setCurrentScreen] = useState<string>('list'); // list, diaryDetail, diarySettings, entryEditor, appSettings
   const [isEditorFocusMode, setIsEditorFocusMode] = useState<boolean>(false);
+  const [isCreateSheetOpen, setIsCreateSheetOpen] = useState(false);
+  const [isProfileSheetOpen, setIsProfileSheetOpen] = useState(false);
   
   // Selected resource IDs for deep links
   const [selectedDiaryId, setSelectedDiaryId] = useState<string>('');
@@ -319,6 +328,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const resumePendingSyncWorkAfterUnlock = async () => {
+    await syncV2Application.resumeAfterUnlock();
+    const activeV2Account = await diaryRepository.getLocalSyncAccountState();
+    if (activeV2Account?.syncProtocolVersion === 2) return activeV2Account;
     const secrets = await loadSyncSecrets();
     const pendingRecovery = await loadPendingPrimaryRecovery();
     const accessToken = secrets?.supabaseSession.accessToken || pendingRecovery?.supabaseSession.accessToken;
@@ -389,8 +401,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   useEffect(() => {
     if (isAuthenticated || isNativePlatform()) return;
     let cancelled = false;
-    void diaryRepository.getLocalSyncAccountState().then(syncAccount => {
+    void diaryRepository.getLocalSyncAccountState().then(async syncAccount => {
       if (cancelled || syncAccount?.deviceRole !== 'web_companion') return;
+      await syncV2Application.startIfActive();
       eventSyncEngine.startPolling();
     }).catch(() => undefined);
     return () => {
@@ -567,6 +580,37 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     }
     handleNavigate('diaries');
   };
+
+  const handleLockSettingsChange = async (nextSettings: AppSettings) => {
+    await diaryRepository.saveSettings(nextSettings);
+    setSettings(nextSettings);
+  };
+
+  const handleCreateEntry = (capture?: 'voice' | 'photo') => {
+    const targetDiary = diaries[0];
+    if (!targetDiary) {
+      handleNavigate('diaries');
+      showToast('Create a journal before adding your first entry.', 'info');
+      return;
+    }
+    handleNavigate(
+      'diaries',
+      'entryEditor',
+      targetDiary.id,
+      '',
+      '',
+      '',
+      capture === 'voice' ? 'Voice reflection' : capture === 'photo' ? 'Photo memory' : '',
+    );
+  };
+
+  const rootPageTitle = () => ({
+    home: 'Today',
+    diaries: 'Journals',
+    notes: 'Notes',
+    search: 'Search',
+    stats: currentScreen === 'appSettings' ? 'Settings' : 'Insights',
+  }[activeTab] || 'Dear Diary');
 
   const navigateToDeepLink = useCallback(async (target: DearDiaryDeepLinkTarget) => {
     switch (target.kind) {
@@ -1236,16 +1280,16 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   const desktopPageTitle = () => {
     if (activeTab === 'stats' && currentScreen === 'appSettings') return 'Settings';
-    if (activeTab === 'stats') return 'Reflections';
+    if (activeTab === 'stats') return 'Insights';
     if (activeTab === 'diaries' && currentScreen === 'entryEditor') return selectedEntryId ? 'Edit Entry' : 'New Entry';
     if (activeTab === 'diaries' && currentScreen === 'diaryDetail') {
       return diaries.find(diary => diary.id === selectedDiaryId)?.name || 'My Journal';
     }
     return {
-      home: 'Home',
-      diaries: 'Diaries Library',
-      notes: 'Quick Notes',
-      search: 'Global Search',
+      home: 'Today',
+      diaries: 'Journals',
+      notes: 'Notes',
+      search: 'Search',
     }[activeTab] || 'Dear Diary';
   };
 
@@ -1259,12 +1303,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   const renderDesktopShell = () => {
     const navItems = [
-      { id: 'home', label: 'Home', icon: Home, onClick: () => handleNavigate('home'), active: activeTab === 'home' },
-      { id: 'diaries', label: 'Diaries', icon: BookOpen, onClick: () => handleNavigate('diaries'), active: activeTab === 'diaries' },
+      { id: 'home', label: 'Today', icon: Home, onClick: () => handleNavigate('home'), active: activeTab === 'home' },
+      { id: 'diaries', label: 'Journals', icon: BookOpen, onClick: () => handleNavigate('diaries'), active: activeTab === 'diaries' },
       { id: 'notes', label: 'Notes', icon: ClipboardList, onClick: () => handleNavigate('notes'), active: activeTab === 'notes' },
-      { id: 'search', label: 'Search', icon: Search, onClick: () => handleNavigate('search'), active: activeTab === 'search' },
-      { id: 'stats', label: 'Reflections', icon: BarChart2, onClick: () => handleNavigate('stats'), active: activeTab === 'stats' && currentScreen !== 'appSettings' },
-      { id: 'settings', label: 'Settings', icon: ShieldCheck, onClick: () => handleNavigate('stats', 'appSettings'), active: activeTab === 'stats' && currentScreen === 'appSettings' },
+      { id: 'stats', label: 'Insights', icon: BarChart2, onClick: () => handleNavigate('stats'), active: activeTab === 'stats' && currentScreen !== 'appSettings' },
     ];
 
     return (
@@ -1273,7 +1315,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         <GlobalLoaderOverlay loading={globalLoading} />
         {renderDesktopBackground()}
         {!isOnline && (
-          <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+          <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg" role="status">
             <WifiOff className="h-4 w-4" />
             <span>Offline. Synced changes are paused.</span>
           </div>
@@ -1318,6 +1360,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-brand-sage">Private Vault</p>
                 <p className="mt-2 text-xs leading-relaxed text-brand-text-muted">Local-first, encrypted sync aware, and ready to lock instantly.</p>
               </div>
+              <button type="button" onClick={() => handleNavigate('stats', 'appSettings')} className="flex min-h-11 w-full items-center gap-3 rounded-xl px-4 text-sm font-bold text-brand-plum hover:bg-white/60 dark:text-brand-text dark:hover:bg-white/5">
+                <ShieldCheck className="h-5 w-5" /> Settings
+              </button>
               <button
                 type="button"
                 data-testid="lock-app-button"
@@ -1343,6 +1388,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                   <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
                   <input
                     type="text"
+                    data-testid="nav-search"
+                    aria-label="Global search"
                     value={desktopSearchQuery}
                     onChange={(event) => setDesktopSearchQuery(event.target.value)}
                     placeholder="Search thoughts, memories, dreams"
@@ -1399,7 +1446,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       <GlobalLoaderOverlay loading={globalLoading} />
       {renderDesktopBackground()}
       {!isOnline && (
-        <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+        <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg" role="status">
           <WifiOff className="h-4 w-4" />
           <span>Offline. Synced changes are paused.</span>
         </div>
@@ -1420,6 +1467,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             initialSecurity={security}
             initialSettings={settings}
             onSecurityChange={setSecurity}
+            onSettingsChange={handleLockSettingsChange}
             onThemeChange={handleLocalThemeChange}
             onUnlock={handleUnlock}
           />
@@ -1437,7 +1485,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         {renderSyncStatusBadge()}
         <GlobalLoaderOverlay loading={globalLoading} />
         {!isOnline && (
-          <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+          <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg" role="status">
             <WifiOff className="h-4 w-4" />
             <span>Offline. Synced changes are paused.</span>
           </div>
@@ -1464,12 +1512,22 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   }
 
   return (
-    <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none pb-24 relative safe-area-root app-shell">
+    <div className="tablet-shell-content min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none pb-24 relative safe-area-root app-shell">
       {renderSyncAuthorizationBanner()}
       {renderSyncStatusBadge()}
       <GlobalLoaderOverlay loading={globalLoading} />
+      {layout === 'tablet' && (
+        <NavigationRail
+          active={activeTab}
+          onNavigate={(destination) => handleNavigate(destination)}
+          onCreate={() => setIsCreateSheetOpen(true)}
+          onSearch={() => handleNavigate('search')}
+          onSettings={() => handleNavigate('stats', 'appSettings')}
+          onLock={handleLockApp}
+        />
+      )}
       {!isOnline && (
-        <div className="fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg">
+        <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg" role="status">
           <WifiOff className="h-4 w-4" />
           <span>Offline. Synced changes are paused.</span>
         </div>
@@ -1483,6 +1541,14 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
       {/* Main Container */}
       <main className="w-full max-w-lg z-10 px-4 pt-1 pb-6 flex-grow flex flex-col justify-between app-main">
+        {currentScreen === 'list' && (
+          <AppHeader
+            title={rootPageTitle()}
+            profile={userProfile}
+            onSearch={() => handleNavigate('search')}
+            onProfile={() => setIsProfileSheetOpen(true)}
+          />
+        )}
         <AnimatePresence mode="wait">
           <motion.div
             key={`${activeTab}-${currentScreen}`}
@@ -1497,89 +1563,27 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         </AnimatePresence>
       </main>
 
-      {/* Bottom Floating Navigation Bar */}
-      {currentScreen !== 'entryEditor' && (
-        <nav className="fixed bottom-4 left-4 right-4 max-w-md mx-auto bg-white/75 dark:bg-brand-card-bg/50 backdrop-blur-xl border border-brand-border/70 dark:border-white/10 rounded-3xl py-2 px-3 flex justify-between items-center z-40 shadow-[0_8px_32px_0_rgba(60,43,48,0.06),_inset_0_1px_1px_0_rgba(255,255,255,0.8)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.3),_inset_0_1px_1px_0_rgba(255,255,255,0.05)] bottom-nav-safe">
-          
-          {/* Navigation Tabs */}
-          <button 
-            data-testid="nav-home"
-            onClick={() => handleNavigate('home')}
-            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-              activeTab === 'home' 
-                ? 'text-brand-pink scale-105 font-bold' 
-                : 'text-brand-sage hover:text-brand-plum'
-            }`}
-          >
-            <Home className={`w-5 h-5 ${activeTab === 'home' ? 'stroke-[2.5px]' : ''}`} />
-            <span className="text-[9px] uppercase tracking-wider">Home</span>
-          </button>
-
-          <button 
-            data-testid="nav-diaries"
-            onClick={() => handleNavigate('diaries')}
-            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-              activeTab === 'diaries' 
-                ? 'text-brand-pink scale-105 font-bold' 
-                : 'text-brand-sage hover:text-brand-plum'
-            }`}
-          >
-            <BookOpen className={`w-5 h-5 ${activeTab === 'diaries' ? 'stroke-[2.5px]' : ''}`} />
-            <span className="text-[9px] uppercase tracking-wider">Diaries</span>
-          </button>
-
-          <button 
-            data-testid="nav-notes"
-            onClick={() => handleNavigate('notes')}
-            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-              activeTab === 'notes' 
-                ? 'text-brand-pink scale-105 font-bold' 
-                : 'text-brand-sage hover:text-brand-plum'
-            }`}
-          >
-            <ClipboardList className={`w-5 h-5 ${activeTab === 'notes' ? 'stroke-[2.5px]' : ''}`} />
-            <span className="text-[9px] uppercase tracking-wider">Notes</span>
-          </button>
-
-          <button 
-            data-testid="nav-search"
-            onClick={() => handleNavigate('search')}
-            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-              activeTab === 'search' 
-                ? 'text-brand-pink scale-105 font-bold' 
-                : 'text-brand-sage hover:text-brand-plum'
-            }`}
-          >
-            <Search className={`w-5 h-5 ${activeTab === 'search' ? 'stroke-[2.5px]' : ''}`} />
-            <span className="text-[9px] uppercase tracking-wider">Search</span>
-          </button>
-
-          <button 
-            data-testid="nav-stats"
-            onClick={() => handleNavigate('stats')}
-            className={`flex flex-col items-center gap-1 flex-1 py-1 rounded-2xl transition-all ${
-              activeTab === 'stats' 
-                ? 'text-brand-pink scale-105 font-bold' 
-                : 'text-brand-sage hover:text-brand-plum'
-            }`}
-          >
-            <BarChart2 className={`w-5 h-5 ${activeTab === 'stats' ? 'stroke-[2.5px]' : ''}`} />
-            <span className="text-[9px] uppercase tracking-wider">Stats</span>
-          </button>
-
-          <div className="w-px h-6 bg-brand-rose-light mx-1" />
-
-          {/* Lock App Button (Interactive test action) */}
-          <button 
-            data-testid="lock-app-button"
-            onClick={handleLockApp}
-            className="p-2 text-brand-sage hover:text-brand-pink transition-all rounded-full flex items-center justify-center hover:bg-brand-blush-light active:scale-95"
-            title="Secure/Lock App Now"
-          >
-            <Lock className="w-4 h-4" />
-          </button>
-        </nav>
+      {layout === 'mobile' && currentScreen !== 'entryEditor' && (
+        <MobileBottomNavigation active={activeTab} onNavigate={(destination) => handleNavigate(destination)} onCreate={() => setIsCreateSheetOpen(true)} />
       )}
+
+      <CreateActionSheet
+        open={isCreateSheetOpen}
+        hasJournals={diaries.length > 0}
+        onClose={() => setIsCreateSheetOpen(false)}
+        onNewEntry={() => handleCreateEntry()}
+        onNewNote={() => handleNavigate('notes')}
+        onVoice={() => handleCreateEntry('voice')}
+        onPhoto={() => handleCreateEntry('photo')}
+        onNewJournal={() => handleNavigate('diaries')}
+      />
+      <ProfileActionSheet
+        open={isProfileSheetOpen}
+        profile={userProfile}
+        onClose={() => setIsProfileSheetOpen(false)}
+        onSettings={() => handleNavigate('stats', 'appSettings')}
+        onLock={handleLockApp}
+      />
 
       {renderToast()}
     </div>

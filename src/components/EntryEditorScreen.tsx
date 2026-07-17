@@ -84,6 +84,18 @@ export default function EntryEditorScreen({
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
   const [audioUri, setAudioUri] = useState<string | undefined>(undefined);
   const [isSaving, setIsSaving] = useState(false);
+  const [isAutosaving, setIsAutosaving] = useState(false);
+  const [autosaveError, setAutosaveError] = useState('');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [isEditorReady, setIsEditorReady] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [hasSessionChanges, setHasSessionChanges] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [showEntryDetails, setShowEntryDetails] = useState(Boolean(showDiarySelector));
+  const baselineFingerprintRef = useRef<string | null>(null);
+  const workingEntryIdRef = useRef<string | undefined>(entryId);
+  const originalEntryRef = useRef<Entry | null>(null);
+  const isLeavingRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const [showTagPicker, setShowTagPicker] = useState<boolean>(false);
@@ -1080,6 +1092,7 @@ export default function EntryEditorScreen({
         const entryObj = await diaryRepository.getEntry(entryId);
         if (cancelled) return;
         if (entryObj) {
+          originalEntryRef.current = entryObj;
           setDiaryId(entryObj.diaryId);
           setDate(entryObj.date);
         
@@ -1138,6 +1151,7 @@ export default function EntryEditorScreen({
           setSelectedTags(['happy']);
         }
       }
+      if (!cancelled) setIsEditorReady(true);
     };
 
     void loadEntry();
@@ -1157,6 +1171,124 @@ export default function EntryEditorScreen({
     const currentWordsCount = currentWords ? currentWords.split(/\s+/).filter(Boolean).length : 0;
     return previousBlocksWords + currentWordsCount;
   }, [blocks, body, activeBlockId]);
+
+  const draftFingerprint = useMemo(() => JSON.stringify({
+    diaryId,
+    date,
+    time,
+    title,
+    body,
+    blocks,
+    mood,
+    selectedTags,
+    photoUris,
+    audioUri,
+    currentTimeText,
+  }), [diaryId, date, time, title, body, blocks, mood, selectedTags, photoUris, audioUri, currentTimeText]);
+
+  useEffect(() => {
+    if (!isEditorReady) return;
+    if (baselineFingerprintRef.current === null) {
+      baselineFingerprintRef.current = draftFingerprint;
+      setIsDirty(false);
+      return;
+    }
+    const changed = draftFingerprint !== baselineFingerprintRef.current;
+    setIsDirty(changed);
+    if (changed) setHasSessionChanges(true);
+  }, [draftFingerprint, isEditorReady]);
+
+  useEffect(() => {
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isDirty) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [isDirty]);
+
+  const composeEntryDraft = () => {
+    const finalTitle = title.trim() || 'Untitled entry';
+    const finalBlocks = [...blocks].filter(block => richTextHtmlToPlainText(block.body) !== '' || block.audioUri);
+    const hasDraftText = richTextHtmlToPlainText(body) !== '';
+    if (hasDraftText || audioUri) {
+      finalBlocks.push({
+        id: `block-draft-${workingEntryIdRef.current || 'new'}`,
+        time: currentTimeText,
+        body,
+        audioUri,
+      });
+    }
+    finalBlocks.sort((left, right) => left.time.localeCompare(right.time));
+    return {
+      finalTitle,
+      finalBlocks,
+      finalBody: finalBlocks.map(block => block.body).filter(Boolean).join('<br/><br/>'),
+      hasDraftText,
+      hasContent: finalBlocks.length > 0 || Boolean(title.trim()),
+    };
+  };
+
+  useEffect(() => {
+    if (!isEditorReady || !isDirty || isSaving || isAutosaving) return;
+    const timeout = window.setTimeout(() => {
+      const draft = composeEntryDraft();
+      if (!draft.hasContent) return;
+      void (async () => {
+        if (isLeavingRef.current) return;
+        setIsAutosaving(true);
+        setAutosaveError('');
+        try {
+          const existingId = workingEntryIdRef.current;
+          if (existingId) {
+            const existing = await diaryRepository.getEntry(existingId);
+            if (!existing) throw new Error('This entry is no longer available.');
+            await diaryRepository.updateEntry({
+              ...existing,
+              diaryId,
+              date,
+              time: draft.finalBlocks[0]?.time || time,
+              title: draft.finalTitle,
+              body: draft.finalBody,
+              moodName: mood.name,
+              moodEmoji: mood.emoji,
+              tags: selectedTags,
+              photoUris,
+              photoCount: photoUris.length,
+              wordCount: liveWordCount,
+              audioUri: undefined,
+              updatedAt: Date.now(),
+              blocks: draft.finalBlocks,
+            });
+          } else {
+            const created = await diaryRepository.createEntry({
+              diaryId,
+              date,
+              time: draft.finalBlocks[0]?.time || time,
+              title: draft.finalTitle,
+              body: draft.finalBody,
+              moodName: mood.name,
+              moodEmoji: mood.emoji,
+              tags: selectedTags,
+              photoUris,
+              audioUri: undefined,
+              blocks: draft.finalBlocks,
+            });
+            workingEntryIdRef.current = created.id;
+          }
+          baselineFingerprintRef.current = draftFingerprint;
+          setIsDirty(false);
+          setLastSavedAt(new Date());
+        } catch (error: any) {
+          setAutosaveError(error?.message || 'Autosave failed. Use Save Entry to try again.');
+        } finally {
+          setIsAutosaving(false);
+        }
+      })();
+    }, 1800);
+    return () => window.clearTimeout(timeout);
+  }, [draftFingerprint, isDirty, isEditorReady, isSaving, isAutosaving]);
 
 
 
@@ -1237,8 +1369,9 @@ export default function EntryEditorScreen({
     try {
       setIsSaving(true);
       const saveOperation = async () => {
-        if (isEditing && entryId) {
-          const entryObj = await diaryRepository.getEntry(entryId);
+        const workingEntryId = workingEntryIdRef.current;
+        if (workingEntryId) {
+          const entryObj = await diaryRepository.getEntry(workingEntryId);
           if (entryObj) {
             const updated: Entry = {
               ...entryObj,
@@ -1260,7 +1393,7 @@ export default function EntryEditorScreen({
             await diaryRepository.updateEntry(updated);
           }
         } else {
-          await diaryRepository.createEntry({
+          const created = await diaryRepository.createEntry({
             diaryId,
             date,
             time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
@@ -1273,12 +1406,17 @@ export default function EntryEditorScreen({
             audioUri: undefined,
             blocks: finalBlocks,
           });
+          workingEntryIdRef.current = created.id;
         }
 
         if (hasDraftText || audioUri) {
           setAudioUri(undefined);
           setBody('');
         }
+        isLeavingRef.current = true;
+        baselineFingerprintRef.current = draftFingerprint;
+        setIsDirty(false);
+        await onRefreshEntries();
         onBack();
         onShowToast('Saved to this device', 'success');
       };
@@ -1296,6 +1434,42 @@ export default function EntryEditorScreen({
       }
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleRequestBack = () => {
+    if (isDirty || isAutosaving) {
+      setShowLeaveConfirm(true);
+      return;
+    }
+    isLeavingRef.current = true;
+    onBack();
+  };
+
+  const handleRequestDiscard = () => {
+    if (!hasSessionChanges) {
+      handleRequestBack();
+      return;
+    }
+    setShowLeaveConfirm(true);
+  };
+
+  const handleDiscardAndLeave = async () => {
+    isLeavingRef.current = true;
+    setShowLeaveConfirm(false);
+    try {
+      if (originalEntryRef.current) {
+        await diaryRepository.updateEntry(originalEntryRef.current);
+      } else if (workingEntryIdRef.current) {
+        await diaryRepository.deleteEntry(workingEntryIdRef.current);
+      }
+      baselineFingerprintRef.current = draftFingerprint;
+      setIsDirty(false);
+      await onRefreshEntries();
+      onBack();
+    } catch (error: any) {
+      isLeavingRef.current = false;
+      onShowToast?.(error?.message || 'Could not discard these changes.', 'error');
     }
   };
 
@@ -1630,6 +1804,59 @@ export default function EntryEditorScreen({
     </section>
   );
 
+  const saveStatusText = isSaving
+    ? 'Saving entry...'
+    : isAutosaving
+      ? 'Saving draft...'
+      : autosaveError
+        ? autosaveError
+        : isDirty
+          ? 'Unsaved changes'
+          : lastSavedAt
+            ? `Saved at ${lastSavedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+            : 'All changes saved locally';
+
+  const saveStatusUI = (
+    <p
+      role="status"
+      className={`text-xs font-bold ${autosaveError ? 'text-brand-rose' : isDirty ? 'text-amber-700 dark:text-amber-300' : 'text-brand-sage'}`}
+    >
+      {saveStatusText}
+    </p>
+  );
+
+  const leaveConfirmationUI = (
+    <AnimatePresence>
+      {showLeaveConfirm && (
+        <motion.div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-brand-plum/45 px-5 backdrop-blur-sm"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          role="presentation"
+        >
+          <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="leave-entry-title"
+            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.98 }}
+            className="w-full max-w-md rounded-3xl border border-brand-border bg-brand-bg p-6 shadow-2xl dark:bg-brand-card-bg"
+          >
+            <h2 id="leave-entry-title" className="font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Leave this entry?</h2>
+            <p className="mt-2 text-sm leading-relaxed text-brand-text-muted">Save and keep this editing session, discard its changes, or return to writing.</p>
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setShowLeaveConfirm(false)} className="rounded-full px-4 py-2.5 text-sm font-bold text-brand-sage hover:bg-brand-sage-light">Keep writing</button>
+              <button type="button" onClick={() => void handleDiscardAndLeave()} className="rounded-full border border-brand-rose/30 px-4 py-2.5 text-sm font-bold text-brand-rose hover:bg-red-50">Discard changes</button>
+              <button type="button" onClick={() => void handleSave()} disabled={isSaving || isAutosaving} className="rounded-full bg-brand-sage px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50">Save and leave</button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
   if (isFocusMode) {
     return (
       <div className="fixed inset-0 z-50 bg-brand-bg flex flex-col h-screen overflow-y-auto px-6 py-8 md:py-12 pb-28 focus-mode-safe">
@@ -1653,6 +1880,7 @@ export default function EntryEditorScreen({
               {showDiarySelector && diaries.length > 0 && (
                 <div className="relative">
                   <select
+                    aria-label="Destination journal"
                     value={diaryId}
                     onChange={(e) => setDiaryId(e.target.value)}
                     className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
@@ -1695,6 +1923,7 @@ export default function EntryEditorScreen({
               </button>
             </div>
           </header>
+          <div className="flex justify-end">{saveStatusUI}</div>
 
           {/* Minimalist Title */}
           <div className="w-full pt-1">
@@ -1738,6 +1967,7 @@ export default function EntryEditorScreen({
                               </span>
                               <input 
                                 type="time" 
+                                aria-label="Moment time"
                                 value={b.time}
                                 onChange={(e) => {
                                   const updated = [...blocks];
@@ -1827,6 +2057,7 @@ export default function EntryEditorScreen({
                     <div className="ml-auto flex items-center">
                       <input 
                         type="time" 
+                        aria-label="New moment time"
                         value={currentTimeText}
                         onChange={(e) => setCurrentTimeText(e.target.value)}
                         className="text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
@@ -1994,6 +2225,7 @@ export default function EntryEditorScreen({
         </div>
         {localReflectionUI}
         {recordingOverlayUI}
+        {leaveConfirmationUI}
       </div>
     );
   }
@@ -2005,7 +2237,7 @@ export default function EntryEditorScreen({
           <div className="min-w-0">
             <button
               type="button"
-              onClick={onBack}
+              onClick={handleRequestBack}
               className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage transition-colors hover:text-brand-pink"
             >
               <ArrowLeft className="h-4 w-4" />
@@ -2018,7 +2250,7 @@ export default function EntryEditorScreen({
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={onBack}
+              onClick={handleRequestDiscard}
               className="rounded-full border border-brand-border bg-white/60 px-5 py-3 text-sm font-bold text-brand-sage transition-all hover:bg-white"
             >
               Discard
@@ -2100,11 +2332,24 @@ export default function EntryEditorScreen({
               <div className="flex items-center gap-2 text-xs font-bold text-brand-text-muted">
                 <span>{liveWordCount} words</span>
                 <span className="h-2 w-2 rounded-full bg-brand-sage" />
-                <span>Local draft</span>
+                {saveStatusUI}
               </div>
             </div>
 
             <section className="mx-auto max-w-4xl px-7 py-8 xl:px-10 xl:py-9 2xl:px-12 2xl:py-10">
+              <div className="mb-6 flex justify-center">
+                <button
+                  type="button"
+                  aria-expanded={showEntryDetails}
+                  onClick={() => setShowEntryDetails(previous => !previous)}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-border bg-brand-bg/55 px-4 py-2 text-xs font-bold text-brand-sage hover:border-brand-sage"
+                >
+                  {showEntryDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  Entry details
+                </button>
+              </div>
+              {showEntryDetails && (
+                <div className="mb-7 rounded-2xl border border-brand-border/70 bg-brand-bg/35 p-4">
               {showDiarySelector && diaries.length > 0 && (
                 <label className="mb-7 flex flex-col gap-2">
                   <span className="text-xs font-bold uppercase tracking-[0.18em] text-brand-sage">Destination journal</span>
@@ -2123,17 +2368,20 @@ export default function EntryEditorScreen({
               <div className="flex flex-wrap items-center justify-center gap-3 text-sm font-bold text-brand-text-muted">
                 <input
                   type="date"
+                  aria-label="Entry date"
                   value={date}
                   onChange={(event) => setDate(event.target.value)}
                   className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 font-serif-diary text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
                 />
                 <input
                   type="time"
+                  aria-label="Entry time"
                   value={time}
                   onChange={(event) => setTime(event.target.value)}
                   className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 font-serif-diary text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
                 />
                 <select
+                  aria-label="Entry mood"
                   value={mood.name}
                   onChange={(event) => {
                     const found = availableMoods.find(item => item.name === event.target.value);
@@ -2146,6 +2394,8 @@ export default function EntryEditorScreen({
                   ))}
                 </select>
               </div>
+                </div>
+              )}
 
               <input
                 type="text"
@@ -2202,6 +2452,7 @@ export default function EntryEditorScreen({
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <input
                             type="time"
+                            aria-label="Moment time"
                             value={block.time}
                             onChange={(event) => {
                               const updated = [...blocks];
@@ -2257,6 +2508,7 @@ export default function EntryEditorScreen({
                     Drafting Moment at {formatTime12(currentTimeText)}
                     <input
                       type="time"
+                      aria-label="New moment time"
                       value={currentTimeText}
                       onChange={(event) => setCurrentTimeText(event.target.value)}
                       className="ml-2 w-20 bg-transparent font-mono text-brand-plum outline-none"
@@ -2402,6 +2654,7 @@ export default function EntryEditorScreen({
         )}
 
         {recordingOverlayUI}
+        {leaveConfirmationUI}
       </div>
     );
   }
@@ -2411,14 +2664,15 @@ export default function EntryEditorScreen({
       {/* Top Header */}
       <header className="flex justify-between items-center bg-brand-bg sticky top-0 py-3 z-30 border-b border-brand-rose-light/40">
         <button 
-          onClick={onBack}
+          onClick={handleRequestBack}
+          aria-label="Close editor"
           className="p-2 text-brand-plum hover:bg-brand-blush-light rounded-full transition-all active:scale-90"
         >
           <X className="w-5 h-5" />
         </button>
         <div className="flex items-center gap-3">
           <button 
-            onClick={onBack}
+            onClick={handleRequestDiscard}
             className="px-4 py-2 font-bold text-xs text-brand-sage hover:text-brand-plum transition-colors"
           >
             Discard
@@ -2432,10 +2686,23 @@ export default function EntryEditorScreen({
           </button>
         </div>
       </header>
+      <div className="-mt-3 flex justify-end px-2">{saveStatusUI}</div>
 
       {/* Unified Writing Canvas */}
       <div className="bg-brand-card-bg p-4 md:p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3 flex-grow">
-        
+
+        <button
+          type="button"
+          aria-expanded={showEntryDetails}
+          onClick={() => setShowEntryDetails(previous => !previous)}
+          className="flex w-full items-center justify-between rounded-xl border border-brand-border/60 bg-brand-bg/30 px-3.5 py-2.5 text-left text-xs font-bold text-brand-sage"
+        >
+          <span>Entry details</span>
+          {showEntryDetails ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+
+        {showEntryDetails && (
+          <>
         {showDiarySelector && diaries.length > 0 && (
           <div className="flex flex-col gap-1.5 pb-3 border-b border-brand-border/20">
             <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest pl-0.5 select-none">
@@ -2443,6 +2710,7 @@ export default function EntryEditorScreen({
             </label>
             <div className="relative">
               <select
+                aria-label="Destination journal"
                 value={diaryId}
                 onChange={(e) => setDiaryId(e.target.value)}
                 className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
@@ -2476,6 +2744,7 @@ export default function EntryEditorScreen({
             <Calendar className="w-3.5 h-3.5 text-brand-pink" />
             <input 
               type="date" 
+              aria-label="Entry date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
               className="bg-transparent border-none text-brand-plum font-serif-diary font-bold py-0 p-0 focus:outline-none focus:ring-0 cursor-pointer w-[105px]"
@@ -2489,6 +2758,7 @@ export default function EntryEditorScreen({
             <Clock className="w-3.5 h-3.5 text-brand-pink" />
             <input 
               type="time" 
+              aria-label="Entry time"
               value={time}
               onChange={(e) => setTime(e.target.value)}
               className="bg-transparent border-none text-brand-plum font-serif-diary font-bold py-0 p-0 focus:outline-none focus:ring-0 cursor-pointer w-[65px]"
@@ -2502,6 +2772,8 @@ export default function EntryEditorScreen({
             {liveWordCount} words
           </div>
         </div>
+          </>
+        )}
 
         {/* Title Input */}
         <div className="w-full">
@@ -2518,10 +2790,12 @@ export default function EntryEditorScreen({
         </div>
 
         {/* Cohesive Inline Mood & Tags Row */}
+        {showEntryDetails && (
         <div className="flex flex-wrap items-center gap-2 border-b border-brand-border/20 pb-2.5 mb-1.5">
           {/* Active Mood Button with overlay dropdown */}
           <div className="relative">
             <select
+              aria-label="Entry mood"
               value={mood.name}
               onChange={(e) => {
                 const found = availableMoods.find(m => m.name === e.target.value);
@@ -2573,6 +2847,7 @@ export default function EntryEditorScreen({
             </button>
           </div>
         </div>
+        )}
 
         {/* Content Canvas (Timelines, text body inputs) */}
         <div className="flex flex-col gap-2.5 flex-grow mt-1">
@@ -2658,6 +2933,7 @@ export default function EntryEditorScreen({
                             </span>
                             <input 
                               type="time" 
+                              aria-label="Moment time"
                               value={b.time}
                               onChange={(e) => {
                                 const updated = [...blocks];
@@ -2745,6 +3021,7 @@ export default function EntryEditorScreen({
                   <div className="ml-auto flex items-center">
                     <input 
                       type="time" 
+                      aria-label="New moment time"
                       value={currentTimeText}
                       onChange={(e) => setCurrentTimeText(e.target.value)}
                       className="ml-1 text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
@@ -3028,6 +3305,7 @@ export default function EntryEditorScreen({
 
       {localReflectionUI}
       {recordingOverlayUI}
+      {leaveConfirmationUI}
     </div>
   );
 }

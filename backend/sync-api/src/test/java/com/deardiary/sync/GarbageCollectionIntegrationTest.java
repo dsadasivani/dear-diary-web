@@ -111,7 +111,7 @@ class GarbageCollectionIntegrationTest {
         if (referenced) jdbc.update("""
             INSERT INTO sync_object_references (account_id, object_key, owner_record_type, owner_record_id,
                 reference_kind, created_sequence, created_at) VALUES (?, ?, 'ACCOUNT', ?, 'MEDIA', 1, ?)
-            """, accountId, key, accountId, old);
+            """, accountId, key, accountId.toString(), old);
         return key;
     }
 

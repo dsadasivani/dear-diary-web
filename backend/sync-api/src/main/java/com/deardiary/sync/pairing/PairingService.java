@@ -18,6 +18,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -54,9 +55,12 @@ public class PairingService {
     public PairingResponse create(String ownerSubject, PairingRequests.Create request) {
         requireEnabled();
         var account = accounts.requireActiveAccount(ownerSubject);
-        var publicKey = decode(request.requestedDevicePublicKey(), "INVALID_DEVICE_KEY");
+        var publicKey = decode(request.requestedDeviceSigningPublicKey(), "INVALID_DEVICE_KEY");
+        var encryptionPublicKey = request.requestedDeviceEncryptionPublicKey();
         var challenge = decode(request.challenge(), "INVALID_PAIRING_CHALLENGE");
-        if (publicKey.length < 32 || publicKey.length > 16_384 || challenge.length < 16 || challenge.length > 128) {
+        if (publicKey.length < 32 || publicKey.length > 16_384
+                || encryptionPublicKey.length() < 32 || encryptionPublicKey.length() > 16_384
+                || challenge.length < 16 || challenge.length > 128) {
             throw invalid("INVALID_PAIRING_REQUEST", "The pairing request is invalid.");
         }
         return transactions.execute(status -> {
@@ -65,6 +69,7 @@ public class PairingService {
             if (existing != null) {
                 if (!existing.requestedDeviceId().equals(request.requestedDeviceId())
                         || !MessageDigest.isEqual(existing.publicKey(), publicKey)
+                        || !existing.encryptionPublicKey().equals(encryptionPublicKey)
                         || !existing.codeHash().equals(request.codeHash())
                         || !MessageDigest.isEqual(existing.challenge(), challenge)) {
                     throw invalid("IDEMPOTENCY_MISMATCH", "The pairing identifier has different metadata.");
@@ -76,13 +81,30 @@ public class PairingService {
             jdbc.update("""
                 INSERT INTO sync_pairing_requests (
                     account_id, pairing_id, requested_device_id, requested_device_public_key,
+                    requested_device_encryption_public_key,
                     requested_device_role, platform, code_hash, challenge, pairing_status,
                     requested_at, expires_at
-                ) VALUES (?, ?, ?, ?, 'COMPANION', ?, ?, ?, 'REQUESTED', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 'COMPANION', ?, ?, ?, 'REQUESTED', ?, ?)
                 """, account.accountId(), request.pairingId(), request.requestedDeviceId(), publicKey,
-                request.platform(), request.codeHash(), challenge, now, expires);
+                encryptionPublicKey, request.platform(), request.codeHash(), challenge, now, expires);
             return response(load(account.accountId(), request.pairingId(), false), null, null, null);
         });
+    }
+
+    public List<PairingResponse> listPending(String ownerSubject, UUID approverDeviceId) {
+        requireEnabled();
+        var approver = devices.requireActiveDevice(ownerSubject, approverDeviceId);
+        requirePrimary(approver.accountId(), approverDeviceId);
+        var now = OffsetDateTime.now(clock);
+        jdbc.update("""
+            UPDATE sync_pairing_requests SET pairing_status = 'EXPIRED'
+            WHERE account_id = ? AND pairing_status = 'REQUESTED' AND expires_at <= ?
+            """, approver.accountId(), now);
+        return jdbc.query(selectPairingRows() + """
+            WHERE p.account_id = ? AND p.pairing_status IN ('REQUESTED', 'KEY_PACKAGE_PENDING')
+            ORDER BY p.requested_at ASC
+            """, pairingRowMapper(), approver.accountId()).stream()
+            .map(pair -> response(pair, null, null, null)).toList();
     }
 
     public PairingResponse approve(String ownerSubject, UUID pairingId, PairingRequests.Approve request) {
@@ -162,26 +184,29 @@ public class PairingService {
     private PairRow approveTransaction(UUID accountId, UUID pairingId, PairingRequests.Approve request) {
         lockAccount(accountId);
         var pair = load(accountId, pairingId, true);
-        if (OffsetDateTime.now(clock).isAfter(pair.expiresAt())) {
+        var retryingPendingPackage = false;
+        if ("KEY_PACKAGE_PENDING".equals(pair.status()) || "KEY_PACKAGE_AVAILABLE".equals(pair.status())) {
+            var samePackage = request.keyPackageId().equals(pair.keyPackageId())
+                && request.sha256().equals(pair.sha256()) && request.sizeBytes() == pair.sizeBytes();
+            if (samePackage) return pair;
+            if ("KEY_PACKAGE_AVAILABLE".equals(pair.status())) {
+                throw invalid("IDEMPOTENCY_MISMATCH", "The pairing approval has different metadata.");
+            }
+            // The client journals encrypted bytes before upload. If that local
+            // journal is replaced after an interrupted upload, permit the same
+            // primary to restart only the still-unregistered package. An
+            // AVAILABLE package is immutable and can never enter this path.
+            verifyApproval(pair, request);
+            resetPendingPackage(accountId, pair);
+            pair = load(accountId, pairingId, true);
+            retryingPendingPackage = true;
+        }
+        if (!retryingPendingPackage && OffsetDateTime.now(clock).isAfter(pair.expiresAt())) {
             expire(accountId, pairingId);
             throw invalid("PAIRING_EXPIRED", "The pairing request expired.");
         }
-        if ("KEY_PACKAGE_PENDING".equals(pair.status()) || "KEY_PACKAGE_AVAILABLE".equals(pair.status())) {
-            if (!request.keyPackageId().equals(pair.keyPackageId())
-                    || !request.sha256().equals(pair.sha256()) || request.sizeBytes() != pair.sizeBytes()) {
-                throw invalid("IDEMPOTENCY_MISMATCH", "The pairing approval has different metadata.");
-            }
-            return pair;
-        }
         if (!"REQUESTED".equals(pair.status())) throw invalid("PAIRING_ALREADY_USED", "The pairing request was already used.");
-        var actualHash = sha256(request.pairingCode().getBytes(StandardCharsets.UTF_8));
-        if (!MessageDigest.isEqual(pair.codeHash().getBytes(StandardCharsets.US_ASCII), actualHash.getBytes(StandardCharsets.US_ASCII))) {
-            throw invalid("PAIRING_CODE_INVALID", "The pairing code is invalid.");
-        }
-        var approverKey = jdbc.queryForObject("""
-            SELECT device_public_key FROM sync_devices WHERE account_id = ? AND device_id = ?
-            """, byte[].class, accountId, request.approverDeviceId());
-        verifySignature(approverKey, approvalMessage(pair), request.approvalSignature(), "INVALID_PAIRING_APPROVAL");
+        verifyApproval(pair, request);
         var objectKey = objectKeys.create(accountId).value();
         var epoch = jdbc.queryForObject("SELECT current_key_epoch FROM sync_accounts WHERE account_id = ?",
             Integer.class, accountId);
@@ -219,6 +244,34 @@ public class PairingService {
         return load(accountId, pairingId, false);
     }
 
+    private void verifyApproval(PairRow pair, PairingRequests.Approve request) {
+        var actualHash = sha256(request.pairingCode().getBytes(StandardCharsets.UTF_8));
+        if (!MessageDigest.isEqual(pair.codeHash().getBytes(StandardCharsets.US_ASCII), actualHash.getBytes(StandardCharsets.US_ASCII))) {
+            throw invalid("PAIRING_CODE_INVALID", "The pairing code is invalid.");
+        }
+        var approverKey = jdbc.queryForObject("""
+            SELECT device_public_key FROM sync_devices WHERE account_id = ? AND device_id = ?
+            """, byte[].class, pair.accountId(), request.approverDeviceId());
+        verifySignature(approverKey, approvalMessage(pair), request.approvalSignature(), "INVALID_PAIRING_APPROVAL");
+    }
+
+    private void resetPendingPackage(UUID accountId, PairRow pair) {
+        jdbc.update("DELETE FROM sync_key_packages WHERE account_id = ? AND key_package_id = ?",
+            accountId, pair.keyPackageId());
+        jdbc.update("DELETE FROM sync_objects WHERE account_id = ? AND object_key = ?",
+            accountId, pair.objectKey());
+        jdbc.update("DELETE FROM sync_device_cursors WHERE account_id = ? AND device_id = ?",
+            accountId, pair.requestedDeviceId());
+        jdbc.update("DELETE FROM sync_devices WHERE account_id = ? AND device_id = ? AND device_status = 'RECOVERY_PENDING'",
+            accountId, pair.requestedDeviceId());
+        jdbc.update("""
+            UPDATE sync_pairing_requests
+            SET pairing_status = 'REQUESTED', approved_by_device_id = NULL,
+                key_package_id = NULL, approved_at = NULL
+            WHERE account_id = ? AND pairing_id = ? AND pairing_status = 'KEY_PACKAGE_PENDING'
+            """, accountId, pair.pairingId());
+    }
+
     private PairRow activatePackage(UUID accountId, UUID pairingId, UUID approverDeviceId) {
         lockAccount(accountId);
         var pair = load(accountId, pairingId, true);
@@ -240,7 +293,7 @@ public class PairingService {
                 account_id, object_key, owner_record_type, owner_record_id,
                 reference_kind, created_sequence, created_at
             ) VALUES (?, ?, 'ACCOUNT', ?, 'KEY_PACKAGE', ?, ?) ON CONFLICT DO NOTHING
-            """, accountId, pair.objectKey(), accountId, Math.max(1, sequence), now);
+            """, accountId, pair.objectKey(), accountId.toString(), Math.max(1, sequence), now);
         jdbc.update("""
             UPDATE sync_pairing_requests SET pairing_status = 'KEY_PACKAGE_AVAILABLE'
             WHERE account_id = ? AND pairing_id = ?
@@ -283,26 +336,36 @@ public class PairingService {
     }
 
     private PairRow loadOptional(UUID accountId, UUID pairingId, boolean lock) {
-        var rows = jdbc.query("""
-            SELECT p.pairing_id, p.requested_device_id, p.requested_device_public_key,
-                   p.code_hash, p.challenge, p.pairing_status, p.approved_by_device_id,
-                   p.key_package_id, p.expires_at, k.key_epoch, k.object_key, k.sha256, k.size_bytes
-            FROM sync_pairing_requests p
-            LEFT JOIN sync_key_packages k ON k.account_id = p.account_id AND k.key_package_id = p.key_package_id
-            WHERE p.account_id = ? AND p.pairing_id = ?
-            """ + (lock ? " FOR UPDATE OF p" : ""), (rs, row) -> new PairRow(
-                rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getBytes(3),
-                rs.getString(4), rs.getBytes(5), rs.getString(6), rs.getObject(7, UUID.class),
-                rs.getObject(8, UUID.class), rs.getObject(9, OffsetDateTime.class),
-                nullableInt(rs, 10), rs.getString(11), rs.getString(12), nullableLong(rs, 13)),
-            accountId, pairingId);
+        var rows = jdbc.query(selectPairingRows() + " WHERE p.account_id = ? AND p.pairing_id = ?"
+            + (lock ? " FOR UPDATE OF p" : ""), pairingRowMapper(), accountId, pairingId);
         return rows.isEmpty() ? null : rows.getFirst();
     }
 
+    private String selectPairingRows() {
+        return """
+            SELECT p.account_id, p.pairing_id, p.requested_device_id, p.requested_device_public_key,
+                   p.requested_device_encryption_public_key, p.platform, p.code_hash, p.challenge,
+                   p.pairing_status, p.approved_by_device_id, p.key_package_id,
+                   p.requested_at, p.expires_at, k.key_epoch, k.object_key, k.sha256, k.size_bytes
+            FROM sync_pairing_requests p
+            LEFT JOIN sync_key_packages k ON k.account_id = p.account_id AND k.key_package_id = p.key_package_id
+            """;
+    }
+
+    private org.springframework.jdbc.core.RowMapper<PairRow> pairingRowMapper() {
+        return (rs, row) -> new PairRow(
+            rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getObject(3, UUID.class), rs.getBytes(4),
+            rs.getString(5), rs.getString(6), rs.getString(7), rs.getBytes(8), rs.getString(9),
+            rs.getObject(10, UUID.class), rs.getObject(11, UUID.class),
+            rs.getObject(12, OffsetDateTime.class), rs.getObject(13, OffsetDateTime.class),
+            nullableInt(rs, 14), rs.getString(15), rs.getString(16), nullableLong(rs, 17));
+    }
+
     private PairingResponse response(PairRow pair, PairingResponse.Upload upload, String downloadUrl, java.time.Instant expires) {
-        return new PairingResponse(pair.pairingId(), pair.requestedDeviceId(), pair.status(),
+        return new PairingResponse(pair.accountId(), pair.pairingId(), pair.requestedDeviceId(), pair.encryptionPublicKey(),
+            pair.platform(), Base64.getEncoder().encodeToString(pair.challenge()), pair.status(),
             pair.keyEpoch() == null ? 0 : pair.keyEpoch(), pair.keyPackageId(), pair.objectKey(), pair.sha256(),
-            pair.sizeBytes(), downloadUrl, expires, upload, pair.expiresAt().toInstant());
+            pair.sizeBytes(), downloadUrl, expires, upload, pair.requestedAt().toInstant(), pair.expiresAt().toInstant());
     }
 
     private String approvalMessage(PairRow pair) {
@@ -355,8 +418,9 @@ public class PairingService {
     }
 
     private record PairRow(
-        UUID pairingId, UUID requestedDeviceId, byte[] publicKey, String codeHash, byte[] challenge,
-        String status, UUID approverDeviceId, UUID keyPackageId, OffsetDateTime expiresAt,
+        UUID accountId, UUID pairingId, UUID requestedDeviceId, byte[] publicKey, String encryptionPublicKey,
+        String platform, String codeHash, byte[] challenge, String status,
+        UUID approverDeviceId, UUID keyPackageId, OffsetDateTime requestedAt, OffsetDateTime expiresAt,
         Integer keyEpoch, String objectKey, String sha256, Long sizeBytes
     ) {}
 }

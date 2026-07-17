@@ -47,6 +47,8 @@ logging:
   config: classpath:logback-spring.xml
 
 sync:
+  cors:
+    allowed-origins: ${SYNC_CORS_ALLOWED_ORIGINS:}
   observability:
     gauge-interval: ${SYNC_OBSERVABILITY_GAUGE_INTERVAL:30s}
   garbage-collection:

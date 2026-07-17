@@ -13,5 +13,19 @@ public record DeviceRegistrationRequest(
     @NotBlank @Size(max = 32768) String devicePublicKey,
     @NotBlank @Pattern(regexp = "PRIMARY|COMPANION") String deviceRole,
     @Min(1) @Max(1000) int protocolVersion,
-    @Size(max = 128) String appVersion
-) {}
+    @Size(max = 128) String appVersion,
+    @Min(1) @Max(1_000_000) Integer initialKeyEpoch
+) {
+    public DeviceRegistrationRequest(
+            UUID deviceId,
+            String devicePublicKey,
+            String deviceRole,
+            int protocolVersion,
+            String appVersion) {
+        this(deviceId, devicePublicKey, deviceRole, protocolVersion, appVersion, null);
+    }
+
+    public int resolvedInitialKeyEpoch() {
+        return initialKeyEpoch == null ? 1 : initialKeyEpoch;
+    }
+}

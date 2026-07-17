@@ -11,6 +11,12 @@ import com.deardiary.sync.objectstore.UploadObjectCommand;
 import com.deardiary.sync.protocol.ProtocolService;
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -82,6 +88,42 @@ public class KeyPackageService {
         } catch (ObjectStoreException error) { throw storage(error); }
     }
 
+    public List<KeyPackageResponse> availableForDevice(String ownerSubject, UUID deviceId) {
+        var device = devices.requireActiveDevice(ownerSubject, deviceId);
+        return jdbc.query("""
+            SELECT key_package_id, target_device_id, key_epoch, package_purpose, package_status,
+                   object_key, sha256, size_bytes, created_by_device_id, rotation_id, recovery_attempt_id
+            FROM sync_key_packages
+            WHERE account_id = ? AND target_device_id = ? AND package_purpose = 'DEVICE'
+              AND package_status = 'AVAILABLE'
+            ORDER BY key_epoch DESC, created_at DESC
+            """, (rs, row) -> map(rs), device.accountId(), deviceId).stream().map(row -> {
+                try {
+                    var download = objectStore.createDownload(new ObjectKey(row.objectKey()));
+                    return response(row, download.url().toString(), download.expiresAt(), null);
+                } catch (ObjectStoreException error) { throw storage(error); }
+            }).toList();
+    }
+
+    public KeyPackageResponse applyDevicePackage(
+            String ownerSubject, UUID packageId, ApplyDeviceKeyPackageRequest request) {
+        var device = devices.requireActiveDevice(ownerSubject, request.deviceId());
+        return transactions.execute(status -> {
+            lockAccount(device.accountId());
+            var row = load(device.accountId(), packageId, true);
+            if (!row.targetDeviceId().equals(request.deviceId()) || !"DEVICE".equals(row.purpose())) throw forbidden();
+            if ("APPLIED".equals(row.status())) return response(row, null, null, null);
+            if (!"AVAILABLE".equals(row.status())) throw invalid("KEY_PACKAGE_NOT_AVAILABLE");
+            var key = jdbc.queryForObject(
+                "SELECT device_public_key FROM sync_devices WHERE account_id = ? AND device_id = ?",
+                byte[].class, device.accountId(), request.deviceId());
+            verifyPossession(key, "key-package-applied:" + packageId + ":" + row.keyEpoch(), request.possessionSignature());
+            jdbc.update("UPDATE sync_key_packages SET package_status = 'APPLIED', applied_at = ? WHERE account_id = ? AND key_package_id = ?",
+                OffsetDateTime.now(clock), device.accountId(), packageId);
+            return response(load(device.accountId(), packageId, false), null, null, null);
+        });
+    }
+
     public long availableRotationPackageCount(UUID accountId, UUID rotationId, int epoch) {
         return jdbc.queryForObject("""
             SELECT count(*) FROM sync_key_packages
@@ -104,11 +146,12 @@ public class KeyPackageService {
                 throw invalid("INVALID_RECOVERY_PACKAGE");
             }
             if (request.rotationId() == null && request.keyEpoch() != currentEpoch) throw invalid("KEY_EPOCH_MISMATCH");
-            if (request.rotationId() != null) requireRotation(accountId, request.rotationId(), request.keyEpoch());
+            if (request.rotationId() != null) requireRotationTarget(
+                accountId, request.rotationId(), request.keyEpoch(), request.targetDeviceId());
         } else if (request.rotationId() == null) {
             if (request.keyEpoch() != currentEpoch) throw invalid("KEY_EPOCH_MISMATCH");
         } else {
-            requireRotation(accountId, request.rotationId(), request.keyEpoch());
+            requireRotationTarget(accountId, request.rotationId(), request.keyEpoch(), request.targetDeviceId());
         }
     }
 
@@ -119,6 +162,15 @@ public class KeyPackageService {
               AND rotation_status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
             """, Long.class, accountId, rotationId, epoch);
         if (count == null || count == 0) throw invalid("KEY_ROTATION_NOT_FOUND");
+    }
+
+    private void requireRotationTarget(UUID accountId, UUID rotationId, int epoch, UUID targetDeviceId) {
+        requireRotation(accountId, rotationId, epoch);
+        var revokedTarget = jdbc.queryForObject("""
+            SELECT revoked_device_id FROM sync_key_rotations
+            WHERE account_id = ? AND rotation_id = ?
+            """, UUID.class, accountId, rotationId);
+        if (targetDeviceId.equals(revokedTarget)) throw invalid("KEY_PACKAGE_TARGET_REVOKED");
     }
 
     private PackageRow persist(UUID accountId, KeyPackageRequest request) {
@@ -171,7 +223,7 @@ public class KeyPackageService {
                 account_id, object_key, owner_record_type, owner_record_id,
                 reference_kind, created_sequence, created_at
             ) VALUES (?, ?, 'ACCOUNT', ?, 'KEY_PACKAGE', ?, ?) ON CONFLICT DO NOTHING
-            """, accountId, row.objectKey(), accountId, Math.max(1, sequence), now);
+            """, accountId, row.objectKey(), accountId.toString(), Math.max(1, sequence), now);
         return load(accountId, packageId, false);
     }
 
@@ -181,6 +233,15 @@ public class KeyPackageService {
             if (metadata.sizeBytes() != row.sizeBytes()) throw invalid("OBJECT_SIZE_MISMATCH");
             if (!metadata.sha256().equals(row.sha256())) throw invalid("HASH_MISMATCH");
         } catch (ObjectStoreException error) { throw storage(error); }
+    }
+    private void verifyPossession(byte[] publicKey, String message, String encodedSignature) {
+        try {
+            var verifier = Signature.getInstance("SHA256withECDSA");
+            verifier.initVerify(KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(publicKey)));
+            verifier.update(message.getBytes(StandardCharsets.UTF_8));
+            if (!verifier.verify(Base64.getDecoder().decode(encodedSignature))) throw invalid("INVALID_KEY_PACKAGE_PROOF");
+        } catch (ApiException error) { throw error; }
+        catch (Exception error) { throw invalid("INVALID_KEY_PACKAGE_PROOF"); }
     }
     private void lockAccount(UUID id) { jdbc.queryForObject("SELECT account_id FROM sync_accounts WHERE account_id = ? FOR UPDATE", UUID.class, id); }
     private PackageRow load(UUID accountId, UUID id, boolean lock) {

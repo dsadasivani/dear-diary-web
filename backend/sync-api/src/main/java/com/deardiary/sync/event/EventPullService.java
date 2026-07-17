@@ -44,7 +44,7 @@ public class EventPullService {
             ORDER BY sequence ASC LIMIT ?
             """, (rs, row) -> new EventRow(
                 rs.getLong(1), rs.getObject(2, UUID.class), rs.getObject(3, UUID.class),
-                rs.getObject(4, UUID.class), rs.getString(5), rs.getObject(6, UUID.class),
+                rs.getObject(4, UUID.class), rs.getString(5), rs.getString(6),
                 rs.getString(7), rs.getLong(8), rs.getInt(9), rs.getString(10),
                 rs.getString(11), rs.getString(12), rs.getLong(13), rs.getInt(14)),
             account.accountId(), after, limit + 1);
@@ -79,7 +79,7 @@ public class EventPullService {
 
     private record EventRow(
         long sequence, UUID eventId, UUID operationId, UUID deviceId,
-        String recordType, UUID recordId, String operationType, long recordVersion,
+        String recordType, String recordId, String operationType, long recordVersion,
         int keyEpoch, String partitionKey, String objectKey, String sha256,
         long sizeBytes, int eventSchemaVersion
     ) {}

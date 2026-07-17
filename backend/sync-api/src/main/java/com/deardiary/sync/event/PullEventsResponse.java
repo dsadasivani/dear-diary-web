@@ -12,7 +12,7 @@ public record PullEventsResponse(List<Event> events, long currentSequence, boole
         UUID operationId,
         UUID deviceId,
         String recordType,
-        UUID recordId,
+        String recordId,
         String operationType,
         long recordVersion,
         int keyEpoch,

@@ -10,7 +10,7 @@ import type {
   UserProfile,
 } from '../types';
 import type { DiaryRepository } from '../repositories';
-import { createInitialPinWithRecovery } from '../domain/security';
+import { createInitialPinWithRecovery, hasRecoveryQuestion } from '../domain/security';
 import { createDefaultDriveBackupSettings } from '../repositories/defaults';
 import { getPlatformName } from '../platform';
 import {
@@ -228,18 +228,25 @@ const createRecoveredSecurityConfig = async (
   googleSession: GoogleAccountSession,
   localPin: string,
   recoveryQuestion: RecoveryQuestionInput,
-): Promise<SecurityConfig> => ({
-  ...createInitialPinWithRecovery(
-    await repository.getSecurityConfig(),
-    localPin,
-    recoveryQuestion.questionId,
-    recoveryQuestion.answer,
-    recoveryQuestion.questionText,
-  ),
-  linkedGoogleUserId: googleSession.userId,
-  linkedGoogleEmail: googleSession.email,
-  linkedGoogleBoundAt: Date.now(),
-});
+): Promise<SecurityConfig> => {
+  const currentSecurity = await repository.getSecurityConfig();
+  const recoveredSecurity = currentSecurity.isPinCreated && hasRecoveryQuestion(currentSecurity)
+    ? currentSecurity
+    : createInitialPinWithRecovery(
+      currentSecurity,
+      localPin,
+      recoveryQuestion.questionId,
+      recoveryQuestion.answer,
+      recoveryQuestion.questionText,
+    );
+
+  return {
+    ...recoveredSecurity,
+    linkedGoogleUserId: googleSession.userId,
+    linkedGoogleEmail: googleSession.email,
+    linkedGoogleBoundAt: Date.now(),
+  };
+};
 
 const createRecoveredDriveBackupSettings = async (
   repository: DiaryRepository,
@@ -270,6 +277,7 @@ const localStateFromPending = (
   } = {},
 ): LocalSyncAccountState => ({
   accountId: pending.account.id,
+  syncProtocolVersion: 1,
   deviceId: pending.device.id,
   deviceRole: 'primary_mobile',
   googleUserId: pending.googleSession.userId,
@@ -943,6 +951,7 @@ export const bootstrapNewMobileAccount = async ({
 
   const localState: LocalSyncAccountState = {
     accountId: created.account.id,
+    syncProtocolVersion: 1,
     deviceId: created.device.id,
     deviceRole: 'primary_mobile',
     googleUserId: googleSession.userId,

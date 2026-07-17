@@ -48,7 +48,10 @@ export class BoundedObjectTransfer {
   private readonly telemetry: Telemetry;
 
   constructor(private readonly options: BoundedTransferOptions) {
-    this.fetcher = options.fetch || fetch;
+    const configuredFetcher = options.fetch;
+    this.fetcher = configuredFetcher
+      ? (input, init) => configuredFetcher(input, init)
+      : (input, init) => globalThis.fetch(input, init);
     this.concurrency = options.maximumConcurrency || 3;
     this.telemetry = options.telemetry || NOOP_TELEMETRY;
   }

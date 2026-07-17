@@ -15,7 +15,7 @@ public record InitiateOperationRequest(
     @NotNull UUID operationId,
     @NotNull UUID deviceId,
     @NotBlank @Pattern(regexp = "DIARY|ENTRY|NOTE|SETTINGS|PROFILE") String recordType,
-    @NotNull UUID recordId,
+    @NotBlank @Size(max = 128) @Pattern(regexp = "^[A-Za-z0-9:_-]+$") String recordId,
     @NotBlank @Pattern(regexp = "UPSERT|DELETE") String operationType,
     @Min(0) long baseRecordVersion,
     @Min(1) @Max(1000) int protocolVersion,

@@ -23,6 +23,12 @@
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-inset-left: env(safe-area-inset-left, 0px);
   --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --radius-control: 0.75rem;
+  --radius-card: 1rem;
+  --radius-major: 1.375rem;
+  --shadow-subtle: 0 1px 2px rgba(62, 36, 41, 0.06), 0 8px 24px rgba(62, 36, 41, 0.04);
+  --shadow-raised: 0 16px 42px rgba(62, 36, 41, 0.10);
+  --shadow-modal: 0 24px 80px rgba(20, 12, 15, 0.22);
 }
 
 .dark {
@@ -80,6 +86,157 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+button, a, input, textarea, select, [tabindex]:not([tabindex="-1"]) {
+  outline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--brand-sage) 78%, white);
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* Legacy screen branches still contain compact utility labels. Keep all meaningful
+   interface copy at the design-system caption floor while they are consolidated. */
+[class*="text-[7px]"], [class*="text-[7.5px]"], [class*="text-[8px]"],
+[class*="text-[9px]"], [class*="text-[10px]"], [class*="text-[11px]"] {
+  font-size: 0.75rem !important;
+}
+
+@media (max-width: 767px) {
+  input, textarea, select { font-size: 1rem; }
+  button, a[href], [role="button"] { min-height: 2.75rem; }
+}
+
+.surface-card {
+  border: 1px solid var(--brand-border);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--brand-card-bg) 92%, transparent);
+  box-shadow: var(--shadow-subtle);
+}
+
+.surface-modal {
+  border: 1px solid var(--brand-border);
+  border-radius: var(--radius-major);
+  background: var(--brand-card-bg);
+  box-shadow: var(--shadow-modal);
+}
+
+.app-eyebrow {
+  color: var(--brand-sage);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.icon-button {
+  display: inline-flex;
+  width: 2.75rem;
+  height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--brand-border);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--brand-card-bg) 90%, transparent);
+  color: var(--brand-plum);
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.icon-button:hover { border-color: var(--brand-sage); }
+
+.app-header {
+  position: sticky;
+  top: var(--safe-area-inset-top);
+  z-index: 35;
+  display: flex;
+  min-height: 4.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 -0.25rem 0.5rem;
+  padding: 0.6rem 0.25rem;
+  background: color-mix(in srgb, var(--brand-bg) 88%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.mobile-bottom-navigation {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: end;
+  max-width: 34rem;
+  margin-inline: auto;
+  padding: 0.4rem 0.35rem;
+  border: 1px solid var(--brand-border);
+  border-radius: 1.25rem;
+  background: color-mix(in srgb, var(--brand-card-bg) 92%, transparent);
+  box-shadow: var(--shadow-raised);
+  backdrop-filter: blur(20px);
+}
+
+.app-nav-item, .app-create-button {
+  display: flex;
+  min-width: 0;
+  min-height: 3.25rem;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0.15rem;
+  border-radius: 0.75rem;
+  color: var(--brand-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.app-nav-item-active {
+  background: var(--brand-sage-light);
+  color: var(--brand-sage-dark);
+  box-shadow: inset 0 -3px 0 var(--brand-sage);
+}
+
+.app-create-button {
+  min-height: 3.65rem;
+  margin-top: -1rem;
+  border-radius: 1rem;
+  background: var(--brand-sage);
+  color: white;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--brand-sage) 28%, transparent);
+}
+
+.navigation-rail {
+  position: fixed;
+  inset-block: 0;
+  left: 0;
+  z-index: 50;
+  display: none;
+  width: 7.25rem;
+  padding: calc(1rem + var(--safe-area-inset-top)) 0.65rem calc(1rem + var(--safe-area-inset-bottom));
+  border-right: 1px solid var(--brand-border);
+  background: color-mix(in srgb, var(--brand-card-bg) 88%, transparent);
+  backdrop-filter: blur(20px);
+}
+
+.navigation-rail > :first-child { margin-inline: auto; }
+.rail-item { display: flex; min-height: 3.25rem; align-items: center; justify-content: center; flex-direction: column; gap: 0.2rem; border-radius: 0.75rem; color: var(--brand-text-muted); font-size: 0.75rem; font-weight: 700; }
+.rail-item-active { background: var(--brand-sage-light); color: var(--brand-sage-dark); box-shadow: inset 3px 0 0 var(--brand-sage); }
+.rail-item.rail-create { color: white; }
+
+@media (min-width: 768px) and (max-width: 1199px) {
+  .navigation-rail { display: flex; flex-direction: column; }
+  .tablet-shell-content { margin-left: 7.25rem; }
+  .mobile-bottom-navigation { display: none; }
+  .app-shell { padding-bottom: var(--safe-area-inset-bottom); }
+  .app-main { max-width: none !important; padding-inline: 2rem !important; }
+}
+
+@media (min-width: 1200px) {
+  .icon-button { width: 2.5rem; height: 2.5rem; }
 }
 
 .safe-area-root {
@@ -158,6 +315,16 @@ body {
   100% {
     background-position: -120% 0, center;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .synced-image-skeleton { animation: none; }
 }
 
 /* Rich Text Editor visual styles */

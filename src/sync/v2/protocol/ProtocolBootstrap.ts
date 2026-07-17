@@ -40,6 +40,10 @@ export class SyncV2RuntimeStore {
   save(runtime: SyncV2LocalRuntime): Promise<void> {
     return this.store.setItem(RUNTIME_KEY, JSON.stringify(runtime));
   }
+
+  clear(): Promise<void> {
+    return this.store.removeItem(RUNTIME_KEY);
+  }
 }
 
 export class ProtocolBootstrap {

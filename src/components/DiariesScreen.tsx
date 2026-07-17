@@ -28,12 +28,15 @@ export default function DiariesScreen({
   onRefreshDiaries
 }: DiariesScreenProps) {
   const [showCreateForm, setShowCreateForm] = useState<boolean>(false);
+  const [showJournalCustomization, setShowJournalCustomization] = useState(false);
   const [diarySearch, setDiarySearch] = useState('');
   
   // View mode state: compact (uniform grid), list (classic list)
-  const [viewMode, setViewMode] = useState<DiaryViewMode>(() => {
-    return localStorage.getItem('deardiary_diary_viewmode') === 'list' ? 'list' : 'compact';
-  });
+  const [viewMode, setViewMode] = useState<DiaryViewMode>(() => (
+    localStorage.getItem('deardiary_diary_viewmode') === 'compact' ? 'compact' : 'list'
+  ));
+  const [sortBy, setSortBy] = useState<'updated' | 'name' | 'entries' | 'created'>('updated');
+  const [filterBy, setFilterBy] = useState<'all' | 'locked' | 'unlocked' | 'empty'>('all');
 
   const handleViewModeChange = (mode: DiaryViewMode) => {
     setViewMode(mode);
@@ -43,7 +46,6 @@ export default function DiariesScreen({
 
   // New diary form state
   const [diaryName, setDiaryName] = useState<string>('');
-  const [diaryDesc, setDiaryDesc] = useState<string>('');
   const [selectedEmoji, setSelectedEmoji] = useState<string>('📔');
   const [selectedColor, setSelectedColor] = useState<string>(PREDEFINED_COLORS[0].hex);
   const [isLocked, setIsLocked] = useState<boolean>(false);
@@ -54,10 +56,15 @@ export default function DiariesScreen({
   const coverFileInputRef = useRef<HTMLInputElement>(null);
 
   const totalEntries = diaries.reduce((sum, diary) => sum + diary.entryCount, 0);
-  const visibleDiaries = diaries.filter(diary => (
-    !diarySearch.trim() ||
-    diary.name.toLowerCase().includes(diarySearch.trim().toLowerCase())
-  ));
+  const visibleDiaries = diaries
+    .filter(diary => !diarySearch.trim() || diary.name.toLowerCase().includes(diarySearch.trim().toLowerCase()))
+    .filter(diary => filterBy === 'all' || (filterBy === 'locked' && diary.isLocked) || (filterBy === 'unlocked' && !diary.isLocked) || (filterBy === 'empty' && diary.entryCount === 0))
+    .sort((a, b) => {
+      if (sortBy === 'name') return a.name.localeCompare(b.name);
+      if (sortBy === 'entries') return b.entryCount - a.entryCount;
+      if (sortBy === 'created') return diaries.indexOf(b) - diaries.indexOf(a);
+      return (b.lastEntryUpdatedAt || 0) - (a.lastEntryUpdatedAt || 0);
+    });
 
   const handleDiaryClick = (diary: Diary) => {
     onNavigate('diaries', 'diaryDetail', diary.id);
@@ -101,12 +108,12 @@ export default function DiariesScreen({
     
     // Reset form
     setDiaryName('');
-    setDiaryDesc('');
     setSelectedEmoji('📔');
     setSelectedColor(PREDEFINED_COLORS[0].hex);
     setIsLocked(false);
     setCoverImage(undefined);
     setSelectedFoilIcons([]);
+    setShowJournalCustomization(false);
     setShowCreateForm(false);
   };
 
@@ -116,7 +123,7 @@ export default function DiariesScreen({
         <header className="flex items-start justify-between gap-6">
           <div>
             <h1 className="font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
-              Diaries Library
+              Journals
             </h1>
             <p className="mt-2 text-lg text-brand-text-muted">Your collection of safe spaces and quiet reflections.</p>
           </div>
@@ -126,13 +133,13 @@ export default function DiariesScreen({
             className="inline-flex items-center gap-2 rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark"
           >
             <Plus className="h-4 w-4" />
-            Start New
+            New Journal
           </button>
         </header>
 
         <section className="grid grid-cols-3 gap-4">
           <div className="rounded-[22px] border border-brand-border bg-white/65 p-5 shadow-sm dark:bg-brand-card-bg/60">
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-sage">Diaries</p>
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-sage">Journals</p>
             <p className="mt-2 font-serif-diary text-3xl font-semibold text-brand-plum dark:text-brand-text">{diaries.length}</p>
           </div>
           <div className="rounded-[22px] border border-brand-border bg-white/65 p-5 shadow-sm dark:bg-brand-card-bg/60">
@@ -152,7 +159,7 @@ export default function DiariesScreen({
               type="text"
               value={diarySearch}
               onChange={(event) => setDiarySearch(event.target.value)}
-              placeholder="Search within diaries..."
+              placeholder="Search journals"
               className="w-full rounded-2xl border border-transparent bg-transparent py-3 pl-12 pr-4 text-base font-semibold text-brand-plum outline-none placeholder:text-brand-text-muted/55 focus:border-brand-border focus:bg-white dark:text-brand-text"
             />
           </div>
@@ -273,7 +280,7 @@ export default function DiariesScreen({
             className="flex flex-col gap-6"
           >
             {/* Header */}
-            <header className="flex justify-between items-center bg-brand-bg/95 backdrop-blur-md sticky top-0 py-3 z-30 select-none">
+            <header className="sr-only">
               <div className="flex items-center gap-3">
                 <span className="p-2.5 bg-brand-pink/10 text-brand-pink rounded-2xl">
                   <BookOpen className="w-5 h-5" />
@@ -286,14 +293,19 @@ export default function DiariesScreen({
             </header>
 
             {/* Title & View Selector Section */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/40 dark:bg-brand-card-bg/20 p-4 rounded-3xl border border-brand-border/30">
-              <div className="space-y-1">
-                <h2 className="font-serif-diary text-2xl font-bold text-brand-plum italic">Your Bookcases</h2>
-                <p className="text-xs text-brand-text-muted font-medium">Click on a journal to flip open its pages and explore your journey.</p>
-              </div>
+            <div className="surface-card grid gap-3 p-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <label className="relative block">
+                <span className="sr-only">Search journals</span>
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
+                <input value={diarySearch} onChange={(event) => setDiarySearch(event.target.value)} placeholder="Search journals" className="min-h-11 w-full rounded-xl border border-brand-border bg-brand-bg/40 pl-10 pr-3 text-base outline-none focus:border-brand-sage" />
+              </label>
 
               {/* View Selector Buttons */}
-              <div className="flex items-center gap-1 bg-white/90 dark:bg-brand-card-bg/90 border border-brand-border p-1 rounded-2xl shadow-sm self-start sm:self-auto">
+              <div className="flex items-center gap-1 rounded-xl border border-brand-border bg-white/90 p-1 shadow-sm dark:bg-brand-card-bg/90">
+                <label className="sr-only" htmlFor="journal-sort">Sort journals</label>
+                <select id="journal-sort" value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)} className="min-h-10 rounded-lg bg-transparent px-2 text-sm font-bold"><option value="updated">Recently updated</option><option value="name">Name</option><option value="entries">Most entries</option><option value="created">Newest created</option></select>
+                <label className="sr-only" htmlFor="journal-filter">Filter journals</label>
+                <select id="journal-filter" value={filterBy} onChange={(event) => setFilterBy(event.target.value as typeof filterBy)} className="min-h-10 rounded-lg bg-transparent px-2 text-sm font-bold"><option value="all">All</option><option value="locked">Locked</option><option value="unlocked">Unlocked</option><option value="empty">Empty</option></select>
                 <button
                   onClick={() => handleViewModeChange('compact')}
                   className={`p-2.5 rounded-xl transition-all ${
@@ -301,7 +313,8 @@ export default function DiariesScreen({
                       ? 'bg-brand-pink text-white shadow-md'
                       : 'text-brand-sage hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
                   }`}
-                  title="Compact Cover View"
+                  aria-label="Gallery view"
+                  aria-pressed={viewMode === 'compact'}
                 >
                   <LayoutGrid className="w-4 h-4" />
                 </button>
@@ -312,11 +325,13 @@ export default function DiariesScreen({
                       ? 'bg-brand-pink text-white shadow-md'
                       : 'text-brand-sage hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
                   }`}
-                  title="Classic List View"
+                  aria-label="List view"
+                  aria-pressed={viewMode === 'list'}
                 >
                   <List className="w-4 h-4" />
                 </button>
               </div>
+              <button type="button" onClick={() => setShowCreateForm(true)} className="min-h-11 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white sm:col-span-2"><Plus className="mr-2 inline h-4 w-4" />New Journal</button>
             </div>
 
             {/* CONDITIONAL RENDER BY VIEW MODE */}
@@ -330,8 +345,9 @@ export default function DiariesScreen({
                   exit={{ opacity: 0 }}
                   className="grid grid-cols-2 sm:grid-cols-3 gap-5 pb-24"
                 >
-                  {diaries.map((diary) => (
-                    <motion.div
+                  {visibleDiaries.map((diary) => (
+                    <motion.button
+                      type="button"
                       key={diary.id}
                       data-testid="diary-card"
                       whileHover={{ y: -6 }}
@@ -432,7 +448,7 @@ export default function DiariesScreen({
                           </p>
                         </div>
                       </div>
-                    </motion.div>
+                    </motion.button>
                   ))}
                 </motion.div>
               )}
@@ -446,13 +462,14 @@ export default function DiariesScreen({
                   exit={{ opacity: 0 }}
                   className="flex flex-col gap-4.5 pb-24"
                 >
-                  {diaries.map((diary) => (
-                    <motion.div
+                  {visibleDiaries.map((diary) => (
+                    <motion.button
+                      type="button"
                       key={diary.id}
                       data-testid="diary-card"
                       whileHover={{ x: 4, scale: 1.01 }}
                       onClick={() => handleDiaryClick(diary)}
-                      className="group relative overflow-hidden bg-white dark:bg-brand-card-bg rounded-2xl p-4.5 cursor-pointer border border-brand-border/60 dark:border-brand-border/10 shadow-sm flex items-center justify-between transition-all select-none hover:shadow-md"
+                      className="group relative min-h-20 w-full overflow-hidden bg-white dark:bg-brand-card-bg rounded-2xl p-4.5 cursor-pointer border border-brand-border/60 dark:border-brand-border/10 shadow-sm flex items-center justify-between text-left transition-all select-none hover:shadow-md"
                     >
                       <div className="flex items-center gap-4">
                         {/* Tiny Spine Accent represent the book */}
@@ -494,22 +511,12 @@ export default function DiariesScreen({
                           ))}
                         </div>
                       )}
-                    </motion.div>
+                    </motion.button>
                   ))}
                 </motion.div>
               )}
             </AnimatePresence>
 
-            {/* Floating Create FAB */}
-            <motion.button 
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => setShowCreateForm(true)}
-              className="fixed bottom-24 right-6 md:right-10 w-15 h-15 bg-brand-pink hover:bg-brand-pink-dark text-white rounded-3xl flex items-center justify-center shadow-xl shadow-brand-pink/20 transition-all z-40 border border-brand-pink-dark/10"
-              title="Bind a new journal"
-            >
-              <Plus className="w-7 h-7" />
-            </motion.button>
           </motion.div>
         ) : (
           /* CREATE DIARY SCREEN */
@@ -524,17 +531,19 @@ export default function DiariesScreen({
             <header className="flex justify-between items-center py-3 bg-brand-bg sticky top-0 z-30 border-b border-brand-border/40 select-none">
               <button 
                 onClick={() => setShowCreateForm(false)}
+                aria-label="Back to journals"
                 className="p-2.5 text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-full transition-all active:scale-90"
               >
                 <ArrowLeft className="w-5 h-5" />
               </button>
-              <h1 className="font-serif-diary text-xl font-bold text-brand-plum italic">Bind a New Journal</h1>
+              <h1 className="font-serif-diary text-xl font-bold text-brand-plum">New Journal</h1>
               <div className="w-10 h-10" />
             </header>
 
             <form onSubmit={handleCreateSubmit} className="flex flex-col gap-6">
               
-              {/* Cover Preview Card with Custom cover and Foil seals support */}
+              {showJournalCustomization && (
+              /* Cover Preview Card with Custom cover and Foil seals support */
               <div className="flex flex-col items-center py-6 select-none">
                 <div className="w-44 aspect-[3/4.2] relative">
                   {/* Double-layered realistic skeuomorphic shadow (shady effect) */}
@@ -626,35 +635,34 @@ export default function DiariesScreen({
                 </div>
                 <p className="text-[10px] text-brand-text-muted font-bold uppercase tracking-wider mt-4">Cover Art Preview</p>
               </div>
+              )}
 
               {/* Basic Info Section */}
               <div className="flex flex-col gap-5 bg-white/90 dark:bg-brand-card-bg p-6 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm">
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">Journal Title</label>
+                  <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">Journal name</label>
                   <input 
                     type="text" 
                     value={diaryName}
                     onChange={(e) => setDiaryName(e.target.value)}
-                    placeholder="e.g., Midnight Musings"
+                    placeholder="e.g., Evening Reflections"
                     required
                     maxLength={32}
                     className="w-full bg-transparent border-b border-brand-border/60 py-2.5 text-base text-brand-plum focus:outline-none focus:border-brand-pink transition-colors font-serif-diary placeholder-brand-plum/25 font-semibold"
                   />
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">Aesthetic Intent (Optional)</label>
-                  <textarea 
-                    value={diaryDesc}
-                    onChange={(e) => setDiaryDesc(e.target.value)}
-                    placeholder="Describe the emotional theme or goal for this specific journal..."
-                    rows={2}
-                    maxLength={140}
-                    className="w-full bg-transparent border-b border-brand-border/60 py-2 text-sm text-brand-plum focus:outline-none focus:border-brand-pink transition-colors font-serif-diary resize-none placeholder-brand-plum/25 leading-relaxed"
-                  />
-                </div>
+                <label className="flex min-h-12 cursor-pointer items-center justify-between gap-4 rounded-xl bg-brand-bg/55 px-3 py-2">
+                  <span><span className="block text-sm font-bold text-brand-plum">Lock this journal</span><span className="block text-xs text-brand-text-muted">Require your app PIN or biometrics to open it.</span></span>
+                  <input type="checkbox" checked={isLocked} onChange={(event) => setIsLocked(event.target.checked)} className="h-5 w-5 accent-brand-sage" />
+                </label>
               </div>
 
+              <button type="button" onClick={() => setShowJournalCustomization(value => !value)} aria-expanded={showJournalCustomization} className="min-h-12 rounded-xl border border-brand-border bg-white/75 px-4 text-sm font-bold text-brand-sage dark:bg-brand-card-bg/75">
+                {showJournalCustomization ? 'Hide appearance options' : 'Customize appearance (optional)'}
+              </button>
+
+              {showJournalCustomization && (<>
               {/* Cover Page Background Image Upload */}
               <div className="flex flex-col gap-3.5 bg-white/90 dark:bg-brand-card-bg p-6 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm">
                 <div className="flex justify-between items-center">
@@ -704,6 +712,8 @@ export default function DiariesScreen({
                       key={emoji}
                       type="button"
                       onClick={() => setSelectedEmoji(emoji)}
+                      aria-label={`Use ${emoji} as journal icon`}
+                      aria-pressed={selectedEmoji === emoji}
                       className={`aspect-square text-xl flex items-center justify-center rounded-2xl transition-all ${
                         selectedEmoji === emoji 
                           ? 'bg-brand-pink/15 text-brand-pink-dark border-2 border-brand-pink scale-110 shadow-sm' 
@@ -741,6 +751,8 @@ export default function DiariesScreen({
                         key={icon}
                         type="button"
                         onClick={() => handleFoilIconToggle(icon)}
+                        aria-label={`${isSelected ? 'Remove' : 'Add'} ${icon} cover stamp`}
+                        aria-pressed={isSelected}
                         className={`aspect-square text-xl flex items-center justify-center rounded-2xl relative transition-all ${
                           isSelected 
                             ? 'bg-yellow-500/20 text-yellow-600 border-2 border-yellow-500 scale-110 shadow-md' 
@@ -769,6 +781,8 @@ export default function DiariesScreen({
                       type="button"
                       onClick={() => setSelectedColor(color.hex)}
                       disabled={!!coverImage}
+                      aria-label={`Use ${color.name} cover color`}
+                      aria-pressed={selectedColor === color.hex && !coverImage}
                       className={`aspect-square rounded-2xl relative flex items-center justify-center shadow-md transition-transform hover:scale-105 ${
                         coverImage ? 'opacity-30 cursor-not-allowed' : ''
                       }`}
@@ -784,29 +798,7 @@ export default function DiariesScreen({
                 </div>
                 {coverImage && <p className="text-[10px] text-amber-600 font-semibold">Custom cover image is active, backing leather color is hidden.</p>}
               </div>
-
-              {/* Password Protection Toggle */}
-              <div className="bg-white/90 dark:bg-brand-card-bg p-6 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm flex items-center justify-between">
-                <div className="flex items-center gap-3.5">
-                  <span className="p-3 bg-brand-pink/10 text-brand-pink rounded-2xl">
-                    <Lock className="w-4.5 h-4.5" />
-                  </span>
-                  <div>
-                    <h3 className="text-sm font-bold text-brand-plum">Private Lock Status</h3>
-                    <p className="text-[11px] text-brand-text-muted mt-0.5">Encrypt and protect this book with biometrics</p>
-                  </div>
-                </div>
-
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={isLocked}
-                    onChange={(e) => setIsLocked(e.target.checked)}
-                    className="sr-only peer" 
-                  />
-                  <div className="w-11 h-6 bg-brand-sage-light/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-brand-sage-light after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-sage" />
-                </label>
-              </div>
+              </>)}
 
               {/* Footer Actions */}
               <footer className="flex gap-4 pt-4 select-none">
@@ -815,14 +807,14 @@ export default function DiariesScreen({
                   onClick={() => setShowCreateForm(false)}
                   className="flex-1 py-3.5 rounded-full border border-brand-pink text-brand-pink font-bold text-xs hover:bg-brand-pink/5 transition-all active:scale-95"
                 >
-                  Discard Setup
+                  Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={!diaryName.trim()}
                   className="flex-1 py-3.5 rounded-full bg-brand-pink disabled:opacity-40 hover:bg-brand-pink-dark text-white font-bold text-xs shadow-lg shadow-brand-pink/15 transition-all active:scale-95"
                 >
-                  Bind Cover
+                  Create Journal
                 </button>
               </footer>
             </form>

@@ -1,5 +1,5 @@
 import CryptoJS from 'crypto-js';
-import type { GoogleAccountSession, SecurityConfig } from '../types';
+import type { GoogleAccountSession, SecurityConfig, SyncDeviceRole } from '../types';
 import { DEFAULT_SECURITY_CONFIG } from '../repositories/defaults';
 
 export type PinLength = 4 | 8;
@@ -97,6 +97,15 @@ export const hasRecoveryQuestion = (config: SecurityConfig): boolean => Boolean(
   config.recoveryAnswerIterations
 );
 
+export const requiresRecoveryQuestionForDevice = (
+  config: SecurityConfig,
+  deviceRole?: SyncDeviceRole,
+): boolean => config.isPinCreated
+  && !hasRecoveryQuestion(config)
+  && !config.linkedGoogleUserId
+  && !config.linkedGoogleUid
+  && deviceRole !== 'web_companion';
+
 export const verifyPin = (config: SecurityConfig, pin: string): boolean => (
   config.isPinCreated &&
   (!config.pinLength || pin.length === config.pinLength) &&
@@ -106,6 +115,19 @@ export const verifyPin = (config: SecurityConfig, pin: string): boolean => (
 export const unlockWithPin = (config: SecurityConfig, pin: string): SecurityConfig | null => (
   verifyPin(config, pin) ? { ...config, isLocked: false } : null
 );
+
+export const createInitialPin = (config: SecurityConfig, pin: string): SecurityConfig => {
+  if (!isValidPin(pin)) throw new Error('PIN must be exactly 4 or 8 digits.');
+  return {
+    ...config,
+    isPinCreated: true,
+    ...createPinFields(pin),
+    isBiometricsEnabled: false,
+    passkeyCredentialId: undefined,
+    isBiometricsSimulated: undefined,
+    isLocked: false,
+  };
+};
 
 export const createInitialPinWithRecovery = (
   config: SecurityConfig,

@@ -211,14 +211,18 @@ class StructuredMemoryDataStore extends MemoryDataStore {
     records: LocalStructuredRecordMutation[];
     items?: Record<string, string>;
     outboxOperation: SyncOutboxOperation;
+    outboxV2Operation: SyncOutboxOperationV2;
   }): Promise<void> {
     this.localMutationCommitCount += 1;
     this.applyStructuredRecordMutations(input.records);
     const currentOutbox = JSON.parse(await this.getItem('deardiary_sync_outbox') || '{}') as Record<string, SyncOutboxOperation>;
+    const currentOutboxV2 = JSON.parse(await this.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
     currentOutbox[input.outboxOperation.operationId] = cloneTestValue(input.outboxOperation);
+    currentOutboxV2[input.outboxV2Operation.operationId] = cloneTestValue(input.outboxV2Operation);
     await this.setItems({
       ...(input.items || {}),
       deardiary_sync_outbox: JSON.stringify(currentOutbox),
+      deardiary_sync_outbox_v2: JSON.stringify(currentOutboxV2),
     });
   }
 
@@ -1173,12 +1177,54 @@ test('chains same-record local mutations once an earlier outbox operation is in 
   const secondOperation = operations.find(operation => operation.operationId === 'operation-chain-2');
   assert.equal(operations.length, 2);
   assert.equal(secondOperation?.dependsOnOperationId, 'operation-chain-1');
-  assert.equal(secondOperation?.baseRecordVersion, undefined);
+  assert.equal(secondOperation?.baseRecordVersion, 1);
   assert.equal((secondOperation?.payload as Note | undefined)?.title, 'Second edit');
   assert.equal((await repository.getNote(note.id))?.title, 'Second edit');
   const outboxV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
   assert.equal(outboxV2['operation-chain-2'].dependencyOperationId, 'operation-chain-1');
-  assert.equal(outboxV2['operation-chain-2'].baseRecordVersion, 0);
+  assert.equal(outboxV2['operation-chain-2'].baseRecordVersion, 1);
+});
+
+test('rapid same-record saves never reset an in-flight V2 operation', async () => {
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 0,
+    linkedAt: 1,
+  });
+  const account = (await repository.getLocalSyncAccountState())!;
+  const note: Note = {
+    id: 'note-rapid', title: 'First', body: '<p>First.</p>', isPinned: false, tags: [], createdAt: 10, updatedAt: 10,
+  };
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-rapid-1', recordType: 'note', recordId: note.id,
+    operation: 'upsert', account, localPayload: note,
+  });
+  const firstV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  await store.setItem('deardiary_sync_outbox_v2', JSON.stringify({
+    ...firstV2,
+    'operation-rapid-1': { ...firstV2['operation-rapid-1'], state: 'UPLOADING', leaseOwner: 'worker-1', leaseExpiresAt: 100 },
+  }));
+
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-rapid-2', recordType: 'note', recordId: note.id,
+    operation: 'upsert', account, localPayload: { ...note, title: 'Second', updatedAt: 20 },
+  });
+
+  const v2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  assert.equal(v2['operation-rapid-1'].state, 'UPLOADING');
+  assert.equal(v2['operation-rapid-1'].leaseOwner, 'worker-1');
+  assert.equal(v2['operation-rapid-2'].state, 'PENDING');
+  assert.equal(v2['operation-rapid-2'].dependencyOperationId, 'operation-rapid-1');
+  assert.equal(v2['operation-rapid-2'].baseRecordVersion, 1);
 });
 
 test('manages preserved conflicts separately from retryable outbox failures', async () => {

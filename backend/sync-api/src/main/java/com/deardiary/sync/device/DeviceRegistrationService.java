@@ -36,6 +36,7 @@ public class DeviceRegistrationService {
             String ownerSubject,
             DeviceRegistrationRequest request,
             byte[] publicKey) {
+        var initialKeyEpoch = request.resolvedInitialKeyEpoch();
         var accountId = findAccountId(ownerSubject);
         var createdAccount = accountId == null;
         if (createdAccount) {
@@ -43,10 +44,10 @@ public class DeviceRegistrationService {
             var now = OffsetDateTime.now(clock);
             jdbc.update("""
                 INSERT INTO sync_accounts (
-                    account_id, owner_subject, minimum_read_protocol, minimum_write_protocol,
+                    account_id, owner_subject, current_key_epoch, minimum_read_protocol, minimum_write_protocol,
                     account_status, created_at, updated_at
-                ) VALUES (?, ?, 2, 2, 'ACTIVE', ?, ?)
-                """, accountId, ownerSubject, now, now);
+                ) VALUES (?, ?, ?, 2, 2, 'ACTIVE', ?, ?)
+                """, accountId, ownerSubject, initialKeyEpoch, now, now);
         }
 
         var existing = jdbc.query("""
@@ -70,6 +71,7 @@ public class DeviceRegistrationService {
                     || device.protocolVersion() != request.protocolVersion()) {
                 throw new ApiException("IDEMPOTENCY_MISMATCH", HttpStatus.CONFLICT, "The device identifier is already registered with different metadata.");
             }
+            reconcileInitialKeyEpoch(accountId, initialKeyEpoch);
             jdbc.update("UPDATE sync_devices SET last_seen_at = ?, last_app_version = ? WHERE device_id = ?",
                 OffsetDateTime.now(clock), request.appVersion(), request.deviceId());
             return new DeviceRegistrationResponse(accountId, request.deviceId(), device.role(), device.status(), false);
@@ -97,6 +99,31 @@ public class DeviceRegistrationService {
             VALUES (?, ?, 0, ?)
             """, accountId, request.deviceId(), now);
         return new DeviceRegistrationResponse(accountId, request.deviceId(), "PRIMARY", "ACTIVE", true);
+    }
+
+    private void reconcileInitialKeyEpoch(UUID accountId, int requestedEpoch) {
+        var account = jdbc.queryForMap(
+            "SELECT current_key_epoch, current_sequence FROM sync_accounts WHERE account_id = ? FOR UPDATE",
+            accountId);
+        var currentEpoch = ((Number) account.get("current_key_epoch")).intValue();
+        if (currentEpoch == requestedEpoch) return;
+
+        var cloudStateCount = jdbc.queryForObject("""
+            SELECT
+              (SELECT count(*) FROM sync_events WHERE account_id = ?) +
+              (SELECT count(*) FROM sync_snapshots WHERE account_id = ?) +
+              (SELECT count(*) FROM sync_key_rotations WHERE account_id = ?)
+            """, Long.class, accountId, accountId, accountId);
+        var currentSequence = ((Number) account.get("current_sequence")).longValue();
+        if (currentEpoch == 1 && currentSequence == 0 && cloudStateCount != null && cloudStateCount == 0) {
+            jdbc.update(
+                "UPDATE sync_accounts SET current_key_epoch = ?, updated_at = ? WHERE account_id = ?",
+                requestedEpoch, OffsetDateTime.now(clock), accountId);
+            return;
+        }
+        throw new ApiException(
+            "KEY_EPOCH_MISMATCH", HttpStatus.CONFLICT,
+            "The account key epoch does not match this device.", false, true, Map.of());
     }
 
     private UUID findAccountId(String ownerSubject) {

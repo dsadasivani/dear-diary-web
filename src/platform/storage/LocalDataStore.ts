@@ -1,4 +1,5 @@
 import type { Entry, Note, SyncOutboxOperation } from '../../types';
+import type { SyncOutboxOperationV2 } from '../../sync/outbox/SyncOutboxOperationV2';
 
 export interface LocalQueryPageOptions {
   limit?: number;
@@ -68,6 +69,7 @@ export interface LocalDataStore {
     records: LocalStructuredRecordMutation[];
     items?: Record<string, string>;
     outboxOperation: SyncOutboxOperation;
+    outboxV2Operation: SyncOutboxOperationV2;
   }): Promise<void>;
   queryEntries?(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<Entry> | undefined>;
   queryNotes?(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<Note> | undefined>;

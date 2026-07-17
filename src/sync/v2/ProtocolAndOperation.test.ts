@@ -16,6 +16,9 @@ import type { SyncV2Protocol } from './api/SyncV2ApiTypes';
 import { SyncV2ApiClient } from './api/SyncV2ApiClient';
 import { RuntimeControlStore, isCanaryEnabled, isVersionAtLeast } from './protocol/RuntimeControlStore';
 import { TestSyncFaultInjector } from './faults/SyncFaultInjector';
+import { exportDeviceSigningPublicKeySpki, generateDeviceKeyPair } from '../deviceKeys';
+import { clearSyncV2LocalCache, SYNC_V2_LOCAL_CACHE_KEYS } from './clearSyncV2LocalCache';
+import { clearRecoverableCompanionSafetyStop } from './safety/companionSafetyRecovery';
 
 const runtime = (): SyncV2LocalRuntime => ({
   accountId: 'account-1', deviceId: 'device-1', deviceStatus: 'ACTIVE',
@@ -67,6 +70,60 @@ test('protocol bootstrap uses cached remote-pull flags but disables writes when 
   assert.equal(result.protocol.emergencyMode, true);
 });
 
+test('runtime state can be cleared after device revocation', async () => {
+  const store = new MemoryDataStore();
+  const runtimeStore = new SyncV2RuntimeStore(store);
+  await runtimeStore.save(runtime());
+  await runtimeStore.clear();
+  assert.equal(await runtimeStore.load(), null);
+});
+
+test('revoked companion cleanup removes every account-bound V2 cache before re-pairing', async () => {
+  const store = new MemoryDataStore();
+  await Promise.all(SYNC_V2_LOCAL_CACHE_KEYS.map(key => store.setItem(key, JSON.stringify({ stale: true }))));
+  await store.setItem('unrelated-preference', 'keep');
+
+  await clearSyncV2LocalCache(store);
+
+  for (const key of SYNC_V2_LOCAL_CACHE_KEYS) assert.equal(await store.getItem(key), null);
+  assert.equal(await store.getItem('unrelated-preference'), 'keep');
+});
+
+test('zero-cursor companion clears a stale safety stop when it has no local writes', async () => {
+  const store = new MemoryDataStore();
+  const outbox = new PersistentOutboxRepository(store);
+  await new SyncV2RuntimeStore(store).save(runtime());
+  await new PersistentSafetyStopStore(store).engage('account-1', 'LOCAL_DATABASE_FAILURE', 'pull:LOCAL_DATABASE_FAILURE');
+
+  const cleared = await clearRecoverableCompanionSafetyStop(store, outbox, {
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'web_companion',
+    syncProtocolVersion: 2, currentSyncSequence: 0, googleUserId: 'google-1',
+    googleEmail: 'companion@example.com', devicePublicKey: 'public-key',
+    recoveryKeyDriveFileId: '', latestSnapshotDriveFileId: '', linkedAt: 1,
+  });
+
+  assert.equal(cleared, true);
+  assert.equal(await new PersistentSafetyStopStore(store).get('account-1'), null);
+});
+
+test('companion safety recovery does not clear a stop when a local write is pending', async () => {
+  const store = new MemoryDataStore();
+  const outbox = new PersistentOutboxRepository(store);
+  await new SyncV2RuntimeStore(store).save(runtime());
+  await new PersistentSafetyStopStore(store).engage('account-1', 'INVARIANT_VIOLATION', 'pull:INVARIANT_VIOLATION');
+  await outbox.enqueue(operation());
+
+  const cleared = await clearRecoverableCompanionSafetyStop(store, outbox, {
+    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'web_companion',
+    syncProtocolVersion: 2, currentSyncSequence: 0, googleUserId: 'google-1',
+    googleEmail: 'companion@example.com', devicePublicKey: 'public-key',
+    recoveryKeyDriveFileId: '', latestSnapshotDriveFileId: '', linkedAt: 1,
+  });
+
+  assert.equal(cleared, false);
+  assert.ok(await new PersistentSafetyStopStore(store).get('account-1'));
+});
+
 const operation = (patch: Partial<SyncOutboxOperationV2> = {}): SyncOutboxOperationV2 => ({
   operationId: 'operation-1', accountId: 'account-1', deviceId: 'device-1',
   recordType: 'NOTE', recordId: '11111111-1111-4111-8111-111111111111',
@@ -90,6 +147,62 @@ test('API client authenticates requests and maps backend safety codes', async ()
     error instanceof SyncError && error.code === 'DEVICE_REVOKED' && error.userActionRequired
   ));
   assert.equal(authorization, 'Bearer access-token');
+});
+
+test('API client calls the native global fetch with the Window-compatible receiver', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async function receiverSensitiveFetch(this: typeof globalThis) {
+      assert.equal(this, globalThis);
+      return new Response(JSON.stringify(protocol()), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    } as typeof fetch;
+    const client = new SyncV2ApiClient({
+      baseUrl: 'https://sync.invalid',
+      accessToken: async () => 'access-token',
+    });
+    assert.deepEqual(await client.getProtocol(), protocol());
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('V1 device signing keys export to the V2 backend SPKI registration format', async () => {
+  const device = await generateDeviceKeyPair();
+  const encoded = await exportDeviceSigningPublicKeySpki(device.publicKey);
+  const bytes = Uint8Array.from(atob(encoded), character => character.charCodeAt(0));
+  const imported = await crypto.subtle.importKey(
+    'spki', bytes, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify'],
+  );
+  const payload = new TextEncoder().encode('v1-to-v2-device-registration');
+  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, device.privateKey, payload);
+  assert.equal(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, imported, signature, payload), true);
+});
+
+test('bounded transfer calls native global fetch with the Window-compatible receiver', async () => {
+  const originalFetch = globalThis.fetch;
+  const uploaded = new Uint8Array([7, 8, 9]);
+  try {
+    globalThis.fetch = async function receiverSensitiveFetch(this: typeof globalThis, _input, init) {
+      assert.equal(this, globalThis);
+      return init?.method === 'PUT' ? new Response(null, { status: 200 }) : new Response(uploaded, { status: 200 });
+    } as typeof fetch;
+    const transfer = new BoundedObjectTransfer({ maximumObjectBytes: 10 });
+    await transfer.upload(
+      [{ objectKey: 'snapshot', bytes: uploaded }],
+      [{ objectKey: 'snapshot', uploadUrl: 'https://objects.invalid/upload', headers: {}, expiresAt: new Date().toISOString() }],
+    );
+    const downloaded = await transfer.download([{
+      downloadUrl: 'https://objects.invalid/download',
+      sizeBytes: uploaded.byteLength,
+      sha256: await sha256Hex(uploaded),
+    }]);
+    assert.deepEqual(downloaded[0], uploaded);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('protocol bootstrap releases leases and blocks only incompatible cloud writes', async () => {
@@ -209,6 +322,9 @@ test('canonical preparation loads, sanitizes, validates, encrypts, and releases 
 test('operation processor reconciles a lost commit response and acknowledges it', async () => {
   const store = new MemoryDataStore();
   await new SyncV2RuntimeStore(store).save(runtime());
+  await store.setItem('deardiary_sync_v2_record_versions', JSON.stringify({
+    'NOTE:11111111-1111-4111-8111-111111111111': 0,
+  }));
   const outbox = new PersistentOutboxRepository(store);
   await outbox.enqueue(operation());
   const bytes = new TextEncoder().encode('encrypted-event');
@@ -240,6 +356,10 @@ test('operation processor reconciles a lost commit response and acknowledges it'
   assert.equal(completed?.state, 'ACKNOWLEDGED');
   assert.equal(completed?.remoteSequence, 7);
   assert.equal(completed?.remoteRecordVersion, 1);
+  assert.deepEqual(
+    JSON.parse((await store.getItem('deardiary_sync_v2_record_versions')) || '{}'),
+    { 'NOTE:11111111-1111-4111-8111-111111111111': 0 },
+  );
 });
 
 test('operation resumes once after a crash following remote commit', async () => {

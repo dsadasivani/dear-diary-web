@@ -12,7 +12,8 @@ public final class PairingRequests {
     public record Create(
         @NotNull UUID pairingId,
         @NotNull UUID requestedDeviceId,
-        @NotBlank String requestedDevicePublicKey,
+        @NotBlank String requestedDeviceSigningPublicKey,
+        @NotBlank String requestedDeviceEncryptionPublicKey,
         @NotBlank String platform,
         @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String codeHash,
         @NotBlank String challenge

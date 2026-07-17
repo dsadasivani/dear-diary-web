@@ -181,24 +181,25 @@ Clearing browser site data or Android app storage deletes local diary data and s
 
 Encrypted sync uses:
 
-- Supabase for account/device metadata, cursors, object hashes, and Drive file pointers.
-- Google Drive `appDataFolder` for encrypted events, media, thumbnails, snapshots, partition snapshots, manifests, and key packages.
-- Client-side account root keys; plaintext journal data is not stored in Supabase or Google Drive by application code.
+- Supabase Auth for Google-backed account identity.
+- The Spring Boot sync service and PostgreSQL for account/device metadata, cursors, and encrypted-object metadata.
+- S3-compatible object storage for encrypted events, media, snapshots, and recovery packages.
+- Client-side encryption keys; plaintext journal data is not stored by the sync service or object storage.
 
 Important sync behavior:
 
 - User writes are staged locally first with durable outbox operations, then uploaded as encrypted events and media by background sync.
 - Background fallback polling runs periodically, while local saves, reconnect, unlock, realtime, and manual retry request immediate/coalesced outbox flushes.
-- Drive object bytes are checked against Supabase SHA-256 metadata before decrypting/applying.
+- Downloaded encrypted objects are checked against server SHA-256 metadata before decrypting/applying.
 - Latest-first restore loads core data and recent months first, then marks older monthly partitions as available for on-demand hydration.
 - Primary mobile recovery and companion revocation are two-phase flows so old devices are not revoked until restore/package distribution succeeds.
 - See [docs/sync-and-supabase.md](docs/sync-and-supabase.md) for the operational runbook.
 
-The controlled Sync V2 client runtime lives under `src/sync/v2`. It provides protocol bootstrap,
-leased operation processing, bounded and verified object transfer, lost-response reconciliation,
-ordered atomic replay, persistent safety stops, and stable conflict records. Configure its Spring
-Boot endpoint with `VITE_SYNC_V2_API_URL`. The existing Supabase/Drive engine remains available while
-the explicit V1-to-V2 account migration workflow is still disabled.
+The default sync client runtime lives under `src/sync/v2`. Every new account is created there directly;
+there is no user-facing protocol choice or migration step. It provides protocol bootstrap, leased
+operation processing, bounded and verified object transfer, lost-response reconciliation, ordered
+atomic replay, persistent safety stops, and stable conflict records. Configure its Spring Boot endpoint
+with `VITE_SYNC_V2_API_URL`.
 
 Sync V2 account snapshots use encrypted, restart-resumable upload journals and become available only
 after the backend verifies object metadata and atomically registers a retained reference. Restore is

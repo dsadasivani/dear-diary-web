@@ -3,25 +3,18 @@ import { BookOpen, Check, Clipboard, Cloud, LoaderCircle, ShieldCheck } from 'lu
 import { diaryRepository } from '../repositories';
 import type { LocalSyncAccountState } from '../types';
 import {
-  completeCompanionPairing,
-  createCompanionPairingRequest,
-  type PendingCompanionPairing,
-} from '../sync/companionPairing';
-import { createConfiguredSupabaseControlPlaneClient } from '../sync/config';
-import {
-  clearPendingPairingSecret,
-  loadPendingPairingSecret,
-  savePendingPairingSecret,
-} from '../sync/syncSecrets';
+  completeSyncV2CompanionPairing,
+  getPendingSyncV2CompanionPairing,
+  requestSyncV2CompanionPairing,
+} from '../sync/v2/v2CompanionPairing';
 import {
   restoreWebGoogleSyncSession,
-  signOutWebGoogleSync,
   startWebGoogleSyncSignIn,
   type WebGoogleSyncSession,
 } from '../sync/webGoogleAuth';
 
 interface PendingWebCompanion {
-  pairing: PendingCompanionPairing;
+  pairing: Awaited<ReturnType<typeof requestSyncV2CompanionPairing>>;
   auth: WebGoogleSyncSession;
 }
 
@@ -30,7 +23,7 @@ interface WebCompanionLinkProps {
 }
 
 let pairingInitializationPromise: Promise<PendingWebCompanion | null> | null = null;
-let pairingCompletionPromise: ReturnType<typeof completeCompanionPairing> | null = null;
+let pairingCompletionPromise: ReturnType<typeof completeSyncV2CompanionPairing> | null = null;
 const APPROVAL_POLL_INTERVAL_MS = 1_000;
 
 const initializePairing = (): Promise<PendingWebCompanion | null> => {
@@ -38,38 +31,19 @@ const initializePairing = (): Promise<PendingWebCompanion | null> => {
     pairingInitializationPromise = (async () => {
       const auth = await restoreWebGoogleSyncSession();
       if (!auth) return null;
-      const controlPlane = createConfiguredSupabaseControlPlaneClient(auth.supabaseSession.accessToken);
-      if (!await controlPlane.lookupCurrentGoogleAccount()) {
-        await signOutWebGoogleSync();
-        throw new Error('No Dear Diary account exists for this Google account. Create it on mobile first.');
+      const stored = await getPendingSyncV2CompanionPairing(auth).catch(() => null);
+      if (stored && new Date(stored.pairing.expiresAt).getTime() > Date.now()) {
+        return {
+          pairing: {
+            pairingId: stored.pairing.pairingId,
+            requestedDeviceId: stored.requestedDeviceId,
+            pairingCode: stored.pairingCode,
+            expiresAt: stored.pairing.expiresAt,
+          },
+          auth,
+        };
       }
-      const stored = await loadPendingPairingSecret<PendingWebCompanion>();
-      if (stored) {
-        try {
-          const details = await controlPlane.getPairingSession(stored.pairing.session.id);
-          const expiresAt = new Date(details.session.expiresAt).getTime();
-          if (!details.session.approvedAt && expiresAt > Date.now()) {
-            return {
-              pairing: {
-                ...stored.pairing,
-                session: details.session,
-              },
-              auth,
-            };
-          }
-        } catch {
-          // Stale local pairing state is replaced below with a fresh request.
-        }
-        await clearPendingPairingSecret();
-      }
-      const pairing = await createCompanionPairingRequest({
-        controlPlane,
-        displayName: navigator.userAgentData?.platform || navigator.platform || 'Web browser',
-        platform: 'web',
-      });
-      const next = { pairing, auth };
-      await savePendingPairingSecret(next);
-      return next;
+      return { pairing: await requestSyncV2CompanionPairing(auth), auth };
     })().catch(error => {
       pairingInitializationPromise = null;
       throw error;
@@ -112,18 +86,18 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       completingRef.current = true;
       try {
         const existingLinkedState = await diaryRepository.getLocalSyncAccountState();
-        if (existingLinkedState) {
-          await clearPendingPairingSecret();
+        if (existingLinkedState?.syncProtocolVersion === 2) {
           pairingInitializationPromise = null;
           setIsRestoring(true);
           setStatus('Companion approved. Opening your encrypted diary...');
           await onLinked(existingLinkedState);
           return;
         }
-        const controlPlane = createConfiguredSupabaseControlPlaneClient(context.auth.supabaseSession.accessToken);
-        const details = await controlPlane.getPairingSession(context.pairing.session.id);
-        if (!details.session.approvedAt) {
-          if (new Date(details.session.expiresAt).getTime() <= Date.now()) throw new Error('Pairing request expired.');
+        const details = await getPendingSyncV2CompanionPairing(context.auth);
+        if (!details || details.pairing.status === 'EXPIRED' || details.pairing.status === 'REJECTED') {
+          throw new Error('Pairing request expired.');
+        }
+        if (details.pairing.status === 'REQUESTED') {
           return;
         }
         if (active) {
@@ -131,17 +105,11 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           setStatus('Companion approved. Restoring your encrypted diary...');
         }
         if (!pairingCompletionPromise) {
-          pairingCompletionPromise = completeCompanionPairing({
-            pending: context.pairing,
-            repository: diaryRepository,
-            controlPlane,
-            googleSession: context.auth.googleSession,
-            supabaseSession: context.auth.supabaseSession,
-          }).finally(() => { pairingCompletionPromise = null; });
+          pairingCompletionPromise = completeSyncV2CompanionPairing(context.auth)
+            .finally(() => { pairingCompletionPromise = null; });
         }
         const linked = await pairingCompletionPromise;
         if (linked && active) {
-          await clearPendingPairingSecret();
           pairingInitializationPromise = null;
           setIsRestoring(true);
           setStatus('Companion approved. Opening your encrypted diary...');
@@ -149,13 +117,11 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
         }
       } catch (approvalError: any) {
         if (approvalError?.message?.includes('expired')) {
-          await clearPendingPairingSecret();
           pairingInitializationPromise = null;
           if (active) { setContext(null); setIsRestoring(false); setStatus('Pairing expired. Sign in to start a new request.'); }
         } else if (active) {
           const linkedState = await diaryRepository.getLocalSyncAccountState().catch(() => null);
           if (linkedState) {
-            await clearPendingPairingSecret();
             pairingInitializationPromise = null;
             setIsRestoring(true);
             setStatus('Companion approved. Opening your encrypted diary...');
@@ -175,8 +141,9 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
   }, [context, onLinked]);
 
   const pairingPayload = useMemo(() => context ? JSON.stringify({
-    version: 1,
-    sessionId: context.pairing.session.id,
+    version: 2,
+    protocolVersion: 2,
+    sessionId: context.pairing.pairingId,
     pairingCode: context.pairing.pairingCode,
   }) : '', [context]);
 

@@ -84,6 +84,26 @@ class DeviceAndProtocolIntegrationTest {
     }
 
     @Test
+    void migrationRegistrationCarriesForwardAndReconcilesTheV1KeyEpoch() throws Exception {
+        var createdDeviceId = UUID.randomUUID();
+        var created = registrations.register("migration-epoch-new", new DeviceRegistrationRequest(
+            createdDeviceId, publicKey(), "PRIMARY", 2, "test-1.0.0", 23));
+        assertThat(jdbc.queryForObject(
+            "SELECT current_key_epoch FROM sync_accounts WHERE account_id = ?",
+            Integer.class, created.accountId())).isEqualTo(23);
+
+        var retryDeviceId = UUID.randomUUID();
+        var retryPublicKey = publicKey();
+        var legacy = registrations.register("migration-epoch-retry", new DeviceRegistrationRequest(
+            retryDeviceId, retryPublicKey, "PRIMARY", 2, "test-1.0.0"));
+        registrations.register("migration-epoch-retry", new DeviceRegistrationRequest(
+            retryDeviceId, retryPublicKey, "PRIMARY", 2, "test-1.0.0", 23));
+        assertThat(jdbc.queryForObject(
+            "SELECT current_key_epoch FROM sync_accounts WHERE account_id = ?",
+            Integer.class, legacy.accountId())).isEqualTo(23);
+    }
+
+    @Test
     void protocolConfigurationCombinesPersistentFlagsWithKillSwitches() {
         var protocol = protocols.current();
 
@@ -93,7 +113,8 @@ class DeviceAndProtocolIntegrationTest {
         assertThat(protocol.featureFlags().syncWritesEnabled()).isTrue();
         assertThat(protocol.featureFlags().snapshotCreationEnabled()).isFalse();
         assertThat(protocol.featureFlags().garbageCollectionEnabled()).isFalse();
-        assertThat(protocol.featureFlags().keyRotationEnabled()).isFalse();
+        assertThat(protocol.featureFlags().keyRotationEnabled()).isTrue();
+        assertThat(protocol.featureFlags().deviceRevocationEnabled()).isTrue();
         assertThat(protocol.featureFlags().mediaUploadEnabled()).isTrue();
         assertThat(protocol.featureFlags().archiveHydrationEnabled()).isTrue();
         assertThat(protocol.syncV2RolloutPercentage()).isZero();

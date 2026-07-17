@@ -4,7 +4,6 @@ import {
   Plus, Flame, Shuffle, Lock, Settings, Calendar, ChevronRight, Sparkles, PenLine
 } from 'lucide-react';
 import { ResponsiveLayout, UserProfile } from '../types';
-import ProfileAvatar from './ProfileAvatar';
 import SyncedImage from './SyncedImage';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 import { diaryRepository } from '../repositories';
@@ -112,6 +111,9 @@ export default function HomeScreen({
   const recentPhotos = summary?.recentPhotos || [];
   const freqTags = (summary?.commonTags || []).slice(0, 5).map(row => row.label || row.key);
   const goalPercent = Math.min(100, Math.round((todayWordCount / Math.max(1, profile.writingGoal)) * 100));
+  const mostRecentEntry = recentEntries[0];
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const continueLabel = mostRecentEntry?.date === todayKey ? 'Continue today\'s entry' : mostRecentEntry ? 'Continue writing' : 'Start today\'s entry';
 
   if (layout === 'desktop') {
     return (
@@ -189,7 +191,7 @@ export default function HomeScreen({
           <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_270px]">
             <div>
               <div className="mb-4 flex items-center justify-between">
-                <h3 className="font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Last Week's Fragments</h3>
+                <h3 className="font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Recent entries</h3>
                 <button type="button" onClick={() => onNavigate('search')} className="text-sm font-bold text-brand-sage hover:text-brand-pink">
                   Browse all
                 </button>
@@ -217,7 +219,7 @@ export default function HomeScreen({
             <div>
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Journals</h3>
-                <button type="button" onClick={() => onNavigate('diaries')} className="text-brand-sage hover:text-brand-pink">
+                <button type="button" onClick={() => onNavigate('diaries')} className="text-brand-sage hover:text-brand-pink" aria-label="View all journals">
                   <ChevronRight className="h-5 w-5" />
                 </button>
               </div>
@@ -272,6 +274,7 @@ export default function HomeScreen({
                 <button
                   key={`${entryId}-${index}`}
                   type="button"
+                  aria-label={`Open photo memory ${index + 1}`}
                   onClick={() => onNavigate('diaries', 'diaryDetail', diaryId, entryId)}
                   className="aspect-square overflow-hidden rounded-xl border border-brand-border bg-white shadow-sm"
                 >
@@ -315,49 +318,35 @@ export default function HomeScreen({
     <div className="flex flex-col gap-6 font-sans">
       
       {/* Top Header */}
-      <header className="flex justify-between items-center bg-transparent sticky top-0 py-4 z-30 select-none">
-        <div className="flex items-center gap-3.5">
-          <div className="relative group">
-            <div className="absolute inset-0 bg-brand-pink/20 rounded-full blur-md group-hover:bg-brand-pink/30 transition-all" />
-            <button 
-              onClick={() => onNavigate('stats', 'appSettings')}
-              className="w-13 h-13 rounded-full bg-white dark:bg-brand-card-bg flex items-center justify-center text-2xl border-2 border-brand-border shadow-md z-10 relative overflow-hidden hover:scale-105 transition-transform"
-              style={{ backgroundColor: profile.avatarColor }}
-              title="Edit Profile"
-            >
-              <ProfileAvatar profile={profile} />
-            </button>
-          </div>
-          <div>
-            <h1 className="text-2xl font-serif-diary font-bold italic tracking-tight text-brand-plum leading-tight dark:text-brand-text">
-              {greeting}, {profile.name}
-            </h1>
-            <div className="flex items-center gap-1.5 opacity-65 font-medium text-[11px] text-brand-plum dark:text-brand-text mt-0.5 uppercase tracking-wider">
-              <Calendar className="w-3 h-3 text-brand-pink" />
-              <span>
-                {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
-              </span>
-            </div>
-          </div>
+      <header className="order-1 select-none pb-1 pt-2">
+        <h2 className="font-serif-diary text-2xl font-semibold tracking-tight text-brand-plum dark:text-brand-text">
+          {greeting}, {profile.name}
+        </h2>
+        <div className="mt-1 flex items-center gap-1.5 text-xs font-semibold text-brand-text-muted">
+          <Calendar className="h-3.5 w-3.5 text-brand-sage" aria-hidden="true" />
+          <span>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</span>
         </div>
-        
-        <button 
-          onClick={() => onNavigate('stats', 'appSettings')}
-          className="w-11 h-11 rounded-2xl bg-white/85 dark:bg-brand-card-bg/85 backdrop-blur-md flex items-center justify-center shadow-sm text-brand-plum dark:text-brand-text opacity-85 hover:opacity-100 border border-brand-border/85 hover:border-brand-pink/30 transition-all hover:scale-105 active:scale-95"
-          title="Security & System Settings"
-        >
-          <Settings className="w-4.5 h-4.5" />
-        </button>
       </header>
 
+      <section className="surface-card order-2 flex items-center justify-between gap-4 p-5" aria-labelledby="continue-writing-title">
+        <div className="min-w-0">
+          <p className="app-eyebrow">Your writing</p>
+          <h2 id="continue-writing-title" className="mt-1 truncate font-serif-diary text-2xl font-semibold text-brand-plum dark:text-brand-text">{continueLabel}</h2>
+          <p className="mt-1 truncate text-sm text-brand-text-muted">{mostRecentEntry?.title || 'A quiet page is ready when you are.'}</p>
+        </div>
+        <button type="button" data-testid="home-continue-entry-button" aria-label={continueLabel} onClick={() => mostRecentEntry ? onNavigate('diaries', 'diaryDetail', mostRecentEntry.diaryId, mostRecentEntry.id) : onOpenNewEntryWithPrompt('')} className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white shadow-sm hover:bg-brand-sage-dark">
+          <PenLine className="h-4 w-4" aria-hidden="true" /><span className="hidden sm:inline">Write</span>
+        </button>
+      </section>
+
       {summaryError && (
-        <p className="rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-2 text-xs font-semibold text-yellow-800">
+        <p className="order-2 rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-2 text-sm font-semibold text-yellow-800">
           {summaryError}
         </p>
       )}
 
       {/* User Motto & Daily Writing Goal Progress */}
-      <div className="bg-white/85 dark:bg-brand-card-bg/85 backdrop-blur-md p-5 rounded-[32px] border border-brand-border/60 dark:border-brand-border/20 shadow-md flex flex-col gap-3 select-none">
+      <div className="order-5 rounded-2xl border border-brand-border bg-white/85 p-4 shadow-sm backdrop-blur-md dark:bg-brand-card-bg/85 dark:border-brand-border/20 flex flex-col gap-3 select-none">
         {profile.bio && (
           <div className="text-center italic text-brand-plum/90 dark:text-brand-text/90 text-sm font-serif-diary leading-relaxed px-2 border-b border-brand-border/30 dark:border-brand-border/10 pb-3">
             "{profile.bio}"
@@ -371,6 +360,10 @@ export default function HomeScreen({
           <span className="font-mono text-[11px] text-brand-text-muted dark:text-brand-text font-bold bg-brand-bg dark:bg-brand-bg/50 px-2 py-0.5 rounded-lg border border-brand-border/50">
             {todayWordCount} / {profile.writingGoal} words
           </span>
+        </div>
+        <div className="flex items-center justify-between text-sm font-bold text-brand-plum dark:text-brand-text">
+          <span className="flex items-center gap-2"><Flame className="h-4 w-4 text-brand-rose" aria-hidden="true" />{streak} day streak</span>
+          <span className="text-xs text-brand-text-muted">Saved on this device</span>
         </div>
         <div className="relative w-full h-2.5 bg-brand-bg dark:bg-brand-bg/30 border border-brand-border/40 dark:border-brand-border/10 rounded-full overflow-hidden">
           <motion.div 
@@ -389,7 +382,7 @@ export default function HomeScreen({
       </div>
 
       {/* Writing Prompt Card (Vibe upgraded) */}
-      <section aria-label="Daily writing prompt" className="w-full">
+      <section aria-label="Daily writing prompt" className="order-3 w-full">
         <div className="bg-gradient-to-tr from-white via-white to-brand-blush-light dark:from-brand-card-bg dark:via-brand-card-bg dark:to-brand-blush-dark/15 rounded-[36px] p-7 md:p-8 shadow-xl relative overflow-hidden border border-brand-border/80 dark:border-brand-border/20 group">
           
           {/* Soft background decor spark */}
@@ -421,7 +414,7 @@ export default function HomeScreen({
               className="bg-brand-pink text-white px-7 py-3.5 rounded-full font-bold text-xs flex items-center gap-2 shadow-lg shadow-brand-pink/15 hover:bg-brand-pink-dark transition-all"
             >
               <Plus className="w-4 h-4" />
-              Write reflections
+              Write about this
             </motion.button>
             
             <button 
@@ -429,24 +422,24 @@ export default function HomeScreen({
               className="text-brand-pink hover:text-brand-pink-dark text-[11px] font-bold uppercase tracking-wider flex items-center gap-2 transition-colors py-2 px-1 rounded-xl active:bg-brand-pink/5"
             >
               <Shuffle className="w-3.5 h-3.5" />
-              <span>Shuffle prompt</span>
+              <span>Refresh prompt</span>
             </button>
           </div>
         </div>
       </section>
 
       {/* Recent Diaries Section with 3D tactile covers */}
-      <section aria-label="Recent Diaries" className="flex flex-col gap-3.5">
+      <section aria-label="Recent Journals" className="order-4 flex flex-col gap-3.5">
         <div className="flex justify-between items-end">
           <div className="space-y-0.5">
-            <h3 className="font-serif-diary text-lg font-bold text-brand-plum italic leading-none">Your Journals</h3>
-            <p className="text-[10px] text-brand-text-muted font-bold uppercase tracking-wider opacity-85">Recently Updated</p>
+            <h3 className="font-serif-diary text-xl font-semibold text-brand-plum leading-none">Recent journals</h3>
+            <p className="text-[10px] text-brand-text-muted font-bold uppercase tracking-wider">Recently updated</p>
           </div>
           <button 
             onClick={() => onNavigate('diaries')}
             className="text-[11px] font-bold text-brand-pink hover:text-brand-pink-dark flex items-center gap-1 group py-1"
           >
-            <span>View all books</span>
+            <span>View all journals</span>
             <ChevronRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
           </button>
         </div>
@@ -455,12 +448,13 @@ export default function HomeScreen({
         <div className="flex overflow-x-auto no-scrollbar gap-5 -mx-4 px-4 pb-2 select-none">
           {recentDiaries.map((diary) => {
             return (
-              <motion.div 
+              <motion.button
+                type="button"
                 key={diary.id}
                 whileHover={{ y: -6 }}
                 transition={{ type: "spring", stiffness: 300, damping: 20 }}
                 onClick={() => handleDiaryClick(diary)}
-                className="min-w-[140px] max-w-[140px] flex-shrink-0 cursor-pointer group"
+                className="min-w-[140px] max-w-[140px] flex-shrink-0 cursor-pointer text-left group"
               >
                 {/* 3D Physical Book Structure */}
                 <div className="aspect-[3/4.2] relative mb-3.5 select-none">
@@ -558,23 +552,23 @@ export default function HomeScreen({
                     Updated {diary.lastUpdated.toLowerCase()}
                   </p>
                 </div>
-              </motion.div>
+              </motion.button>
             );
           })}
         </div>
       </section>
 
       {/* Lightweight quickcapture box */}
-      <section aria-label="Capture a thought" className="w-full">
+      <section aria-label="Capture a note" className="order-6 w-full">
         <div className="bg-white/90 dark:bg-brand-card-bg p-5 rounded-[28px] shadow-sm border border-brand-border/80 dark:border-brand-border/10 flex flex-col gap-3">
-          <h3 className="text-[10px] font-extrabold text-brand-text-muted uppercase tracking-[0.25em]">Quick Jot</h3>
+          <h3 className="text-xs font-extrabold text-brand-text-muted uppercase tracking-[0.18em]">Quick note</h3>
           <form onSubmit={handleQuickThoughtSubmit} className="flex gap-2">
             <input 
               type="text" 
               value={quickThought}
               onChange={(e) => setQuickThought(e.target.value)}
-              placeholder="Jot down a lightweight reflection..."
-              className="flex-grow bg-brand-bg/60 dark:bg-brand-bg/20 text-brand-plum placeholder-brand-plum/35 px-4.5 py-3 rounded-2xl border border-brand-border/40 focus:outline-none focus:ring-2 focus:ring-brand-pink text-xs font-medium transition-all"
+              placeholder="Capture a thought…"
+              className="min-h-11 flex-grow bg-brand-bg/60 dark:bg-brand-bg/20 text-brand-plum placeholder-brand-plum/35 px-4.5 py-3 rounded-xl border border-brand-border/40 focus:outline-none focus:ring-2 focus:ring-brand-sage text-base font-medium transition-all"
             />
             <motion.button 
               whileTap={{ scale: 0.95 }}
@@ -589,7 +583,7 @@ export default function HomeScreen({
       </section>
 
       {/* Active Streak Achievement Card */}
-      <section className="bg-gradient-to-br from-brand-pink to-brand-sage dark:from-brand-pink-dark dark:to-brand-blush-dark rounded-[36px] p-6.5 text-white shadow-xl relative overflow-hidden select-none group">
+      <section className="hidden">
         
         {/* Glowing atmospheric bubble overlay */}
         <div className="absolute -right-12 -bottom-12 w-44 h-44 bg-white/10 rounded-full blur-3xl group-hover:scale-110 transition-transform duration-700 pointer-events-none" />
@@ -613,7 +607,7 @@ export default function HomeScreen({
       </section>
 
       {/* Popular Tags */}
-      <section aria-label="Frequently used tags" className="flex flex-col gap-3">
+      <section aria-label="Frequently used tags" className="hidden">
         <h3 className="font-serif-diary text-lg font-bold text-brand-plum italic">Popular Topics</h3>
         <div className="flex flex-wrap gap-2.5 bg-white/90 dark:bg-brand-card-bg p-5 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm select-none">
           {freqTags.map(tag => (
@@ -634,7 +628,7 @@ export default function HomeScreen({
       </section>
 
       {/* Navigation Shortcut */}
-      <div className="pt-2 text-center">
+      <div className="hidden">
         <button 
           onClick={() => onNavigate('stats', 'appSettings')}
           className="inline-flex items-center gap-2 text-xs text-brand-pink hover:text-brand-pink-dark font-bold py-2 hover:underline transition-all"

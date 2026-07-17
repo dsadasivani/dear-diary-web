@@ -7,6 +7,7 @@ coverage/
 benchmarks/
 playwright-report/
 test-results/
+.local/
 .DS_Store
 *.log
 *.db

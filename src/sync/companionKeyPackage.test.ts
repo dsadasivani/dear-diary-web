@@ -49,3 +49,35 @@ test('wraps retained epoch keys for a newly paired companion', async () => {
   assert.deepEqual(unwrapped.accountRootKeys[1], epochOne);
   assert.deepEqual(unwrapped.accountRootKeys[2], epochTwo);
 });
+
+test('wraps the mobile PIN verifier without exposing recovery or biometric metadata', async () => {
+  const companion = await generateDeviceKeyPair();
+  const rootKey = crypto.getRandomValues(new Uint8Array(32));
+  const pinVerifier = {
+    version: 1 as const,
+    pinHash: 'mobile-pin-hash',
+    pinSalt: 'mobile-pin-salt',
+    pinLength: 8 as const,
+  };
+  const keyPackage = await wrapRootKeyForCompanion(rootKey, 'account-1', companion.publicKey, {
+    pinVerifier,
+  });
+
+  const serialized = JSON.stringify(keyPackage);
+  assert.doesNotMatch(serialized, /mobile-pin-hash|mobile-pin-salt/);
+  assert.deepEqual(
+    (await unwrapRootKeysForCompanion(keyPackage, companion.publicKey, companion.privateKeyJwk)).pinVerifier,
+    pinVerifier,
+  );
+
+  await assert.rejects(
+    () => unwrapRootKeysForCompanion({
+      ...keyPackage,
+      wrappedPinVerifier: {
+        ...keyPackage.wrappedPinVerifier!,
+        ciphertext: `${keyPackage.wrappedPinVerifier!.ciphertext.slice(0, -2)}AA`,
+      },
+    }, companion.publicKey, companion.privateKeyJwk),
+    /authentication failed/,
+  );
+});

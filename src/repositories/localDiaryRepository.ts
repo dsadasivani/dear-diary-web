@@ -1345,24 +1345,12 @@ export class LocalDiaryRepository implements DiaryRepository {
         ))
         .sort((left, right) => (right.updatedAt || right.createdAt || 0) - (left.updatedAt || left.createdAt || 0));
       const latestSameRecordOperation = existingSameRecordOperations[0];
-      const existingPreparedOperation = existingSameRecordOperations.find(operation => (
-        operation.localApplied &&
-        operation.recordType === input.recordType &&
-        operation.recordId === input.recordId &&
-        (operation.state === 'prepared' || operation.state === 'failed') &&
-        !operation.uploadedObjects &&
-        !operation.eventDriveFileId &&
-        !operation.committedObjects
-      ));
-      const operationId = existingPreparedOperation?.operationId || input.operationId;
-      const dependsOnOperationId = existingPreparedOperation
-        ? existingPreparedOperation.dependsOnOperationId
-        : latestSameRecordOperation?.operationId;
-      const baseRecordVersion = existingPreparedOperation
-        ? existingPreparedOperation.baseRecordVersion
-        : dependsOnOperationId
-          ? undefined
-          : versions[recordKey] ?? 0;
+      const operationId = input.operationId;
+      const dependsOnOperationId = latestSameRecordOperation?.operationId;
+      const dependencyV2 = dependsOnOperationId ? outboxV2[dependsOnOperationId] : undefined;
+      const baseRecordVersion = dependsOnOperationId
+        ? (dependencyV2?.baseRecordVersion ?? latestSameRecordOperation?.baseRecordVersion ?? versions[recordKey] ?? 0) + 1
+        : versions[recordKey] ?? 0;
       const nowMs = input.createdAt || Date.now();
       const syncPayload = input.syncPayload === undefined ? input.localPayload : input.syncPayload;
       const affectedRecords: SyncOutboxOperation['affectedRecords'] = [];
@@ -1493,7 +1481,6 @@ export class LocalDiaryRepository implements DiaryRepository {
       }
 
       const outboxOperation: SyncOutboxOperation = {
-        ...existingPreparedOperation,
         operationId,
         accountId: input.account.accountId,
         deviceId: input.account.deviceId,
@@ -1508,7 +1495,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         affectedRecords,
         state: 'prepared',
         localApplied: true,
-        createdAt: existingPreparedOperation?.createdAt || nowMs,
+        createdAt: nowMs,
         updatedAt: nowMs,
         retryCount: undefined,
         lastErrorAt: undefined,
@@ -1517,14 +1504,15 @@ export class LocalDiaryRepository implements DiaryRepository {
       };
       outbox[operationId] = outboxOperation;
       items[STORAGE_KEYS.syncOutbox] = outbox;
-      outboxV2[operationId] = pendingOutboxV2FromLegacy(outboxOperation, outboxV2[operationId]);
+      const outboxV2Operation = pendingOutboxV2FromLegacy(outboxOperation);
+      outboxV2[operationId] = outboxV2Operation;
       items[STORAGE_KEYS.syncOutboxV2] = outboxV2;
-      metadataItems[STORAGE_KEYS.syncOutboxV2] = outboxV2;
 
       const contentRevision = await this.writeLocalMutationWithOutbox(
         recordMutations,
         metadataItems,
         outboxOperation,
+        outboxV2Operation,
         items,
         changeFactory,
       );
@@ -1819,6 +1807,7 @@ export class LocalDiaryRepository implements DiaryRepository {
     records: LocalStructuredRecordMutation[],
     metadataItems: Record<string, unknown>,
     outboxOperation: SyncOutboxOperation,
+    outboxV2Operation: SyncOutboxOperationV2,
     fallbackItems: Record<string, unknown>,
     createChange?: (contentRevision: number) => RepositoryChange,
   ): Promise<number> {
@@ -1837,6 +1826,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         },
       }),
       outboxOperation,
+      outboxV2Operation,
     });
     this.emitChange(contentRevision, createChange?.(contentRevision));
     return contentRevision;

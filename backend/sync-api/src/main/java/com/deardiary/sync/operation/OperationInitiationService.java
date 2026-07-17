@@ -147,7 +147,7 @@ public class OperationInitiationService {
                    protocol_version, event_schema_version, key_epoch, partition_key, operation_status
             FROM sync_operations WHERE account_id = ? AND operation_id = ? FOR UPDATE
             """, (rs, row) -> new ExistingOperation(
-                rs.getObject(1, UUID.class), rs.getString(2), rs.getObject(3, UUID.class),
+                rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
                 rs.getString(4), rs.getLong(5), rs.getInt(6), rs.getInt(7), rs.getInt(8),
                 rs.getString(9), rs.getString(10)), accountId, operationId);
         return rows.isEmpty() ? null : rows.getFirst();
@@ -185,7 +185,7 @@ public class OperationInitiationService {
     }
 
     private record ExistingOperation(
-        UUID deviceId, String recordType, UUID recordId, String operationType,
+        UUID deviceId, String recordType, String recordId, String operationType,
         long baseRecordVersion, int protocolVersion, int eventSchemaVersion,
         int keyEpoch, String partitionKey, String status
     ) {}
