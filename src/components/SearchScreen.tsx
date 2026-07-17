@@ -8,6 +8,7 @@ import { getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 import { diaryRepository } from '../repositories';
+import type { SettingsSection } from './AppSettingsScreen';
 
 interface SearchScreenProps {
   settings: AppSettings;
@@ -17,6 +18,7 @@ interface SearchScreenProps {
   archiveMonths?: PartitionHydrationState[];
   onHydrateArchiveMonth?: (partitionKey: string) => void | Promise<void>;
   onHydrateAllArchiveMonths?: () => void | Promise<void>;
+  onOpenSettingsSection?: (section: SettingsSection) => void;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onEditNote: (note: Note) => void;
 }
@@ -41,6 +43,15 @@ const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): strin
   return 'The previous archive restore failed. Manual retry is available now.';
 };
 
+const highlightMatch = (value: string, query: string): React.ReactNode => {
+  const needle = query.trim();
+  if (!needle) return value;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return value.split(new RegExp(`(${escaped})`, 'ig')).map((part, index) =>
+    part.toLocaleLowerCase() === needle.toLocaleLowerCase() ? <mark key={index} className="rounded bg-amber-200/70 px-0.5 text-inherit">{part}</mark> : part,
+  );
+};
+
 export default function SearchScreen({
   settings,
   layout = 'mobile',
@@ -49,12 +60,15 @@ export default function SearchScreen({
   archiveMonths = [],
   onHydrateArchiveMonth,
   onHydrateAllArchiveMonths,
+  onOpenSettingsSection,
   onNavigate,
   onEditNote
 }: SearchScreenProps) {
   useScreenPerformance('search');
   const availableTags = getTagsForSettings(settings);
   const [query, setQuery] = useState<string>('');
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const [selectedResultId, setSelectedResultId] = useState<string>('');
   
   // Filter states
@@ -75,6 +89,7 @@ export default function SearchScreen({
   const restorableArchiveMonths = unloadedArchiveMonths.filter(month => month.status !== 'hydrating');
 
   const [results, setResults] = useState<SearchResultItem[]>([]);
+  const activeFilterCount = (selectedSource === 'all' ? 0 : 1) + selectedTags.length + (hasPhotos ? 1 : 0) + (fromDate ? 1 : 0) + (toDate ? 1 : 0);
   const excludeDiaryKey = excludeDiaryIds.join('|');
 
   useEffect(() => {
@@ -85,6 +100,7 @@ export default function SearchScreen({
 
   useEffect(() => {
     let cancelled = false;
+    setIsSearching(true);
     const loadDiaryNames = async () => {
       const summaries = await diaryRepository.listDiarySummaries();
       if (cancelled) return;
@@ -152,7 +168,7 @@ export default function SearchScreen({
         }
 
         nextResults.sort((a, b) => b.date.localeCompare(a.date));
-        if (!cancelled) setResults(nextResults);
+        if (!cancelled) { setResults(nextResults); setIsSearching(false); }
       })();
     }, 220);
 
@@ -180,6 +196,8 @@ export default function SearchScreen({
   };
 
   const handleResultClick = (item: SearchResultItem) => {
+    const committed = query.trim();
+    if (committed) setRecentSearches(previous => [committed, ...previous.filter(value => value !== committed)].slice(0, 5));
     if (item.type === 'entry') {
       onNavigate('diaries', 'diaryDetail', item.rawObj.diaryId, item.id);
     } else {
@@ -188,6 +206,12 @@ export default function SearchScreen({
   };
 
   const selectedResult = results.find(item => item.id === selectedResultId) || results[0] || null;
+  const searchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return;
+    const committed = query.trim();
+    if (committed) setRecentSearches(previous => [committed, ...previous.filter(value => value !== committed)].slice(0, 5));
+    if (layout === 'desktop' && selectedResult) handleResultClick(selectedResult);
+  };
 
   if (layout === 'desktop') {
     const filterPanel = (
@@ -264,19 +288,25 @@ export default function SearchScreen({
                 type="text"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={searchKeyDown}
                 placeholder="Search thoughts, memories, dreams..."
                 className="w-full rounded-full border border-brand-border bg-white/72 py-3.5 pl-12 pr-4 text-base font-semibold text-brand-plum outline-none transition-all focus:border-brand-sage focus:bg-white focus:shadow-[0_10px_34px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/70 dark:text-brand-text"
               />
             </div>
-            <p className="text-lg text-brand-text-muted">
+            <p className="text-lg text-brand-text-muted" role="status">
+              {isSearching ? 'Searching… ' : ''}
               Showing <strong className="text-brand-plum dark:text-brand-text">{results.length}</strong> result{results.length === 1 ? '' : 's'}
               {query.trim() ? ` for "${query.trim()}"` : ''}
+              {activeFilterCount > 0 ? ` · ${activeFilterCount} active filters` : ''}
             </p>
           </header>
 
+          {!query.trim() && recentSearches.length > 0 && <section aria-labelledby="recent-searches"><h2 id="recent-searches" className="text-sm font-bold uppercase tracking-wider">Recent searches this session</h2><div className="mt-3 flex flex-wrap gap-2">{recentSearches.map(value => <button type="button" key={value} onClick={() => setQuery(value)} className="rounded-full border border-brand-border px-4 py-2 text-sm font-bold">{value}</button>)}</div></section>}
+
           {unloadedArchiveMonths.length > 0 && (
             <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-xs text-brand-sage-dark">
-              Searching downloaded memories first. Restore older archive months to include more results.
+              Some older memories are not downloaded. Include Older Memories or manage storage in Settings.
+              {onOpenSettingsSection && <button type="button" onClick={() => onOpenSettingsSection('data-storage')} className="ml-2 font-bold underline">Manage Storage</button>}
             </div>
           )}
 
@@ -295,8 +325,7 @@ export default function SearchScreen({
                       handleResultClick(item);
                     }
                   }}
-                  onDoubleClick={() => handleResultClick(item)}
-                  className={`min-h-[188px] rounded-[24px] border bg-white/74 p-5 text-left shadow-[0_12px_35px_rgba(62,36,41,0.06)] transition-all hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_18px_45px_rgba(62,36,41,0.09)] dark:bg-brand-card-bg/70 ${
+                  className={`min-h-[188px] rounded-[24px] border bg-white/74 p-5 text-left shadow-[0_12px_35px_rgba(62,36,41,0.06)] transition-colors hover:bg-white dark:bg-brand-card-bg/70 ${
                     isSelected ? 'border-brand-sage ring-2 ring-brand-sage/15' : 'border-brand-border'
                   }`}
                 >
@@ -306,11 +335,11 @@ export default function SearchScreen({
                     </span>
                     <span className="text-xs font-bold text-brand-text-muted">{item.date}</span>
                   </div>
-                  <h2 className="mt-5 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{item.title}</h2>
-                  <p className="mt-3 line-clamp-4 text-base leading-relaxed text-brand-plum/80 dark:text-brand-text/80">{item.body}</p>
+                  <h2 className="mt-5 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{highlightMatch(item.title, query)}</h2>
+                  <p className="mt-3 line-clamp-4 text-base leading-relaxed text-brand-plum/80 dark:text-brand-text/80">{highlightMatch(item.body, query)}</p>
                   <div className="mt-4 flex flex-wrap gap-1.5">
                     {item.tags.slice(0, 4).map(tag => (
-                      <span key={tag} className="rounded-full bg-brand-bg px-2 py-0.5 text-[10px] font-bold text-brand-sage-dark">
+                      <span key={tag} className="rounded-full bg-brand-bg px-2 py-0.5 text-xs font-bold text-brand-sage-dark">
                         #{tag}
                       </span>
                     ))}
@@ -407,6 +436,7 @@ export default function SearchScreen({
             type="text" 
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={searchKeyDown}
             placeholder="Search keywords in diaries or notes..."
             className="w-full bg-brand-card-bg text-sm text-brand-plum placeholder-brand-sage/50 pl-11 pr-4 py-3 rounded-2xl border border-brand-border focus:outline-none focus:ring-1 focus:ring-brand-sage journal-shadow"
           />
@@ -430,7 +460,7 @@ export default function SearchScreen({
         >
           {/* Source filter */}
           <div className="flex flex-col gap-1.5">
-            <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Search Source</span>
+            <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Search Source</span>
             <div className="grid grid-cols-3 gap-2">
               {(['all', 'diaries', 'notes'] as const).map(source => (
                 <button
@@ -450,7 +480,7 @@ export default function SearchScreen({
 
           {/* Tag multiselect picker */}
           <div className="flex flex-col gap-1.5">
-            <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">Has Specific Tags</span>
+            <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Has Specific Tags</span>
             <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto no-scrollbar">
               {availableTags.map(tag => {
                 const isSelected = selectedTags.includes(tag);
@@ -458,7 +488,7 @@ export default function SearchScreen({
                   <button
                     key={tag}
                     onClick={() => handleTagToggle(tag)}
-                    className={`px-3 py-1.5 rounded-full text-[10px] font-semibold transition-all border ${
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all border ${
                       isSelected 
                         ? 'bg-brand-pink text-white border-brand-pink' 
                         : 'bg-brand-bg text-brand-sage-dark border-brand-rose-light/40 hover:bg-brand-rose-light/25'
@@ -474,7 +504,7 @@ export default function SearchScreen({
           {/* Date from and to selectors */}
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1">
-              <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">From Date</span>
+              <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">From Date</span>
               <input 
                 type="date" 
                 aria-label="From date"
@@ -484,7 +514,7 @@ export default function SearchScreen({
               />
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">To Date</span>
+              <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">To Date</span>
               <input 
                 type="date" 
                 aria-label="To date"
@@ -533,7 +563,7 @@ export default function SearchScreen({
         <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-xs text-brand-sage-dark">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p>
-              Searching downloaded memories first. {unloadedArchiveMonths.length} older archive month{unloadedArchiveMonths.length === 1 ? '' : 's'} will appear after restore or when opened.
+          Some older memories are not downloaded. {unloadedArchiveMonths.length} archive month{unloadedArchiveMonths.length === 1 ? '' : 's'} can be included on request.
               {failedArchiveMonths.length > 0 && (
                 <> {failedArchiveMonths.length} month{failedArchiveMonths.length === 1 ? '' : 's'} need retry.</>
               )}
@@ -554,7 +584,7 @@ export default function SearchScreen({
                       setRestoringArchiveKey('');
                     }
                   }}
-                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-brand-sage px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-white transition-all hover:bg-brand-sage-dark disabled:cursor-wait disabled:bg-brand-sage/60"
+                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-brand-sage px-3 py-1.5 text-xs font-extrabold uppercase tracking-widest text-white transition-all hover:bg-brand-sage-dark disabled:cursor-wait disabled:bg-brand-sage/60"
                 >
                   {restoringArchiveKey === nextRestorableArchiveMonth.partitionKey ? (
                     <RefreshCw className="h-3 w-3 animate-spin" />
@@ -581,37 +611,39 @@ export default function SearchScreen({
                       setRestoringAllArchives(false);
                     }
                   }}
-                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-brand-sage/40 bg-white/70 px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-brand-sage-dark transition-all hover:bg-brand-sage-light/40 disabled:cursor-wait disabled:opacity-60"
+                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-brand-sage/40 bg-white/70 px-3 py-1.5 text-xs font-extrabold uppercase tracking-widest text-brand-sage-dark transition-all hover:bg-brand-sage-light/40 disabled:cursor-wait disabled:opacity-60"
                 >
                   {restoringAllArchives ? (
                     <RefreshCw className="h-3 w-3 animate-spin" />
                   ) : (
                     <Download className="h-3 w-3" />
                   )}
-                  {restoringAllArchives ? 'Restoring archive' : 'Restore all on Wi-Fi'}
+                  {restoringAllArchives ? 'Including older memories' : 'Include Older Memories'}
                 </button>
               )}
+              {onOpenSettingsSection && <button type="button" onClick={() => onOpenSettingsSection('data-storage')} className="rounded-full border border-brand-sage/40 px-3 py-1.5 text-xs font-extrabold uppercase tracking-widest">Manage Storage</button>}
             </div>
           </div>
           {nextRestorableArchiveStatus && (
-            <p className="mt-2 text-[11px] font-semibold text-brand-sage-dark">
+            <p className="mt-2 text-xs font-semibold text-brand-sage-dark">
               {nextRestorableArchiveStatus}
             </p>
           )}
-          {archiveRestoreError && <p className="mt-2 text-[11px] font-bold text-red-600">{archiveRestoreError}</p>}
+          {archiveRestoreError && <p className="mt-2 text-xs font-bold text-red-600">{archiveRestoreError}</p>}
         </div>
       )}
 
       {/* Results List */}
       <div className="flex flex-col gap-4">
         {results.map(item => (
-          <article 
+          <button
+            type="button"
             key={`${item.type}-${item.id}`}
             onClick={() => handleResultClick(item)}
-            className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border hover:border-brand-pink/40 journal-shadow cursor-pointer flex flex-col gap-2 transition-all hover:translate-x-0.5"
+            className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border hover:border-brand-pink/40 journal-shadow cursor-pointer flex flex-col gap-2 text-left transition-colors"
           >
             <div className="flex justify-between items-start">
-              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full ${
+              <span className={`inline-flex items-center gap-1 text-xs font-bold uppercase tracking-widest px-2 py-0.5 rounded-full ${
                 item.type === 'entry' 
                   ? 'bg-brand-sage-light/30 text-brand-sage-dark' 
                   : 'bg-brand-blush-light text-brand-pink-dark'
@@ -619,26 +651,26 @@ export default function SearchScreen({
                 {item.type === 'entry' ? <BookOpen className="w-3 h-3" /> : <FileText className="w-3 h-3" />}
                 {item.type === 'entry' ? `Journal: ${item.diaryName}` : 'Note'}
               </span>
-              <span className="text-[10px] text-brand-sage font-semibold">{item.date}</span>
+              <span className="text-xs text-brand-sage font-semibold">{item.date}</span>
             </div>
 
-            <h3 className="font-serif-diary font-bold text-brand-plum text-sm">{item.title}</h3>
-            <p className="text-xs text-brand-plum/80 leading-relaxed line-clamp-2">{item.body}</p>
+            <h3 className="font-serif-diary font-bold text-brand-plum text-sm">{highlightMatch(item.title, query)}</h3>
+            <p className="text-xs text-brand-plum/80 leading-relaxed line-clamp-2">{highlightMatch(item.body, query)}</p>
 
             <div className="flex justify-between items-center border-t border-brand-rose-light/30 pt-2.5 mt-1.5">
               <div className="flex flex-wrap gap-1">
                 {item.tags.map(tag => (
-                  <span key={tag} className="text-[9px] font-bold uppercase tracking-widest text-brand-sage-dark bg-brand-sage-light/10 border border-brand-sage-light/25 px-2 py-0.5 rounded-full">
+                  <span key={tag} className="text-xs font-bold uppercase tracking-widest text-brand-sage-dark bg-brand-sage-light/10 border border-brand-sage-light/25 px-2 py-0.5 rounded-full">
                     #{tag}
                   </span>
                 ))}
               </div>
-              <span className="text-[9px] font-bold text-brand-pink hover:underline uppercase tracking-wider flex items-center gap-0.5">
+              <span className="text-xs font-bold text-brand-pink hover:underline uppercase tracking-wider flex items-center gap-0.5">
                 View detail
                 <ArrowRight className="w-2.5 h-2.5" />
               </span>
             </div>
-          </article>
+          </button>
         ))}
 
         {/* Empty State */}

@@ -53,14 +53,20 @@ export default function StatsScreen({
     let cancelled = false;
     const loadStatsData = async () => {
       const filters = { excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [] };
-      const [entryPage, notePage, nextGlobalStats] = await Promise.all([
-        diaryRepository.searchEntries({ ...filters, includeBody: false, limit: 10000 }),
-        diaryRepository.listNotes({ includeBody: false, limit: 10000 }),
-        diaryRepository.getGlobalStatistics(filters),
-      ]);
+      const loadEntries = async () => {
+        const items: EntrySummary[] = []; let cursor: string | undefined;
+        do { const page = await diaryRepository.searchEntries({ ...filters, includeBody: false, limit: 500, cursor }); items.push(...page.items); cursor = page.nextCursor; } while (cursor);
+        return items;
+      };
+      const loadNotes = async () => {
+        const items: NoteSummary[] = []; let cursor: string | undefined;
+        do { const page = await diaryRepository.listNotes({ includeBody: false, limit: 500, cursor }); items.push(...page.items as NoteSummary[]); cursor = page.nextCursor; } while (cursor);
+        return items;
+      };
+      const [entryItems, noteItems, nextGlobalStats] = await Promise.all([loadEntries(), loadNotes(), diaryRepository.getGlobalStatistics(filters)]);
       if (cancelled) return;
-      setEntries(entryPage.items);
-      setNotes(notePage.items as NoteSummary[]);
+      setEntries(entryItems);
+      setNotes(noteItems);
       setGlobalStats(nextGlobalStats);
     };
     void loadStatsData();
@@ -147,6 +153,7 @@ export default function StatsScreen({
   };
 
   const getMoodTagCorrelations = () => {
+    if (entries.length < 5) return [];
     const correlation: { [mood: string]: { [tag: string]: number } } = {};
     
     entries.forEach(e => {
@@ -176,6 +183,7 @@ export default function StatsScreen({
   };
 
   const getInsightCorrelation = () => {
+    if (entries.length < 5) return [];
     const highMoods = ['Joyful', 'Calm', 'Excited', 'Creative'];
     const tagScores: { [tag: string]: number } = {};
     
@@ -380,7 +388,7 @@ export default function StatsScreen({
                   </div>
                 ))}
               </div>
-              <div className="mt-4 grid grid-cols-12 gap-2 text-center text-[10px] font-bold uppercase tracking-wider text-brand-text-muted">
+              <div className="mt-4 grid grid-cols-12 gap-2 text-center text-xs font-bold uppercase tracking-wider text-brand-text-muted">
                 {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map(month => <span key={month}>{month}</span>)}
               </div>
             </section>
@@ -410,7 +418,7 @@ export default function StatsScreen({
               <div className="mx-auto mt-7 flex h-40 w-40 items-center justify-center rounded-full border-[24px] border-brand-sage-light bg-white text-center">
                 <div>
                   <p className="font-serif-diary text-2xl font-bold text-brand-plum">{dominantMood?.name || 'None'}</p>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-brand-text-muted">Dominant</p>
+                  <p className="text-xs font-bold uppercase tracking-widest text-brand-text-muted">Dominant</p>
                 </div>
               </div>
               <div className="mt-6 space-y-3">
@@ -495,19 +503,19 @@ export default function StatsScreen({
           <div className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border text-center flex flex-col gap-1 shadow-sm">
             <Flame className="w-5 h-5 text-brand-pink mx-auto fill-brand-pink" />
             <span className="text-xl font-bold text-brand-plum mt-1">{streak}</span>
-            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">Streak</span>
+            <span className="text-xs text-brand-sage font-bold uppercase tracking-wider">Streak</span>
           </div>
           
           <div className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border text-center flex flex-col gap-1 shadow-sm">
             <BookOpen className="w-5 h-5 text-brand-sage mx-auto" />
             <span className="text-xl font-bold text-brand-plum mt-1">{entries.length}</span>
-            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">{hasUnhydratedArchives ? 'Downloaded' : 'Entries'}</span>
+            <span className="text-xs text-brand-sage font-bold uppercase tracking-wider">{hasUnhydratedArchives ? 'Downloaded' : 'Entries'}</span>
           </div>
 
           <div className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border text-center flex flex-col gap-1 shadow-sm">
             <Camera className="w-5 h-5 text-brand-pink mx-auto" />
             <span className="text-xl font-bold text-brand-plum mt-1">{totalPhotos}</span>
-            <span className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">{hasUnhydratedArchives ? 'DL Photos' : 'Photos'}</span>
+            <span className="text-xs text-brand-sage font-bold uppercase tracking-wider">{hasUnhydratedArchives ? 'DL Photos' : 'Photos'}</span>
           </div>
         </section>
 
@@ -515,7 +523,7 @@ export default function StatsScreen({
             <section className="bg-brand-card-bg p-5 rounded-3xl border border-brand-border journal-shadow flex flex-col gap-4 animate-fade-in">
               <div>
                 <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Mood Landscapes</h3>
-                <p className="text-[11px] text-brand-sage mt-0.5">Real-time breakdown of your logged emotional states.</p>
+                <p className="text-xs text-brand-sage mt-0.5">Real-time breakdown of your logged emotional states.</p>
               </div>
 
               <div className="flex flex-col gap-3">
@@ -545,15 +553,15 @@ export default function StatsScreen({
               {/* Correlations (Point 4) */}
               {moodCorrelations.length > 0 && (
                 <div className="border-t border-brand-border/40 pt-3.5 mt-1">
-                  <h4 className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                  <h4 className="text-xs font-extrabold text-brand-pink uppercase tracking-widest mb-2 flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-brand-pink" />
-                    Emotional Correlations
+                    Observed together
                   </h4>
                   <div className="grid grid-cols-1 gap-2">
                     {moodCorrelations.map((c, i) => (
-                      <div key={i} className="flex items-center gap-2 bg-brand-bg/50 px-3 py-2.5 rounded-xl border border-brand-border/40 text-[11px] text-brand-plum font-semibold leading-relaxed">
+                      <div key={i} className="flex items-center gap-2 bg-brand-bg/50 px-3 py-2.5 rounded-xl border border-brand-border/40 text-xs text-brand-plum font-semibold leading-relaxed">
                         <span className="w-1.5 h-1.5 rounded-full bg-brand-pink flex-shrink-0" />
-                        <span>When you are feeling <strong className="text-brand-pink-dark font-bold">{c.mood}</strong>, your most frequent log topic is <strong className="text-brand-sage-dark font-bold">#{c.tag}</strong> ({c.count}x).</span>
+                        <span><strong className="text-brand-pink-dark font-bold">{c.mood}</strong> and <strong className="text-brand-sage-dark font-bold">#{c.tag}</strong> were observed together in {c.count} of {entries.length} available entries.</span>
                       </div>
                     ))}
                   </div>
@@ -568,7 +576,7 @@ export default function StatsScreen({
                   <h3 className="font-serif-diary text-lg font-bold text-brand-plum">
                     {pixelViewMode === 'year' ? 'Year in Pixels 🌸' : 'Month in Pixels 🌸'}
                   </h3>
-                  <p className="text-[11px] text-brand-sage mt-0.5">
+                  <p className="text-xs text-brand-sage mt-0.5">
                     {pixelViewMode === 'year' 
                       ? 'Your emotional history represented through tiny pastel squares.' 
                       : 'A deep-dive view of your emotional rhythm for the selected month.'}
@@ -593,7 +601,7 @@ export default function StatsScreen({
                             setSelectedPixelEntry(null);
                             setSelectedPixelDate('');
                           }}
-                          className="relative px-3.5 py-1.5 text-[10px] font-bold rounded-xl capitalize transition-all flex items-center justify-center gap-1.5 cursor-pointer select-none group active:scale-[0.96]"
+                          className="relative px-3.5 py-1.5 text-xs font-bold rounded-xl capitalize transition-all flex items-center justify-center gap-1.5 cursor-pointer select-none group active:scale-[0.96]"
                         >
                           {isActive && (
                             <motion.div
@@ -639,7 +647,7 @@ export default function StatsScreen({
                           </option>
                         ))}
                       </select>
-                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border border-brand-border/60 dark:border-white/10 bg-brand-bg/80 dark:bg-brand-card-bg/50 shadow-inner text-[10px] font-bold text-brand-plum dark:text-brand-pink-dark">
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border border-brand-border/60 dark:border-white/10 bg-brand-bg/80 dark:bg-brand-card-bg/50 shadow-inner text-xs font-bold text-brand-plum dark:text-brand-pink-dark">
                         <span>Year: {selectedPixelYear}</span>
                         <ChevronDown className="w-3.5 h-3.5 text-brand-sage" />
                       </div>
@@ -660,7 +668,7 @@ export default function StatsScreen({
                               setSelectedPixelEntry(null);
                               setSelectedPixelDate('');
                             }}
-                            className="relative px-3 py-1.5 text-[10px] font-bold rounded-xl transition-all flex items-center justify-center cursor-pointer select-none group active:scale-[0.96]"
+                            className="relative px-3 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center justify-center cursor-pointer select-none group active:scale-[0.96]"
                           >
                             {isActive && (
                               <motion.div
@@ -699,7 +707,7 @@ export default function StatsScreen({
                         setSelectedPixelEntry(null);
                         setSelectedPixelDate('');
                       }}
-                      className={`px-2.5 py-1 text-[10px] font-bold rounded-lg flex-shrink-0 transition-all ${
+                      className={`px-2.5 py-1 text-xs font-bold rounded-lg flex-shrink-0 transition-all ${
                         selectedPixelMonth === mIdx
                           ? 'bg-brand-pink text-white shadow-sm'
                           : 'bg-brand-bg/50 text-brand-sage hover:bg-brand-blush-light border border-brand-border/30 dark:bg-brand-card-bg/20'
@@ -718,7 +726,7 @@ export default function StatsScreen({
                   {/* Month labels J F M ... */}
                   <div className="flex gap-1.5 pl-6">
                     {['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'].map((m, mIdx) => (
-                      <span key={mIdx} className="w-5 text-center text-[10px] font-bold text-brand-sage">
+                      <span key={mIdx} className="w-5 text-center text-xs font-bold text-brand-sage">
                         {m}
                       </span>
                     ))}
@@ -730,7 +738,7 @@ export default function StatsScreen({
                       return (
                         <div key={dayNum} className="flex gap-1.5 items-center">
                           {/* Day Row Label */}
-                          <span className="w-4 text-right text-[9px] font-bold text-brand-sage pr-1.5">
+                          <span className="w-4 text-right text-xs font-bold text-brand-sage pr-1.5">
                             {dayNum}
                           </span>
 
@@ -770,15 +778,7 @@ export default function StatsScreen({
                             return (
                               <div
                                 key={monthIdx}
-                                onClick={() => {
-                                  if (entry) {
-                                    void selectPixelEntry(entry, `${selectedPixelYear}-${formattedM}-${formattedD}`);
-                                  } else {
-                                    setSelectedPixelEntry(null);
-                                    setSelectedPixelDate(`${selectedPixelYear}-${formattedM}-${formattedD}`);
-                                  }
-                                }}
-                                className={`w-5 h-5 rounded-md border text-[9px] flex items-center justify-center font-semibold cursor-pointer transition-all hover:scale-125 hover:z-20 ${bgClass} ${
+                                className={`w-5 h-5 rounded-md border text-xs flex items-center justify-center font-semibold ${bgClass} ${
                                   selectedPixelDate === `${selectedPixelYear}-${formattedM}-${formattedD}` ? 'ring-1 ring-brand-sage' : ''
                                 }`}
                                 title={
@@ -805,7 +805,7 @@ export default function StatsScreen({
                   </div>
 
                   {/* Weekdays Row */}
-                  <div className="grid grid-cols-7 gap-2 text-center text-[10px] font-bold text-brand-sage border-b border-brand-border/20 pb-2">
+                  <div className="grid grid-cols-7 gap-2 text-center text-xs font-bold text-brand-sage border-b border-brand-border/20 pb-2">
                     {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(day => (
                       <span key={day}>{day}</span>
                     ))}
@@ -847,7 +847,8 @@ export default function StatsScreen({
                         }
 
                         cells.push(
-                          <div
+                          <button
+                            type="button"
                             key={`day-${d}`}
                             onClick={() => {
                               if (entry) {
@@ -857,12 +858,12 @@ export default function StatsScreen({
                                 setSelectedPixelDate(targetDate);
                               }
                             }}
-                            className={`aspect-square rounded-xl border flex flex-col justify-between p-1.5 cursor-pointer transition-all hover:scale-110 ${bgClass} ${
+                            className={`min-h-11 aspect-square rounded-xl border flex flex-col justify-between p-1.5 cursor-pointer transition-colors md:min-h-9 ${bgClass} ${
                               selectedPixelDate === targetDate ? 'ring-2 ring-brand-sage ring-offset-2 dark:ring-offset-[#131012]' : ''
                             }`}
                             title={entry ? `${entry.title} (${entry.moodEmoji} ${entry.moodName})` : 'No reflection logged'}
                           >
-                            <span className="text-[10px] font-bold text-brand-text/75 self-start">
+                            <span className="text-xs font-bold text-brand-text/75 self-start">
                               {d}
                             </span>
                             {entry ? (
@@ -870,11 +871,11 @@ export default function StatsScreen({
                                 {entry.moodEmoji}
                               </span>
                             ) : (
-                              <span className="text-[9px] text-brand-text/10 text-center w-full self-center">
+                              <span className="text-xs text-brand-text/10 text-center w-full self-center">
                                 •
                               </span>
                             )}
-                          </div>
+                          </button>
                         );
                       }
 
@@ -885,7 +886,7 @@ export default function StatsScreen({
               )}
 
               {/* Pixel Legend */}
-              <div className="flex flex-wrap gap-2.5 items-center justify-center text-[9px] font-bold text-brand-sage uppercase tracking-wider pt-2 border-t border-brand-border/40 mt-1">
+              <div className="flex flex-wrap gap-2.5 items-center justify-center text-xs font-bold text-brand-sage uppercase tracking-wider pt-2 border-t border-brand-border/40 mt-1">
                 <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-[#ffccd5] border border-[#ffa6b6]" /> Joyful</span>
                 <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-[#d8f3dc] border border-[#b7e4c7]" /> Calm</span>
                 <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-[#cfe2ff] border border-[#9ec5fe]" /> Sad</span>
@@ -906,7 +907,7 @@ export default function StatsScreen({
                   <div className="flex justify-between items-start pr-6">
                     <div>
                       <h4 className="font-serif-diary text-sm font-bold text-brand-plum italic">{selectedPixelEntry.title}</h4>
-                      <p className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">{selectedPixelDate}</p>
+                      <p className="text-xs text-brand-sage font-bold uppercase tracking-wider">{selectedPixelDate}</p>
                     </div>
                     <span className="text-xs px-2 py-0.5 bg-brand-pink/10 text-brand-pink-dark rounded-full font-bold flex items-center gap-1">
                       <span>{selectedPixelEntry.moodEmoji}</span>
@@ -919,14 +920,14 @@ export default function StatsScreen({
                   <div className="flex justify-between items-center pt-2 border-t border-brand-border/40">
                     <div className="flex gap-1.5">
                       {selectedPixelEntry.tags.map(t => (
-                        <span key={t} className="text-[9px] font-bold text-brand-sage bg-brand-sage-light/10 px-2 py-0.5 rounded-full border border-brand-border/30">
+                        <span key={t} className="text-xs font-bold text-brand-sage bg-brand-sage-light/10 px-2 py-0.5 rounded-full border border-brand-border/30">
                           #{t}
                         </span>
                       ))}
                     </div>
                     <button
                       onClick={() => onNavigate('diaries', 'diaryDetail', selectedPixelEntry.diaryId, selectedPixelEntry.id)}
-                      className="text-[10px] font-bold text-brand-pink hover:text-brand-pink-dark flex items-center gap-1"
+                      className="text-xs font-bold text-brand-pink hover:text-brand-pink-dark flex items-center gap-1"
                     >
                       <span>Jump to Memory</span>
                       <ArrowRight className="w-3 h-3" />
@@ -943,7 +944,7 @@ export default function StatsScreen({
                   </button>
                   <div>
                     <h4 className="font-serif-diary text-sm font-bold text-brand-plum italic">No reflection logged</h4>
-                    <p className="text-[10px] text-brand-sage font-bold uppercase tracking-wider">{selectedPixelDate}</p>
+                    <p className="text-xs text-brand-sage font-bold uppercase tracking-wider">{selectedPixelDate}</p>
                   </div>
                   <p className="text-xs text-brand-sage/80 leading-relaxed font-serif-diary italic">
                     There is no diary entry or voice memory logged for this date. Would you like to create a new reflection?
@@ -964,29 +965,29 @@ export default function StatsScreen({
                   </button>
                 </div>
               ) : (
-                <div className="text-center py-5 bg-brand-bg/25 border border-dashed border-brand-border/60 rounded-2xl text-[11px] text-brand-sage italic mt-1">
+                <div className="text-center py-5 bg-brand-bg/25 border border-dashed border-brand-border/60 rounded-2xl text-xs text-brand-sage italic mt-1">
                   Tap any colored pixel on the grid to instantly load that day's voice/text memory preview card.
                 </div>
               )}
 
               {/* Emotional Catalysts Panel */}
               <div className="bg-brand-sage-light/10 p-3.5 rounded-2xl border border-brand-border/40 mt-1">
-                <h4 className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+                <h4 className="text-xs font-extrabold text-brand-pink uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5 text-brand-pink fill-brand-pink/20" />
-                  Emotional Catalysts (Highest States)
+                  Topics observed with selected moods
                 </h4>
-                <p className="text-[11px] text-brand-sage leading-normal mb-3">
-                  These topics statistically appear most frequently in your happiest emotional states (Joyful, Calm, Excited, Creative):
+                <p className="text-xs text-brand-sage leading-normal mb-3">
+                  These topics were observed together with Joyful, Calm, Excited, or Creative labels. This is descriptive, not causal. Sample: {entries.length} available entries.
                 </p>
                 <div className="flex flex-col gap-2">
                   {getInsightCorrelation().map((c, i) => (
                     <div key={i} className="flex justify-between items-center bg-white/75 dark:bg-white/5 px-3 py-2 rounded-xl border border-brand-border/40 text-xs font-semibold text-brand-plum">
                       <span className="text-brand-sage-dark font-bold">#{c.tag}</span>
-                      <span className="text-brand-sage text-[10px] font-bold">{c.count} highly-positive entries</span>
+                      <span className="text-brand-sage text-xs font-bold">observed together {c.count} times</span>
                     </div>
                   ))}
                   {getInsightCorrelation().length === 0 && (
-                    <p className="text-[11px] text-brand-sage italic text-center py-2">No catalyst data available yet. Keep writing!</p>
+                    <p className="text-xs text-brand-sage italic text-center py-2">No catalyst data available yet. Keep writing!</p>
                   )}
                 </div>
               </div>
@@ -997,7 +998,7 @@ export default function StatsScreen({
               <div className="flex justify-between items-center">
                 <div>
                   <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Writing Frequency</h3>
-                  <p className="text-[11px] text-brand-sage mt-0.5">Your daily reflections over the past 30 days.</p>
+                  <p className="text-xs text-brand-sage mt-0.5">Your daily reflections over the past 30 days.</p>
                 </div>
                 <Award className="w-5 h-5 text-brand-pink" />
               </div>
@@ -1015,11 +1016,11 @@ export default function StatsScreen({
                   return (
                     <div 
                       key={item.date}
-                      className={`aspect-square rounded-xl border flex items-center justify-center text-[10px] font-bold shadow-sm transition-transform hover:scale-115 relative group cursor-pointer ${bgClass}`}
+                      className={`aspect-square rounded-xl border flex items-center justify-center text-xs font-bold shadow-sm transition-transform hover:scale-115 relative group cursor-pointer ${bgClass}`}
                       title={`${item.date}: ${item.count} items written`}
                     >
                       {item.dayNum}
-                      <span className="absolute bottom-full left-1/2 transform -translate-x-1/2 bg-black text-white text-[8px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none mb-1 z-10">
+                      <span className="absolute bottom-full left-1/2 transform -translate-x-1/2 bg-black text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none mb-1 z-10">
                         {item.count} entries
                       </span>
                     </div>
@@ -1028,7 +1029,7 @@ export default function StatsScreen({
               </div>
 
               {/* Heatmap Legend */}
-              <div className="flex justify-end gap-1.5 items-center text-[10px] font-bold text-brand-sage uppercase tracking-wider pt-2 border-t border-brand-border/40 mt-1">
+              <div className="flex justify-end gap-1.5 items-center text-xs font-bold text-brand-sage uppercase tracking-wider pt-2 border-t border-brand-border/40 mt-1">
                 <span>Less</span>
                 <div className="w-3.5 h-3.5 bg-brand-bg border border-brand-border/40 rounded-md" />
                 <div className="w-3.5 h-3.5 bg-brand-blush-light rounded-md" />
@@ -1042,7 +1043,7 @@ export default function StatsScreen({
             <section className="bg-brand-card-bg p-5 rounded-3xl border border-brand-border journal-shadow flex flex-col gap-4">
               <div>
                 <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Top Tag Topics</h3>
-                <p className="text-[11px] text-brand-sage mt-0.5">Frequently logged tag elements from diaries & notes.</p>
+                <p className="text-xs text-brand-sage mt-0.5">Frequently logged tag elements from diaries & notes.</p>
               </div>
 
               <div className="flex flex-col gap-3.5">
@@ -1089,7 +1090,7 @@ export default function StatsScreen({
                         fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
                         label="photo memory"
                       />
-                      <div className="absolute inset-x-2 bottom-2 bg-brand-card-bg/95 backdrop-blur-md px-2.5 py-1 rounded-xl text-[9px] font-bold text-brand-plum truncate flex justify-between shadow-sm border border-brand-border/20">
+                      <div className="absolute inset-x-2 bottom-2 bg-brand-card-bg/95 backdrop-blur-md px-2.5 py-1 rounded-xl text-xs font-bold text-brand-plum truncate flex justify-between shadow-sm border border-brand-border/20">
                         <span>{photo.date}</span>
                         <ArrowRight className="w-2.5 h-2.5 text-brand-pink" />
                       </div>

@@ -17,6 +17,7 @@ import {
 
 import { AppSettings, Diary, Entry, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
 import type { NoteConversionRequest } from './components/NotesScreen';
+import type { SettingsSection } from './components/AppSettingsScreen';
 import type { RepositoryChange, SyncStatusSummary } from './repositories';
 import { addNativeAppStateListener, addNativeBackListener, addNativeUrlOpenListener, exitNativeApp, getNativeLaunchUrl, syncNativeStatusBar } from './mobile/capacitorBootstrap';
 import { DearDiaryDeepLinkTarget, parseDearDiaryDeepLink } from './mobile/deepLinks';
@@ -126,6 +127,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [isReauthorizingSync, setIsReauthorizingSync] = useState(false);
   const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
   const [searchInitialQuery, setSearchInitialQuery] = useState('');
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('profile');
   
   // Navigation states
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
@@ -1145,6 +1147,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             archiveMonths={archiveMonths}
             onHydrateArchiveMonth={handleHydrateArchiveMonth}
             onHydrateAllArchiveMonths={handleHydrateAllArchiveMonths}
+            onOpenSettingsSection={(section) => { setSettingsInitialSection(section); handleNavigate('stats', 'appSettings'); }}
             onNavigate={handleNavigate}
             onEditNote={(note) => {
               // Deep-link note editing from search results
@@ -1161,6 +1164,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               initialSecurity={security}
               initialProfile={userProfile}
               layout={layout}
+              initialSection={settingsInitialSection}
               onBack={() => handleNavigate('stats', 'list')}
               onResetSuccess={() => {
                 void reloadData();
