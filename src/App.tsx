@@ -127,7 +127,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [isReauthorizingSync, setIsReauthorizingSync] = useState(false);
   const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
   const [searchInitialQuery, setSearchInitialQuery] = useState('');
-  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('profile');
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(undefined);
   
   // Navigation states
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
@@ -650,6 +650,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         handleNavigate('stats');
         return;
       case 'settings':
+        setSettingsInitialSection(undefined);
         handleNavigate('stats', 'appSettings');
         return;
       default:
@@ -1165,7 +1166,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               initialProfile={userProfile}
               layout={layout}
               initialSection={settingsInitialSection}
-              onBack={() => handleNavigate('stats', 'list')}
+              onBack={() => {
+                setSettingsInitialSection(undefined);
+                handleNavigate('stats', 'list');
+              }}
               onResetSuccess={() => {
                 void reloadData();
                 handleNavigate('home');
@@ -1574,7 +1578,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         </AnimatePresence>
       </main>
 
-      {layout === 'mobile' && currentScreen !== 'entryEditor' && (
+      {layout === 'mobile' && currentScreen !== 'entryEditor' && !(activeTab === 'stats' && currentScreen === 'appSettings') && (
         <MobileBottomNavigation active={activeTab} onNavigate={(destination) => handleNavigate(destination)} onCreate={() => setIsCreateSheetOpen(true)} />
       )}
 

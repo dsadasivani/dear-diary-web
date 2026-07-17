@@ -236,6 +236,30 @@ test('local app renders sanitized content and archive availability without execu
   await expect(page.getByText(/Some older memories are not downloaded/)).toBeVisible();
 });
 
+test('settings uses responsive section navigation and isolates section content', async ({ page }) => {
+  await setupUnlockedLocalApp(page);
+  await openSettings(page);
+
+  const sectionNavigation = page.getByRole('navigation', { name: 'Settings sections' });
+  await expect(sectionNavigation).toBeVisible();
+  await sectionNavigation.getByRole('button', { name: /Appearance/ }).click();
+  await expect(page.getByText('Application Theme')).toBeVisible();
+  await expect(page.getByText('Daily Writing Reminder')).not.toBeVisible();
+  await expect(page.getByText('Custom Tags')).not.toBeVisible();
+
+  const isMobile = (page.viewportSize()?.width || 0) < 768;
+  if (isMobile) {
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Back to settings' }).click();
+    await expect(sectionNavigation).toBeVisible();
+  }
+
+  await sectionNavigation.getByRole('button', { name: /Data & Storage/ }).click();
+  await expect(page.getByText('Cloud storage', { exact: true })).toBeVisible();
+  await expect(page.getByText('Local availability', { exact: true })).toBeVisible();
+  await expect(page.getByText('Local sync queue')).not.toBeVisible();
+});
+
 test('@accessibility authenticated primary destinations have no serious or critical axe violations', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await setupUnlockedLocalApp(page);
@@ -262,6 +286,10 @@ test('@accessibility authenticated primary destinations have no serious or criti
     await expectCurrentScreenAccessible(destination.name);
   }
 
+  const settingsBack = page.getByRole('button', { name: 'Back', exact: true });
+  if (await settingsBack.count() && await settingsBack.isVisible()) {
+    await settingsBack.click();
+  }
   await page.getByTestId('nav-diaries').click();
   await page.getByTestId('diary-card').filter({ hasText: 'E2E Open Diary' }).first().click();
   await expectCurrentScreenAccessible('Journal reader');

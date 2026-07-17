@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ArrowLeft, Lock, Bell,
   Check, ShieldCheck, RefreshCw,
   Plus, Tag, Smile, X, Sun, Moon, Cloud, CloudLightning,
-  Fingerprint, Palette, ChevronLeft, ChevronRight, Eye, EyeOff
+  Fingerprint, Palette, Eye, EyeOff, Database, Info, PenLine, ChevronRight
 } from 'lucide-react';
 import {
   AppSettings,
@@ -76,6 +76,18 @@ const sectionTab = (section: SettingsSection): 'profile' | 'security' | 'backup'
   return 'profile';
 };
 
+const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string; description: string; icon: typeof User }> = [
+  { id: 'profile', label: 'Profile', description: 'Name, avatar, email, and writing target', icon: User },
+  { id: 'appearance', label: 'Appearance', description: 'Theme and visual preferences', icon: Palette },
+  { id: 'writing', label: 'Writing Preferences', description: 'Tags and mood vocabulary', icon: PenLine },
+  { id: 'notifications', label: 'Notifications', description: 'Daily writing reminders', icon: Bell },
+  { id: 'privacy-security', label: 'Privacy & Security', description: 'PIN, recovery, and biometrics', icon: ShieldCheck },
+  { id: 'sync-backup', label: 'Sync & Backup', description: 'Account, devices, and recovery readiness', icon: Cloud },
+  { id: 'data-storage', label: 'Data & Storage', description: 'Local and cloud storage', icon: Database },
+  { id: 'advanced', label: 'Advanced', description: 'Diagnostics, queue state, and reset tools', icon: Lock },
+  { id: 'about', label: 'About', description: 'App version and privacy principles', icon: Info },
+];
+
 const formatBytes = (bytes: number): string => {
   if (bytes === 0) return '0 B';
   const k = 1024;
@@ -101,7 +113,7 @@ export default function AppSettingsScreen({
   initialSecurity,
   initialProfile,
   layout = 'mobile',
-  initialSection = 'profile',
+  initialSection,
   onBack,
   onResetSuccess,
   onDataChanged,
@@ -109,49 +121,19 @@ export default function AppSettingsScreen({
   onThemeChange
 }: AppSettingsScreenProps) {
   useScreenPerformance('settings');
-  const isDesktop = layout === 'desktop';
+  const hasSidebar = layout !== 'mobile';
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
-  const [selectedSection, setSelectedSection] = useState<SettingsSection>(initialSection);
-  const [activeTab, setActiveTab] = useState<'profile' | 'security' | 'backup' | 'customize'>(() => sectionTab(initialSection));
+  const [selectedSection, setSelectedSection] = useState<SettingsSection>(initialSection || 'profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'security' | 'backup' | 'customize'>(() => sectionTab(initialSection || 'profile'));
+  const [mobileSectionOpen, setMobileSectionOpen] = useState(Boolean(initialSection));
 
-  // Horizontal scroll state for tab bar indicator
-  const tabsContainerRef = useRef<HTMLDivElement>(null);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-
-  const checkScroll = () => {
-    const el = tabsContainerRef.current;
-    if (el) {
-      const scrollLeft = el.scrollLeft;
-      const scrollWidth = el.scrollWidth;
-      const clientWidth = el.clientWidth;
-      setCanScrollLeft(scrollLeft > 3);
-      setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 3);
-    }
+  const openSection = (section: SettingsSection) => {
+    setSelectedSection(section);
+    setActiveTab(sectionTab(section));
+    setMobileSectionOpen(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-
-  useEffect(() => {
-    const el = tabsContainerRef.current;
-    if (el) {
-      checkScroll();
-      el.addEventListener('scroll', checkScroll, { passive: true });
-      window.addEventListener('resize', checkScroll);
-      const ro = new ResizeObserver(() => checkScroll());
-      ro.observe(el);
-
-      return () => {
-        el.removeEventListener('scroll', checkScroll);
-        window.removeEventListener('resize', checkScroll);
-        ro.disconnect();
-      };
-    }
-  }, []);
-
-  useEffect(() => {
-    const timer = setTimeout(checkScroll, 100);
-    return () => clearTimeout(timer);
-  }, [activeTab]);
 
   // User Profile States
   const [profile, setProfile] = useState<UserProfile>(initialProfile);
@@ -680,128 +662,74 @@ export default function AppSettingsScreen({
     }
   };
 
+  const currentSection = SETTINGS_SECTIONS.find(section => section.id === selectedSection) || SETTINGS_SECTIONS[0];
+  const handleSettingsBack = () => {
+    if (!hasSidebar && mobileSectionOpen) {
+      setMobileSectionOpen(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    onBack();
+  };
+
   return (
-    <div className={`${isDesktop ? 'grid grid-cols-1 items-start gap-7 xl:grid-cols-[220px_minmax(0,980px)] xl:gap-10 2xl:grid-cols-[230px_minmax(0,1040px)]' : 'flex flex-col gap-6'} font-sans`}>
-      {/* Header */}
-      <header className={`${isDesktop ? 'col-span-full border-none bg-transparent py-0' : 'bg-brand-bg/95 sticky top-0 border-b border-brand-rose-light/40 py-3'} flex justify-between items-center backdrop-blur-md z-30`}>
+    <div className={`${hasSidebar ? 'grid grid-cols-[220px_minmax(0,1fr)] items-start gap-7' : 'flex flex-col gap-4'} pb-8 font-sans`}>
+      <header className={`${hasSidebar ? 'col-span-full border-none bg-transparent py-0' : 'sticky top-0 -mx-4 border-b border-brand-rose-light/40 bg-brand-bg/95 px-4 py-3'} z-30 flex items-center justify-between backdrop-blur-md`}>
         <div className="flex items-center gap-2">
           <button 
-            onClick={onBack}
-            className={`${isDesktop ? 'hidden' : 'p-2'} text-brand-plum hover:bg-brand-blush-light rounded-full transition-all`}
+            type="button"
+            onClick={handleSettingsBack}
+            className={`${hasSidebar ? 'hidden' : 'flex h-11 w-11 items-center justify-center'} rounded-full text-brand-plum transition-colors hover:bg-brand-blush-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sage`}
+            aria-label={mobileSectionOpen ? 'Back to settings' : 'Back'}
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
-            <h1 className={`${isDesktop ? 'text-4xl font-semibold xl:text-5xl' : 'text-xl font-bold'} font-serif-diary text-brand-plum dark:text-brand-text`}>Settings</h1>
-            {isDesktop && <p className="mt-2 text-lg text-brand-text-muted">Manage your digital sanctuary and privacy preferences.</p>}
+            <h1 className={`${hasSidebar ? 'text-4xl font-semibold' : 'text-xl font-bold'} font-serif-diary text-brand-plum dark:text-brand-text`}>
+              {!hasSidebar && mobileSectionOpen ? currentSection.label : 'Settings'}
+            </h1>
+            {hasSidebar && <p className="mt-2 text-lg text-brand-text-muted">Manage your digital sanctuary and privacy preferences.</p>}
           </div>
         </div>
       </header>
 
-      {/* Tab Navigation Wrapper */}
-      <div className={`${isDesktop ? 'rounded-[24px] border border-brand-border bg-white/68 p-3 shadow-[0_14px_42px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/55 xl:sticky xl:top-6' : 'relative w-full'}`}>
-        {/* Left scroll fade & chevron indicator */}
-        <AnimatePresence>
-          {canScrollLeft && (
-            <motion.div 
-              initial={{ opacity: 0, x: -4 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -4 }}
-              transition={{ duration: 0.2 }}
-              className="absolute left-0 top-0 bottom-0 w-12 bg-gradient-to-r from-brand-bg via-brand-bg/85 to-transparent pointer-events-none z-20 flex items-center pl-1"
+      <nav
+        aria-label="Settings sections"
+        className={`${hasSidebar ? 'sticky top-6 rounded-[24px] border border-brand-border bg-white/68 p-2 shadow-[0_14px_42px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/55' : mobileSectionOpen ? 'hidden' : 'overflow-hidden rounded-3xl border border-brand-border bg-brand-card-bg shadow-sm'}`}
+      >
+        {SETTINGS_SECTIONS.map(section => {
+          const Icon = section.icon;
+          const isActive = selectedSection === section.id;
+          return (
+            <button
+              key={section.id}
+              type="button"
+              onClick={() => openSection(section.id)}
+              aria-current={hasSidebar && isActive ? 'page' : undefined}
+              className={`${hasSidebar ? 'mb-1 rounded-2xl px-3 py-3' : 'min-h-[68px] border-b border-brand-border/60 px-4 py-3 last:border-b-0'} group flex w-full items-center gap-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-sage ${hasSidebar && isActive ? 'bg-brand-sage text-white' : 'text-brand-plum hover:bg-brand-blush-light/60 dark:text-brand-text dark:hover:bg-white/5'}`}
             >
-              <button
-                type="button"
-                onClick={() => tabsContainerRef.current?.scrollBy({ left: -120, behavior: 'smooth' })}
-                className="w-7 h-7 rounded-full bg-brand-card-bg/95 dark:bg-brand-card-bg/95 shadow-[0_2px_8px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_12px_rgba(0,0,0,0.3)] border border-brand-border/80 dark:border-white/10 flex items-center justify-center text-brand-sage hover:text-brand-plum dark:hover:text-brand-text active:scale-90 transition-all cursor-pointer pointer-events-auto"
-                aria-label="Scroll left"
-              >
-                <ChevronLeft className="w-4 h-4 stroke-[2.5px]" />
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Right scroll fade & chevron indicator */}
-        <AnimatePresence>
-          {canScrollRight && (
-            <motion.div 
-              initial={{ opacity: 0, x: 4 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 4 }}
-              transition={{ duration: 0.2 }}
-              className="absolute right-0 top-0 bottom-0 w-12 bg-gradient-to-l from-brand-bg via-brand-bg/85 to-transparent pointer-events-none z-20 flex items-center justify-end pr-1"
-            >
-              <button
-                type="button"
-                onClick={() => tabsContainerRef.current?.scrollBy({ left: 120, behavior: 'smooth' })}
-                className="w-7 h-7 rounded-full bg-brand-card-bg/95 dark:bg-brand-card-bg/95 shadow-[0_2px_8px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_12px_rgba(0,0,0,0.3)] border border-brand-border/80 dark:border-white/10 flex items-center justify-center text-brand-sage hover:text-brand-plum dark:hover:text-brand-text active:scale-90 transition-all cursor-pointer pointer-events-auto"
-                aria-label="Scroll right"
-              >
-                <ChevronRight className="w-4 h-4 stroke-[2.5px]" />
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Tab Navigation */}
-        <div 
-          ref={tabsContainerRef}
-          className={`${isDesktop ? 'flex-col bg-transparent p-0 border-none shadow-none overflow-visible' : 'bg-brand-bg/50 dark:bg-brand-card-bg/40 p-1.5 rounded-2xl border border-brand-border/60 dark:border-white/5 shadow-inner overflow-x-auto no-scrollbar'} flex gap-1 scroll-smooth relative`}
-        >
-          {([
-            { id: 'profile', label: 'Profile', icon: User, target: 'profile' },
-            { id: 'appearance', label: 'Appearance', icon: Palette, target: 'customize' },
-            { id: 'writing', label: 'Writing Preferences', icon: Tag, target: 'customize' },
-            { id: 'notifications', label: 'Notifications', icon: Bell, target: 'customize' },
-            { id: 'privacy-security', label: 'Privacy & Security', icon: ShieldCheck, target: 'security' },
-            { id: 'sync-backup', label: 'Sync & Backup', icon: Cloud, target: 'backup' },
-            { id: 'data-storage', label: 'Data & Storage', icon: RefreshCw, target: 'backup' },
-            { id: 'advanced', label: 'Advanced', icon: Lock, target: 'backup' },
-            { id: 'about', label: 'About', icon: Smile, target: 'profile' },
-          ] as Array<{ id: SettingsSection; label: string; icon: typeof User; target: 'profile' | 'security' | 'backup' | 'customize' }>).map((tab) => {
-            const Icon = tab.icon;
-            const isActive = selectedSection === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => { setSelectedSection(tab.id); setActiveTab(tab.target); }}
-                className={`relative ${isDesktop ? 'w-full justify-start px-4 py-3 text-sm' : 'flex-1 min-w-[100px] justify-center py-2 px-2.5 text-xs'} rounded-xl font-bold transition-all flex items-center cursor-pointer select-none group active:scale-[0.98]`}
-              >
-                {isActive && (
-                  <motion.div
-                    layoutId="settingsActiveTab"
-                    className="absolute inset-0 rounded-xl bg-brand-sage shadow-[0_4px_12px_rgba(69,98,80,0.25)]"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
-                <span className={`relative z-10 flex items-center justify-center gap-1.5 transition-all duration-300 ${
-                  isActive 
-                    ? 'text-white scale-[1.03] tracking-wide' 
-                    : 'text-brand-text-muted dark:text-brand-text-muted/80 group-hover:text-brand-plum dark:group-hover:text-brand-text'
-                }`}>
-                  <Icon className={`w-3.5 h-3.5 shrink-0 transition-all duration-300 ${
-                    isActive 
-                      ? 'scale-110 text-white' 
-                      : 'text-brand-sage opacity-75 group-hover:opacity-100 group-hover:scale-110'
-                  }`} />
-                  <span>{tab.label}</span>
-                </span>
-                
-                {/* Subtle hover background capsule for interactive tactile feel */}
-                {!isActive && (
-                  <div className="absolute inset-0 rounded-xl bg-brand-blush-light/0 dark:bg-white/0 group-hover:bg-brand-blush-light/40 dark:group-hover:bg-white/5 transition-colors duration-200 -z-0 pointer-events-none" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+              <span className={`${hasSidebar && isActive ? 'bg-white/15 text-white' : 'bg-brand-sage/10 text-brand-sage'} flex h-10 w-10 shrink-0 items-center justify-center rounded-xl`}>
+                <Icon className="h-5 w-5" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-bold">{section.label}</span>
+                {!hasSidebar && <span className="mt-0.5 block text-xs leading-5 text-brand-text-muted">{section.description}</span>}
+              </span>
+              {!hasSidebar && <ChevronRight className="h-5 w-5 shrink-0 text-brand-text-muted" aria-hidden="true" />}
+            </button>
+          );
+        })}
+      </nav>
 
       {/* Security Config settings */}
-      <div className={`${isDesktop ? 'min-w-0' : ''} flex flex-col gap-5`}>
+      {(hasSidebar || mobileSectionOpen) && <div className="min-w-0 flex flex-col gap-5">
+        <div className="hidden sm:block">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand-sage">Settings</p>
+          <h2 className="mt-1 font-serif-diary text-3xl font-semibold text-brand-plum dark:text-brand-text">{currentSection.label}</h2>
+          <p className="mt-1 text-sm text-brand-text-muted">{currentSection.description}</p>
+        </div>
         <AnimatePresence mode="wait">
-          {activeTab === 'profile' && (
+          {selectedSection === 'profile' && (
             <motion.div
               key="profile"
               initial={{ opacity: 0, y: 10 }}
@@ -810,35 +738,6 @@ export default function AppSettingsScreen({
               transition={{ duration: 0.15 }}
               className="flex flex-col gap-5"
             >
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0 flex items-center gap-3">
-                  <span className="p-2.5 bg-brand-sage/10 text-brand-sage rounded-2xl">
-                    <Cloud className="w-4 h-4" />
-                  </span>
-                  <div className="min-w-0">
-                    <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Google Account</h3>
-                    <p className="text-xs text-brand-sage truncate">
-                      {syncAccountState?.googleEmail || 'Loading account...'}
-                    </p>
-                  </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void reconnectSyncAccount()}
-                    disabled={isAuthLoading || !syncAccountState}
-                    className="w-9 h-9 shrink-0 rounded-xl border border-brand-border text-brand-text-muted hover:text-brand-sage flex items-center justify-center disabled:opacity-40"
-                    title="Reconnect encrypted sync"
-                    aria-label="Reconnect encrypted sync"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${isAuthLoading ? 'animate-spin' : ''}`} />
-                  </button>
-                </div>
-                {authError && <p className="text-xs font-bold text-red-600 dark:text-red-400">{authError}</p>}
-              </div>
-
-              <CompanionApprovalPanel />
-
               {/* User Profile Customizer Card */}
               <div className="bg-brand-card-bg p-6 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-5">
                 <div className="flex items-center gap-3">
@@ -990,7 +889,36 @@ export default function AppSettingsScreen({
             </motion.div>
           )}
 
-          {activeTab === 'security' && (
+          {selectedSection === 'about' && (
+            <motion.div
+              key="about"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col gap-5"
+            >
+              <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-6 journal-shadow">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-sage/10 text-brand-sage"><Info className="h-5 w-5" /></span>
+                  <div>
+                    <h3 className="font-serif-diary text-xl font-semibold text-brand-plum dark:text-brand-text">Dear Diary</h3>
+                    <p className="text-sm text-brand-text-muted">Your private, local-first journaling space.</p>
+                  </div>
+                </div>
+                <div className="mt-5 space-y-3 text-sm leading-6 text-brand-text-muted">
+                  <p>Your writing is encrypted on this device. Optional encrypted sync keeps your account and recovery controls separate from your public profile.</p>
+                  <p>Dear Diary does not use your entries for advertising. On-device suggestions are identified wherever they appear.</p>
+                </div>
+                <dl className="mt-6 grid gap-3 border-t border-brand-border pt-5 text-sm sm:grid-cols-2">
+                  <div><dt className="text-brand-text-muted">Version</dt><dd className="mt-1 font-bold text-brand-plum dark:text-brand-text">{import.meta.env.VITE_APP_VERSION || '1.0.0'}</dd></div>
+                  <div><dt className="text-brand-text-muted">Storage model</dt><dd className="mt-1 font-bold text-brand-plum dark:text-brand-text">Local-first, encrypted</dd></div>
+                </dl>
+              </div>
+            </motion.div>
+          )}
+
+          {selectedSection === 'privacy-security' && (
             <motion.div
               key="security"
               initial={{ opacity: 0, y: 10 }}
@@ -1374,9 +1302,120 @@ export default function AppSettingsScreen({
             </motion.div>
           )}
 
-          {activeTab === 'backup' && (
+          {selectedSection === 'sync-backup' && (
             <motion.div
-              key="backup-simple"
+              key="sync-backup"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col gap-5"
+            >
+              <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-sage/10 text-brand-sage"><Cloud className="h-5 w-5" /></span>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Connected Google identity</h3>
+                      <p className="mt-1 truncate text-sm text-brand-text-muted">{syncAccountState?.googleEmail || security.linkedGoogleEmail || 'Not connected'}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void reconnectSyncAccount()}
+                    disabled={isAuthLoading || !syncAccountState}
+                    className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-xl border border-brand-border px-3 text-sm font-bold text-brand-sage disabled:opacity-40"
+                  >
+                    {isAuthLoading ? 'Connecting…' : 'Reconnect'}
+                  </button>
+                </div>
+                {authError && <p className="mt-3 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-700 dark:bg-red-950/20 dark:text-red-300">{authError}</p>}
+              </div>
+
+              <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Sync health</h3>
+                    <p className="mt-1 text-sm text-brand-text-muted">
+                      {syncHealth ? getSyncHealthStatusMessage(syncHealth) : syncAccountState ? 'Checking encrypted sync…' : 'Connect an account to enable encrypted sync.'}
+                    </p>
+                  </div>
+                  <span className={`${failedSyncCount > 0 || driveSyncStatusError ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300' : 'bg-brand-sage/10 text-brand-sage'} rounded-full px-3 py-1.5 text-xs font-bold`}>
+                    {failedSyncCount > 0 || driveSyncStatusError ? 'Needs attention' : pendingSyncCount > 0 ? 'Syncing' : syncAccountState ? 'Healthy' : 'Not connected'}
+                  </span>
+                </div>
+                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                  <div className="rounded-2xl bg-brand-bg/50 p-3"><dt className="text-brand-text-muted">Last sync</dt><dd className="mt-1 font-bold text-brand-plum dark:text-brand-text">{formatDateTime(syncHealth?.lastSuccessfulPullAt || driveSyncStatus?.lastUploadAt)}</dd></div>
+                  <div className="rounded-2xl bg-brand-bg/50 p-3"><dt className="text-brand-text-muted">Recovery</dt><dd className="mt-1 font-bold text-brand-plum dark:text-brand-text">{syncAccountState ? 'Passphrase configured' : 'Not configured'}</dd></div>
+                </dl>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void retryLocalSync()} disabled={!syncAccountState || isRetryingSync} className="min-h-11 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white disabled:opacity-40">
+                    {isRetryingSync ? 'Syncing…' : 'Sync Now'}
+                  </button>
+                  <button type="button" onClick={() => openSection('privacy-security')} disabled={!syncAccountState} className="min-h-11 rounded-xl border border-brand-border px-4 text-sm font-bold text-brand-sage disabled:opacity-40">Review Recovery</button>
+                </div>
+              </div>
+
+              <CompanionApprovalPanel />
+
+              <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Recovery readiness</h3>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div className="rounded-xl bg-brand-bg/50 p-3"><p className="text-brand-text-muted">Google account</p><p className="mt-1 font-bold text-brand-plum dark:text-brand-text">{syncAccountState ? 'Connected' : 'Not connected'}</p></div>
+                  <div className="rounded-xl bg-brand-bg/50 p-3"><p className="text-brand-text-muted">Encryption</p><p className="mt-1 font-bold text-brand-plum dark:text-brand-text">{syncAccountState ? 'Always on' : 'Unavailable'}</p></div>
+                </div>
+                <p className="mt-3 rounded-xl border border-brand-sage/25 bg-brand-sage/10 p-3 text-sm leading-6 text-brand-sage-dark">Your recovery passphrase protects the account key before diary data reaches Google Drive.</p>
+              </div>
+            </motion.div>
+          )}
+
+          {selectedSection === 'data-storage' && (
+            <motion.div
+              key="data-storage"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col gap-5"
+            >
+              <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Cloud storage</h3>
+                    <p className="mt-1 text-sm text-brand-text-muted">Encrypted Dear Diary data in hidden Google Drive app storage.</p>
+                  </div>
+                  <button type="button" onClick={() => void refreshDriveSyncStatus()} disabled={!syncAccountState || isDriveSyncStatusLoading} className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-brand-border text-brand-sage disabled:opacity-40" aria-label="Refresh storage usage">
+                    <RefreshCw className={`h-4 w-4 ${isDriveSyncStatusLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+                <div className="mt-4 flex items-end justify-between gap-3">
+                  <p className="font-serif-diary text-2xl font-semibold text-brand-plum dark:text-brand-text">{driveSyncStatus ? formatBytes(appStorageBytes) : isDriveSyncStatusLoading ? 'Loading…' : 'Not loaded'}</p>
+                  {googleStorageUsed && googleStorageLimit && <span className="rounded-full bg-brand-pink/10 px-3 py-1 text-xs font-bold text-brand-pink">{storagePercentLabel(googleStoragePercent)} of Drive</span>}
+                </div>
+                <div className="mt-4 grid gap-2">
+                  {[
+                    ['Journal data', driveSyncStatus?.storageBreakdown.journalDataBytes || 0],
+                    ['Photos', driveSyncStatus?.storageBreakdown.imageBytes || 0],
+                    ['Voice notes', driveSyncStatus?.storageBreakdown.audioBytes || 0],
+                  ].map(([label, bytes]) => (
+                    <div key={String(label)} className="flex items-center justify-between rounded-xl bg-brand-bg/50 p-3 text-sm">
+                      <span className="font-semibold text-brand-plum dark:text-brand-text">{label}</span>
+                      <span className="font-bold text-brand-sage">{driveSyncStatus ? formatBytes(Number(bytes)) : '—'}</span>
+                    </div>
+                  ))}
+                </div>
+                {!syncAccountState && <p className="mt-3 rounded-xl border border-brand-border bg-brand-bg/40 p-3 text-sm text-brand-text-muted">Connect encrypted sync to see cloud storage usage.</p>}
+              </div>
+              <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Local availability</h3>
+                <p className="mt-2 text-sm leading-6 text-brand-text-muted">Downloaded journals and media remain available offline on this device. Older memories that are not downloaded can be included from Search when encrypted sync is connected.</p>
+              </div>
+            </motion.div>
+          )}
+
+          {selectedSection === 'advanced' && (
+            <motion.div
+              key="advanced"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
@@ -1693,16 +1732,16 @@ export default function AppSettingsScreen({
             </motion.div>
           )}
 
-          {activeTab === 'customize' && (
+          {(selectedSection === 'appearance' || selectedSection === 'writing' || selectedSection === 'notifications') && (
             <motion.div
-              key="customize"
+              key={selectedSection}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.15 }}
               className="flex flex-col gap-5"
             >
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
+              {selectedSection === 'notifications' && <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <span className="p-2.5 bg-brand-sage/10 text-brand-sage rounded-2xl">
@@ -1747,10 +1786,10 @@ export default function AppSettingsScreen({
                     Notifications are blocked. Enable them in Android Settings, then try again.
                   </p>
                 )}
-              </div>
+              </div>}
 
               {/* App Theme Selector */}
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
+              {selectedSection === 'appearance' && <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
@@ -1787,9 +1826,10 @@ export default function AppSettingsScreen({
                     Dark Mode
                   </button>
                 </div>
-              </div>
+              </div>}
 
               {/* Custom Tags */}
+              {selectedSection === 'writing' && <>
               <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
                 <div className="flex items-center gap-3 mb-2">
                   <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
@@ -1882,10 +1922,11 @@ export default function AppSettingsScreen({
                   </button>
                 </div>
               </div>
+              </>}
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
+      </div>}
     </div>
   );
 }
