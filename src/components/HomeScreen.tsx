@@ -93,7 +93,7 @@ export default function HomeScreen({
           <h2 id="continue-writing-title" className="truncate font-serif-diary text-2xl font-semibold text-brand-plum dark:text-brand-text md:text-3xl">{continueLabel}</h2>
           <p className="mt-1 truncate text-sm text-brand-text-muted">{mostRecentEntry?.title || 'A quiet page is ready when you are.'}</p>
         </div>
-        <button type="button" data-testid="home-continue-entry-button" onClick={openContinue} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white hover:bg-brand-sage-dark">
+        <button type="button" aria-label="Continue writing" data-testid="home-continue-entry-button" onClick={openContinue} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white hover:bg-brand-sage-dark">
           <PenLine className="h-4 w-4" aria-hidden="true" /><span className="hidden sm:inline">Write</span>
         </button>
       </div>

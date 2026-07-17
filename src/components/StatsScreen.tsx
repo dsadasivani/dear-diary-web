@@ -352,6 +352,7 @@ export default function StatsScreen({
                   <p className="mt-1 text-sm text-brand-text-muted">A calm map of your emotional rhythm.</p>
                 </div>
                 <select
+                  aria-label="Insight year"
                   value={selectedPixelYear}
                   onChange={(event) => setSelectedPixelYear(parseInt(event.target.value, 10))}
                   className="rounded-full border border-brand-border bg-brand-bg/70 px-4 py-2 text-sm font-bold text-brand-sage outline-none"
@@ -633,6 +634,7 @@ export default function StatsScreen({
                   {availableYears.length > 5 ? (
                     <div className="relative animate-fade-in">
                       <select
+                        aria-label="Year in pixels"
                         value={selectedPixelYear}
                         onChange={(e) => {
                           setSelectedPixelYear(parseInt(e.target.value, 10));

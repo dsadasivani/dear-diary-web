@@ -211,7 +211,8 @@ test('local app creates, edits, and deletes a diary entry through the UI', async
   await page.getByTestId('entry-edit-button').first().click();
   await page.getByTestId('entry-title-input').fill(updatedTitle);
   await fillEditor(page.getByTestId('entry-body-editor'), 'Updated entry body from Playwright.');
-  await expect(page.getByRole('status').filter({ hasText: /saved at/i })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('status').filter({ hasText: /unsaved changes/i }).first()).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: /saved at/i }).first()).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: /close editor|my journal/i }).first().click();
   await expect(page.getByText(updatedTitle).first()).toBeVisible();
 
@@ -232,7 +233,7 @@ test('local app renders sanitized content and archive availability without execu
   const xssFlag = await page.evaluate(() => (window as typeof window & { __e2eXss?: number }).__e2eXss);
   expect(xssFlag).toBeUndefined();
 
-  await expect(page.getByText(/Searching downloaded memories first/)).toBeVisible();
+  await expect(page.getByText(/Some older memories are not downloaded/)).toBeVisible();
 });
 
 test('@accessibility authenticated primary destinations have no serious or critical axe violations', async ({ page }) => {

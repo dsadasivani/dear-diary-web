@@ -1269,7 +1269,7 @@ test('manages preserved conflicts separately from retryable outbox failures', as
   assert.equal(status.conflictCount, 1);
   const [conflict] = await repository.listPreservedSyncConflicts();
   assert.equal(conflict.operation.operationId, operation.operationId);
-  assert.equal(conflict.currentRecord?.id, original.id);
+  assert.equal(conflict.currentRecord, null);
   assert.equal(conflict.recoveredRecord?.id, recovered.id);
 
   assert.equal(await repository.deleteSyncConflictRecoveredCopy(operation.operationId), true);

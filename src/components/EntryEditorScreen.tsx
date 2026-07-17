@@ -2593,7 +2593,7 @@ export default function EntryEditorScreen({
       <header className="flex justify-between items-center bg-brand-bg sticky top-0 py-3 z-30 border-b border-brand-rose-light/40">
         <button 
           onClick={handleRequestBack}
-          aria-label="Back from editor"
+          aria-label="Close editor"
           className="p-2 text-brand-plum hover:bg-brand-blush-light rounded-full transition-all active:scale-90"
         >
           <ArrowLeft className="w-5 h-5" />
