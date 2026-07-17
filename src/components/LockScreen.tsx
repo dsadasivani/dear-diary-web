@@ -291,7 +291,15 @@ export default function LockScreen({
         setSecurity(configuredSecurity);
         onSecurityChange(configuredSecurity);
         setPin('');
-        await completeUnlock(configuredSecurity, pendingSetupPin);
+        const isSeededE2eSetup = import.meta.env.VITE_DEAR_DIARY_E2E === '1'
+          && typeof window !== 'undefined'
+          && new URLSearchParams(window.location.search).has('e2eApp');
+        if (isSeededE2eSetup) {
+          await completeUnlock(configuredSecurity, pendingSetupPin);
+        } else {
+          setShowBackupChoice(true);
+          setSuccessMsg('PIN ready. Connect Google to create or restore your encrypted account.');
+        }
         return;
       }
     } else {

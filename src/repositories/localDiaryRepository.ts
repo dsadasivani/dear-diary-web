@@ -1291,7 +1291,12 @@ export class LocalDiaryRepository implements DiaryRepository {
             ? await this.getNote(operation.recoveredRecordId)
             : null
         : null;
-      return { operation, recoveredRecord };
+      const currentRecord = operation.recordType === 'entry'
+        ? await this.getEntry(operation.recordId)
+        : operation.recordType === 'note'
+          ? await this.getNote(operation.recordId)
+          : null;
+      return { operation, currentRecord, recoveredRecord };
     }));
     return conflicts;
   }
@@ -1687,6 +1692,19 @@ export class LocalDiaryRepository implements DiaryRepository {
     const next = records.map(item => item.id === record.id ? clone(record) : item);
     if (!records.some(item => item.id === record.id)) next.push(clone(record));
     return next;
+  }
+
+  async resolvePreservedSyncConflict(operationId: string, resolution: 'keep-current' | 'keep-recovered' | 'keep-both'): Promise<void> {
+    if (resolution === 'keep-current') {
+      await this.deleteSyncConflictRecoveredCopy(operationId);
+      await this.markSyncConflictResolved(operationId);
+      return;
+    }
+    if (resolution === 'keep-recovered') {
+      await this.retryPreservedSyncConflict(operationId);
+      return;
+    }
+    await this.markSyncConflictResolved(operationId);
   }
 
   private async readAllEntryProjections(

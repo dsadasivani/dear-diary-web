@@ -1075,6 +1075,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             return (
               <DiarySettingsScreen 
                 diary={selectedDiary}
+                layout={layout}
+                security={security}
                 onBack={() => handleNavigate('diaries', 'diaryDetail', selectedDiaryId)}
                 onRefreshDiaries={refreshDiaries}
               />

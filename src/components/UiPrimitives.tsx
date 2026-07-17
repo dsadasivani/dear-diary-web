@@ -117,7 +117,7 @@ export function AppDialog({ open, title, description, onClose, children, footer,
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
+    const focusTimer = window.setTimeout(() => closeRef.current?.focus(), 0);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
       if (event.key !== 'Tab') return;
@@ -131,7 +131,7 @@ export function AppDialog({ open, title, description, onClose, children, footer,
       if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     };
     document.addEventListener('keydown', onKeyDown);
-    return () => { document.removeEventListener('keydown', onKeyDown); previous?.focus(); };
+    return () => { window.clearTimeout(focusTimer); document.removeEventListener('keydown', onKeyDown); previous?.focus(); };
   }, [open, onClose]);
 
   if (!open) return null;

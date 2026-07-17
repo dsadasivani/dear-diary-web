@@ -141,8 +141,11 @@ export interface SyncStatusSummary {
 
 export interface PreservedSyncConflict {
   operation: SyncOutboxOperation;
+  currentRecord?: Entry | Note | null;
   recoveredRecord?: Entry | Note | null;
 }
+
+export type PreservedConflictResolution = 'keep-current' | 'keep-recovered' | 'keep-both';
 
 export type RepositoryChange =
   | { type: 'entry-created'; entry: Entry; contentRevision: number }
@@ -266,6 +269,7 @@ export interface DiaryRepository {
   markSyncConflictResolved(operationId: string): Promise<void>;
   deleteSyncConflictRecoveredCopy(operationId: string): Promise<boolean>;
   retryPreservedSyncConflict(operationId: string): Promise<void>;
+  resolvePreservedSyncConflict(operationId: string, resolution: PreservedConflictResolution): Promise<void>;
   applyLocalMutationWithOutbox(input: ApplyLocalMutationWithOutboxInput): Promise<Diary | Entry | Note | AppSettings | UserProfile | null>;
   acknowledgeLocalMutation(input: AcknowledgeLocalMutationInput): Promise<void>;
 
