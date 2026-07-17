@@ -263,7 +263,7 @@ export default function CompanionApprovalPanel() {
           <span className="rounded-lg bg-brand-sage/10 p-2.5 text-brand-sage"><Link2 className="h-4 w-4" /></span>
           <div>
             <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Companion Devices</h3>
-            <p className="text-[10px] text-brand-sage">Approve a browser displaying a pairing code.</p>
+            <p className="text-xs text-brand-sage">Approve a browser displaying a pairing code.</p>
           </div>
         </div>
         <button
@@ -278,14 +278,14 @@ export default function CompanionApprovalPanel() {
       </div>
 
       {!loading && sessions.length === 0 && v2Sessions.length === 0 && devices.length === 0 && v2Devices.length === 0 && !error && (
-        <p className="border-t border-brand-border pt-3 text-[11px] text-brand-text-muted">No browsers are waiting for approval.</p>
+        <p className="border-t border-brand-border pt-3 text-xs text-brand-text-muted">No browsers are waiting for approval.</p>
       )}
       {sessions.map(session => (
         <div key={session.id} className="flex flex-col gap-3 border-t border-brand-border pt-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-xs font-bold text-brand-plum dark:text-brand-text">{session.requestedDisplayName}</p>
-              <p className="text-[10px] uppercase text-brand-text-muted">{session.requestedPlatform}</p>
+              <p className="text-xs uppercase text-brand-text-muted">{session.requestedPlatform}</p>
             </div>
             <ShieldCheck className="h-4 w-4 shrink-0 text-brand-sage" />
           </div>
@@ -319,7 +319,7 @@ export default function CompanionApprovalPanel() {
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-xs font-bold text-brand-plum dark:text-brand-text">Web browser</p>
-              <p className="text-[10px] uppercase text-brand-text-muted">{session.platform}</p>
+              <p className="text-xs uppercase text-brand-text-muted">{session.platform}</p>
             </div>
             <ShieldCheck className="h-4 w-4 shrink-0 text-brand-sage" />
           </div>
@@ -350,14 +350,14 @@ export default function CompanionApprovalPanel() {
       ))}
       {devices.length > 0 && (
         <div className="flex flex-col gap-2 border-t border-brand-border pt-3">
-          <p className="text-[10px] font-bold uppercase text-brand-sage">Linked companions</p>
+          <p className="text-xs font-bold uppercase text-brand-sage">Linked companions</p>
           {devices.map(device => (
             <div key={device.id} className="flex items-center justify-between gap-3 py-1">
               <div className="flex min-w-0 items-center gap-2">
                 <Monitor className="h-4 w-4 shrink-0 text-brand-sage" />
                 <div className="min-w-0">
                   <p className="truncate text-xs font-semibold text-brand-plum dark:text-brand-text">{device.displayName}</p>
-                  <p className="text-[9px] uppercase text-brand-text-muted">{device.platform}</p>
+                  <p className="text-xs uppercase text-brand-text-muted">{device.platform}</p>
                 </div>
               </div>
               <button
@@ -375,14 +375,14 @@ export default function CompanionApprovalPanel() {
       )}
       {v2Devices.length > 0 && (
         <div className="flex flex-col gap-2 border-t border-brand-border pt-3">
-          <p className="text-[10px] font-bold uppercase text-brand-sage">Linked companions</p>
+          <p className="text-xs font-bold uppercase text-brand-sage">Linked companions</p>
           {v2Devices.map(device => (
             <div key={device.deviceId} className="flex items-center justify-between gap-3 py-1">
               <div className="flex min-w-0 items-center gap-2">
                 <Monitor className="h-4 w-4 shrink-0 text-brand-sage" />
                 <div className="min-w-0">
                   <p className="truncate text-xs font-semibold text-brand-plum dark:text-brand-text">Web browser</p>
-                  <p className="text-[9px] uppercase text-brand-text-muted">
+                  <p className="text-xs uppercase text-brand-text-muted">
                     {device.platform} · Last seen {new Date(device.lastSeenAt).toLocaleDateString()}
                   </p>
                 </div>
@@ -400,8 +400,8 @@ export default function CompanionApprovalPanel() {
           ))}
         </div>
       )}
-      {message && <p className="text-[11px] font-semibold text-brand-sage">{message}</p>}
-      {error && <p className="text-[11px] font-semibold text-red-600 dark:text-red-400">{error}</p>}
+      {message && <p className="text-xs font-semibold text-brand-sage">{message}</p>}
+      {error && <p className="text-xs font-semibold text-red-600 dark:text-red-400">{error}</p>}
       <PassphraseConfirmationDialog
         open={Boolean(revocationTarget || v2RevocationTarget)}
         title="Revoke companion device"

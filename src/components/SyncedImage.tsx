@@ -179,7 +179,7 @@ export default function SyncedImage({
             setHydrationError('');
             setRetryNonce(value => value + 1);
           }}
-          className="absolute inset-0 flex items-center justify-center bg-brand-plum/55 px-2 text-center text-[10px] font-extrabold uppercase tracking-wide text-white"
+          className="absolute inset-0 flex items-center justify-center bg-brand-plum/55 px-2 text-center text-xs font-extrabold uppercase tracking-wide text-white"
         >
           {hydrationError}
         </button>

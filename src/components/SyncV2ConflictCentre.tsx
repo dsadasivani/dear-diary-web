@@ -22,13 +22,13 @@ export const SyncV2ConflictCentre = ({
   if (conflicts.length === 0) return null;
   return (
     <section aria-labelledby="sync-v2-conflict-centre" className="mt-3 space-y-2">
-      <h3 id="sync-v2-conflict-centre" className="text-[9px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+      <h3 id="sync-v2-conflict-centre" className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
         Conflict centre
       </h3>
       {conflicts.map(conflict => {
         const busy = busyConflictId === conflict.conflictId;
         return (
-          <article key={conflict.conflictId} className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-[10px] dark:border-amber-900/50 dark:bg-amber-950/20">
+          <article key={conflict.conflictId} className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-xs dark:border-amber-900/50 dark:bg-amber-950/20">
             <p className="font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
               {conflict.recordType} conflict
             </p>

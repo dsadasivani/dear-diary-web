@@ -241,8 +241,8 @@ export default function AudioWaveformPlayer({
         </button>
 
         <div className="flex-grow flex flex-col min-w-0">
-          <span className="text-[10px] font-bold text-brand-plum truncate tracking-tight">{title}</span>
-          <span className="text-[9px] font-mono text-brand-sage font-semibold">
+          <span className="text-xs font-bold text-brand-plum truncate tracking-tight">{title}</span>
+          <span className="text-xs font-mono text-brand-sage font-semibold">
             {formatTime(currentTime)} / {formatTime(duration || 0)}
           </span>
         </div>
@@ -295,7 +295,7 @@ export default function AudioWaveformPlayer({
               e.stopPropagation();
               onDelete();
             }}
-            className="flex items-center gap-1.5 text-[10px] font-bold text-brand-rose hover:text-brand-rose-dark bg-brand-rose/5 hover:bg-brand-rose/15 px-2.5 py-1 rounded-full transition-all border border-brand-rose/10"
+            className="flex items-center gap-1.5 text-xs font-bold text-brand-rose hover:text-brand-rose-dark bg-brand-rose/5 hover:bg-brand-rose/15 px-2.5 py-1 rounded-full transition-all border border-brand-rose/10"
           >
             <Trash2 className="w-3 h-3" />
             Remove Recording
@@ -341,7 +341,7 @@ export default function AudioWaveformPlayer({
           </div>
 
           {/* Timestamps */}
-          <div className="flex justify-between items-center text-[10px] font-mono text-brand-sage font-semibold">
+          <div className="flex justify-between items-center text-xs font-mono text-brand-sage font-semibold">
             <span>{formatTime(currentTime)}</span>
             <span>{formatTime(duration || 0)}</span>
           </div>

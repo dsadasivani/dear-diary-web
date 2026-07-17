@@ -195,7 +195,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           ) : (
             <div className="flex flex-col items-center gap-5 text-center">
               <div>
-                <p className="text-[10px] font-bold uppercase text-brand-sage">Pairing Code</p>
+                <p className="text-xs font-bold uppercase text-brand-sage">Pairing Code</p>
                 <p className="mt-2 font-mono text-4xl font-bold text-brand-plum">{context.pairing.pairingCode}</p>
               </div>
               <button
@@ -216,7 +216,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           {error && <p className="mt-3 text-center text-xs font-semibold text-red-600">{error}</p>}
         </section>
 
-        <div className="flex items-start gap-2 text-[11px] leading-relaxed text-brand-text-muted">
+        <div className="flex items-start gap-2 text-xs leading-relaxed text-brand-text-muted">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand-sage" />
           <p>Your primary mobile must approve this code before encrypted diary keys are released.</p>
         </div>

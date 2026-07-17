@@ -127,7 +127,7 @@ export default function PassphraseConfirmationDialog({
             }}
           >
             <div>
-              <label htmlFor="recovery-passphrase-confirmation" className="text-[10px] font-bold uppercase text-brand-sage">
+              <label htmlFor="recovery-passphrase-confirmation" className="text-xs font-bold uppercase text-brand-sage">
                 Recovery passphrase
               </label>
               <input
