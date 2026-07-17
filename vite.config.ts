@@ -27,6 +27,7 @@ const manualChunks = (id: string): string | undefined => {
 
 export default defineConfig(() => {
   const includeTestHooks = process.env.VITE_DEAR_DIARY_E2E === '1' || process.env.VITE_ENABLE_MD_FLOW_HOOKS === 'true';
+  const disableHmr = process.env.DISABLE_HMR === 'true' || process.env.VITE_DEAR_DIARY_E2E === '1';
   return {
     plugins: [react(), tailwindcss()],
     build: {
@@ -55,9 +56,9 @@ export default defineConfig(() => {
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify; file watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
+      hmr: !disableHmr,
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      watch: disableHmr ? null : {},
     },
   };
 });

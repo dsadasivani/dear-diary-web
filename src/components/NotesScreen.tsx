@@ -1,772 +1,221 @@
-import React, { useCallback, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Pin, Edit, Trash2, Plus, BookOpen,
-  X, FileText, ClipboardList, Bold, Italic, Underline
-} from 'lucide-react';
-import { AppSettings, Note, ResponsiveLayout } from '../types';
-import RichTextEditor from './RichTextEditor';
-import { diaryRepository } from '../repositories';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, BookOpen, MoreHorizontal, Pin, Plus, Search, Trash2 } from 'lucide-react';
+import type { AppSettings, Diary, Note, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
-import OverlayPortal from './OverlayPortal';
-import { SyncConflictError } from '../sync/eventSyncEngine';
-import SanitizedRichText from './SanitizedRichText';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
-import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import { diaryRepository } from '../repositories';
+import RichTextEditor from './RichTextEditor';
+import { AppButton, AppDialog, IconButton, StatusNotice } from './UiPrimitives';
+
+export interface NoteConversionRequest {
+  noteId: string;
+  journalId: string;
+  title: string;
+  body: string;
+  tags: string[];
+  date: string;
+  disposition: 'keep' | 'delete';
+}
 
 interface NotesScreenProps {
   settings: AppSettings;
+  diaries: Diary[];
   layout?: ResponsiveLayout;
-  onConvertToDiaryEntry: (noteTitle: string, noteBody: string, tags: string[]) => void | Promise<void>;
+  onConvertToDiaryEntry: (request: NoteConversionRequest) => void | Promise<void>;
   initialNoteId?: string;
   onClearInitialNoteId?: () => void;
 }
 
-export default function NotesScreen({
-  settings,
-  layout = 'mobile',
-  onConvertToDiaryEntry,
-  initialNoteId,
-  onClearInitialNoteId
-}: NotesScreenProps) {
-  useScreenPerformance('notes');
+type Filter = 'all' | 'pinned' | 'tagged' | 'untagged';
+
+const emptyDraft = { title: '', body: '', isPinned: false, tags: [] as string[] };
+
+export default function NotesScreen({ settings, diaries, layout = 'mobile', onConvertToDiaryEntry, initialNoteId, onClearInitialNoteId }: NotesScreenProps) {
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState(emptyDraft);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [deleteId, setDeleteId] = useState('');
+  const [conversionNote, setConversionNote] = useState<Note | null>(null);
+  const [conversionJournalId, setConversionJournalId] = useState(diaries[0]?.id || '');
+  const [conversionTitle, setConversionTitle] = useState('');
+  const [conversionDate, setConversionDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [conversionDisposition, setConversionDisposition] = useState<'keep' | 'delete'>('keep');
   const availableTags = getTagsForSettings(settings);
 
-  const [activeFilter, setActiveFilter] = useState<'all' | 'pinned' | 'tagged' | 'untagged'>('all');
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [noteTotal, setNoteTotal] = useState(0);
-  const [noteQuery, setNoteQuery] = useState('');
-  
-  // Note creation inputs
-  const [quickThought, setQuickThought] = useState<string>('');
-  const [isCreatingNote, setIsCreatingNote] = useState(false);
-  const [selectedTag, setSelectedTag] = useState<string>('ideas');
-  
-  // Note editing state
-  const [editingNote, setEditingNote] = useState<Note | null>(null);
-  const [editTitle, setEditingTitle] = useState<string>('');
-  const [editBody, setEditingBody] = useState<string>('');
-  const [editPinned, setEditingPinned] = useState<boolean>(false);
-  const [editTags, setEditingTags] = useState<string[]>([]);
-  const [showConfirmDeleteId, setShowConfirmDeleteId] = useState<string | null>(null);
-  const [syncError, setSyncError] = useState('');
-
   const loadNotes = useCallback(async () => {
-    const page = await diaryRepository.listNotes({
-      filter: activeFilter,
-      query: noteQuery,
-      includeBody: true,
-      limit: 200,
-    });
-    setNotes(page.items as Note[]);
-    setNoteTotal(page.total ?? page.items.length);
-  }, [activeFilter, noteQuery]);
+    try {
+      setNotes(await diaryRepository.listNotes());
+      setError('');
+    } catch (loadError: any) {
+      setError(loadError?.message || 'Notes could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const pinnedNotes = notes.filter(n => n.isPinned);
-  const totalNotes = noteTotal;
-
-  React.useEffect(() => {
+  useEffect(() => {
     void loadNotes();
     return diaryRepository.subscribeChanges((_revision, change) => {
-      if (!change || change.type.startsWith('note-') || change.type === 'remote-batch-applied') {
-        void loadNotes();
-      }
+      if (!change || change.type.startsWith('note-') || change.type === 'remote-batch-applied') void loadNotes();
     });
   }, [loadNotes]);
 
-  React.useEffect(() => {
-    if (initialNoteId) {
-      void (async () => {
-        const matched = notes.find(n => n.id === initialNoteId) || await diaryRepository.getNote(initialNoteId);
-        if (matched) {
-          setEditingNote(matched);
-          setEditingTitle(matched.title === 'Untitled note' ? '' : matched.title);
-          setEditingBody(matched.body);
-          setEditingPinned(matched.isPinned);
-          setEditingTags(matched.tags);
-        }
-      })();
-      if (onClearInitialNoteId) {
-        onClearInitialNoteId();
-      }
-    }
+  useEffect(() => {
+    if (!initialNoteId || notes.length === 0) return;
+    const note = notes.find(item => item.id === initialNoteId);
+    if (note) openEditor(note);
+    onClearInitialNoteId?.();
   }, [initialNoteId, notes, onClearInitialNoteId]);
 
-  const handleSaveQuickNote = async () => {
-    // A quick note might have html from quickThought if it were a rich text, but it's plain text here
-    const plainTextBody = richTextHtmlToPlainText(quickThought);
-    if (!plainTextBody) return;
-    
-    // Create new quick note
-    await diaryRepository.createNote({
-      title: plainTextBody.split('\n')[0].substring(0, 30) || 'Untitled note',
-      body: quickThought,
-      isPinned: false,
-      tags: [selectedTag]
-    });
-    
-    setQuickThought('');
-    setIsCreatingNote(false);
-    await loadNotes();
-  };
+  useEffect(() => {
+    if (!conversionJournalId && diaries[0]) setConversionJournalId(diaries[0].id);
+  }, [conversionJournalId, diaries]);
 
-  const handleStartEdit = (note: Note) => {
-    setEditingNote(note);
-    setEditingTitle(note.title === 'Untitled note' ? '' : note.title);
-    setEditingBody(note.body);
-    setEditingPinned(note.isPinned);
-    setEditingTags(note.tags);
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editingNote) return;
-
-    const finalTitle = editTitle.trim() || 'Untitled note';
-    const updated: Note = {
-      ...editingNote,
-      title: finalTitle,
-      body: editBody,
-      isPinned: editPinned,
-      tags: editTags
-    };
-
-    try {
-      await diaryRepository.updateNote(updated);
-      setEditingNote(null);
-      setSyncError('');
-      await loadNotes();
-    } catch (saveError: any) {
-      setSyncError(saveError?.message || 'Note could not be saved.');
-      if (saveError instanceof SyncConflictError) {
-        setEditingNote(null);
-        await loadNotes();
-      }
-    }
-  };
-
-  const handleDeleteNote = async (id: string) => {
-    await diaryRepository.deleteNote(id);
-    setShowConfirmDeleteId(null);
-    if (editingNote && editingNote.id === id) {
-      setEditingNote(null);
-    }
-    await loadNotes();
-  };
-
-  const handleTogglePin = async (note: Note) => {
-    await diaryRepository.updateNote({
-      ...note,
-      isPinned: !note.isPinned
-    });
-    await loadNotes();
-  };
-
-  const handleEditTagToggle = (tag: string) => {
-    if (editTags.includes(tag)) {
-      setEditingTags(prev => prev.filter(t => t !== tag));
-    } else {
-      setEditingTags(prev => [...prev, tag]);
-    }
-  };
-
-  // Filter notes based on selection
-  const filteredNotes = notes
-    .filter(n => {
-      if (activeFilter === 'pinned') return n.isPinned;
-      if (activeFilter === 'tagged') return n.tags.length > 0;
-      if (activeFilter === 'untagged') return n.tags.length === 0;
-      return true; // 'all'
+  const visible = useMemo(() => notes
+    .filter(note => {
+      if (filter === 'pinned') return note.isPinned;
+      if (filter === 'tagged') return note.tags.length > 0;
+      if (filter === 'untagged') return note.tags.length === 0;
+      return true;
     })
-    // Sort: pinned first, then by updatedTime descending
-    .sort((a, b) => {
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
-      return b.updatedAt - a.updatedAt;
-    });
+    .filter(note => {
+      const needle = query.trim().toLowerCase();
+      return !needle || note.title.toLowerCase().includes(needle) || richTextHtmlToPlainText(note.body).toLowerCase().includes(needle) || note.tags.some(tag => tag.includes(needle));
+    })
+    .sort((left, right) => Number(right.isPinned) - Number(left.isPinned) || right.updatedAt - left.updatedAt), [filter, notes, query]);
 
-  const getTagEmoji = (tag: string) => {
-    const matched = tag.toLowerCase();
-    if (matched.includes('errands') || matched.includes('shopping') || matched.includes('grocery')) return '🛒';
-    if (matched.includes('ideas') || matched.includes('dream')) return '💡';
-    if (matched.includes('thought') || matched.includes('quotes') || matched.includes('reading')) return '💭';
-    if (matched.includes('work') || matched.includes('study')) return '💼';
-    return '📝';
-  };
-
-  const formatNoteDate = (timestamp: number) => {
-    const d = new Date(timestamp);
-    return d.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const execCommand = (command: string) => {
-    document.execCommand(command, false, undefined);
-  };
-
-  if (layout === 'desktop') {
-    const activeNote = editingNote || filteredNotes[0] || null;
-
-    return (
-      <div className="grid grid-cols-1 overflow-hidden rounded-[28px] border border-brand-border bg-white/72 shadow-[0_18px_55px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/60 xl:grid-cols-[300px_minmax(0,1fr)] 2xl:grid-cols-[340px_minmax(0,1fr)]">
-        <aside className="flex max-h-[420px] flex-col border-b border-brand-border bg-gradient-to-b from-brand-blush-light/68 to-white/35 dark:bg-brand-bg/30 xl:max-h-[calc(100vh-10rem)] xl:border-b-0 xl:border-r">
-          <div className="border-b border-brand-border p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">Your Notes</h1>
-                <p className="mt-1 text-xs font-semibold text-brand-text-muted">{pinnedNotes.length} pinned, {totalNotes} total</p>
-              </div>
-              <button
-                type="button"
-                data-testid="new-note-button"
-                onClick={() => {
-                  setEditingNote(null);
-                  setEditingTitle('');
-                  setEditingBody('');
-                  setEditingPinned(false);
-                  setEditingTags([]);
-                }}
-                className="rounded-full border border-brand-border bg-white/55 p-2 text-brand-sage shadow-sm hover:bg-white"
-                title="New quick note"
-              >
-                <Plus className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="relative mt-5">
-              <FileText className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
-              <input
-                type="text"
-                value={noteQuery}
-                placeholder="Search notes..."
-                className="w-full rounded-full border border-brand-border bg-white/72 py-2.5 pl-10 pr-4 text-sm font-semibold text-brand-plum outline-none transition-all focus:border-brand-sage focus:bg-white dark:bg-white/5 dark:text-brand-text"
-                onChange={(event) => setNoteQuery(event.target.value)}
-              />
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {(['all', 'pinned', 'tagged', 'untagged'] as const).map(filter => (
-                <button
-                  key={filter}
-                  type="button"
-                  onClick={() => setActiveFilter(filter)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-bold capitalize transition-all ${activeFilter === filter ? 'bg-brand-sage text-white shadow-sm' : 'bg-white/60 text-brand-sage hover:bg-white'}`}
-                >
-                  {filter}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="space-y-3">
-              {filteredNotes.map(note => {
-                const isActive = activeNote?.id === note.id;
-                return (
-                  <button
-                    key={note.id}
-                    type="button"
-                    data-testid="note-card"
-                    onClick={() => handleStartEdit(note)}
-                    className={`w-full rounded-[20px] border p-4 text-left transition-all ${
-                      isActive
-                        ? 'border-brand-sage bg-white shadow-[0_10px_26px_rgba(62,36,41,0.07)]'
-                        : 'border-brand-border bg-white/58 hover:bg-white hover:shadow-sm dark:bg-white/5'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="text-xs font-bold text-brand-text-muted">{formatNoteDate(note.updatedAt)}</span>
-                      {note.isPinned && <Pin className="h-4 w-4 shrink-0 fill-brand-pink text-brand-pink" />}
-                    </div>
-                    <h2 className="mt-2 font-serif-diary text-lg font-bold text-brand-plum dark:text-brand-text">{note.title}</h2>
-                    <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{richTextHtmlToPlainText(note.body)}</p>
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {note.tags.slice(0, 3).map(tag => (
-                        <span key={tag} className="rounded-full bg-brand-sage-light px-2 py-0.5 text-[10px] font-bold text-brand-sage-dark">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </button>
-                );
-              })}
-              {filteredNotes.length === 0 && (
-                <div className="rounded-[20px] border border-dashed border-brand-border bg-white/45 p-5 text-center">
-                  <FileText className="mx-auto h-6 w-6 text-brand-sage/70" />
-                  <p className="mt-3 text-sm font-bold text-brand-plum dark:text-brand-text">No notes here yet</p>
-                  <p className="mt-1 text-xs leading-relaxed text-brand-text-muted">Try another filter or start a quick note.</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </aside>
-
-        <main className="min-h-[620px] overflow-y-auto bg-white/82 dark:bg-brand-card-bg/75 xl:max-h-[calc(100vh-10rem)]">
-          {syncError && (
-            <p className="m-6 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
-              {syncError}
-            </p>
-          )}
-
-          {editingNote ? (
-            <section className="mx-auto max-w-4xl px-7 py-8 xl:px-10 xl:py-9 2xl:px-12">
-              <div className="mb-8 flex items-center justify-between gap-4 border-b border-brand-border pb-5">
-                <div className="flex items-center gap-2">
-                  <button type="button" onMouseDown={(event) => { event.preventDefault(); execCommand('bold'); }} className="rounded-xl p-2 text-brand-sage hover:bg-brand-blush-light"><Bold className="h-4 w-4" /></button>
-                  <button type="button" onMouseDown={(event) => { event.preventDefault(); execCommand('italic'); }} className="rounded-xl p-2 text-brand-sage hover:bg-brand-blush-light"><Italic className="h-4 w-4" /></button>
-                  <button type="button" onMouseDown={(event) => { event.preventDefault(); execCommand('underline'); }} className="rounded-xl p-2 text-brand-sage hover:bg-brand-blush-light"><Underline className="h-4 w-4" /></button>
-                </div>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setEditingPinned(prev => !prev)}
-                    className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-bold ${editPinned ? 'border-brand-pink bg-brand-pink/10 text-brand-pink' : 'border-brand-border text-brand-sage'}`}
-                  >
-                    <Pin className="h-4 w-4" />
-                    Pinned
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onConvertToDiaryEntry(editTitle || editingNote.title, editBody, editTags)}
-                    className="inline-flex items-center gap-2 rounded-full border border-brand-border px-4 py-2 text-sm font-bold text-brand-sage hover:bg-brand-blush-light"
-                  >
-                    <BookOpen className="h-4 w-4" />
-                    Convert to Entry
-                  </button>
-                </div>
-              </div>
-
-              <input
-                type="text"
-                data-testid="note-title-input"
-                value={editTitle}
-                onChange={(event) => setEditingTitle(event.target.value)}
-                placeholder="Note title..."
-                className="w-full border-none bg-transparent text-center font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum outline-none placeholder:text-brand-text-muted/30 dark:text-brand-text xl:text-[3rem]"
-              />
-
-              <div className="mt-6 flex flex-wrap justify-center gap-2">
-                {availableTags.map(tag => {
-                  const isSelected = editTags.includes(tag);
-                  return (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => handleEditTagToggle(tag)}
-                      className={`rounded-full px-3 py-1.5 text-xs font-bold transition-all ${isSelected ? 'bg-brand-sage text-white' : 'bg-brand-sage-light text-brand-sage-dark hover:bg-brand-blush-light'}`}
-                    >
-                      #{tag}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-10 rounded-[24px] border border-brand-border bg-brand-bg/32 p-7">
-                <RichTextEditor
-                  html={editBody}
-                  onChange={setEditingBody}
-                  placeholder="Write your note..."
-                  testId="note-edit-editor"
-                  className="min-h-[340px] w-full bg-transparent font-serif-diary text-2xl leading-[1.7] text-brand-plum outline-none dark:text-brand-text"
-                />
-              </div>
-
-              <div className="mt-8 flex items-center justify-between border-t border-brand-border pt-5">
-                <button
-                  type="button"
-                  data-testid="note-delete-button"
-                  onClick={() => setShowConfirmDeleteId(editingNote.id)}
-                  className="rounded-full border border-red-200 px-4 py-2 text-sm font-bold text-red-700 hover:bg-red-50"
-                >
-                  Delete
-                </button>
-                <div className="flex gap-3">
-                  <button type="button" onClick={() => setEditingNote(null)} className="rounded-full border border-brand-border px-5 py-3 text-sm font-bold text-brand-sage">
-                    Discard
-                  </button>
-                  <button type="button" onClick={handleSaveEdit} className="rounded-full bg-brand-sage px-5 py-3 text-sm font-bold text-white">
-                    Save Changes
-                  </button>
-                </div>
-              </div>
-
-              {showConfirmDeleteId === editingNote.id && (
-                <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
-                  <p className="text-sm font-semibold text-red-700">Delete this note permanently?</p>
-                  <div className="mt-3 flex gap-2">
-                    <button type="button" data-testid="note-confirm-delete-button" onClick={() => handleDeleteNote(editingNote.id)} className="rounded-full bg-red-600 px-4 py-2 text-sm font-bold text-white">Confirm delete</button>
-                    <button type="button" onClick={() => setShowConfirmDeleteId(null)} className="rounded-full border border-red-200 px-4 py-2 text-sm font-bold text-red-700">Cancel</button>
-                  </div>
-                </div>
-              )}
-            </section>
-          ) : (
-            <section className="mx-auto flex min-h-[620px] max-w-4xl flex-col justify-center px-8 py-10 xl:px-12">
-              <p className="text-sm font-bold uppercase tracking-[0.2em] text-brand-sage">Quick capture</p>
-              <h1 className="mt-3 font-serif-diary text-5xl font-semibold text-brand-plum dark:text-brand-text">Start a note</h1>
-              <div className="mt-8 rounded-[24px] border border-brand-border bg-brand-bg/35 p-7 shadow-sm">
-                <RichTextEditor
-                  html={quickThought}
-                  onChange={setQuickThought}
-                  placeholder="Jot down a quick thought, shopping list, or temporary idea..."
-                  testId="quick-note-editor"
-                  className="min-h-[240px] w-full bg-transparent font-serif-diary text-2xl leading-relaxed text-brand-plum outline-none"
-                />
-                <div className="mt-5 flex items-center justify-between border-t border-brand-border pt-5">
-                  <select
-                    aria-label="Quick note tag"
-                    value={selectedTag}
-                    onChange={(event) => setSelectedTag(event.target.value)}
-                    className="rounded-full border border-brand-border bg-white px-4 py-2 text-sm font-bold text-brand-sage outline-none"
-                  >
-                    {availableTags.map(tag => <option key={tag} value={tag}>#{tag}</option>)}
-                  </select>
-                  <button type="button" onClick={handleSaveQuickNote} className="rounded-full bg-brand-sage px-5 py-3 text-sm font-bold text-white">
-                    Save Note
-                  </button>
-                </div>
-              </div>
-            </section>
-          )}
-        </main>
-      </div>
-    );
+  function openEditor(note: Note) {
+    setEditingId(note.id);
+    setCreating(false);
+    setDraft({ title: note.title, body: note.body, isPinned: note.isPinned, tags: [...note.tags] });
   }
 
-  return (
-    <div className="flex flex-col gap-6 font-sans">
-      {/* Header */}
-      <header className="sr-only">
-        <div className="flex items-center gap-3">
-          <span className="p-2 bg-brand-sage-light/20 text-brand-sage rounded-full">
-            <ClipboardList className="w-5 h-5" />
-          </span>
-          <h1 className="font-serif-diary text-3xl text-brand-plum tracking-tight font-bold">Dear Diary</h1>
-        </div>
-        <div className="text-xs font-semibold text-brand-sage bg-brand-rose-light px-3 py-1.5 rounded-full">
-          {pinnedNotes.length} Pinned • {totalNotes} Notes
-        </div>
+  const openCreator = () => {
+    setEditingId(null);
+    setCreating(true);
+    setDraft(emptyDraft);
+  };
+
+  const closeEditor = () => {
+    setCreating(false);
+    setEditingId(null);
+    setDraft(emptyDraft);
+  };
+
+  const saveDraft = async () => {
+    const title = draft.title.trim() || richTextHtmlToPlainText(draft.body).trim().slice(0, 48) || 'Untitled note';
+    if (editingId) {
+      const original = notes.find(note => note.id === editingId);
+      if (original) await diaryRepository.updateNote({ ...original, ...draft, title });
+    } else {
+      await diaryRepository.createNote({ ...draft, title });
+    }
+    await loadNotes();
+    closeEditor();
+  };
+
+  const togglePin = async (note: Note) => {
+    await diaryRepository.updateNote({ ...note, isPinned: !note.isPinned });
+    await loadNotes();
+  };
+
+  const removeNote = async (id: string) => {
+    await diaryRepository.deleteNote(id);
+    setDeleteId('');
+    if (editingId === id) closeEditor();
+    await loadNotes();
+  };
+
+  const openConversion = (note: Note) => {
+    setConversionNote(note);
+    setConversionTitle(note.title);
+    setConversionDate(new Date().toISOString().slice(0, 10));
+    setConversionJournalId(diaries[0]?.id || '');
+    setConversionDisposition('keep');
+  };
+
+  const convert = async () => {
+    if (!conversionNote || !conversionJournalId) return;
+    await onConvertToDiaryEntry({
+      noteId: conversionNote.id,
+      journalId: conversionJournalId,
+      title: conversionTitle.trim() || conversionNote.title,
+      body: conversionNote.body,
+      tags: conversionNote.tags,
+      date: conversionDate,
+      disposition: conversionDisposition,
+    });
+    setConversionNote(null);
+    closeEditor();
+    await loadNotes();
+  };
+
+  const Editor = ({ fullScreen = false }: { fullScreen?: boolean }) => (
+    <section className={`${fullScreen ? 'fixed inset-0 z-[70] overflow-y-auto bg-brand-bg p-4 mobile-overlay-safe' : 'min-h-[620px] bg-brand-card-bg p-6'} flex flex-col gap-5`} aria-label={editingId ? 'Edit note' : 'New note'}>
+      <header className="flex items-center justify-between border-b border-brand-border pb-3">
+        <div className="flex items-center gap-3"><IconButton label="Close note editor" onClick={closeEditor}><ArrowLeft className="h-5 w-5" /></IconButton><div><p className="app-eyebrow">Notes</p><h2 className="font-serif-diary text-2xl font-semibold">{editingId ? 'Edit note' : 'New note'}</h2></div></div>
+        <AppButton tone="primary" onClick={() => void saveDraft()}>{editingId ? 'Save Changes' : 'Save Note'}</AppButton>
       </header>
-
-      {syncError && (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
-          {syncError}
-        </p>
-      )}
-
-      {/* Quick Thought Textarea Input Card */}
-      <section aria-label="Create a note" className="w-full">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div><h2 className="font-serif-diary text-2xl font-semibold text-brand-plum">Your notes</h2><p className="text-sm text-brand-text-muted">Small thoughts, lists, and ideas.</p></div>
-          <button type="button" data-testid="new-note-button" onClick={() => setIsCreatingNote(value => !value)} className="min-h-11 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white"><Plus className="mr-2 inline h-4 w-4" />New Note</button>
-        </div>
-        {isCreatingNote && (
-        <div className="bg-brand-sage-light/10 rounded-3xl p-4 border border-brand-sage-light/45 flex flex-col gap-3 relative focus-within:border-brand-sage transition-all duration-300 shadow-sm">
-          <div className="flex items-center gap-2 pb-2 mb-2 border-b border-brand-rose-light/50">
-            <button 
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); execCommand('bold'); }}
-              className={`p-1.5 rounded-lg transition-all text-brand-sage hover:bg-brand-blush-light`}
-            >
-              <Bold className="w-4 h-4" />
-            </button>
-            <button 
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); execCommand('italic'); }}
-              className={`p-1.5 rounded-lg transition-all text-brand-sage hover:bg-brand-blush-light`}
-            >
-              <Italic className="w-4 h-4" />
-            </button>
-            <button 
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); execCommand('underline'); }}
-              className={`p-1.5 rounded-lg transition-all text-brand-sage hover:bg-brand-blush-light`}
-            >
-              <Underline className="w-4 h-4" />
-            </button>
-          </div>
-          <RichTextEditor 
-            html={quickThought}
-            onChange={setQuickThought}
-              placeholder="Write a note…"
-            testId="quick-note-editor"
-            className="w-full bg-transparent border-none text-base text-brand-plum min-h-[96px]"
-          />
-          <div className="flex justify-between items-center border-t border-brand-rose-light/50 pt-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-brand-sage font-bold">Tag:</span>
-              <select
-                value={selectedTag}
-                onChange={(e) => setSelectedTag(e.target.value)}
-                className="text-xs font-bold text-brand-sage-dark bg-brand-card-bg border border-brand-border px-3 py-1 rounded-full focus:outline-none max-w-[120px] truncate"
-              >
-                {availableTags.map(t => (
-                  <option key={t} value={t}>#{t}</option>
-                ))}
-              </select>
-            </div>
-            
-            <button 
-              onClick={handleSaveQuickNote}
-              disabled={!richTextHtmlToPlainText(quickThought)}
-              className="bg-brand-sage hover:bg-brand-sage-dark disabled:bg-brand-sage-light/35 disabled:cursor-not-allowed text-white font-bold text-xs px-4 py-2 rounded-full transition-all shadow-sm"
-            >
-              Save Note
-            </button>
-          </div>
-        </div>
-        )}
-      </section>
-
-      {/* Navigation Filter pills */}
-      <div className="flex gap-2 py-1 max-w-full overflow-x-auto no-scrollbar border-b border-brand-rose-light/40">
-        {(['all', 'pinned', 'tagged', 'untagged'] as const).map(filter => (
-          <button
-            key={filter}
-            onClick={() => setActiveFilter(filter)}
-            className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-all ${
-              activeFilter === filter 
-                ? 'bg-brand-pink text-white shadow-sm' 
-                : 'text-brand-sage hover:bg-brand-blush-light'
-            }`}
-          >
-            {filter}
-          </button>
-        ))}
+      <label className="text-sm font-bold">Title
+        <input data-testid="note-title-input" value={draft.title} onChange={event => setDraft(current => ({ ...current, title: event.target.value }))} placeholder="Optional title" className="mt-2 min-h-11 w-full rounded-xl border border-brand-border bg-brand-card-bg px-4 text-base outline-none focus:border-brand-sage" />
+      </label>
+      <label className="flex min-h-12 items-center justify-between rounded-xl border border-brand-border px-3 text-sm font-bold">Pin to top<input type="checkbox" checked={draft.isPinned} onChange={event => setDraft(current => ({ ...current, isPinned: event.target.checked }))} className="h-5 w-5 accent-brand-sage" /></label>
+      <div className="flex min-h-[220px] flex-1 flex-col rounded-2xl border border-brand-border bg-brand-card-bg p-4 focus-within:border-brand-sage">
+        <RichTextEditor html={draft.body} onChange={body => setDraft(current => ({ ...current, body }))} placeholder="Write a quick thought…" testId={editingId ? 'note-edit-editor' : 'quick-note-editor'} className="min-h-[200px] flex-1 text-base leading-relaxed" />
       </div>
+      <fieldset><legend className="text-sm font-bold">Tags</legend><div className="mt-2 flex flex-wrap gap-2">{availableTags.map(tag => { const selected = draft.tags.includes(tag); return <button key={tag} type="button" aria-pressed={selected} onClick={() => setDraft(current => ({ ...current, tags: selected ? current.tags.filter(item => item !== tag) : [...current.tags, tag] }))} className={`min-h-9 rounded-full border px-3 text-xs font-bold ${selected ? 'border-brand-sage bg-brand-sage-light text-brand-sage-dark' : 'border-brand-border'}`}>#{tag}</button>; })}</div></fieldset>
+      {editingId && <div className="mt-auto flex flex-wrap gap-2 border-t border-brand-border pt-4"><AppButton onClick={() => { const note = notes.find(item => item.id === editingId); if (note) openConversion({ ...note, ...draft }); }}><BookOpen className="h-4 w-4" />Convert to Entry</AppButton><AppButton tone="danger" data-testid="note-delete-button" onClick={() => setDeleteId(editingId)}><Trash2 className="h-4 w-4" />Delete</AppButton>{deleteId === editingId && <AppButton tone="danger" data-testid="note-confirm-delete-button" onClick={() => void removeNote(editingId)}>Confirm delete</AppButton>}</div>}
+    </section>
+  );
 
-      {/* Notes List (Bento-style responsive asymmetrical grid layout) */}
-      <section className="grid grid-cols-1 gap-3">
-        {filteredNotes.map((note, idx) => {
-          const isErrand = note.tags.some(t => t === 'errands');
-          // Double-width for third note in bento list
-          const isDoubleWide = idx % 3 === 2;
-
-          return (
-            <article 
-              key={note.id}
-              data-testid="note-card"
-              className={`rounded-2xl p-5 border shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between group relative overflow-hidden ${
-                isDoubleWide ? '' : ''
-              } ${
-                isErrand 
-                  ? 'bg-brand-sage-light/25 border-brand-sage-light' 
-                  : 'bg-brand-card-bg border-brand-border'
-              }`}
-            >
-              <div>
-                <div className="flex justify-between items-start mb-3">
-                  <span className="text-[10px] font-bold text-brand-sage uppercase tracking-wider">
-                    {formatNoteDate(note.updatedAt)}
-                  </span>
-                  
-                  <div className="flex flex-wrap justify-end items-center gap-1.5 max-w-[70%]">
-                    {note.isPinned && <Pin className="w-3.5 h-3.5 text-brand-pink fill-brand-pink" />}
-                    {note.tags.map(tag => (
-                      <span 
-                        key={tag} 
-                        className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded-full flex items-center gap-1 border truncate ${
-                          isErrand 
-                            ? 'bg-white/80 text-brand-sage-dark border-brand-sage-light' 
-                            : 'bg-brand-blush-light text-brand-pink-dark border-brand-rose-light/50'
-                        }`}
-                      >
-                        <span>{getTagEmoji(tag)}</span>
-                        <span className="truncate max-w-[60px]">{tag}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                <h3 className={`font-serif-diary font-bold text-brand-plum mb-2 text-base ${isErrand ? 'line-through opacity-85' : ''}`}>
-                  {note.title}
-                </h3>
-                <SanitizedRichText
-                  className={`text-xs text-brand-plum leading-relaxed mb-4 [&_ul]:list-disc [&_ul]:ml-4 ${isErrand ? 'opacity-70 font-mono text-[11px]' : ''}`}
-                  html={note.body}
-                />
+  const ListPanel = () => (
+    <section className="min-w-0">
+      <div className="surface-card mb-4 grid gap-2 p-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <label className="relative"><span className="sr-only">Search notes</span><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search notes" className="min-h-11 w-full rounded-xl border border-brand-border bg-brand-bg/40 pl-10 pr-3 text-base outline-none focus:border-brand-sage" /></label>
+        <label className="sr-only" htmlFor="note-filter">Filter notes</label><select id="note-filter" value={filter} onChange={event => setFilter(event.target.value as Filter)} className="min-h-11 rounded-xl border border-brand-border bg-brand-card-bg px-3 text-sm font-bold"><option value="all">All notes</option><option value="pinned">Pinned</option><option value="tagged">Tagged</option><option value="untagged">Untagged</option></select>
+      </div>
+      <div className="surface-card divide-y divide-brand-border overflow-hidden">
+        {visible.map(note => (
+          <article key={note.id} data-testid="note-card" className="p-4">
+            <div className="flex items-start gap-3">
+              <button type="button" data-testid="note-edit-button" onClick={() => openEditor(note)} className="min-w-0 flex-1 text-left">
+                <span className="flex items-center gap-2"><span className="truncate font-serif-diary text-lg font-bold text-brand-plum dark:text-brand-text">{note.title}</span>{note.isPinned && <Pin className="h-3.5 w-3.5 shrink-0 text-brand-pink" aria-label="Pinned" />}</span>
+                <span className="mt-1 block line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{richTextHtmlToPlainText(note.body) || 'Empty note'}</span>
+                <span className="mt-2 flex flex-wrap items-center gap-2 text-xs text-brand-text-muted"><span>{new Date(note.updatedAt).toLocaleString()}</span>{note.tags.map(tag => <span key={tag}>#{tag}</span>)}</span>
+              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                <IconButton label={note.isPinned ? 'Unpin note' : 'Pin note'} onClick={() => void togglePin(note)}><Pin className="h-4 w-4" /></IconButton>
+                <IconButton label="Convert note to entry" onClick={() => openConversion(note)}><BookOpen className="h-4 w-4" /></IconButton>
+                <IconButton label="Delete note" data-testid="note-delete-button" onClick={() => setDeleteId(note.id)}><Trash2 className="h-4 w-4" /></IconButton>
               </div>
-
-              {/* Note actions toolbar, shown on card focus or hover */}
-              <div className="flex justify-between items-center border-t border-brand-rose-light/40 pt-3 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity duration-300">
-                <div className="flex items-center gap-1">
-                  <button 
-                    onClick={() => handleTogglePin(note)}
-                    aria-label={note.isPinned ? `Unpin ${note.title}` : `Pin ${note.title}`}
-                    className="p-1.5 text-brand-sage hover:bg-brand-blush-light rounded-lg transition-colors"
-                  >
-                    <Pin className={`w-3.5 h-3.5 ${note.isPinned ? 'fill-brand-pink text-brand-pink' : ''}`} />
-                  </button>
-                  <button 
-                    data-testid="note-edit-button"
-                    onClick={() => handleStartEdit(note)}
-                    aria-label={`Edit ${note.title}`}
-                    className="p-1.5 text-brand-sage hover:bg-brand-blush-light rounded-lg transition-colors"
-                  >
-                    <Edit className="w-3.5 h-3.5" />
-                  </button>
-                  
-                  {showConfirmDeleteId !== note.id ? (
-                    <button 
-                      data-testid="note-delete-button"
-                      onClick={() => setShowConfirmDeleteId(note.id)}
-                      aria-label={`Delete ${note.title}`}
-                      className="p-1.5 text-brand-sage hover:text-red-600 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  ) : (
-                    <button 
-                      data-testid="note-confirm-delete-button"
-                      onClick={() => handleDeleteNote(note.id)}
-                      className="px-2 py-1 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg text-[10px] font-bold transition-all"
-                    >
-                      Delete?
-                    </button>
-                  )}
-                </div>
-
-                <button 
-                  onClick={() => onConvertToDiaryEntry(note.title, note.body, note.tags)}
-                  className="flex items-center gap-1 text-brand-sage font-bold text-[10px] uppercase tracking-wider hover:text-brand-pink transition-colors p-1"
-                >
-                  <BookOpen className="w-3.5 h-3.5" />
-                  Convert to Entry
-                </button>
-              </div>
-            </article>
-          );
-        })}
-      </section>
-
-      {/* FULL NOTE EDIT DIALOG MODAL IF ACTIVE */}
-      <AnimatePresence>
-        {editingNote && (
-          <OverlayPortal>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-md bg-brand-card-bg rounded-3xl p-6 journal-shadow border border-brand-border flex flex-col gap-4 max-h-[85vh] overflow-y-auto"
-            >
-              <div className="flex justify-between items-center border-b border-brand-rose-light/50 pb-3">
-                <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Edit Quick Note</h3>
-                <button onClick={() => setEditingNote(null)} className="text-brand-sage">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-4 py-2">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Note Title</label>
-                  <input 
-                    type="text" 
-                    data-testid="note-title-input"
-                    value={editTitle}
-                    onChange={(e) => setEditingTitle(e.target.value)}
-                    placeholder="Enter title..."
-                    className="w-full bg-transparent border-b border-brand-rose-light py-1.5 text-base text-brand-plum font-serif-diary focus:outline-none focus:border-brand-pink"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between items-end">
-                    <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Content</label>
-                    <div className="flex items-center gap-1">
-                      <button 
-                        type="button"
-                        onMouseDown={(e) => { e.preventDefault(); execCommand('bold'); }}
-                        className={`p-1 rounded-md transition-all text-brand-sage hover:bg-brand-blush-light`}
-                      >
-                        <Bold className="w-3 h-3" />
-                      </button>
-                      <button 
-                        type="button"
-                        onMouseDown={(e) => { e.preventDefault(); execCommand('italic'); }}
-                        className={`p-1 rounded-md transition-all text-brand-sage hover:bg-brand-blush-light`}
-                      >
-                        <Italic className="w-3 h-3" />
-                      </button>
-                      <button 
-                        type="button"
-                        onMouseDown={(e) => { e.preventDefault(); execCommand('underline'); }}
-                        className={`p-1 rounded-md transition-all text-brand-sage hover:bg-brand-blush-light`}
-                      >
-                        <Underline className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="border border-brand-rose-light/60 p-3 rounded-2xl focus-within:ring-1 focus-within:ring-brand-pink">
-                    <RichTextEditor 
-                      html={editBody}
-                      onChange={setEditingBody}
-                      placeholder="Note description..."
-                      testId="note-edit-editor"
-                      className="w-full bg-transparent text-sm text-brand-plum min-h-[100px]"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Pin to Top</span>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      checked={editPinned}
-                      onChange={(e) => setEditingPinned(e.target.checked)}
-                      className="sr-only peer" 
-                    />
-                    <div className="w-11 h-6 bg-brand-sage-light/50 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-brand-sage-light after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-sage" />
-                  </label>
-                </div>
-
-                <div className="flex flex-col gap-1.5 mt-2">
-                  <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Tag Categories</label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {availableTags.map(tag => {
-                      const isSelected = editTags.includes(tag);
-                      return (
-                        <button
-                          key={tag}
-                          type="button"
-                          onClick={() => handleEditTagToggle(tag)}
-                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border transition-all ${
-                            isSelected 
-                              ? 'bg-brand-pink text-white border-brand-pink' 
-                              : 'bg-brand-bg text-brand-sage-dark border-brand-rose-light/50 hover:bg-brand-rose-light/20'
-                          }`}
-                        >
-                          #{tag}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-3 border-t border-brand-rose-light/50">
-                <button
-                  type="button"
-                  onClick={() => setEditingNote(null)}
-                  className="flex-1 py-2 rounded-full border border-brand-sage text-brand-sage font-bold text-xs"
-                >
-                  Discard
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveEdit}
-                  className="flex-1 py-2 rounded-full bg-brand-sage text-white font-bold text-xs"
-                >
-                  Save Changes
-                </button>
-              </div>
-            </motion.div>
             </div>
-          </OverlayPortal>
-        )}
-      </AnimatePresence>
+            {deleteId === note.id && <div className="mt-3 flex items-center justify-end gap-2"><AppButton tone="quiet" onClick={() => setDeleteId('')}>Cancel</AppButton><AppButton tone="danger" data-testid="note-confirm-delete-button" onClick={() => void removeNote(note.id)}>Delete note</AppButton></div>}
+          </article>
+        ))}
+        {!loading && visible.length === 0 && <div className="p-12 text-center"><MoreHorizontal className="mx-auto h-8 w-8 text-brand-sage" /><p className="mt-3 font-serif-diary text-xl font-semibold">No notes found</p><p className="mt-1 text-sm text-brand-text-muted">Capture a thought or adjust the filter.</p></div>}
+      </div>
+    </section>
+  );
+
+  return (
+    <div className="space-y-6 pb-20">
+      <header className="flex items-end justify-between gap-4"><div><h1 className="font-serif-diary text-3xl font-semibold md:text-4xl">Notes</h1><p className="mt-1 text-sm text-brand-text-muted">Lightweight thoughts, kept close.</p></div><AppButton tone="primary" data-testid="new-note-button" onClick={openCreator}><Plus className="h-4 w-4" />New Note</AppButton></header>
+      {error && <StatusNotice role="alert" tone="danger">{error}</StatusNotice>}
+      {layout === 'desktop' ? <div className="grid overflow-hidden rounded-2xl border border-brand-border xl:grid-cols-[340px_minmax(0,1fr)]"><div className="border-r border-brand-border p-4"><ListPanel /></div>{creating || editingId ? <Editor /> : <div className="flex min-h-[620px] items-center justify-center p-8 text-center"><div><BookOpen className="mx-auto h-10 w-10 text-brand-sage" /><h2 className="mt-3 font-serif-diary text-2xl font-semibold">Select a note</h2><p className="mt-1 text-sm text-brand-text-muted">Open a note to edit it here.</p></div></div>}</div> : <><ListPanel />{(creating || editingId) && <Editor fullScreen />}</>}
+
+      <AppDialog open={Boolean(conversionNote)} title="Convert to journal entry" description="Review where this note will go and what happens to the original." onClose={() => setConversionNote(null)} footer={<><AppButton onClick={() => setConversionNote(null)}>Cancel</AppButton><AppButton tone="primary" onClick={() => void convert()} disabled={!conversionJournalId}>Create Entry</AppButton></>}>
+        <div className="space-y-4">
+          {diaries.length === 0 ? <StatusNotice tone="warning">Create a journal before converting this note.</StatusNotice> : <label className="block text-sm font-bold">Journal<select value={conversionJournalId} onChange={event => setConversionJournalId(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-brand-border bg-brand-card-bg px-3">{diaries.map(diary => <option key={diary.id} value={diary.id}>{diary.name}</option>)}</select></label>}
+          <label className="block text-sm font-bold">Entry title<input value={conversionTitle} onChange={event => setConversionTitle(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-brand-border bg-brand-card-bg px-3" /></label>
+          <label className="block text-sm font-bold">Entry date<input type="date" value={conversionDate} onChange={event => setConversionDate(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-brand-border bg-brand-card-bg px-3" /></label>
+          <fieldset><legend className="text-sm font-bold">Original note</legend><label className="mt-2 flex min-h-12 items-center gap-3 rounded-xl border border-brand-border p-3 text-sm"><input type="radio" checked={conversionDisposition === 'keep'} onChange={() => setConversionDisposition('keep')} />Keep original note</label><label className="mt-2 flex min-h-12 items-center gap-3 rounded-xl border border-brand-border p-3 text-sm"><input type="radio" checked={conversionDisposition === 'delete'} onChange={() => setConversionDisposition('delete')} />Delete original after conversion</label></fieldset>
+        </div>
+      </AppDialog>
     </div>
   );
 }

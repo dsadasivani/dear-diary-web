@@ -89,7 +89,6 @@ export default function EntryEditorScreen({
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isEditorReady, setIsEditorReady] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
-  const [hasSessionChanges, setHasSessionChanges] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [showEntryDetails, setShowEntryDetails] = useState(Boolean(showDiarySelector));
   const baselineFingerprintRef = useRef<string | null>(null);
@@ -129,9 +128,6 @@ export default function EntryEditorScreen({
     setAiResult(null);
 
     try {
-      // Simulate a small, elegant processing delay to feel tactile and deep
-      await new Promise(resolve => setTimeout(resolve, 850));
-
       const lowerText = plainText.toLowerCase();
 
       // Heuristic Mood Detection
@@ -196,19 +192,10 @@ export default function EntryEditorScreen({
         if (!suggestedTags.includes('ideas')) suggestedTags.push('ideas');
       }
 
-      // Empathy Reflections Map
-      const reflections: { [key: string]: string } = {
-        Joyful: "It's beautiful to see you celebrating this moment of joy! Savoring these happy experiences is a powerful way to build emotional resilience and lasting memories. Keep shining bright.",
-        Calm: "You've captured a wonderfully peaceful state of mind. Pausing to appreciate quiet, cozy moments is a gentle gift to yourself. May this sense of serenity stay with you.",
-        Sad: "I'm holding space for you as you process these heavy or sad feelings. It is completely okay not to be okay. Remember to be exceptionally kind and gentle with yourself right now.",
-        Anxious: "It sounds like there's a lot on your mind, and things might feel overwhelming. Take a soft, deep breath. Focus on just this single present moment—you are safe here.",
-        Excited: "Your excitement and vibrant energy are absolutely contagious! Harness this wonderful momentum to propel your dreams forward. Embrace the journey ahead.",
-        Reflective: "Your deep reflection shows a beautiful level of self-awareness. Taking the time to look inward and ponder your path is how we grow. Your journey is uniquely yours.",
-        Tired: "You seem to be carrying a heavy load and feeling depleted. Please give yourself permission to fully rest and recharge. You don't have to carry it all today.",
-        Creative: "What an inspiring spark of creativity and imagination! Bringing new ideas or art into the world is a wonderful expression of who you are. Keep creating."
-      };
-
-      const reflectionText = reflections[detectedMood] || reflections.Reflective;
+      const explanationTopics = suggestedTags.slice(0, 3);
+      const reflectionText = maxMatches > 0
+        ? `Why: words associated with ${detectedMood.toLowerCase()}${explanationTopics.length ? ` and ${explanationTopics.join(', ')}` : ''} appeared in this entry.`
+        : 'Why: no strong keyword pattern was found, so Reflective is shown as a neutral possibility.';
 
       setAiResult({
         reflection: reflectionText,
@@ -1195,7 +1182,6 @@ export default function EntryEditorScreen({
     }
     const changed = draftFingerprint !== baselineFingerprintRef.current;
     setIsDirty(changed);
-    if (changed) setHasSessionChanges(true);
   }, [draftFingerprint, isEditorReady]);
 
   useEffect(() => {
@@ -1446,14 +1432,6 @@ export default function EntryEditorScreen({
     onBack();
   };
 
-  const handleRequestDiscard = () => {
-    if (!hasSessionChanges) {
-      handleRequestBack();
-      return;
-    }
-    setShowLeaveConfirm(true);
-  };
-
   const handleDiscardAndLeave = async () => {
     isLeavingRef.current = true;
     setShowLeaveConfirm(false);
@@ -1580,14 +1558,14 @@ export default function EntryEditorScreen({
           
           <div className="min-h-screen flex flex-col items-center justify-start md:justify-center w-full max-w-xl mx-auto gap-4 sm:gap-6 md:gap-8 py-16 px-4 sm:px-6">
             <div className="text-center space-y-1 select-none">
-              <span className="text-[9px] sm:text-[10px] font-extrabold text-brand-pink uppercase tracking-[0.25em] bg-brand-pink/10 px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full">
+              <span className="text-xs sm:text-xs font-extrabold text-brand-pink uppercase tracking-[0.25em] bg-brand-pink/10 px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full">
                 {recordingOverlayMode === 'speech-to-text' ? 'Dictate Text' : 'Audio Note'}
               </span>
               <h2 className="text-xl sm:text-2xl font-serif-diary font-bold text-brand-plum italic pt-1.5 sm:pt-2">
                 {recordingOverlayMode === 'speech-to-text' ? 'Speak to Write' : 'Record This Moment'}
               </h2>
               {recordingOverlayMode === 'voice-dictation' && (
-                <p className="text-[11px] sm:text-xs text-brand-text-muted font-medium px-2">
+                <p className="text-xs sm:text-xs text-brand-text-muted font-medium px-2">
                   Record an audio memory and save it with this diary moment.
                 </p>
               )}
@@ -1595,7 +1573,7 @@ export default function EntryEditorScreen({
               {/* Transcription Toggle (Only in Voice Sanctuary mode) */}
               {recordingOverlayMode === 'speech-to-text' && (
                 <div className="flex justify-center pt-3">
-                  <p className="max-w-sm text-[10px] text-brand-text-muted font-semibold">
+                  <p className="max-w-sm text-xs text-brand-text-muted font-semibold">
                     Recognition uses your browser or Android speech service and may require a network connection.
                   </p>
                 </div>
@@ -1648,7 +1626,7 @@ export default function EntryEditorScreen({
             {/* Status indicators and Connection notices */}
             {(isAudioRecordingOnly || Boolean(speechError)) && (
               <div className="flex flex-col items-center gap-2 max-w-md w-full">
-                <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 bg-white/70 dark:bg-brand-card-bg/85 px-3 py-1.5 sm:px-4 sm:py-2 rounded-2xl border border-brand-border/60 text-[10px] sm:text-xs font-semibold">
+                <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 bg-white/70 dark:bg-brand-card-bg/85 px-3 py-1.5 sm:px-4 sm:py-2 rounded-2xl border border-brand-border/60 text-xs sm:text-xs font-semibold">
                   {isAudioRecordingOnly && <span className="flex items-center gap-1.5 text-brand-plum">
                     <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isTranscriptionEnabled ? 'bg-brand-text-muted/40' : 'bg-emerald-500 animate-pulse'}`} />
                     <span>Raw Audio: {isTranscriptionEnabled ? 'Off' : 'Active'} 🎙️</span>
@@ -1677,7 +1655,7 @@ export default function EntryEditorScreen({
                   <motion.div 
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[10px] sm:text-xs px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl text-center leading-relaxed font-semibold shadow-sm"
+                    className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs sm:text-xs px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl text-center leading-relaxed font-semibold shadow-sm"
                   >
                     {speechError === 'network' ? (
                       "Dictation lost its network connection. Finished words are preserved; retry later or use Audio Note."
@@ -1693,7 +1671,7 @@ export default function EntryEditorScreen({
 
             {/* Live Transcription Box */}
             <div className="text-center w-full space-y-2 sm:space-y-4">
-              <h3 className="text-[10px] sm:text-xs font-bold text-brand-pink uppercase tracking-widest">
+              <h3 className="text-xs sm:text-xs font-bold text-brand-pink uppercase tracking-widest">
                 {isRecording 
                   ? (isTranscriptionEnabled ? 'Listening and transcribing...' : 'Audio recording active') 
                   : 'Recording is paused'}
@@ -1719,7 +1697,7 @@ export default function EntryEditorScreen({
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 onClick={cancelRecording}
-                className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-red-50 hover:bg-red-100 text-red-600 font-bold rounded-full shadow-md border border-red-200 text-[10px] sm:text-xs uppercase tracking-wider"
+                className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-red-50 hover:bg-red-100 text-red-600 font-bold rounded-full shadow-md border border-red-200 text-xs sm:text-xs uppercase tracking-wider"
               >
                 <X className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500" /> 
                 <span>Cancel</span>
@@ -1731,7 +1709,7 @@ export default function EntryEditorScreen({
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={pauseRecording}
-                  className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-white dark:bg-brand-card-bg text-brand-plum font-bold rounded-full shadow-md hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-colors border border-brand-border text-[10px] sm:text-xs uppercase tracking-wider"
+                  className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-white dark:bg-brand-card-bg text-brand-plum font-bold rounded-full shadow-md hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-colors border border-brand-border text-xs sm:text-xs uppercase tracking-wider"
                 >
                   <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-brand-pink" /> 
                   <span>Pause</span>
@@ -1742,7 +1720,7 @@ export default function EntryEditorScreen({
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={() => startRecording(true, recordingOverlayMode)}
-                  className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-brand-pink text-white font-bold rounded-full shadow-lg hover:bg-brand-pink-dark transition-all shadow-brand-pink/15 text-[10px] sm:text-xs uppercase tracking-wider"
+                  className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-brand-pink text-white font-bold rounded-full shadow-lg hover:bg-brand-pink-dark transition-all shadow-brand-pink/15 text-xs sm:text-xs uppercase tracking-wider"
                 >
                   <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> 
                   <span>Resume</span>
@@ -1754,7 +1732,7 @@ export default function EntryEditorScreen({
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 onClick={stopRecording}
-                className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-brand-plum dark:bg-white text-white dark:text-brand-plum font-bold rounded-full shadow-md hover:opacity-90 transition-colors text-[10px] sm:text-xs uppercase tracking-wider"
+                className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-brand-plum dark:bg-white text-white dark:text-brand-plum font-bold rounded-full shadow-md hover:opacity-90 transition-colors text-xs sm:text-xs uppercase tracking-wider"
               >
                 <Square className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-brand-pink" /> 
                 <span>Finish</span>
@@ -1773,28 +1751,30 @@ export default function EntryEditorScreen({
           <Sparkles className="w-4 h-4 text-brand-pink" />
           <div>
             <h3 className="text-xs font-bold text-brand-plum">Local Reflection</h3>
-            <p className="text-[9px] text-brand-sage">Private keyword analysis performed entirely on this device.</p>
+            <p className="text-xs text-brand-sage">Private keyword analysis performed entirely on this device.</p>
           </div>
         </div>
         <button
           type="button"
           onClick={() => void handleAiEnhance()}
           disabled={aiLoading}
-          className="px-3 py-2 rounded-xl bg-brand-sage text-white text-[10px] font-bold disabled:opacity-50"
+          className="px-3 py-2 rounded-xl bg-brand-sage text-white text-xs font-bold disabled:opacity-50"
         >
           {aiLoading ? 'Reflecting...' : 'Reflect locally'}
         </button>
       </div>
-      {aiError && <p className="text-[10px] text-brand-pink-dark">{aiError}</p>}
+      {aiError && <p className="text-xs text-brand-pink-dark">{aiError}</p>}
       {aiResult && (
         <div className="rounded-2xl bg-brand-bg/60 border border-brand-border/40 p-3 flex flex-col gap-2">
-          <p className="text-xs text-brand-plum leading-relaxed">{aiResult.reflection}</p>
+          <p className="text-xs font-bold text-brand-plum">Possible mood: {aiResult.mood}</p>
+          <p className="text-xs text-brand-plum leading-relaxed">Possible topics: {aiResult.tags.join(', ') || 'none yet'}</p>
+          <p className="text-xs text-brand-text-muted leading-relaxed">{aiResult.reflection}</p>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => applyAiMood(aiResult.mood)} className="px-2.5 py-1 rounded-full bg-brand-pink/10 text-brand-pink text-[10px] font-bold">
+            <button type="button" onClick={() => applyAiMood(aiResult.mood)} className="px-2.5 py-1 rounded-full bg-brand-pink/10 text-brand-pink text-xs font-bold">
               Use mood: {aiResult.mood}
             </button>
             {aiResult.tags.map(tag => (
-              <button key={tag} type="button" onClick={() => applyAiTag(tag)} className="px-2.5 py-1 rounded-full bg-brand-sage/10 text-brand-sage text-[10px] font-bold">
+              <button key={tag} type="button" onClick={() => applyAiTag(tag)} className="px-2.5 py-1 rounded-full bg-brand-sage/10 text-brand-sage text-xs font-bold">
                 +#{tag}
               </button>
             ))}
@@ -1863,67 +1843,21 @@ export default function EntryEditorScreen({
         <div className="max-w-2xl mx-auto w-full flex-grow flex flex-col gap-5">
           
           {/* Distraction-Free Minimalist Top Controls */}
-          <header className="flex justify-between items-center text-brand-sage/60 hover:opacity-100 transition-opacity duration-300 select-none pb-3 border-b border-brand-border/10">
+          <header className="flex justify-between items-center select-none pb-3 border-b border-brand-border/10">
             <button 
               onClick={() => {
                 setIsFocusMode(false);
                 onFocusModeChange?.(false);
               }}
-              className="flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 bg-brand-card-bg rounded-lg border border-brand-border/60 text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-all active:scale-95"
+              className="flex items-center gap-1 text-xs font-bold px-2.5 py-1 bg-brand-card-bg rounded-lg border border-brand-border/60 text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-all active:scale-95"
               title="Exit Focus Mode"
             >
               <Minimize2 className="w-3 h-3 text-brand-pink" />
               <span>Exit Focus</span>
             </button>
 
-            <div className="flex items-center gap-1.5">
-              {showDiarySelector && diaries.length > 0 && (
-                <div className="relative">
-                  <select
-                    aria-label="Destination journal"
-                    value={diaryId}
-                    onChange={(e) => setDiaryId(e.target.value)}
-                    className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
-                  >
-                    {diaries.map(d => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="px-2.5 py-1 rounded-lg bg-brand-card-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1.5 border border-brand-border/60 text-brand-plum select-none">
-                    <span 
-                      className="w-2 h-2 rounded-full border border-white/20 shadow-inner" 
-                      style={{ backgroundColor: diaries.find(d => d.id === diaryId)?.color || '#8A3D55' }}
-                    />
-                    <span className="truncate max-w-[80px]">
-                      {diaries.find(d => d.id === diaryId)?.name || 'Select'}
-                    </span>
-                    <ChevronDown className="w-3 h-3 text-brand-sage" />
-                  </div>
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setFontFamily(prev => prev === 'serif' ? 'sans' : prev === 'sans' ? 'mono' : 'serif')}
-                className="px-2.5 py-1 rounded-lg bg-brand-card-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 border border-brand-border/60 text-brand-plum"
-                title="Change font style"
-              >
-                <Type className="w-3 h-3 text-brand-pink" />
-                <span>Font: <span className="capitalize">{fontFamily}</span></span>
-              </button>
-
-              <button 
-                onClick={handleSave}
-                disabled={isSaving}
-                className="bg-brand-sage hover:bg-brand-sage-dark text-white px-3.5 py-1 rounded-lg text-[11px] font-bold transition-all active:scale-95 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSaving ? 'Saving' : 'Save'}
-              </button>
-            </div>
+            {saveStatusUI}
           </header>
-          <div className="flex justify-end">{saveStatusUI}</div>
 
           {/* Minimalist Title */}
           <div className="w-full pt-1">
@@ -1945,7 +1879,7 @@ export default function EntryEditorScreen({
               {/* Scrollable history stream of blocks - NOW ALL IN EDIT MODE */}
               {blocks.length > 0 && (
                 <div className="flex flex-col gap-6 mb-8">
-                  <span className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest pl-1 border-b border-brand-pink/20 pb-2">
+                  <span className="text-xs font-extrabold text-brand-pink uppercase tracking-widest pl-1 border-b border-brand-pink/20 pb-2">
                     Earlier Saved Moments ({blocks.length})
                   </span>
                   <div className="flex flex-col gap-6">
@@ -2051,7 +1985,7 @@ export default function EntryEditorScreen({
                 <div className="flex items-center justify-between bg-brand-pink/5 px-3 py-1.5 rounded-xl border border-brand-pink/15">
                   <div className="flex items-center gap-1.5 select-none w-full">
                     <Clock className="w-3.5 h-3.5 text-brand-pink flex-shrink-0" />
-                    <span className="text-[10px] font-bold text-brand-pink uppercase tracking-wider truncate">
+                    <span className="text-xs font-bold text-brand-pink uppercase tracking-wider truncate">
                       Drafting Moment for {formatTime12(currentTimeText)}
                     </span>
                     <div className="ml-auto flex items-center">
@@ -2060,7 +1994,7 @@ export default function EntryEditorScreen({
                         aria-label="New moment time"
                         value={currentTimeText}
                         onChange={(e) => setCurrentTimeText(e.target.value)}
-                        className="text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
+                        className="text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
                       />
                     </div>
                   </div>
@@ -2248,20 +2182,14 @@ export default function EntryEditorScreen({
             </h1>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleRequestDiscard}
-              className="rounded-full border border-brand-border bg-white/60 px-5 py-3 text-sm font-bold text-brand-sage transition-all hover:bg-white"
-            >
-              Discard
-            </button>
+            {saveStatusUI}
             <button
               type="button"
               onClick={handleSave}
               disabled={isSaving}
               className="rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark disabled:cursor-not-allowed disabled:opacity-55"
             >
-              {isSaving ? 'Saving...' : 'Save Entry'}
+              {isSaving ? 'Saving...' : 'Done'}
             </button>
           </div>
         </header>
@@ -2331,8 +2259,6 @@ export default function EntryEditorScreen({
 
               <div className="flex items-center gap-2 text-xs font-bold text-brand-text-muted">
                 <span>{liveWordCount} words</span>
-                <span className="h-2 w-2 rounded-full bg-brand-sage" />
-                {saveStatusUI}
               </div>
             </div>
 
@@ -2601,7 +2527,9 @@ export default function EntryEditorScreen({
               {aiError && <p className="mt-3 text-xs font-bold text-brand-rose">{aiError}</p>}
               {aiResult && (
                 <div className="mt-4 rounded-2xl bg-brand-sage-light/35 p-4">
-                  <p className="text-sm leading-relaxed text-brand-plum dark:text-brand-text">{aiResult.reflection}</p>
+                  <p className="text-sm font-bold text-brand-plum dark:text-brand-text">Possible mood: {aiResult.mood}</p>
+                  <p className="text-sm text-brand-plum dark:text-brand-text">Possible topics: {aiResult.tags.join(', ') || 'none yet'}</p>
+                  <p className="text-sm leading-relaxed text-brand-text-muted">{aiResult.reflection}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button type="button" onClick={() => applyAiMood(aiResult.mood)} className="rounded-full bg-brand-pink/10 px-3 py-1 text-xs font-bold text-brand-pink">
                       Use mood: {aiResult.mood}
@@ -2665,28 +2593,22 @@ export default function EntryEditorScreen({
       <header className="flex justify-between items-center bg-brand-bg sticky top-0 py-3 z-30 border-b border-brand-rose-light/40">
         <button 
           onClick={handleRequestBack}
-          aria-label="Close editor"
+          aria-label="Back from editor"
           className="p-2 text-brand-plum hover:bg-brand-blush-light rounded-full transition-all active:scale-90"
         >
-          <X className="w-5 h-5" />
+          <ArrowLeft className="w-5 h-5" />
         </button>
         <div className="flex items-center gap-3">
-          <button 
-            onClick={handleRequestDiscard}
-            className="px-4 py-2 font-bold text-xs text-brand-sage hover:text-brand-plum transition-colors"
-          >
-            Discard
-          </button>
+          {saveStatusUI}
           <button 
             onClick={handleSave}
             disabled={isSaving}
             className="bg-brand-sage hover:bg-brand-sage-dark text-white px-5 py-2 rounded-full text-xs font-bold transition-all active:scale-95 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSaving ? 'Saving...' : 'Save Entry'}
+            {isSaving ? 'Saving...' : 'Done'}
           </button>
         </div>
       </header>
-      <div className="-mt-3 flex justify-end px-2">{saveStatusUI}</div>
 
       {/* Unified Writing Canvas */}
       <div className="bg-brand-card-bg p-4 md:p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3 flex-grow">
@@ -2705,7 +2627,7 @@ export default function EntryEditorScreen({
           <>
         {showDiarySelector && diaries.length > 0 && (
           <div className="flex flex-col gap-1.5 pb-3 border-b border-brand-border/20">
-            <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest pl-0.5 select-none">
+            <label className="text-xs font-extrabold text-brand-pink uppercase tracking-widest pl-0.5 select-none">
               Choose Destination Journal
             </label>
             <div className="relative">
@@ -2768,7 +2690,7 @@ export default function EntryEditorScreen({
           <span className="text-brand-border/60">•</span>
 
           {/* Word Count */}
-          <div className="text-[11px] font-semibold text-brand-sage/80 bg-brand-rose-light/40 dark:bg-brand-rose-light/10 px-2 py-0.5 rounded-md border border-brand-border/20">
+          <div className="text-xs font-semibold text-brand-sage/80 bg-brand-rose-light/40 dark:bg-brand-rose-light/10 px-2 py-0.5 rounded-md border border-brand-border/20">
             {liveWordCount} words
           </div>
         </div>
@@ -2809,7 +2731,7 @@ export default function EntryEditorScreen({
             </select>
             <button
               type="button"
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-brand-border bg-white dark:bg-brand-card-bg text-brand-plum text-[11px] font-semibold hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-all shadow-sm"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-brand-border bg-white dark:bg-brand-card-bg text-brand-plum text-xs font-semibold hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-all shadow-sm"
             >
               <span>{mood.emoji}</span>
               <span>Feeling {mood.name}</span>
@@ -2824,7 +2746,7 @@ export default function EntryEditorScreen({
             {selectedTags.map(tag => (
               <span 
                 key={tag}
-                className="text-[10px] font-semibold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded-full border border-brand-pink/15 flex items-center gap-1"
+                className="text-xs font-semibold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded-full border border-brand-pink/15 flex items-center gap-1"
               >
                 #{tag}
                 <button 
@@ -2840,7 +2762,7 @@ export default function EntryEditorScreen({
             <button
               type="button"
               onClick={() => setShowTagPicker(true)}
-              className="flex items-center gap-1 text-[10px] font-bold text-brand-sage hover:text-brand-pink px-2 py-0.5 rounded-full border border-dashed border-brand-border/60 bg-transparent hover:border-brand-pink/40 transition-all cursor-pointer"
+              className="flex items-center gap-1 text-xs font-bold text-brand-sage hover:text-brand-pink px-2 py-0.5 rounded-full border border-dashed border-brand-border/60 bg-transparent hover:border-brand-pink/40 transition-all cursor-pointer"
             >
               <Plus className="w-2.5 h-2.5 text-brand-pink" />
               <span>Tag</span>
@@ -2858,7 +2780,7 @@ export default function EntryEditorScreen({
               <button
                 type="button"
                 onClick={() => setFontFamily(prev => prev === 'serif' ? 'sans' : prev === 'sans' ? 'mono' : 'serif')}
-                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
+                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
                 title="Change Writing Font style"
               >
                 <Type className="w-3 h-3 text-brand-pink" />
@@ -2870,7 +2792,7 @@ export default function EntryEditorScreen({
               <button
                 type="button"
                 onClick={() => toggleRecording('voice-dictation')}
-                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
+                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
                 title="Record Voice Note"
               >
                 <Mic className="w-3 h-3 text-brand-pink" />
@@ -2880,7 +2802,7 @@ export default function EntryEditorScreen({
               <button
                 type="button"
                 onClick={() => toggleRecording('speech-to-text')}
-                className={`px-2 py-1 rounded-lg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 border border-brand-border/40 active:scale-95 ${
+                className={`px-2 py-1 rounded-lg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1 border border-brand-border/40 active:scale-95 ${
                   showRecordingOverlay && recordingOverlayMode === 'speech-to-text'
                     ? 'bg-red-100 text-red-500'
                     : 'bg-brand-bg/40 text-brand-plum'
@@ -2898,7 +2820,7 @@ export default function EntryEditorScreen({
                   setIsDockMinimized(true);
                   onFocusModeChange?.(true);
                 }}
-                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-[11px] font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
+                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
                 title="Distraction-free Writing Mode"
               >
                 <Maximize2 className="w-3 h-3 text-brand-pink animate-pulse" />
@@ -2911,7 +2833,7 @@ export default function EntryEditorScreen({
             {/* List of blocks in edit mode for mobile */}
             {blocks.length > 0 && (
               <div className="flex flex-col gap-5 mb-4">
-                <span className="text-[10px] font-extrabold text-brand-pink uppercase tracking-wider pl-1 border-b border-brand-pink/10 pb-1.5">
+                <span className="text-xs font-extrabold text-brand-pink uppercase tracking-wider pl-1 border-b border-brand-pink/10 pb-1.5">
                   Saved Moments ({blocks.length})
                 </span>
                 <div className="flex flex-col gap-5 animate-fade-in">
@@ -2927,7 +2849,7 @@ export default function EntryEditorScreen({
                         
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2 overflow-hidden">
-                            <span className="font-mono text-[10px] font-bold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded flex items-center gap-1 border border-brand-pink/10 shadow-sm">
+                            <span className="font-mono text-xs font-bold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded flex items-center gap-1 border border-brand-pink/10 shadow-sm">
                               <Clock className="w-3.5 h-3.5" />
                               {formatTime12(b.time)}
                             </span>
@@ -2940,7 +2862,7 @@ export default function EntryEditorScreen({
                                 updated[index].time = e.target.value;
                                 setBlocks(updated);
                               }}
-                              className="text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0 transition-colors w-20 cursor-pointer"
+                              className="text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0 transition-colors w-20 cursor-pointer"
                             />
                           </div>
                           <div className="flex items-center gap-1">
@@ -3015,7 +2937,7 @@ export default function EntryEditorScreen({
               <div className="flex items-center justify-between bg-brand-pink/5 px-2.5 py-1 rounded-xl border border-brand-pink/15">
                 <div className="flex items-center gap-1.5 select-none overflow-hidden w-full">
                   <Clock className="w-3.5 h-3.5 text-brand-pink flex-shrink-0" />
-                  <span className="text-[10px] font-bold text-brand-pink uppercase tracking-wider truncate">
+                  <span className="text-xs font-bold text-brand-pink uppercase tracking-wider truncate">
                     Drafting Moment at {formatTime12(currentTimeText)}
                   </span>
                   <div className="ml-auto flex items-center">
@@ -3024,7 +2946,7 @@ export default function EntryEditorScreen({
                       aria-label="New moment time"
                       value={currentTimeText}
                       onChange={(e) => setCurrentTimeText(e.target.value)}
-                      className="ml-1 text-[10px] font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
+                      className="ml-1 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
                     />
                   </div>
                 </div>
@@ -3057,7 +2979,7 @@ export default function EntryEditorScreen({
         {/* Thumbnail attachments list */}
         {photoUris.length > 0 && (
           <div className="flex flex-col gap-1.5 border-t border-brand-border/40 pt-3 mt-2">
-            <p className="text-[10px] font-bold text-brand-sage uppercase tracking-widest">
+            <p className="text-xs font-bold text-brand-sage uppercase tracking-widest">
               Attached Photos
             </p>
             <div className="flex overflow-x-auto gap-3 py-1">

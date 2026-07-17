@@ -16,6 +16,7 @@ import {
 } from './components/AppShellPrimitives';
 
 import { AppSettings, Diary, Entry, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
+import type { NoteConversionRequest } from './components/NotesScreen';
 import type { RepositoryChange, SyncStatusSummary } from './repositories';
 import { addNativeAppStateListener, addNativeBackListener, addNativeUrlOpenListener, exitNativeApp, getNativeLaunchUrl, syncNativeStatusBar } from './mobile/capacitorBootstrap';
 import { DearDiaryDeepLinkTarget, parseDearDiaryDeepLink } from './mobile/deepLinks';
@@ -852,22 +853,25 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   useEffect(() => addNativeBackListener(handleBackNavigation), [handleBackNavigation]);
 
   // Convert quick note into formal diary entry helper
-  const handleConvertToDiaryEntry = async (noteTitle: string, noteBody: string, tags: string[]) => {
-    // Determine target diary (default to first diary)
-    const targetDiary = diaries[0];
+  const handleConvertToDiaryEntry = async (request: NoteConversionRequest) => {
+    const targetDiary = diaries.find(diary => diary.id === request.journalId);
     if (!targetDiary) return;
 
     await measureAsync('app.quickNote.convertToEntry', async () => {
       await diaryRepository.createEntry({
         diaryId: targetDiary.id,
-        date: new Date().toISOString().split('T')[0],
-        title: noteTitle,
-        body: noteBody,
+        date: request.date,
+        title: request.title,
+        body: request.body,
         moodName: 'Reflective',
       moodEmoji: '💭',
-        tags: tags,
+        tags: request.tags,
         photoUris: []
       });
+
+      if (request.disposition === 'delete') {
+        await diaryRepository.deleteNote(request.noteId);
+      }
     });
 
     showToast(`Saved to this device inside "${targetDiary.name}".`, 'success');
@@ -1121,6 +1125,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         return (
           <NotesScreen 
             settings={settings}
+            diaries={diaries}
             layout={layout}
             onConvertToDiaryEntry={handleConvertToDiaryEntry}
             initialNoteId={selectedNoteId}

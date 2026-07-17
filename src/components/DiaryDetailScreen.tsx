@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   ArrowLeft, Edit, Download, Settings, ChevronLeft, ChevronRight, 
@@ -54,7 +54,7 @@ export default function DiaryDetailScreen({
   onEditEntry,
   onNewEntry,
   onOpenSettings,
-  onRefreshEntries,
+  onRefreshEntries: _onRefreshEntries,
   archiveMonths = [],
   onHydrateArchiveMonth,
 }: DiaryDetailScreenProps) {
@@ -137,8 +137,6 @@ export default function DiaryDetailScreen({
   }, [diary.id, loadVisibleCalendarMonth]);
 
   // Swipe Gestures refs
-  const touchStartX = useRef<number | null>(null);
-  const touchEndX = useRef<number | null>(null);
 
   // Filter entries based on search query
   const filteredEntries = useMemo(() => {
@@ -188,30 +186,6 @@ export default function DiaryDetailScreen({
       const realIndex = diaryEntries.findIndex(e => e.id === prevEntry.id);
       setCurrentIndex(realIndex);
     }
-  };
-
-  // Touch handlers for page swipe gestures (Point 4)
-  const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartX.current = e.targetTouches[0].clientX;
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    touchEndX.current = e.targetTouches[0].clientX;
-  };
-
-  const handleTouchEnd = () => {
-    if (touchStartX.current === null || touchEndX.current === null) return;
-    const diffX = touchStartX.current - touchEndX.current;
-    const swipeThreshold = 55; // pixels
-    if (diffX > swipeThreshold) {
-      // Swiped left -> show older pages (going forwards in indices)
-      handlePrev();
-    } else if (diffX < -swipeThreshold) {
-      // Swiped right -> show newer pages (going backwards in indices)
-      handleNext();
-    }
-    touchStartX.current = null;
-    touchEndX.current = null;
   };
 
   // Convert "HH:MM" to "HH:MM AM/PM" (Point 5)
@@ -440,7 +414,7 @@ export default function DiaryDetailScreen({
                   <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{richTextHtmlToPlainText(entry.body)}</p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {entry.tags.slice(0, 3).map(tag => (
-                      <span key={tag} className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold text-brand-sage-dark">
+                      <span key={tag} className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-bold text-brand-sage-dark">
                         #{tag}
                       </span>
                     ))}
@@ -839,23 +813,23 @@ export default function DiaryDetailScreen({
                   <div className="flex items-start gap-2">
                     <Download className="mt-0.5 h-4 w-4 shrink-0 text-brand-pink" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-brand-pink">
+                      <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-brand-pink">
                         {visibleArchiveState?.status === 'failed'
                           ? 'Archive restore needs retry'
                           : 'Archive month not on this device'}
                       </p>
-                      <p className="mt-1 text-[11px] font-medium leading-relaxed text-brand-text-muted">
+                      <p className="mt-1 text-xs font-medium leading-relaxed text-brand-text-muted">
                         {visibleArchiveState?.status === 'failed'
                           ? (visibleArchiveState.error || 'This encrypted archive month could not be restored last time.')
                           : 'This month exists in your encrypted archive. Restore it before opening or creating entries here.'}
                       </p>
                       {visibleArchiveRetryStatus && (
-                        <p className="mt-1 text-[11px] font-semibold leading-relaxed text-brand-text-muted">
+                        <p className="mt-1 text-xs font-semibold leading-relaxed text-brand-text-muted">
                           {visibleArchiveRetryStatus}
                         </p>
                       )}
                       {archiveHydrationError && (
-                        <p className="mt-1 text-[11px] font-bold text-red-500">{archiveHydrationError}</p>
+                        <p className="mt-1 text-xs font-bold text-red-500">{archiveHydrationError}</p>
                       )}
                     </div>
                   </div>
@@ -874,7 +848,7 @@ export default function DiaryDetailScreen({
                         setHydratingArchiveKey(null);
                       }
                     }}
-                    className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-brand-pink px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-white shadow-sm transition-all hover:bg-brand-pink-dark disabled:cursor-wait disabled:bg-brand-pink/60"
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-brand-pink px-3 py-1.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-sm transition-all hover:bg-brand-pink-dark disabled:cursor-wait disabled:bg-brand-pink/60"
                   >
                     {hydratingArchiveKey === visibleCalendarPartitionKey ? (
                       <RefreshCw className="h-3 w-3 animate-spin" />
@@ -889,7 +863,7 @@ export default function DiaryDetailScreen({
               )}
               
               {/* Weekdays */}
-              <div className="grid grid-cols-7 text-center text-[10px] font-bold text-brand-sage uppercase tracking-wider">
+              <div className="grid grid-cols-7 text-center text-xs font-bold text-brand-sage uppercase tracking-wider">
                 <span>Su</span>
                 <span>Mo</span>
                 <span>Tu</span>
@@ -909,7 +883,7 @@ export default function DiaryDetailScreen({
                     <button
                       key={idx}
                       onClick={() => handleCalendarDayClick(cell.dateStr)}
-                      className={`relative h-9 rounded-xl flex flex-col items-center justify-center text-xs font-bold transition-all ${
+                      className={`relative h-11 rounded-xl flex flex-col items-center justify-center text-xs font-bold transition-all ${
                         cell.isCurrentMonth 
                           ? isActive
                             ? 'bg-brand-pink text-white scale-105 shadow-md shadow-brand-pink/15'
@@ -975,7 +949,7 @@ export default function DiaryDetailScreen({
           
           {/* Header Pagination & Nav Buttons */}
           <div className="flex flex-col items-center gap-2 bg-white/80 dark:bg-brand-card-bg/85 backdrop-blur-md p-4 rounded-[32px] border border-brand-border/50 shadow-sm">
-            <span className="text-[10px] font-extrabold text-brand-pink uppercase tracking-[0.2em]">
+            <span className="text-xs font-extrabold text-brand-pink uppercase tracking-[0.2em]">
               Page {activeEntryIndex + 1} of {filteredEntries.length} {searchQuery ? '(Filtered)' : ''}
             </span>
             
@@ -1051,60 +1025,18 @@ export default function DiaryDetailScreen({
               ))}
             </div>
 
-            {/* Timeline View Toggle (Bifurcation toggle on active journal entry level) */}
-            <div className="flex items-center gap-2 mt-1 select-none">
-              <span className="text-[10px] font-extrabold text-brand-sage uppercase tracking-wider">
-                {activeEntry.isTimelineBifurcated ? 'Timeline view (Hourly)' : 'Standard day view'}
-              </span>
-              <button
-                type="button"
-                onClick={async () => {
-                  const nextState = !activeEntry.isTimelineBifurcated;
-                  const updatedEntry: Entry = {
-                    ...activeEntry,
-                    isTimelineBifurcated: nextState,
-                    // If toggling on and blocks are empty, initialize blocks
-                    blocks: nextState && (!activeEntry.blocks || activeEntry.blocks.length === 0)
-                      ? [{ id: `block-${Date.now()}`, time: activeEntry.time || new Date().toTimeString().split(' ')[0].substring(0, 5), body: activeEntry.body || '' }]
-                      : activeEntry.blocks
-                  };
-                  await diaryRepository.updateEntry(updatedEntry);
-                  await loadDiaryEntries();
-                  await loadVisibleCalendarMonth();
-                  await onRefreshEntries?.();
-                }}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-                  activeEntry.isTimelineBifurcated ? 'bg-brand-pink' : 'bg-brand-sage-light'
-                }`}
-                title="Toggle between single daily text or hourly timeline blocks"
-              >
-                <span
-                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                    activeEntry.isTimelineBifurcated ? 'translate-x-4.5' : 'translate-x-1'
-                  }`}
-                />
-              </button>
-            </div>
+            <p className="text-xs font-bold text-brand-text-muted">
+              {activeEntry.isTimelineBifurcated ? 'Timeline entry' : 'Journal entry'} · Change structure in Edit Entry
+            </p>
           </div>
 
           {/* Page body with swipe gestures and realistic 3D folding curves */}
           <div 
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
-            className="relative min-h-[300px] bg-white dark:bg-brand-card-bg p-5 sm:p-7 rounded-[32px] border border-brand-border/60 dark:border-brand-border/10 shadow-xl journal-shadow overflow-hidden cursor-ew-resize" 
+            className="relative min-h-[300px] bg-white dark:bg-brand-card-bg p-5 sm:p-7 rounded-[32px] border border-brand-border/60 dark:border-brand-border/10 shadow-xl journal-shadow overflow-hidden" 
             style={{ perspective: '2000px' }}
           >
             {/* Elegant physical book spine crease shadow */}
             <div className="absolute inset-y-0 left-0 w-full pointer-events-none journal-crease z-10" />
-
-            {/* Visual swipe hint (only on first entry to guide touch) */}
-            {activeEntryIndex === 0 && (
-              <div className="absolute right-4 top-4 text-[9px] font-extrabold text-brand-sage/40 uppercase tracking-widest pointer-events-none select-none flex items-center gap-1">
-                <span>Swipe left/right to turn pages</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            )}
 
             <AnimatePresence custom={slideDirection} mode="wait">
               <motion.article 
@@ -1134,7 +1066,7 @@ export default function DiaryDetailScreen({
                         <div className="absolute -left-[4.5px] top-2.5 w-2 h-2 rounded-full bg-brand-pink" />
                         
                         <div className="flex items-center gap-1.5 select-none">
-                          <span className="font-mono text-[10px] font-extrabold text-brand-pink uppercase tracking-widest bg-brand-pink/5 px-2.5 py-0.5 rounded-full border border-brand-pink/10 shadow-sm flex items-center gap-1">
+                          <span className="font-mono text-xs font-extrabold text-brand-pink uppercase tracking-widest bg-brand-pink/5 px-2.5 py-0.5 rounded-full border border-brand-pink/10 shadow-sm flex items-center gap-1">
                             <Clock className="w-2.5 h-2.5" />
                             {formatTime12(block.time)}
                           </span>
@@ -1166,7 +1098,7 @@ export default function DiaryDetailScreen({
                       <div className="mt-6 pt-6 border-t border-brand-border/10 flex flex-col gap-4">
                         <div className="flex items-center gap-2">
                           <span className="w-1.5 h-1.5 rounded-full bg-brand-pink" />
-                          <h4 className="text-[10px] font-extrabold text-brand-pink uppercase tracking-[0.2em]">
+                          <h4 className="text-xs font-extrabold text-brand-pink uppercase tracking-[0.2em]">
                             Voice Sanctuary ({allAudioUris.length})
                           </h4>
                         </div>
@@ -1190,7 +1122,7 @@ export default function DiaryDetailScreen({
             <section className="mt-6 flex flex-col gap-3">
               <div className="flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-brand-pink" />
-                <h3 className="text-[10px] font-extrabold text-brand-pink uppercase tracking-[0.25em]">
+                <h3 className="text-xs font-extrabold text-brand-pink uppercase tracking-[0.25em]">
                   Scrapbook Memories ({activeEntry.photoUris.length})
                 </h3>
               </div>
@@ -1233,6 +1165,12 @@ export default function DiaryDetailScreen({
               Edit this entry
             </motion.button>
           </div>
+
+          <nav aria-label="Entry navigation" className="sticky bottom-3 z-30 mx-auto grid w-full max-w-sm grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg/95 p-2 shadow-lg backdrop-blur-xl">
+            <button type="button" onClick={handlePrev} disabled={activeEntryIndex === filteredEntries.length - 1} className="min-h-11 rounded-xl text-sm font-bold text-brand-sage disabled:opacity-35">Older</button>
+            <button type="button" onClick={() => setShowTOC(true)} className="min-h-11 rounded-xl border border-brand-border px-3 text-sm font-bold text-brand-plum dark:text-brand-text" aria-label={`Open entry navigator, entry ${activeEntryIndex + 1} of ${filteredEntries.length}`}>{activeEntryIndex + 1} of {filteredEntries.length}</button>
+            <button type="button" onClick={handleNext} disabled={activeEntryIndex === 0} className="min-h-11 rounded-xl text-sm font-bold text-brand-sage disabled:opacity-35">Newer</button>
+          </nav>
         </div>
       )}
 
@@ -1240,19 +1178,19 @@ export default function DiaryDetailScreen({
       <AnimatePresence>
         {showTOC && (
           <OverlayPortal>
-            <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-sm" onClick={() => setShowTOC(false)}>
+            <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-3 backdrop-blur-sm md:justify-end md:p-0" onClick={() => setShowTOC(false)}>
             <motion.div 
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
+              initial={{ y: 48, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 48, opacity: 0 }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="w-full max-w-sm h-full bg-brand-bg dark:bg-brand-card-bg shadow-2xl p-6 overflow-y-auto flex flex-col gap-4"
+              className="mobile-overlay-safe flex h-[85dvh] w-full max-w-xl flex-col gap-4 overflow-y-auto rounded-t-3xl bg-brand-bg p-6 shadow-2xl dark:bg-brand-card-bg md:h-full md:max-w-sm md:rounded-none"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex justify-between items-center border-b border-brand-border pb-3">
                 <div className="flex items-center gap-2">
                   <List className="w-5 h-5 text-brand-pink" />
-                  <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Table of Contents</h3>
+                  <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Entry navigator</h3>
                 </div>
                 <button 
                   onClick={() => setShowTOC(false)}
@@ -1269,7 +1207,7 @@ export default function DiaryDetailScreen({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Filter table of contents..."
+                  placeholder="Search entries..."
                   className="w-full bg-white dark:bg-brand-bg/50 border border-brand-border/60 pl-8 pr-4 py-2 rounded-xl text-xs text-brand-plum"
                 />
               </div>
@@ -1293,13 +1231,13 @@ export default function DiaryDetailScreen({
                       }`}
                     >
                       <div className="flex justify-between items-center w-full">
-                        <span className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">{entry.date}</span>
+                        <span className="text-xs font-extrabold text-brand-pink uppercase tracking-widest">{entry.date}</span>
                         <span className="text-xs">{entry.moodEmoji}</span>
                       </div>
                       <h4 className="font-serif-diary font-bold text-sm text-brand-plum line-clamp-1 leading-snug">
                         {entry.title || 'Untitled reflection'}
                       </h4>
-                      <p className="text-[10px] text-brand-sage truncate leading-none">
+                      <p className="text-xs text-brand-sage truncate leading-none">
                         {entry.tags.map(t => `#${t}`).join(' ') || 'No tags'} • {entry.wordCount} words
                       </p>
                     </button>
