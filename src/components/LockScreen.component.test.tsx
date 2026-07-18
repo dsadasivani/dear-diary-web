@@ -212,25 +212,25 @@ describe('LockScreen first-run sync setup', () => {
     expect(screen.getByRole('button', { name: /create encrypted account/i })).toBeDisabled();
   }, 15_000);
 
-  it('uses the saved ambient lock preference and lets returning users disable it', async () => {
+  it('always shows the ambient clock before PIN entry for returning users', async () => {
     const user = userEvent.setup();
-    const onSettingsChange = vi.fn();
     render(
       <LockScreen
-        initialSettings={{ ...initialSettings, showAmbientLockScreen: true }}
+        initialSettings={{ ...initialSettings, showAmbientLockScreen: false }}
         initialSecurity={savedSecurity}
         onSecurityChange={vi.fn()}
-        onSettingsChange={onSettingsChange}
         onUnlock={vi.fn()}
       />,
     );
 
+    expect(screen.getByRole('button', { name: /tap to unlock/i })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
-    const ambientPreference = await screen.findByRole('checkbox', { name: /show clock before pin/i });
-    expect(ambientPreference).toBeChecked();
-    await user.click(ambientPreference);
-
-    expect(onSettingsChange).toHaveBeenCalledWith(expect.objectContaining({ showAmbientLockScreen: false }));
+    expect(screen.queryByRole('checkbox', { name: /show clock before pin/i })).not.toBeInTheDocument();
+    expect(await screen.findByTitle(/back to clock/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reveal pin digits/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /erase last pin digit/i })).toBeDisabled();
+    expect(screen.queryByText(/^reveal$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^erase$/i)).not.toBeInTheDocument();
   });
 
   it('unlocks a paired web companion with the transferred mobile PIN only', async () => {
@@ -255,6 +255,8 @@ describe('LockScreen first-run sync setup', () => {
       />,
     );
 
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    await screen.findByRole('button', { name: /^1$/ });
     await clickPin(user, '1234');
     await user.click(screen.getByRole('button', { name: /unlock diary/i }));
 

@@ -8,9 +8,10 @@ interface RichTextEditorProps {
   placeholder?: string;
   className?: string;
   testId?: string;
+  autoFocus?: boolean;
 }
 
-export default function RichTextEditor({ html, onChange, onFocus, placeholder, className, testId }: RichTextEditorProps) {
+export default function RichTextEditor({ html, onChange, onFocus, placeholder, className, testId, autoFocus = false }: RichTextEditorProps) {
   const contentEditableRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -19,6 +20,12 @@ export default function RichTextEditor({ html, onChange, onFocus, placeholder, c
       contentEditableRef.current.innerHTML = sanitized;
     }
   }, [html]);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    const frame = window.requestAnimationFrame(() => contentEditableRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [autoFocus]);
 
   const handleInput = (e: React.FormEvent<HTMLDivElement>) => {
     onChange(sanitizeRichTextHtml(e.currentTarget.innerHTML));

@@ -155,18 +155,24 @@ test('local app persists IndexedDB state, supports keyboard navigation, shows of
   await expect(page.getByText('E2E Private Keyword')).toHaveCount(0);
 });
 
-test('local app creates, edits, and deletes a quick note through the UI', async ({ page }) => {
+test('local app creates, edits, and deletes a quick note through the UI', async ({ page }, testInfo) => {
   await setupUnlockedLocalApp(page);
   await page.getByTestId('nav-notes').click();
   const newNoteButton = page.getByTestId('new-note-button');
   await expect(newNoteButton).toBeVisible();
   await newNoteButton.click();
+  if (testInfo.project.name.includes('mobile')) {
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+  }
 
   const noteTitle = 'E2E UI note created body';
   const updatedTitle = 'E2E UI note updated';
   await fillEditor(page.getByTestId('quick-note-editor').first(), noteTitle);
   await page.getByRole('button', { name: /save note/i }).click();
   await expect(page.getByText(noteTitle)).toBeVisible();
+  if (testInfo.project.name.includes('mobile')) {
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+  }
 
   await openNoteForEditing(page, noteTitle);
   await page.getByTestId('note-title-input').fill(updatedTitle);
@@ -181,16 +187,22 @@ test('local app creates, edits, and deletes a quick note through the UI', async 
   await expect(page.getByText(updatedTitle)).toHaveCount(0);
 });
 
-test('local app creates a journal without requiring appearance customization', async ({ page }) => {
+test('local app creates a journal without requiring appearance customization', async ({ page }, testInfo) => {
   await setupUnlockedLocalApp(page);
   await page.getByTestId('nav-diaries').click();
   await page.getByRole('button', { name: 'New Journal', exact: true }).click();
+  if (testInfo.project.name.includes('mobile')) {
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+  }
 
   await expect(page.getByRole('button', { name: /Customize appearance \(optional\)/i })).toBeVisible();
   await page.getByPlaceholder('e.g., Evening Reflections').fill('E2E Minimal Journal');
   await page.getByRole('button', { name: 'Create Journal', exact: true }).click();
 
   await expect(page.getByTestId('diary-card').filter({ hasText: 'E2E Minimal Journal' }).first()).toBeVisible();
+  if (testInfo.project.name.includes('mobile')) {
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+  }
 });
 
 test('local app creates, edits, and deletes a diary entry through the UI', async ({ page }) => {
@@ -284,6 +296,9 @@ test('@accessibility authenticated primary destinations have no serious or criti
   for (const destination of destinations) {
     await destination.open();
     await expectCurrentScreenAccessible(destination.name);
+    if (destination.name === 'New Journal') {
+      await page.getByRole('button', { name: 'Back to journals' }).click();
+    }
   }
 
   const settingsBack = page.getByRole('button', { name: 'Back', exact: true });

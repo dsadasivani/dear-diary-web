@@ -10,7 +10,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   remindersEnabled: false,
   reminderTime: '08:00 PM',
   theme: 'light',
-  showAmbientLockScreen: false,
+  showAmbientLockScreen: true,
 };
 
 export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {

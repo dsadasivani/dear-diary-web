@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, type ChangeEvent } from 'react';
 import { Play, Pause, Volume2, Trash2 } from 'lucide-react';
 import { eventSyncEngine } from '../repositories';
 import { parseSyncMediaReference } from '../sync/syncMedia';
@@ -193,12 +193,9 @@ export default function AudioWaveformPlayer({
     setCurrentTime(0);
   };
 
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleSeek = (e: ChangeEvent<HTMLInputElement>) => {
     if (!audioRef.current || !duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const percentage = clickX / rect.width;
-    const newTime = percentage * duration;
+    const newTime = Number(e.currentTarget.value);
     audioRef.current.currentTime = newTime;
     setCurrentTime(newTime);
   };
@@ -215,7 +212,7 @@ export default function AudioWaveformPlayer({
 
   if (variant === 'minimal') {
     return (
-      <div className="bg-brand-card-bg/80 px-3 py-2 rounded-2xl border border-brand-border/60 flex items-center gap-3 w-full max-w-sm select-none animate-fade-in relative">
+      <div className="flex w-full max-w-sm animate-fade-in select-none items-center gap-3 border-y border-brand-border/50 py-2.5">
         <audio
           ref={audioRef}
           src={playableSrc}
@@ -231,7 +228,8 @@ export default function AudioWaveformPlayer({
           type="button"
           onClick={togglePlay}
           disabled={isResolvingAudio || Boolean(resolveError)}
-          className="w-7 h-7 flex-shrink-0 bg-brand-pink hover:bg-brand-pink-dark text-white rounded-full flex items-center justify-center shadow-sm active:scale-95 transition-transform disabled:opacity-45"
+          aria-label={isPlaying ? `Pause ${title}` : `Play ${title}`}
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-brand-plum text-white transition-transform active:scale-95 disabled:opacity-45 dark:bg-brand-text dark:text-brand-bg"
         >
           {isPlaying ? (
             <Pause className="w-3 h-3 fill-white" />
@@ -240,11 +238,16 @@ export default function AudioWaveformPlayer({
           )}
         </button>
 
-        <div className="flex-grow flex flex-col min-w-0">
-          <span className="text-xs font-bold text-brand-plum truncate tracking-tight">{title}</span>
-          <span className="text-xs font-mono text-brand-sage font-semibold">
+        <div className="flex min-w-0 flex-grow flex-col">
+          <span className="truncate text-xs font-bold tracking-tight text-brand-plum">{title}</span>
+          <span className="font-mono text-[0.6875rem] font-semibold text-brand-text-muted">
             {formatTime(currentTime)} / {formatTime(duration || 0)}
           </span>
+          {(isResolvingAudio || resolveError) && (
+            <span className={`mt-0.5 text-[0.6875rem] ${resolveError ? 'text-brand-rose' : 'text-brand-text-muted'}`}>
+              {resolveError || 'Preparing audio…'}
+            </span>
+          )}
         </div>
 
         {onDelete && (
@@ -254,8 +257,8 @@ export default function AudioWaveformPlayer({
               e.stopPropagation();
               onDelete();
             }}
-            className="flex-shrink-0 p-1.5 text-brand-rose hover:bg-brand-rose/10 rounded-full transition-all"
-            title="Remove Recording"
+            aria-label={`Remove ${title}`}
+            className="flex-shrink-0 rounded-full p-2 text-brand-rose transition-colors hover:bg-brand-rose/10"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -265,10 +268,7 @@ export default function AudioWaveformPlayer({
   }
 
   return (
-    <div className="bg-brand-card-bg/95 p-4 rounded-3xl border border-brand-border/90 journal-shadow flex flex-col gap-3 max-w-md w-full select-none animate-fade-in relative overflow-hidden">
-      {/* Decorative subtle background gradient */}
-      <div className="absolute -right-10 -bottom-10 w-24 h-24 bg-brand-pink/5 rounded-full blur-xl pointer-events-none" />
-      
+    <div className="surface-paper relative flex w-full max-w-md animate-fade-in select-none flex-col gap-4 overflow-hidden rounded-[var(--radius-card)] border border-brand-border/60 px-4 py-3.5">
       <audio
         ref={audioRef}
         src={playableSrc}
@@ -280,12 +280,12 @@ export default function AudioWaveformPlayer({
         className="hidden"
       />
 
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="p-1.5 bg-brand-pink/10 text-brand-pink rounded-lg flex items-center justify-center">
-            <Volume2 className="w-3.5 h-3.5 animate-pulse" />
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-brand-pink/10 text-brand-pink">
+            <Volume2 className="h-3.5 w-3.5" />
           </span>
-          <span className="text-xs font-bold text-brand-plum tracking-tight">{title}</span>
+          <span className="truncate text-xs font-bold tracking-tight text-brand-plum">{title}</span>
         </div>
 
         {onDelete && (
@@ -295,7 +295,8 @@ export default function AudioWaveformPlayer({
               e.stopPropagation();
               onDelete();
             }}
-            className="flex items-center gap-1.5 text-xs font-bold text-brand-rose hover:text-brand-rose-dark bg-brand-rose/5 hover:bg-brand-rose/15 px-2.5 py-1 rounded-full transition-all border border-brand-rose/10"
+            aria-label={`Remove ${title}`}
+            className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-bold text-brand-rose transition-colors hover:bg-brand-rose/10"
           >
             <Trash2 className="w-3 h-3" />
             Remove Recording
@@ -303,13 +304,13 @@ export default function AudioWaveformPlayer({
         )}
       </div>
 
-      <div className="flex items-center gap-4 py-1">
-        {/* Playback trigger button */}
+      <div className="flex items-center gap-4">
         <button
           type="button"
           onClick={togglePlay}
           disabled={isResolvingAudio || Boolean(resolveError)}
-          className="w-10 h-10 flex-shrink-0 bg-brand-pink hover:bg-brand-pink-dark text-white rounded-full flex items-center justify-center shadow-md active:scale-95 transition-transform disabled:opacity-45"
+          aria-label={isPlaying ? `Pause ${title}` : `Play ${title}`}
+          className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-brand-plum text-white shadow-sm transition-transform active:scale-95 disabled:opacity-45 dark:bg-brand-text dark:text-brand-bg"
         >
           {isPlaying ? (
             <Pause className="w-4.5 h-4.5 fill-white" />
@@ -318,12 +319,8 @@ export default function AudioWaveformPlayer({
           )}
         </button>
 
-        {/* Waveform Visualization Grid Container */}
-        <div className="flex-grow flex flex-col gap-1.5">
-          <div 
-            onClick={handleSeek}
-            className="h-9 flex items-center gap-0.5 cursor-pointer select-none"
-          >
+        <div className="flex min-w-0 flex-grow flex-col gap-1.5">
+          <div className="relative flex h-10 items-center gap-0.5">
             {barHeights.map((height, idx) => {
               const isActive = idx <= activeBarIndex;
               return (
@@ -332,21 +329,35 @@ export default function AudioWaveformPlayer({
                   className="flex-grow rounded-full transition-all duration-150"
                   style={{
                     height: `${height}%`,
-                    backgroundColor: isActive ? 'var(--color-brand-pink, #df7d8d)' : 'rgba(223, 125, 141, 0.25)',
-                    transform: isActive ? 'scaleY(1.05)' : 'scaleY(1)'
+                    backgroundColor: isActive ? 'var(--brand-pink)' : 'var(--brand-border)',
                   }}
                 />
               );
             })}
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step="0.01"
+              value={Math.min(currentTime, duration || 0)}
+              onChange={handleSeek}
+              disabled={!duration}
+              aria-label={`Seek through ${title}`}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
+            />
           </div>
 
-          {/* Timestamps */}
-          <div className="flex justify-between items-center text-xs font-mono text-brand-sage font-semibold">
+          <div className="flex items-center justify-between font-mono text-[0.6875rem] font-semibold text-brand-text-muted">
             <span>{formatTime(currentTime)}</span>
             <span>{formatTime(duration || 0)}</span>
           </div>
         </div>
       </div>
+      {(isResolvingAudio || resolveError) && (
+        <p role={resolveError ? 'alert' : 'status'} className={`text-xs ${resolveError ? 'text-brand-rose' : 'text-brand-text-muted'}`}>
+          {resolveError || 'Preparing this voice note…'}
+        </p>
+      )}
     </div>
   );
 }

@@ -15,10 +15,11 @@
 
 ### Progress
 
-- Completed: responsive shell, navigation hierarchy, shared shell primitives, design tokens, Today/Journals/Notes/reader simplification, and terminology alignment.
+- Completed: responsive shell, navigation hierarchy, shared shell and control primitives, semantic tokens, Today/Journals/Notes/reader simplification, and terminology alignment.
 - Completed: seven-step private setup, explicit Ready state, separated recovery and encrypted-account stages, and opt-in ambient lock screen preference.
-- Completed: editor autosave for new and existing entries, visible save status, browser unload protection, protected in-app exit/discard choices, and progressive Entry details disclosure.
-- Next: settings information architecture and dialogs, journal-settings tabs and typed deletion, then Search/Insights refinements and final device validation.
+- Completed: editor autosave for new and existing entries, visible save status, browser unload protection, protected in-app exit/discard choices, progressive Entry details, and desktop photo drag-and-drop.
+- Completed: focused-flow navigation suppression and native-back handling for journal/note creation, resizable and collapsible desktop Notes, responsive journal-settings navigation with typed deletion, Search geometry continuity, and the narrative Insights replacement.
+- Completed: TypeScript, component, storage, server, production-build, browser E2E/accessibility, Android unit, and Android lint validation. Physical-device/provider and production-signing checks remain release activities requiring release hardware and credentials.
 
 1. **Foundation and shell**
    - Add responsive-layout primitives and shared buttons, icon buttons, cards, status/empty states, bottom sheet, create sheet, compact navigation, medium navigation rail, and large sidebar/top bar.

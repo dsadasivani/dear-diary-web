@@ -22,6 +22,8 @@ import { diaryRepository } from '../repositories';
 import { getMoodsForSettings, getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { measureAsync } from '../utils/performance';
+import { triggerImpact, triggerSuccess } from '../mobile/haptics';
+import { BottomSheet } from './ui/BottomSheet';
 
 interface EntryEditorScreenProps {
   diaries: Diary[];
@@ -81,6 +83,7 @@ export default function EntryEditorScreen({
   const [mood, setMood] = useState(availableMoods[0] || { name: 'Joyful', emoji: '😊' });
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [photoUris, setPhotoUris] = useState<string[]>([]);
+  const [isPhotoDragActive, setIsPhotoDragActive] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
   const [audioUri, setAudioUri] = useState<string | undefined>(undefined);
   const [isSaving, setIsSaving] = useState(false);
@@ -91,6 +94,8 @@ export default function EntryEditorScreen({
   const [isDirty, setIsDirty] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [showEntryDetails, setShowEntryDetails] = useState(Boolean(showDiarySelector));
+  const [showAddTools, setShowAddTools] = useState(false);
+  const [showFormattingTools, setShowFormattingTools] = useState(false);
   const baselineFingerprintRef = useRef<string | null>(null);
   const workingEntryIdRef = useRef<string | undefined>(entryId);
   const originalEntryRef = useRef<Entry | null>(null);
@@ -247,6 +252,7 @@ export default function EntryEditorScreen({
   
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [showRecordingOverlay, setShowRecordingOverlay] = useState<boolean>(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [interimText, setInterimText] = useState<string>('');
   const interimTextRef = useRef<string>('');
   const isOverlayActiveRef = useRef<boolean>(false);
@@ -265,6 +271,18 @@ export default function EntryEditorScreen({
   const shouldBeRecordingRef = useRef<boolean>(false);
   const shouldRestartSpeechRef = useRef<boolean>(true);
   const [speechError, setSpeechError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showRecordingOverlay) {
+      setRecordingSeconds(0);
+      return;
+    }
+    if (!isRecording) return;
+    const timer = window.setInterval(() => setRecordingSeconds(seconds => seconds + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [isRecording, showRecordingOverlay]);
+
+  const formattedRecordingTime = `${Math.floor(recordingSeconds / 60)}:${String(recordingSeconds % 60).padStart(2, '0')}`;
 
   // Clean up speech recognition on unmount
   useEffect(() => {
@@ -721,6 +739,7 @@ export default function EntryEditorScreen({
   };
 
   const startRecording = (isResume: boolean = false, mode: 'voice-dictation' | 'speech-to-text' = 'voice-dictation') => {
+    void triggerImpact(isResume ? 'medium' : 'light');
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0) {
       savedSelectionRef.current = selection.getRangeAt(0);
@@ -888,6 +907,7 @@ export default function EntryEditorScreen({
   };
 
   const pauseRecording = async () => {
+    void triggerImpact('medium');
     if (isNativePlatform()) {
       shouldBeRecordingRef.current = false;
       if (isTranscriptionEnabledRef.current) {
@@ -998,6 +1018,7 @@ export default function EntryEditorScreen({
 
 
   const stopRecording = () => {
+    void triggerSuccess();
     if (isNativePlatform()) {
       void finishNativeRecording(false);
       return;
@@ -1278,13 +1299,17 @@ export default function EntryEditorScreen({
 
 
 
-  // Handle local photo file upload
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
+  const attachPhotoFiles = async (files: File[]) => {
+    const selectedFiles = files.filter(file => file.type.startsWith('image/'));
+    if (selectedFiles.length === 0) {
+      onShowToast?.('Drop an image file to attach it to this entry.', 'warning');
+      return;
+    }
+    if (selectedFiles.length !== files.length) {
+      onShowToast?.('Only image files were attached.', 'info');
+    }
 
-    const selectedFiles: File[] = Array.from(files);
-    void (async () => {
+    await (async () => {
       const results: Array<string | null> = new Array(selectedFiles.length).fill(null);
       let nextIndex = 0;
       const worker = async () => {
@@ -1305,7 +1330,22 @@ export default function EntryEditorScreen({
         setPhotoUris(prev => [...prev, ...orderedUris]);
       }
     })();
+  };
+
+  // Handle local photo file upload
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    void attachPhotoFiles(Array.from(files));
     e.target.value = '';
+  };
+
+  const handlePhotoDrop = (event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    setIsPhotoDragActive(false);
+    if (event.dataTransfer.files.length > 0) {
+      void attachPhotoFiles(Array.from(event.dataTransfer.files));
+    }
   };
 
   const removePhoto = (idx: number) => {
@@ -1541,7 +1581,10 @@ export default function EntryEditorScreen({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[100] overflow-y-auto bg-brand-bg/95 dark:bg-brand-plum/95 backdrop-blur-2xl select-none"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="recording-overlay-title"
+          className="fixed inset-0 z-[100] select-none overflow-y-auto bg-brand-bg/94 backdrop-blur-2xl dark:bg-brand-bg/94"
         >
           {/* Top action dismiss button */}
           <div className="absolute top-4 right-4 sm:top-6 sm:right-6">
@@ -1549,19 +1592,19 @@ export default function EntryEditorScreen({
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={cancelRecording}
-              className="p-2.5 sm:p-3 text-brand-pink hover:text-brand-pink-dark bg-white dark:bg-brand-card-bg rounded-full shadow-md border border-brand-border/40"
-              title="Discard recording and exit"
+              aria-label="Discard recording and exit"
+              className="surface-glass-strong rounded-full border border-brand-border/50 p-2.5 text-brand-plum transition-colors hover:text-brand-pink sm:p-3"
             >
               <X className="w-5 h-5 sm:w-6 sm:h-6" />
             </motion.button>
           </div>
           
-          <div className="min-h-screen flex flex-col items-center justify-start md:justify-center w-full max-w-xl mx-auto gap-4 sm:gap-6 md:gap-8 py-16 px-4 sm:px-6">
+          <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center gap-5 px-4 py-20 sm:gap-7 sm:px-6">
             <div className="text-center space-y-1 select-none">
-              <span className="text-xs sm:text-xs font-extrabold text-brand-pink uppercase tracking-[0.25em] bg-brand-pink/10 px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full">
+              <span className="text-xs font-bold uppercase tracking-[0.24em] text-brand-pink">
                 {recordingOverlayMode === 'speech-to-text' ? 'Dictate Text' : 'Audio Note'}
               </span>
-              <h2 className="text-xl sm:text-2xl font-serif-diary font-bold text-brand-plum italic pt-1.5 sm:pt-2">
+              <h2 id="recording-overlay-title" className="pt-2 font-serif-diary text-3xl font-semibold tracking-tight text-brand-plum sm:text-4xl">
                 {recordingOverlayMode === 'speech-to-text' ? 'Speak to Write' : 'Record This Moment'}
               </h2>
               {recordingOverlayMode === 'voice-dictation' && (
@@ -1587,22 +1630,22 @@ export default function EntryEditorScreen({
                   <motion.div 
                     animate={{ scale: [1, 1.8, 1], opacity: [0.3, 0, 0.3] }}
                     transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-                    className="absolute w-24 h-24 sm:w-32 sm:h-32 rounded-full border-2 border-brand-pink/20"
+                    className="absolute h-24 w-24 rounded-full border border-brand-pink/20 sm:h-32 sm:w-32"
                   />
                   <motion.div 
                     animate={{ scale: [1, 2.3, 1], opacity: [0.15, 0, 0.15] }}
                     transition={{ duration: 4, repeat: Infinity, ease: "easeInOut", delay: 1 }}
-                    className="absolute w-24 h-24 sm:w-32 sm:h-32 rounded-full border border-brand-pink/10"
+                    className="absolute h-24 w-24 rounded-full border border-brand-pink/10 sm:h-32 sm:w-32"
                   />
                 </div>
               ) : null}
 
               <motion.div 
                 whileHover={{ scale: 1.02 }}
-                className={`relative z-10 p-5 sm:p-[30px] rounded-full shadow-xl border transition-all duration-500 ${
+                className={`relative z-10 rounded-full border p-5 transition-all duration-300 sm:p-7 ${
                   isRecording 
-                    ? 'bg-brand-pink text-white border-brand-pink/20 shadow-brand-pink/30 scale-105' 
-                    : 'bg-white dark:bg-brand-card-bg text-brand-pink border-brand-border/80 shadow-md'
+                    ? 'scale-105 border-brand-pink/20 bg-brand-pink text-white shadow-[0_18px_52px_rgba(175,91,111,0.24)]'
+                    : 'surface-paper border-brand-border/80 text-brand-pink'
                 }`}
               >
                 {isRecording ? <Mic className="w-8 h-8 sm:w-12 sm:h-12" /> : <MicOff className="w-8 h-8 sm:w-12 sm:h-12" />}
@@ -1621,12 +1664,15 @@ export default function EntryEditorScreen({
                   ))}
                 </div>
               )}
+              <p className="mt-3 font-mono text-sm font-semibold tabular-nums text-brand-text-muted" aria-label={`${formattedRecordingTime} elapsed`}>
+                {formattedRecordingTime}
+              </p>
             </div>
 
             {/* Status indicators and Connection notices */}
             {(isAudioRecordingOnly || Boolean(speechError)) && (
               <div className="flex flex-col items-center gap-2 max-w-md w-full">
-                <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 bg-white/70 dark:bg-brand-card-bg/85 px-3 py-1.5 sm:px-4 sm:py-2 rounded-2xl border border-brand-border/60 text-xs sm:text-xs font-semibold">
+                <div className="flex flex-wrap items-center justify-center gap-2 border-y border-brand-border/60 px-3 py-2 text-xs font-semibold sm:gap-4 sm:px-4">
                   {isAudioRecordingOnly && <span className="flex items-center gap-1.5 text-brand-plum">
                     <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isTranscriptionEnabled ? 'bg-brand-text-muted/40' : 'bg-emerald-500 animate-pulse'}`} />
                     <span>Raw Audio: {isTranscriptionEnabled ? 'Off' : 'Active'} 🎙️</span>
@@ -1671,13 +1717,13 @@ export default function EntryEditorScreen({
 
             {/* Live Transcription Box */}
             <div className="text-center w-full space-y-2 sm:space-y-4">
-              <h3 className="text-xs sm:text-xs font-bold text-brand-pink uppercase tracking-widest">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-brand-pink" aria-live="polite">
                 {isRecording 
                   ? (isTranscriptionEnabled ? 'Listening and transcribing...' : 'Audio recording active') 
                   : 'Recording is paused'}
               </h3>
               
-              <div className="min-h-[100px] sm:min-h-[140px] w-full p-4 sm:p-6 bg-white/70 dark:bg-brand-card-bg/75 backdrop-blur-md rounded-2xl sm:rounded-3xl border border-brand-border/60 text-brand-plum text-sm sm:text-base md:text-lg leading-[1.6] sm:leading-[1.7] shadow-inner max-h-36 sm:max-h-48 overflow-y-auto no-scrollbar text-left font-serif-diary italic flex flex-wrap content-start">
+              <div className="surface-paper no-scrollbar flex max-h-52 min-h-[116px] w-full flex-wrap content-start overflow-y-auto rounded-[var(--radius-card)] border border-brand-border/60 p-5 text-left font-serif-diary text-base italic leading-[1.7] text-brand-plum sm:min-h-[156px] sm:p-7 sm:text-lg">
                 <div className="w-full flex flex-wrap">
                   {renderInkBleedingText(recordedSessionText, false)}
                   {renderInkBleedingText(interimText, true)}
@@ -1691,13 +1737,13 @@ export default function EntryEditorScreen({
             </div>
 
             {/* Audio Command Controls */}
-            <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4.5">
+            <div className="surface-glass-strong flex flex-wrap items-center justify-center gap-2 rounded-full border border-brand-border/60 p-2 sm:gap-3">
               <motion.button
                 type="button"
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 onClick={cancelRecording}
-                className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-red-50 hover:bg-red-100 text-red-600 font-bold rounded-full shadow-md border border-red-200 text-xs sm:text-xs uppercase tracking-wider"
+                className="flex items-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-bold text-brand-rose transition-colors hover:bg-brand-rose/10 sm:gap-2 sm:px-5"
               >
                 <X className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500" /> 
                 <span>Cancel</span>
@@ -1709,7 +1755,7 @@ export default function EntryEditorScreen({
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={pauseRecording}
-                  className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-white dark:bg-brand-card-bg text-brand-plum font-bold rounded-full shadow-md hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-colors border border-brand-border text-xs sm:text-xs uppercase tracking-wider"
+                  className="flex items-center gap-1.5 rounded-full border border-brand-border px-4 py-2.5 text-xs font-bold text-brand-plum transition-colors hover:bg-brand-blush-light sm:gap-2 sm:px-5"
                 >
                   <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-brand-pink" /> 
                   <span>Pause</span>
@@ -1720,7 +1766,7 @@ export default function EntryEditorScreen({
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={() => startRecording(true, recordingOverlayMode)}
-                  className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-brand-pink text-white font-bold rounded-full shadow-lg hover:bg-brand-pink-dark transition-all shadow-brand-pink/15 text-xs sm:text-xs uppercase tracking-wider"
+                  className="flex items-center gap-1.5 rounded-full bg-brand-pink px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-brand-pink-dark sm:gap-2 sm:px-5"
                 >
                   <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> 
                   <span>Resume</span>
@@ -1732,7 +1778,7 @@ export default function EntryEditorScreen({
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 onClick={stopRecording}
-                className="flex items-center gap-1.5 sm:gap-2 px-4 py-2.5 sm:px-6 sm:py-3 bg-brand-plum dark:bg-white text-white dark:text-brand-plum font-bold rounded-full shadow-md hover:opacity-90 transition-colors text-xs sm:text-xs uppercase tracking-wider"
+                className="flex items-center gap-1.5 rounded-full bg-brand-plum px-5 py-2.5 text-xs font-bold text-white shadow-sm transition-opacity hover:opacity-90 sm:gap-2 sm:px-6 dark:bg-brand-text dark:text-brand-bg"
               >
                 <Square className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-brand-pink" /> 
                 <span>Finish</span>
@@ -1745,7 +1791,7 @@ export default function EntryEditorScreen({
   );
 
   const localReflectionUI = (
-    <section className="rounded-3xl border border-brand-border bg-brand-card-bg p-4 flex flex-col gap-3">
+    <section className="flex flex-col gap-3 border-t border-brand-border py-5">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-brand-pink" />
@@ -1765,7 +1811,7 @@ export default function EntryEditorScreen({
       </div>
       {aiError && <p className="text-xs text-brand-pink-dark">{aiError}</p>}
       {aiResult && (
-        <div className="rounded-2xl bg-brand-bg/60 border border-brand-border/40 p-3 flex flex-col gap-2">
+        <div className="flex flex-col gap-2 border-l-2 border-brand-sage/30 pl-3">
           <p className="text-xs font-bold text-brand-plum">Possible mood: {aiResult.mood}</p>
           <p className="text-xs text-brand-plum leading-relaxed">Possible topics: {aiResult.tags.join(', ') || 'none yet'}</p>
           <p className="text-xs text-brand-text-muted leading-relaxed">{aiResult.reflection}</p>
@@ -2166,7 +2212,7 @@ export default function EntryEditorScreen({
 
   if (layout === 'desktop') {
     return (
-      <div className="space-y-6">
+      <div className="space-y-7">
         <header className="flex flex-wrap items-center justify-between gap-5 xl:gap-6">
           <div className="min-w-0">
             <button
@@ -2194,9 +2240,36 @@ export default function EntryEditorScreen({
           </div>
         </header>
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_340px] 2xl:gap-8">
-          <main className="min-w-0 overflow-hidden rounded-[28px] border border-brand-border bg-white/86 shadow-[0_18px_60px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/82">
-            <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-4 border-b border-brand-border bg-white/92 px-5 py-4 backdrop-blur-xl dark:bg-brand-card-bg/90 xl:px-7">
+        <div className="grid grid-cols-1 gap-7 xl:grid-cols-[minmax(0,1fr)_304px] 2xl:grid-cols-[minmax(0,1fr)_324px] 2xl:gap-10">
+          <main
+            className={`surface-paper relative min-w-0 overflow-hidden rounded-[var(--radius-sheet)] border-x transition-[border-color,box-shadow] duration-200 ${isPhotoDragActive ? 'border-accent shadow-[0_0_0_4px_var(--accent-primary-soft)]' : 'border-brand-border/60'}`}
+            onDragEnter={event => {
+              if (event.dataTransfer.types.includes('Files')) {
+                event.preventDefault();
+                setIsPhotoDragActive(true);
+              }
+            }}
+            onDragOver={event => {
+              if (event.dataTransfer.types.includes('Files')) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'copy';
+              }
+            }}
+            onDragLeave={event => {
+              const nextTarget = event.relatedTarget;
+              if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) setIsPhotoDragActive(false);
+            }}
+            onDrop={handlePhotoDrop}
+          >
+            {isPhotoDragActive && (
+              <div className="pointer-events-none absolute inset-3 z-40 flex items-center justify-center rounded-[var(--radius-paper)] border-2 border-dashed border-accent bg-[color-mix(in_srgb,var(--paper)_90%,transparent)] backdrop-blur-sm" role="status" aria-live="polite">
+                <div className="text-center text-accent-strong">
+                  <Camera className="mx-auto h-7 w-7" />
+                  <p className="mt-2 text-sm font-bold">Drop photos onto this page</p>
+                </div>
+              </div>
+            )}
+            <div className="surface-glass-strong sticky top-0 z-20 flex flex-wrap items-center justify-between gap-4 border-b border-brand-border/70 px-5 py-3.5 xl:px-7">
               <div className="flex flex-wrap items-center gap-1.5">
                 {[
                   { key: 'bold', icon: Bold, action: () => execCommand('bold'), label: 'Bold' },
@@ -2262,7 +2335,7 @@ export default function EntryEditorScreen({
               </div>
             </div>
 
-            <section className="mx-auto max-w-4xl px-7 py-8 xl:px-10 xl:py-9 2xl:px-12 2xl:py-10">
+            <section className="mx-auto max-w-3xl px-7 py-9 xl:px-10 xl:py-12 2xl:px-14">
               <div className="mb-6 flex justify-center">
                 <button
                   type="button"
@@ -2275,7 +2348,7 @@ export default function EntryEditorScreen({
                 </button>
               </div>
               {showEntryDetails && (
-                <div className="mb-7 rounded-2xl border border-brand-border/70 bg-brand-bg/35 p-4">
+                <div className="mb-8 border-y border-brand-border/70 py-5">
               {showDiarySelector && diaries.length > 0 && (
                 <label className="mb-7 flex flex-col gap-2">
                   <span className="text-xs font-bold uppercase tracking-[0.18em] text-brand-sage">Destination journal</span>
@@ -2460,8 +2533,8 @@ export default function EntryEditorScreen({
             </section>
           </main>
 
-          <aside className="flex flex-col gap-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-5rem)] xl:overflow-y-auto">
-            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-[0_14px_38px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/70">
+          <aside className="flex flex-col border-l border-brand-border/70 pl-6 xl:sticky xl:top-6 xl:max-h-[calc(100vh-5rem)] xl:overflow-y-auto">
+            <section className="border-b border-brand-border/70 pb-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Scrapbook</h2>
                 <button type="button" onClick={triggerPhotoInput} className="rounded-full border border-brand-border p-2 text-brand-sage hover:bg-brand-blush-light" title="Attach photo">
@@ -2473,10 +2546,13 @@ export default function EntryEditorScreen({
                 <button
                   type="button"
                   onClick={triggerPhotoInput}
-                  className="flex aspect-square flex-col items-center justify-center rounded-xl border border-dashed border-brand-border bg-brand-bg/50 text-xs font-bold uppercase tracking-wider text-brand-text-muted hover:border-brand-sage hover:text-brand-sage"
+                  onDragEnter={event => { event.preventDefault(); setIsPhotoDragActive(true); }}
+                  onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+                  onDrop={handlePhotoDrop}
+                  className="flex aspect-square flex-col items-center justify-center rounded-xl border border-dashed border-brand-border bg-brand-bg/50 text-xs font-bold tracking-wide text-brand-text-muted hover:border-brand-sage hover:text-brand-sage"
                 >
                   <Camera className="mb-2 h-5 w-5" />
-                  Drop photo
+                  Choose or drop photos
                 </button>
                 {photoUris.map((photo, index) => (
                   <div key={`${photo}-${index}`} className="relative aspect-square overflow-hidden rounded-xl border border-brand-border bg-brand-bg">
@@ -2493,27 +2569,27 @@ export default function EntryEditorScreen({
               </div>
             </section>
 
-            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
+            <section className="border-b border-brand-border/70 py-6">
               <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Voice Memo</h2>
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <button
                   type="button"
                   onClick={() => toggleRecording('voice-dictation')}
-                  className="rounded-2xl border border-brand-border bg-brand-bg/60 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-brand-sage-light"
+                  className="rounded-full border border-brand-border px-4 py-3 text-sm font-bold text-brand-sage transition-colors hover:bg-brand-sage-light"
                 >
                   Audio note
                 </button>
                 <button
                   type="button"
                   onClick={() => toggleRecording('speech-to-text')}
-                  className="rounded-2xl border border-brand-border bg-brand-bg/60 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-brand-sage-light"
+                  className="rounded-full border border-brand-border px-4 py-3 text-sm font-bold text-brand-sage transition-colors hover:bg-brand-sage-light"
                 >
                   Dictate text
                 </button>
               </div>
             </section>
 
-            <section className="rounded-[24px] border border-brand-border bg-white/74 p-5 shadow-sm dark:bg-brand-card-bg/70">
+            <section className="border-b border-brand-border/70 py-6">
               <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-sage">Local Reflection</h2>
               <p className="mt-2 text-sm leading-relaxed text-brand-text-muted">Private suggestions are generated on this device from your draft.</p>
               <button
@@ -2544,7 +2620,7 @@ export default function EntryEditorScreen({
               )}
             </section>
 
-            <section className="rounded-[24px] border border-brand-border bg-white/62 p-5 shadow-sm dark:bg-brand-card-bg/55">
+            <section className="pt-6">
               <button
                 type="button"
                 onClick={() => {
@@ -2588,9 +2664,9 @@ export default function EntryEditorScreen({
   }
 
   return (
-    <div className="flex flex-col gap-5 font-sans relative pb-28">
+    <div className="relative flex flex-col gap-5 pb-32 font-sans">
       {/* Top Header */}
-      <header className="flex justify-between items-center bg-brand-bg sticky top-0 py-3 z-30 border-b border-brand-rose-light/40">
+      <header className="surface-glass-strong sticky top-0 z-30 flex items-center justify-between border-b border-brand-border/60 py-3">
         <button 
           onClick={handleRequestBack}
           aria-label="Close editor"
@@ -2611,13 +2687,13 @@ export default function EntryEditorScreen({
       </header>
 
       {/* Unified Writing Canvas */}
-      <div className="bg-brand-card-bg p-4 md:p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3 flex-grow">
+      <main className="surface-paper flex flex-grow flex-col gap-4 rounded-[var(--radius-sheet)] border-x border-brand-border/60 px-4 py-5 md:px-5">
 
         <button
           type="button"
           aria-expanded={showEntryDetails}
           onClick={() => setShowEntryDetails(previous => !previous)}
-          className="flex w-full items-center justify-between rounded-xl border border-brand-border/60 bg-brand-bg/30 px-3.5 py-2.5 text-left text-xs font-bold text-brand-sage"
+          className="flex w-full items-center justify-between border-y border-brand-border/60 px-1 py-2.5 text-left text-xs font-bold text-brand-sage"
         >
           <span>Entry details</span>
           {showEntryDetails ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -2705,7 +2781,7 @@ export default function EntryEditorScreen({
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Title your entry..."
-            className={`w-full bg-transparent p-0 border-none text-base md:text-lg font-bold text-brand-plum placeholder-brand-sage/35 focus:outline-none focus:ring-0 pb-1 border-b border-brand-border/15 focus:border-brand-pink/40 transition-colors ${
+            className={`w-full border-none border-b border-brand-border/25 bg-transparent p-0 pb-2 font-bold text-brand-plum outline-none transition-colors placeholder:text-brand-sage/35 focus:border-brand-pink/40 focus:ring-0 text-2xl md:text-3xl ${
               fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
             }`}
           />
@@ -2774,59 +2850,10 @@ export default function EntryEditorScreen({
         {/* Content Canvas (Timelines, text body inputs) */}
         <div className="flex flex-col gap-2.5 flex-grow mt-1">
           
-          {/* Editor Header controls inline */}
-          <div className="flex justify-between items-center pb-1 text-brand-sage select-none">
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setFontFamily(prev => prev === 'serif' ? 'sans' : prev === 'sans' ? 'mono' : 'serif')}
-                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
-                title="Change Writing Font style"
-              >
-                <Type className="w-3 h-3 text-brand-pink" />
-                <span>Font: <span className="capitalize">{fontFamily}</span></span>
-              </button>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => toggleRecording('voice-dictation')}
-                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
-                title="Record Voice Note"
-              >
-                <Mic className="w-3 h-3 text-brand-pink" />
-                <span>Voice Note</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => toggleRecording('speech-to-text')}
-                className={`px-2 py-1 rounded-lg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1 border border-brand-border/40 active:scale-95 ${
-                  showRecordingOverlay && recordingOverlayMode === 'speech-to-text'
-                    ? 'bg-red-100 text-red-500'
-                    : 'bg-brand-bg/40 text-brand-plum'
-                }`}
-                title="Start Voice to Text"
-              >
-                <Edit className="w-3 h-3 text-brand-pink" />
-                <span>Voice Text</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setIsFocusMode(true);
-                  setIsDockMinimized(true);
-                  onFocusModeChange?.(true);
-                }}
-                className="px-2 py-1 rounded-lg bg-brand-bg/40 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-xs font-bold transition-all flex items-center gap-1 text-brand-plum border border-brand-border/40 active:scale-95"
-                title="Distraction-free Writing Mode"
-              >
-                <Maximize2 className="w-3 h-3 text-brand-pink animate-pulse" />
-                <span>Focus</span>
-              </button>
-            </div>
+          {/* A single disclosure point keeps the default canvas quiet. */}
+          <div className="flex items-center justify-between border-y border-brand-border/50 py-2 text-brand-sage select-none">
+            <button type="button" onClick={() => setFontFamily(prev => prev === 'serif' ? 'sans' : prev === 'sans' ? 'mono' : 'serif')} className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-xs font-bold hover:bg-brand-blush-light" title="Change writing font"><Type className="h-3.5 w-3.5 text-brand-pink" /><span className="capitalize">{fontFamily}</span></button>
+            <button type="button" onClick={() => setShowAddTools(true)} className="inline-flex min-h-11 items-center gap-2 rounded-full bg-brand-sage px-4 text-sm font-bold text-white shadow-sm" aria-haspopup="dialog"><Plus className="h-4 w-4" />Add</button>
           </div>
 
           <div className="flex flex-col gap-5 text-left w-full h-full mt-2">
@@ -2894,7 +2921,7 @@ export default function EntryEditorScreen({
                         </div>
 
                         {!isMinimized && (
-                          <div className="bg-white/45 dark:bg-brand-bg/25 p-3 rounded-xl border border-brand-border/20 flex flex-col gap-3 shadow-inner">
+                            <div className="flex flex-col gap-3 border-t border-brand-border/30 pt-3">
                             <RichTextEditor
                               html={b.body}
                               onChange={(newHtml) => {
@@ -2958,7 +2985,7 @@ export default function EntryEditorScreen({
                 onFocus={() => setActiveBlockId(null)}
                 placeholder="Write a brand-new moment reflection..."
                 testId="entry-body-editor"
-                className={`rich-text-editor w-full text-base leading-relaxed text-brand-plum min-h-[180px] focus:outline-none focus:ring-0 ${
+                className={`rich-text-editor min-h-[260px] w-full text-lg leading-[1.75] text-brand-plum focus:outline-none focus:ring-0 ${
                   fontFamily === 'serif' ? 'font-serif-diary' : fontFamily === 'sans' ? 'font-sans' : 'font-mono'
                 }`}
               />
@@ -2994,6 +3021,7 @@ export default function EntryEditorScreen({
                   <button
                     type="button"
                     onClick={() => removePhoto(idx)}
+                    aria-label={`Remove photo ${idx + 1}`}
                     className="absolute top-1 right-1 p-1 bg-black/60 backdrop-blur-sm text-white rounded-full hover:bg-red-600 transition-colors"
                   >
                     <X className="w-3 h-3" />
@@ -3003,12 +3031,27 @@ export default function EntryEditorScreen({
             </div>
           </div>
         )}
-      </div>
+      </main>
 
+      <BottomSheet
+        open={showAddTools}
+        title="Add to this entry"
+        description="Bring in a moment, change the writing layer, or adjust entry details."
+        onClose={() => setShowAddTools(false)}
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <button type="button" onClick={() => { setShowAddTools(false); triggerPhotoInput(); }} className="flex min-h-20 flex-col items-start justify-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg p-4 text-left text-sm font-bold"><Camera className="h-5 w-5 text-brand-pink" />Photo</button>
+          <button type="button" onClick={() => { setShowAddTools(false); toggleRecording('voice-dictation'); }} className="flex min-h-20 flex-col items-start justify-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg p-4 text-left text-sm font-bold"><Mic className="h-5 w-5 text-brand-pink" />Audio note</button>
+          <button type="button" onClick={() => { setShowAddTools(false); toggleRecording('speech-to-text'); }} className="flex min-h-20 flex-col items-start justify-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg p-4 text-left text-sm font-bold"><Edit className="h-5 w-5 text-brand-pink" />Dictate text</button>
+          <button type="button" onClick={() => { setShowAddTools(false); setShowTagPicker(true); }} className="flex min-h-20 flex-col items-start justify-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg p-4 text-left text-sm font-bold"><Tag className="h-5 w-5 text-brand-pink" />Tags</button>
+          <button type="button" onClick={() => { setShowAddTools(false); setShowEntryDetails(true); }} className="flex min-h-20 flex-col items-start justify-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg p-4 text-left text-sm font-bold"><Calendar className="h-5 w-5 text-brand-pink" />Details & mood</button>
+          <button type="button" onClick={() => { setShowAddTools(false); setShowFormattingTools(true); }} className="flex min-h-20 flex-col items-start justify-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg p-4 text-left text-sm font-bold"><Bold className="h-5 w-5 text-brand-pink" />Formatting</button>
+        </div>
+        <button type="button" onClick={() => { setShowAddTools(false); setIsFocusMode(true); setIsDockMinimized(true); onFocusModeChange?.(true); }} className="mt-3 flex min-h-12 w-full items-center justify-between rounded-2xl border border-brand-border px-4 text-sm font-bold"><span className="flex items-center gap-2"><Maximize2 className="h-4 w-4 text-brand-pink" />Focus mode</span><span className="text-xs font-normal text-brand-text-muted">Distraction-free</span></button>
+      </BottomSheet>
 
-
-      {/* Styles formatting toolbar (Inline for normal mode) */}
-      <div className="mt-4 mb-16 bg-brand-card-bg/50 border border-brand-border/60 shadow-sm rounded-2xl p-2 transition-all">
+      {/* Styles formatting toolbar appears only when requested. */}
+      {showFormattingTools && <div className="surface-glass-strong fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-4 right-4 z-40 rounded-full border border-brand-border/60 p-2 shadow-[0_12px_38px_rgba(62,36,41,0.14)] transition-all">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1">
             <button 
@@ -3101,20 +3144,6 @@ export default function EntryEditorScreen({
           </div>
 
           <div className="flex items-center gap-1.5">
-            {/* Voice to text Button */}
-            <button 
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); toggleRecording('speech-to-text'); }}
-              className={`p-2 rounded-xl transition-all relative ${
-                showRecordingOverlay && recordingOverlayMode === 'speech-to-text'
-                  ? 'bg-red-100 text-red-500 shadow-sm' 
-                  : 'text-brand-sage hover:bg-brand-blush-light'
-              }`}
-              title="Start Voice to Text"
-            >
-              <Mic className="w-4 h-4" />
-            </button>
-
             {/* Attachment Button */}
             <button 
               type="button"
@@ -3129,10 +3158,14 @@ export default function EntryEditorScreen({
             <button 
               type="button"
               onClick={() => setShowTagPicker(!showTagPicker)}
+              aria-label={showTagPicker ? 'Close tag picker' : 'Choose entry tags'}
+              title={showTagPicker ? 'Close tag picker' : 'Choose entry tags'}
               className={`p-2 rounded-xl transition-all ${showTagPicker ? 'bg-brand-pink text-white' : 'text-brand-sage hover:bg-brand-blush-light'}`}
             >
               <Tag className="w-4 h-4" />
             </button>
+
+            <button type="button" onClick={() => setShowFormattingTools(false)} className="p-2 text-brand-sage hover:bg-brand-blush-light rounded-xl" aria-label="Close formatting toolbar" title="Close formatting toolbar"><X className="h-4 w-4" /></button>
 
             {/* Hidden Photo File uploader input */}
             <input 
@@ -3145,7 +3178,7 @@ export default function EntryEditorScreen({
             />
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Floating Tag Selection Picker Overlay */}
       <AnimatePresence>
@@ -3154,7 +3187,7 @@ export default function EntryEditorScreen({
             initial={{ y: 20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 20, opacity: 0 }}
-            className="fixed bottom-24 left-0 right-0 p-4 bg-brand-card-bg/95 backdrop-blur-md border-t border-brand-border shadow-lg rounded-t-3xl z-40 mobile-overlay-safe"
+            className="surface-glass-strong mobile-overlay-safe fixed bottom-0 left-0 right-0 z-50 rounded-t-[var(--radius-sheet)] border-t border-brand-border p-4 shadow-lg"
           >
             <div className="max-w-md mx-auto flex flex-col gap-3">
               <div className="flex justify-between items-center">
@@ -3225,7 +3258,7 @@ export default function EntryEditorScreen({
         </div>
       )}
 
-      {localReflectionUI}
+      {showEntryDetails && localReflectionUI}
       {recordingOverlayUI}
       {leaveConfirmationUI}
     </div>

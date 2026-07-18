@@ -1,5 +1,5 @@
 import React, { Suspense, useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { 
   AlertCircle, ArrowLeft, BarChart2, BookOpen, Check, ClipboardList, Eye, EyeOff,
   Fingerprint, Home, LoaderCircle, Lock, Plus, RefreshCw, Search, ShieldCheck, WifiOff, X
@@ -13,6 +13,7 @@ import {
   MobileBottomNavigation,
   NavigationRail,
   ProfileActionSheet,
+  isRootDestinationScreen,
 } from './components/AppShellPrimitives';
 
 import { AppSettings, Diary, Entry, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
@@ -37,6 +38,7 @@ import { restoreGoogleDriveSession } from './utils/googleAuth';
 import { reportUnexpectedError } from './infrastructure/telemetry/reportUnexpectedError';
 import { applyThemePreference, getLocalThemePreference, setLocalThemePreference } from './utils/themePreference';
 import { measureAsync } from './utils/performance';
+import { pageMotion } from './components/ui/motion';
 
 const LockScreen = React.lazy(() => import('./components/LockScreen'));
 const HomeScreen = React.lazy(() => import('./components/HomeScreen'));
@@ -119,6 +121,7 @@ const isE2eAppMode = (): boolean => {
 export default function App({ initialSettings, initialSecurity, initialUserProfile }: AppProps) {
   const layout: ResponsiveLayout = useResponsiveLayout();
   const isDesktop = layout === 'desktop';
+  const prefersReducedMotion = useReducedMotion();
 
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -133,8 +136,17 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
   const [currentScreen, setCurrentScreen] = useState<string>('list'); // list, diaryDetail, diarySettings, entryEditor, appSettings
   const [isEditorFocusMode, setIsEditorFocusMode] = useState<boolean>(false);
+  const [isLocalFocusedFlow, setIsLocalFocusedFlow] = useState(false);
+  const localFocusedFlowBackRef = React.useRef<(() => void) | null>(null);
   const [isCreateSheetOpen, setIsCreateSheetOpen] = useState(false);
   const [isProfileSheetOpen, setIsProfileSheetOpen] = useState(false);
+  const isRootScreen = isRootDestinationScreen(activeTab, currentScreen);
+  const showRootNavigation = isRootScreen && !isLocalFocusedFlow;
+
+  const handleLocalFocusedFlowChange = useCallback((active: boolean, onBack?: () => void) => {
+    localFocusedFlowBackRef.current = active ? onBack || null : null;
+    setIsLocalFocusedFlow(active);
+  }, []);
   
   // Selected resource IDs for deep links
   const [selectedDiaryId, setSelectedDiaryId] = useState<string>('');
@@ -554,6 +566,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     noteId: string = '',
     promptText: string = ''
   ) => {
+    localFocusedFlowBackRef.current = null;
+    setIsLocalFocusedFlow(false);
     setActiveTab(tab);
     setCurrentScreen(screen);
     setSelectedDiaryId(diaryId);
@@ -562,6 +576,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setSelectedNoteId(noteId);
     setSelectedPrompt(promptText);
     setIsEditorFocusMode(false);
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      document.scrollingElement?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    });
   };
 
   const handleDesktopSearchSubmit = (event: React.FormEvent) => {
@@ -582,11 +600,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       return;
     }
     handleNavigate('diaries');
-  };
-
-  const handleLockSettingsChange = async (nextSettings: AppSettings) => {
-    await diaryRepository.saveSettings(nextSettings);
-    setSettings(nextSettings);
   };
 
   const handleCreateEntry = (capture?: 'voice' | 'photo') => {
@@ -812,6 +825,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       return;
     }
 
+    if (isLocalFocusedFlow) {
+      localFocusedFlowBackRef.current?.();
+      return;
+    }
+
     if (isEditorFocusMode && activeTab === 'diaries' && currentScreen === 'entryEditor') {
       setIsEditorFocusMode(false);
       return;
@@ -851,7 +869,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     if (isAndroid()) {
       void exitNativeApp();
     }
-  }, [activeTab, currentScreen, isAuthenticated, isEditorFocusMode, selectedDiaryId, selectedPrompt]);
+  }, [activeTab, currentScreen, isAuthenticated, isEditorFocusMode, isLocalFocusedFlow, selectedDiaryId, selectedPrompt]);
 
   useEffect(() => addNativeBackListener(handleBackNavigation), [handleBackNavigation]);
 
@@ -1123,6 +1141,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             layout={layout}
             onNavigate={handleNavigate}
             onRefreshDiaries={refreshDiaries}
+            onFocusedFlowChange={handleLocalFocusedFlowChange}
           />
         );
 
@@ -1135,6 +1154,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             onConvertToDiaryEntry={handleConvertToDiaryEntry}
             initialNoteId={selectedNoteId}
             onClearInitialNoteId={() => setSelectedNoteId('')}
+            onFocusedFlowChange={handleLocalFocusedFlowChange}
           />
         );
 
@@ -1325,7 +1345,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     ];
 
     return (
-      <div className="min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-hidden">
+      <div className="app-canvas min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-hidden">
         {renderSyncAuthorizationBanner()}
         <GlobalLoaderOverlay loading={globalLoading} />
         {renderDesktopBackground()}
@@ -1437,10 +1457,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               <AnimatePresence mode="wait">
                 <motion.div
                   key={`${activeTab}-${currentScreen}`}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.22 }}
+                  {...pageMotion(prefersReducedMotion)}
                   className="mx-auto w-full max-w-[1280px] 2xl:max-w-[1460px]"
                 >
                   {renderSuspendedContent()}
@@ -1455,7 +1472,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const renderDesktopEditorShell = () => (
-    <div className="min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-x-hidden">
+    <div className="app-canvas min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-x-hidden">
       {renderSyncAuthorizationBanner()}
       {renderSyncStatusBadge()}
       <GlobalLoaderOverlay loading={globalLoading} />
@@ -1482,7 +1499,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             initialSecurity={security}
             initialSettings={settings}
             onSecurityChange={setSecurity}
-            onSettingsChange={handleLockSettingsChange}
             onThemeChange={handleLocalThemeChange}
             onUnlock={handleUnlock}
           />
@@ -1495,7 +1511,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   // If in editor focus mode, render only the editor at root level (bypasses transformed motion.div containers and options dock)
   if (isEditorFocusMode && activeTab === 'diaries' && currentScreen === 'entryEditor') {
     return (
-      <div className="min-h-screen bg-brand-bg text-brand-text flex flex-col font-sans select-none relative safe-area-root">
+      <div className="app-canvas min-h-screen bg-brand-bg text-brand-text flex flex-col font-sans select-none relative safe-area-root">
         {renderSyncAuthorizationBanner()}
         {renderSyncStatusBadge()}
         <GlobalLoaderOverlay loading={globalLoading} />
@@ -1505,11 +1521,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             <span>Offline. Synced changes are paused.</span>
           </div>
         )}
-        {/* Background Soft Ambient Light Blurs */}
-        <div className="fixed inset-0 z-0 pointer-events-none opacity-20">
-          <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full bg-brand-blush-dark blur-[120px]" />
-          <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-brand-sage-light blur-[100px]" />
-        </div>
         <div className="z-10 flex-grow flex flex-col">
           {renderSuspendedContent()}
         </div>
@@ -1527,7 +1538,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   }
 
   return (
-    <div className="tablet-shell-content min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none pb-24 relative safe-area-root app-shell">
+    <div className={`app-canvas tablet-shell-content min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none relative safe-area-root app-shell ${layout === 'mobile' && showRootNavigation ? 'app-shell-with-navigation' : ''}`}>
       {renderSyncAuthorizationBanner()}
       {renderSyncStatusBadge()}
       <GlobalLoaderOverlay loading={globalLoading} />
@@ -1548,15 +1559,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         </div>
       )}
       
-      {/* Background Soft Ambient Light Blurs */}
-      <div className="fixed inset-0 z-0 pointer-events-none opacity-20">
-        <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] rounded-full bg-brand-blush-dark blur-[120px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-brand-sage-light blur-[100px]" />
-      </div>
-
       {/* Main Container */}
       <main className="w-full max-w-lg z-10 px-4 pt-1 pb-6 flex-grow flex flex-col justify-between app-main">
-        {currentScreen === 'list' && (
+        {currentScreen === 'list' && !isLocalFocusedFlow && (
           <AppHeader
             title={rootPageTitle()}
             profile={userProfile}
@@ -1567,10 +1572,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         <AnimatePresence mode="wait">
           <motion.div
             key={`${activeTab}-${currentScreen}`}
-            initial={{ opacity: 0, x: 10 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -10 }}
-            transition={{ duration: 0.25 }}
+            {...pageMotion(prefersReducedMotion)}
             className="flex-grow flex flex-col justify-start"
           >
             {renderSuspendedContent()}
@@ -1578,7 +1580,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         </AnimatePresence>
       </main>
 
-      {layout === 'mobile' && currentScreen !== 'entryEditor' && !(activeTab === 'stats' && currentScreen === 'appSettings') && (
+      {layout === 'mobile' && showRootNavigation && (
         <MobileBottomNavigation active={activeTab} onNavigate={(destination) => handleNavigate(destination)} onCreate={() => setIsCreateSheetOpen(true)} />
       )}
 

@@ -1,5 +1,18 @@
-import React from 'react';
-import { Lock } from 'lucide-react';
+import {
+  BookHeart,
+  Feather,
+  Flower2,
+  KeyRound,
+  Leaf,
+  Lock,
+  MoonStar,
+  Mountain,
+  Palette,
+  Plane,
+  Sparkles,
+  type LucideIcon,
+} from 'lucide-react';
+import type { CSSProperties } from 'react';
 import type { Diary } from '../types';
 
 interface JournalCoverProps {
@@ -9,35 +22,65 @@ interface JournalCoverProps {
   showTitle?: boolean;
 }
 
+const EMBLEMS: LucideIcon[] = [BookHeart, Feather, Leaf, MoonStar, Flower2, Plane, Palette, Mountain, KeyRound];
+const FOIL_MARKS: LucideIcon[] = [Sparkles, MoonStar, Flower2, Leaf];
+
+const emblemFor = (diary: JournalCoverProps['diary']): LucideIcon => {
+  const source = `${diary.emoji || ''}${diary.name || ''}`;
+  const hash = Array.from(source).reduce((sum, character) => sum + (character.codePointAt(0) || 0), 0);
+  return EMBLEMS[hash % EMBLEMS.length];
+};
+
 export default function JournalCover({ diary, variant = 'thumbnail', className = '', showTitle = true }: JournalCoverProps) {
-  const full = variant === 'full';
-  const preview = variant === 'preview';
+  const large = variant === 'full' || variant === 'preview';
+  const Emblem = emblemFor(diary);
+  const foilCount = Math.min(4, diary.foilIcons?.length || 0);
+
   return (
     <div
-      className={`relative overflow-hidden border border-black/10 shadow-sm ${full || preview ? 'aspect-[3/4.2] rounded-[22px]' : 'h-14 w-11 rounded-xl'} ${className}`}
+      className={`relative isolate overflow-hidden border border-black/15 bg-[var(--cover-color)] text-white shadow-[0_16px_36px_rgba(37,22,27,0.16),inset_1px_0_rgba(255,255,255,0.18)] ${large ? 'aspect-[3/4.35] rounded-[0.7rem_1.15rem_1.15rem_0.7rem]' : 'h-16 w-12 rounded-[0.35rem_0.65rem_0.65rem_0.35rem]'} ${className}`}
       style={{
+        '--cover-color': diary.color,
         backgroundColor: diary.color,
-        backgroundImage: diary.coverImage ? `linear-gradient(rgba(20,12,15,.08),rgba(20,12,15,.22)),url(${diary.coverImage})` : undefined,
+        backgroundImage: diary.coverImage
+          ? `linear-gradient(155deg,rgba(24,14,18,.08),rgba(24,14,18,.5)),url(${diary.coverImage})`
+          : `linear-gradient(145deg,color-mix(in srgb,${diary.color} 82%,white),${diary.color} 52%,color-mix(in srgb,${diary.color} 76%,black))`,
         backgroundPosition: 'center',
         backgroundSize: 'cover',
-      }}
+      } as CSSProperties}
       aria-hidden="true"
     >
-      {(full || preview) && <span className="absolute inset-y-0 left-0 w-3 bg-gradient-to-r from-black/25 to-transparent" />}
-      <div className={`relative flex h-full flex-col justify-between ${full || preview ? 'p-4' : 'p-1.5'}`}>
-        <div className="flex items-start justify-between gap-1">
-          <span className={`flex items-center justify-center bg-white/90 shadow-sm ${full || preview ? 'h-9 w-9 rounded-xl text-lg' : 'h-6 w-6 rounded-md text-sm'}`}>{diary.emoji}</span>
-          {diary.isLocked && <span className="rounded-md bg-black/25 p-1 text-white"><Lock className={full || preview ? 'h-4 w-4' : 'h-3 w-3'} /></span>}
+      <span className={`absolute inset-y-0 left-0 ${large ? 'w-4' : 'w-2'} bg-gradient-to-r from-black/30 via-black/8 to-white/8`} />
+      <span className="absolute inset-y-0 right-0 w-px bg-white/25" />
+      <span className="absolute inset-x-0 top-0 h-px bg-white/35" />
+      {!diary.coverImage && <span className="absolute -right-8 top-[12%] h-28 w-28 rounded-full bg-white/8 blur-2xl" />}
+
+      <div className={`relative flex h-full flex-col ${large ? 'p-4 sm:p-5' : 'p-1.5'}`}>
+        <div className="flex items-start justify-between gap-2">
+          <span className={`flex items-center justify-center border border-white/30 bg-black/12 text-white shadow-inner backdrop-blur-[2px] ${large ? 'h-10 w-10 rounded-full' : 'h-7 w-7 rounded-full'}`}>
+            <Emblem className={large ? 'h-5 w-5' : 'h-3.5 w-3.5'} strokeWidth={1.7} />
+          </span>
+          {diary.isLocked && <span className="flex items-center gap-1 rounded-full border border-white/25 bg-black/25 p-1.5 text-white backdrop-blur-sm"><Lock className={large ? 'h-3.5 w-3.5' : 'h-3 w-3'} /></span>}
         </div>
-        {(full || preview) && diary.foilIcons && diary.foilIcons.length > 0 && (
-          <div className="flex flex-wrap gap-1 text-sm text-amber-200 drop-shadow">{diary.foilIcons.slice(0, 4).map((icon, index) => <span key={`${icon}-${index}`}>{icon}</span>)}</div>
+
+        {large && foilCount > 0 && (
+          <div className="mt-auto mb-4 flex items-center gap-2 text-[#f5d99b] drop-shadow-md">
+            {Array.from({ length: foilCount }, (_, index) => {
+              const Mark = FOIL_MARKS[index % FOIL_MARKS.length];
+              return <Mark key={`${diary.foilIcons?.[index]}-${index}`} className="h-3.5 w-3.5" strokeWidth={1.5} />;
+            })}
+          </div>
         )}
-        {showTitle && (full || preview) && (
-          <div className="rounded-xl bg-white/92 p-2.5 shadow-sm">
-            <p className="truncate font-serif-diary text-sm font-bold text-brand-plum">{diary.name || 'Untitled journal'}</p>
+
+        {showTitle && large && (
+          <div className={`${foilCount ? '' : 'mt-auto'} border-t border-white/25 pt-3 text-shadow-sm`}>
+            <p className="line-clamp-2 font-serif-diary text-[clamp(1rem,2.4vw,1.35rem)] font-semibold leading-tight tracking-[-0.01em] text-white drop-shadow-md">{diary.name || 'Untitled journal'}</p>
+            <span className="mt-2 block h-px w-8 bg-[#f5d99b]/80" />
           </div>
         )}
       </div>
+
+      {large && <span className="absolute inset-y-[7%] right-[-2px] w-[3px] rounded-full bg-[#f6eee4]/75 shadow-[-1px_0_2px_rgba(0,0,0,0.18)]" />}
     </div>
   );
 }

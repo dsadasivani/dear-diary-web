@@ -84,7 +84,7 @@ final class DriveBackupScheduler {
         return Math.max(1_000, next.getTimeInMillis() - now.getTimeInMillis());
     }
 
-    private static int[] parseHourMinute(String value) {
+    static int[] parseHourMinute(String value) {
         try {
             String[] parts = value == null ? new String[0] : value.split(":", 2);
             int hour = Integer.parseInt(parts[0]);

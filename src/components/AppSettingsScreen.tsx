@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { 
   ArrowLeft, Lock, Bell,
   Check, ShieldCheck, RefreshCw,
@@ -47,6 +47,8 @@ import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
 import type { DriveSyncStatus } from '../sync/eventSyncEngine';
 import type { PreservedSyncConflict, SyncStatusSummary } from '../repositories';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import { pageMotion } from './ui/motion';
+import { BottomSheet } from './ui/BottomSheet';
 import {
   exportPrivacySafeSyncDiagnostics,
   formatSyncHealthAge,
@@ -121,6 +123,7 @@ export default function AppSettingsScreen({
   onThemeChange
 }: AppSettingsScreenProps) {
   useScreenPerformance('settings');
+  const prefersReducedMotion = useReducedMotion();
   const hasSidebar = layout !== 'mobile';
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
@@ -144,6 +147,7 @@ export default function AppSettingsScreen({
   const [profileColor, setProfileColor] = useState(profile.avatarColor);
   const [profileAvatarUri, setProfileAvatarUri] = useState(profile.avatarUri);
   const [profileWritingGoal, setProfileWritingGoal] = useState(profile.writingGoal || 100);
+  const [showAvatarEditor, setShowAvatarEditor] = useState(false);
   
   // Custom Tags and Moods
   const [customTags, setCustomTags] = useState<string[]>(settings.customTags || []);
@@ -673,7 +677,7 @@ export default function AppSettingsScreen({
   };
 
   return (
-    <div className={`${hasSidebar ? 'grid grid-cols-[220px_minmax(0,1fr)] items-start gap-7' : 'flex flex-col gap-4'} pb-8 font-sans`}>
+    <div className={`${hasSidebar ? 'mx-auto grid w-full max-w-6xl grid-cols-[220px_minmax(0,880px)] items-start justify-center gap-8' : 'flex flex-col gap-4'} pb-8 font-sans`}>
       <header className={`${hasSidebar ? 'col-span-full border-none bg-transparent py-0' : 'sticky top-0 -mx-4 border-b border-brand-rose-light/40 bg-brand-bg/95 px-4 py-3'} z-30 flex items-center justify-between backdrop-blur-md`}>
         <div className="flex items-center gap-2">
           <button 
@@ -695,7 +699,7 @@ export default function AppSettingsScreen({
 
       <nav
         aria-label="Settings sections"
-        className={`${hasSidebar ? 'sticky top-6 rounded-[24px] border border-brand-border bg-white/68 p-2 shadow-[0_14px_42px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/55' : mobileSectionOpen ? 'hidden' : 'overflow-hidden rounded-3xl border border-brand-border bg-brand-card-bg shadow-sm'}`}
+        className={`${hasSidebar ? 'sticky top-6 border-r border-brand-border/70 pr-3' : mobileSectionOpen ? 'hidden' : 'overflow-hidden border-y border-brand-border bg-transparent'}`}
       >
         {SETTINGS_SECTIONS.map(section => {
           const Icon = section.icon;
@@ -732,10 +736,7 @@ export default function AppSettingsScreen({
           {selectedSection === 'profile' && (
             <motion.div
               key="profile"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.15 }}
+              {...pageMotion(prefersReducedMotion)}
               className="flex flex-col gap-5"
             >
               {/* User Profile Customizer Card */}
@@ -752,58 +753,12 @@ export default function AppSettingsScreen({
 
                 <form onSubmit={handleSaveProfile} className="flex flex-col gap-4">
                   
-                  {/* Avatar Preview & Selection */}
-                  <div className="flex flex-col items-center gap-3 bg-brand-bg/50 dark:bg-brand-bg/25 p-4 rounded-2xl border border-brand-border/40">
-                    <div 
-                      className="relative overflow-hidden w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-md border-2 border-brand-border"
-                      style={{ backgroundColor: profileColor }}
-                    >
-                      <ProfileAvatar profile={{
-                        ...profile,
-                        name: profileName,
-                        avatarEmoji: profileEmoji,
-                        avatarColor: profileColor,
-                        avatarUri: profileAvatarUri,
-                      }} />
-                    </div>
-                    
-                    {/* Emojis list */}
-                    <div className="flex flex-col gap-2 w-full mt-2">
-                      <span className="text-xs text-brand-sage font-bold uppercase tracking-wider text-center">Choose Emoji</span>
-                      <div className="flex justify-center gap-1.5 flex-wrap">
-                        {['🌸', '☕', '🦊', '🥑', '🌿', '🎒', '🛹', '🎨', '✨', '🧘', '🦄', '🐳', '🐾'].map(emo => (
-                          <button
-                            key={emo}
-                            type="button"
-                            onClick={() => {
-                              setProfileEmoji(emo);
-                              setProfileAvatarUri(undefined);
-                            }}
-                            className={`text-xl p-1.5 rounded-xl hover:scale-110 active:scale-95 transition-transform ${profileEmoji === emo ? 'bg-brand-pink/15 scale-105' : ''}`}
-                          >
-                            {emo}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Colors list */}
-                    <div className="flex flex-col gap-2 w-full mt-1">
-                      <span className="text-xs text-brand-sage font-bold uppercase tracking-wider text-center">Choose Cover Color</span>
-                      <div className="flex justify-center gap-2 flex-wrap">
-                        {PREDEFINED_COLORS.map(col => (
-                          <button
-                            key={col.hex}
-                            type="button"
-                            onClick={() => setProfileColor(col.hex)}
-                            className={`w-6 h-6 rounded-full border border-black/10 hover:scale-110 active:scale-95 transition-all ${profileColor === col.hex ? 'ring-2 ring-brand-pink ring-offset-2' : ''}`}
-                            style={{ backgroundColor: col.hex }}
-                            title={col.name}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  </div>
+                  {/* Compact preview; customization opens as a focused secondary task. */}
+                  <button type="button" onClick={() => setShowAvatarEditor(true)} className="flex min-h-20 w-full items-center gap-4 border-y border-brand-border/60 py-3 text-left">
+                    <span className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border border-brand-border text-3xl" style={{ backgroundColor: profileColor }}><ProfileAvatar profile={{ ...profile, name: profileName, avatarEmoji: profileEmoji, avatarColor: profileColor, avatarUri: profileAvatarUri }} /></span>
+                    <span className="min-w-0 flex-1"><span className="block text-sm font-bold text-brand-plum dark:text-brand-text">Profile image</span><span className="mt-1 block text-xs text-brand-text-muted">Choose an emblem and background color</span></span>
+                    <ChevronRight className="h-5 w-5 text-brand-text-muted" />
+                  </button>
 
                   {/* Fields */}
                   <div className="flex flex-col gap-3">
@@ -850,10 +805,11 @@ export default function AppSettingsScreen({
 
                     <div>
                       <div className="flex justify-between items-center mb-1">
-                        <label className="text-xs text-brand-sage font-bold uppercase tracking-wider">Daily Writing Target</label>
+                        <label htmlFor="daily-writing-target" className="text-xs text-brand-sage font-bold uppercase tracking-wider">Daily Writing Target</label>
                         <span className="font-mono text-xs text-brand-pink font-bold">{profileWritingGoal} words</span>
                       </div>
                       <input
+                        id="daily-writing-target"
                         type="range"
                         min="50"
                         max="1000"
@@ -892,10 +848,7 @@ export default function AppSettingsScreen({
           {selectedSection === 'about' && (
             <motion.div
               key="about"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.15 }}
+              {...pageMotion(prefersReducedMotion)}
               className="flex flex-col gap-5"
             >
               <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-6 journal-shadow">
@@ -921,10 +874,7 @@ export default function AppSettingsScreen({
           {selectedSection === 'privacy-security' && (
             <motion.div
               key="security"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.15 }}
+              {...pageMotion(prefersReducedMotion)}
               className="flex flex-col gap-5"
             >
               {/* PIN Change card */}
@@ -1305,10 +1255,7 @@ export default function AppSettingsScreen({
           {selectedSection === 'sync-backup' && (
             <motion.div
               key="sync-backup"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.15 }}
+              {...pageMotion(prefersReducedMotion)}
               className="flex flex-col gap-5"
             >
               <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
@@ -1372,10 +1319,7 @@ export default function AppSettingsScreen({
           {selectedSection === 'data-storage' && (
             <motion.div
               key="data-storage"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.15 }}
+              {...pageMotion(prefersReducedMotion)}
               className="flex flex-col gap-5"
             >
               <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
@@ -1416,10 +1360,7 @@ export default function AppSettingsScreen({
           {selectedSection === 'advanced' && (
             <motion.div
               key="advanced"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.15 }}
+              {...pageMotion(prefersReducedMotion)}
               className="flex flex-col gap-5"
             >
               <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
@@ -1735,10 +1676,7 @@ export default function AppSettingsScreen({
           {(selectedSection === 'appearance' || selectedSection === 'writing' || selectedSection === 'notifications') && (
             <motion.div
               key={selectedSection}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.15 }}
+              {...pageMotion(prefersReducedMotion)}
               className="flex flex-col gap-5"
             >
               {selectedSection === 'notifications' && <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
@@ -1853,7 +1791,9 @@ export default function AppSettingsScreen({
                     <p className="text-xs text-brand-sage italic">No custom tags added yet.</p>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <details className="border-t border-brand-border/60 pt-3">
+                  <summary className="min-h-11 cursor-pointer list-none text-sm font-bold text-brand-sage">Add a custom tag</summary>
+                <div className="flex gap-2 pt-2">
                   <input 
                     type="text" 
                     value={newTagInput}
@@ -1870,6 +1810,7 @@ export default function AppSettingsScreen({
                     <Plus className="w-4 h-4" />
                   </button>
                 </div>
+                </details>
               </div>
 
               {/* Custom Moods */}
@@ -1897,7 +1838,9 @@ export default function AppSettingsScreen({
                     <p className="text-xs text-brand-sage italic">No custom moods added yet.</p>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <details className="border-t border-brand-border/60 pt-3">
+                  <summary className="min-h-11 cursor-pointer list-none text-sm font-bold text-brand-sage">Add a custom mood</summary>
+                <div className="flex gap-2 pt-2">
                   <input 
                     type="text" 
                     value={newMoodEmojiInput}
@@ -1921,12 +1864,18 @@ export default function AppSettingsScreen({
                     <Plus className="w-4 h-4" />
                   </button>
                 </div>
+                </details>
               </div>
               </>}
             </motion.div>
           )}
         </AnimatePresence>
       </div>}
+      <BottomSheet open={showAvatarEditor} title="Edit profile image" description="Choose a personal emblem and a calm background color." onClose={() => setShowAvatarEditor(false)} footer={<button type="button" onClick={() => setShowAvatarEditor(false)} className="min-h-11 rounded-xl bg-brand-sage px-5 text-sm font-bold text-white">Done</button>}>
+        <div className="flex justify-center"><span className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border-2 border-brand-border text-5xl shadow-sm" style={{ backgroundColor: profileColor }}><ProfileAvatar profile={{ ...profile, name: profileName, avatarEmoji: profileEmoji, avatarColor: profileColor, avatarUri: profileAvatarUri }} /></span></div>
+        <fieldset className="mt-6"><legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">Emblem</legend><div className="mt-3 flex flex-wrap gap-2">{['🌸', '☕', '🦊', '🥑', '🌿', '🎒', '🛹', '🎨', '✨', '🧘', '🦄', '🐳', '🐾'].map(emo => <button key={emo} type="button" aria-label={`Use ${emo} profile emblem`} aria-pressed={profileEmoji === emo} onClick={() => { setProfileEmoji(emo); setProfileAvatarUri(undefined); }} className={`h-11 w-11 rounded-full text-xl ${profileEmoji === emo ? 'border-2 border-brand-pink bg-brand-pink/10' : 'border border-brand-border'}`}>{emo}</button>)}</div></fieldset>
+        <fieldset className="mt-6"><legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">Background</legend><div className="mt-3 flex flex-wrap gap-3">{PREDEFINED_COLORS.map(col => <button key={col.hex} type="button" aria-label={`Use ${col.name} avatar color`} aria-pressed={profileColor === col.hex} onClick={() => setProfileColor(col.hex)} className={`h-10 w-10 rounded-full border border-black/10 ${profileColor === col.hex ? 'ring-2 ring-brand-pink ring-offset-2' : ''}`} style={{ backgroundColor: col.hex }} />)}</div></fieldset>
+      </BottomSheet>
     </div>
   );
 }

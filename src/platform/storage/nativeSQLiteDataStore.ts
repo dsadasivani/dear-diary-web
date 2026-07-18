@@ -350,10 +350,32 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   private async initialize(): Promise<SQLiteDBConnection> {
     await this.ensureEncryptionSecret();
 
+    // The native plugin keeps its connection registry across WebView reloads,
+    // while SQLiteConnection's JavaScript registry is recreated. Reconcile the
+    // two before checking for a connection so a retry can safely recover from
+    // a stale native handle instead of failing with "already exists".
+    await this.sqlite.checkConnectionsConsistency().catch(error => {
+      console.warn('SQLite connection consistency check could not complete:', error);
+    });
+
     const hasConnection = await this.sqlite.isConnection(DATABASE_NAME, false).catch(() => ({ result: false }));
-    const db = hasConnection.result
-      ? await this.sqlite.retrieveConnection(DATABASE_NAME, false)
-      : await this.sqlite.createConnection(DATABASE_NAME, true, 'secret', DATABASE_VERSION, false);
+    let db: SQLiteDBConnection;
+    if (hasConnection.result) {
+      db = await this.sqlite.retrieveConnection(DATABASE_NAME, false);
+    } else {
+      try {
+        db = await this.sqlite.createConnection(DATABASE_NAME, true, 'secret', DATABASE_VERSION, false);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.toLowerCase().includes('already exists')) throw error;
+
+        // A native connection can appear between the consistency check and
+        // creation during lifecycle churn. Close only that stale handle, then
+        // recreate the connection without touching the database file.
+        await this.sqlite.closeConnection(DATABASE_NAME, false).catch(() => undefined);
+        db = await this.sqlite.createConnection(DATABASE_NAME, true, 'secret', DATABASE_VERSION, false);
+      }
+    }
 
     const isOpen = await db.isDBOpen().catch(() => ({ result: false }));
     if (!isOpen.result) {

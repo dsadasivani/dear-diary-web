@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle, ArrowLeft, BookOpen, CalendarDays, Check, Delete,
-  Cloud, Eye, EyeOff, LoaderCircle, Lock, Moon, ShieldCheck, Sparkles, Sun
+  Cloud, Eye, EyeOff, LoaderCircle, Lock, Moon, ShieldCheck, Sparkles, Sun, X
 } from 'lucide-react';
 import { AppSettings, GoogleAccountSession, SecurityConfig, SupabaseAuthSession } from '../types';
 import {
@@ -34,12 +34,12 @@ import {
   validateExistingRecoveryPassphrase,
   validateRecoveryPassphrase,
 } from '../sync/e2eeKeyPackage';
+import { triggerImpact } from '../mobile/haptics';
 
 interface LockScreenProps {
   initialSecurity: SecurityConfig;
   initialSettings: AppSettings;
   onSecurityChange: (security: SecurityConfig) => void;
-  onSettingsChange?: (settings: AppSettings) => void | Promise<void>;
   onThemeChange?: (theme: 'light' | 'dark') => void;
   onUnlock: () => void | Promise<void>;
 }
@@ -128,7 +128,6 @@ export default function LockScreen({
   initialSecurity,
   initialSettings,
   onSecurityChange,
-  onSettingsChange,
   onThemeChange,
   onUnlock,
 }: LockScreenProps) {
@@ -152,10 +151,9 @@ export default function LockScreen({
   const [resetNewPin, setResetNewPin] = useState('');
   const [resetConfirmPin, setResetConfirmPin] = useState('');
   const [recoveryVerifiedBy, setRecoveryVerifiedBy] = useState<'question' | 'google' | null>(null);
-  const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() => {
-    return initialSecurity.isPinCreated && initialSettings.showAmbientLockScreen ? 'ambient' : 'keypad';
-  });
-  const [ambientLockEnabled, setAmbientLockEnabled] = useState(Boolean(initialSettings.showAmbientLockScreen));
+  const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() => (
+    initialSecurity.isPinCreated ? 'ambient' : 'keypad'
+  ));
   const [time, setTime] = useState('');
   const [date, setDate] = useState('');
   const [quoteIndex, setQuoteIndex] = useState(0);
@@ -190,13 +188,8 @@ export default function LockScreen({
   }, [theme]);
 
   const triggerHaptic = (pattern: number | number[]) => {
-    if (typeof window !== 'undefined' && typeof window.navigator?.vibrate === 'function') {
-      try {
-        window.navigator.vibrate(pattern);
-      } catch (e) {
-        console.warn('Haptic feedback not supported:', e);
-      }
-    }
+    const strength = Array.isArray(pattern) ? 'heavy' : pattern >= 15 ? 'medium' : 'light';
+    void triggerImpact(strength);
   };
 
   const fail = (message: string) => {
@@ -569,13 +562,6 @@ export default function LockScreen({
     triggerHaptic(15);
   };
 
-  const handleAmbientPreferenceChange = async (enabled: boolean) => {
-    const updatedSettings = { ...initialSettings, theme, showAmbientLockScreen: enabled };
-    setAmbientLockEnabled(enabled);
-    await onSettingsChange?.(updatedSettings);
-    setSuccessMsg(enabled ? 'Clock screen will appear before PIN entry.' : 'PIN entry will open immediately.');
-  };
-
   const isCreatingSyncAccount = syncSetupSelection?.mode === 'create';
   const isRecoveringSyncAccount = syncSetupSelection?.mode === 'recover';
   const isCustomRecoveryQuestion = questionId === CUSTOM_QUESTION_SELECT_VALUE;
@@ -660,8 +646,8 @@ export default function LockScreen({
     <div className={`min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-all duration-700 lg:justify-center lg:px-8 lg:py-8`}>
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.58),transparent_42%)] dark:bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.08),transparent_40%)]" />
-        <motion.div animate={{ scale: [1, 1.08, 1], x: [0, 18, 0], y: [0, -18, 0] }} transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }} className="absolute top-[-22%] left-[-16%] h-[42rem] w-[42rem] rounded-full bg-brand-pink/10 blur-[140px] dark:bg-brand-pink/16" />
-        <motion.div animate={{ scale: [1, 1.1, 1], x: [0, -24, 0], y: [0, 24, 0] }} transition={{ duration: 24, repeat: Infinity, ease: 'easeInOut', delay: 2 }} className="absolute bottom-[-24%] right-[-12%] h-[44rem] w-[44rem] rounded-full bg-brand-sage/10 blur-[160px] dark:bg-brand-sage/14" />
+        <div className="absolute top-[-22%] left-[-16%] h-[42rem] w-[42rem] rounded-full bg-brand-pink/10 blur-[140px] dark:bg-brand-pink/16" />
+        <div className="absolute bottom-[-24%] right-[-12%] h-[44rem] w-[44rem] rounded-full bg-brand-sage/10 blur-[160px] dark:bg-brand-sage/14" />
         <div className="absolute inset-y-0 left-0 hidden w-1/2 bg-brand-blush-light/28 dark:bg-[#2A1720]/34 lg:block" />
         <div className="absolute inset-y-0 left-1/2 hidden w-px bg-brand-border/45 dark:bg-white/10 lg:block" />
       </div>
@@ -729,7 +715,7 @@ export default function LockScreen({
               </div>
 
               <div className="flex flex-col items-center gap-4">
-                <motion.button onClick={() => { triggerHaptic(15); setScreenMode('keypad'); }} whileHover={{ scale: 1.025 }} whileTap={{ scale: 0.97 }} className="flex flex-col items-center gap-2.5 group">
+                <motion.button onTouchEnd={() => setScreenMode('keypad')} onPointerUp={() => setScreenMode('keypad')} onClick={() => { triggerHaptic(15); setScreenMode('keypad'); }} whileHover={{ scale: 1.025 }} whileTap={{ scale: 0.97 }} className="flex flex-col items-center gap-2.5 group">
                   <div className="w-16 h-16 rounded-full bg-white/70 dark:bg-white/[0.06] border border-brand-border/65 dark:border-white/10 backdrop-blur-md flex items-center justify-center shadow-[0_16px_45px_rgba(62,36,41,0.1)] relative">
                     <Lock className="w-6 h-6 text-brand-plum/85 dark:text-brand-text/80 group-hover:text-brand-pink transition-colors stroke-[1.5]" />
                   </div>
@@ -737,11 +723,11 @@ export default function LockScreen({
                 </motion.button>
               </div>
 
-              <div className="w-full max-w-xs bg-white dark:bg-[#1A1517]/35 border border-brand-border dark:border-white/10 px-4 py-4 rounded-2xl shadow-md text-center flex flex-col gap-2 lg:hidden">
+              <div className="w-full max-w-xs border-y border-brand-border/70 px-4 py-4 text-center flex flex-col gap-2 lg:hidden">
                 <p className="text-xs font-bold tracking-[0.2em] text-brand-pink uppercase">Sanctuary Note</p>
                 <p className="font-serif-diary text-base text-brand-plum dark:text-brand-text leading-snug">{SANCTUARY_QUOTES[quoteIndex]}</p>
                 <button onClick={(e) => { e.stopPropagation(); setQuoteIndex(prev => (prev + 1) % SANCTUARY_QUOTES.length); }} className="self-center p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 text-brand-text-muted hover:text-brand-pink transition-all" title="Cycle Inspiration">
-                  <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+                  <Sparkles className="w-3.5 h-3.5" />
                 </button>
               </div>
             </motion.div>
@@ -749,7 +735,7 @@ export default function LockScreen({
             <motion.div key="keypad" initial={{ opacity: 0, y: 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 80 }} transition={{ type: 'spring', damping: 25, stiffness: 180 }} className="w-full lg:max-w-[440px]">
               <motion.div animate={shakeTrigger ? { x: [-10, 10, -8, 8, -5, 5, 0] } : {}} transition={{ duration: 0.4 }} className="w-full p-4 sm:p-5 lg:p-0 flex flex-col gap-3.5 lg:gap-6 relative overflow-visible">
                 <div className="pointer-events-none absolute inset-x-10 top-0 hidden h-px bg-gradient-to-r from-transparent via-white/80 to-transparent dark:via-white/20" />
-                {security.isPinCreated && !requiresRecoverySetup && ambientLockEnabled && (
+                {security.isPinCreated && !requiresRecoverySetup && (
                   <button onClick={() => { triggerHaptic(10); setScreenMode('ambient'); setPin(''); setError(''); }} className="absolute top-2 left-2 p-2 rounded-full hover:bg-white/40 dark:hover:bg-white/10 text-brand-text-muted hover:text-brand-plum transition-colors lg:hidden" title="Back to Clock">
                     <ArrowLeft className="w-4 h-4 stroke-[2.5]" />
                   </button>
@@ -1109,36 +1095,27 @@ export default function LockScreen({
                           <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">{num}</span>
                         </motion.button>
                       ))}
-                      <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => { pin.length > 0 ? handleClear() : setShowPin(!showPin); }} className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex flex-col items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5">
-                        {pin.length > 0 ? <span className="text-xs font-bold uppercase tracking-wider text-brand-pink">Clear</span> : <>{showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}<span className="text-xs font-bold tracking-wider uppercase text-brand-text-muted mt-1">Reveal</span></>}
+                      <motion.button
+                        type="button"
+                        aria-label={pin.length > 0 ? 'Clear PIN' : showPin ? 'Hide PIN digits' : 'Reveal PIN digits'}
+                        title={pin.length > 0 ? 'Clear PIN' : showPin ? 'Hide PIN digits' : 'Reveal PIN digits'}
+                        whileTap={{ scale: 0.9 }}
+                        onClick={() => { pin.length > 0 ? handleClear() : setShowPin(!showPin); }}
+                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5"
+                      >
+                        {pin.length > 0 ? <X className="h-5 w-5 text-brand-pink" /> : showPin ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                       </motion.button>
                       <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress('0')} className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5">
                         <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">0</span>
                       </motion.button>
-                      <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={handleBackspace} disabled={pin.length === 0} className={`w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex flex-col items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5 ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}>
-                        <Delete className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
-                        <span className="text-xs font-bold tracking-wider uppercase text-brand-text-muted mt-1">Erase</span>
+                      <motion.button type="button" aria-label="Erase last PIN digit" title="Erase last PIN digit" whileTap={{ scale: 0.9 }} onClick={handleBackspace} disabled={pin.length === 0} className={`w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5 ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}>
+                        <Delete className="h-5 w-5" />
                       </motion.button>
                     </div>
 
                     <button onClick={handleSubmit} disabled={!isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength)} className={`w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}>
                       {security.isPinCreated ? 'Unlock Diary' : setupStep === 'confirm' ? 'Confirm PIN' : 'Continue'}
                     </button>
-
-                    {security.isPinCreated && !requiresRecoverySetup && (
-                      <label className="mt-1 flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-brand-border/55 bg-white/35 px-4 py-3 text-left dark:border-white/10 dark:bg-white/[0.03]">
-                        <span>
-                          <span className="block text-xs font-bold text-brand-plum dark:text-brand-text">Show clock before PIN</span>
-                          <span className="mt-0.5 block text-xs leading-relaxed text-brand-text-muted">Use the quiet ambient lock screen when the app opens.</span>
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={ambientLockEnabled}
-                          onChange={(event) => void handleAmbientPreferenceChange(event.target.checked)}
-                          className="h-5 w-5 shrink-0 accent-brand-pink"
-                        />
-                      </label>
-                    )}
 
                   </>
                 )}
@@ -1245,7 +1222,7 @@ export default function LockScreen({
         </AnimatePresence>
       </main>
 
-      <footer className="pointer-events-none w-full max-w-sm lg:absolute lg:bottom-8 lg:left-8 lg:right-auto lg:max-w-none lg:items-start lg:text-left xl:left-10 text-center flex flex-col items-center gap-1 z-10 py-1 opacity-65">
+      <footer className="pointer-events-none hidden w-full max-w-sm flex-col items-center gap-1 py-1 text-center opacity-65 lg:absolute lg:bottom-8 lg:left-8 lg:right-auto lg:flex lg:max-w-none lg:items-start lg:text-left xl:left-10 z-10">
         <div className="flex items-center gap-1.5 bg-white/36 dark:bg-white/[0.05] px-3 py-1 rounded-full border border-brand-border/50 dark:border-white/10 text-xs sm:text-xs font-bold text-brand-plum dark:text-brand-text-muted uppercase tracking-widest backdrop-blur-xl">
           <Lock className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
           <span>Protected Access</span>

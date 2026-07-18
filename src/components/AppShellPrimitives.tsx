@@ -1,10 +1,15 @@
-import React, { useEffect, useRef } from 'react';
-import { BarChart2, BookOpen, ClipboardList, Home, Lock, Plus, Search, Settings, X } from 'lucide-react';
-import OverlayPortal from './OverlayPortal';
+import { BarChart2, BookOpen, ClipboardList, Home, Lock, Plus, Search, Settings } from 'lucide-react';
 import ProfileAvatar from './ProfileAvatar';
 import type { UserProfile } from '../types';
+import { BottomSheet } from './ui/BottomSheet';
 
 export type PrimaryDestination = 'home' | 'diaries' | 'notes' | 'stats';
+
+const primaryDestinationIds: readonly string[] = ['home', 'diaries', 'notes', 'stats'];
+
+export const isRootDestinationScreen = (activeTab: string, currentScreen: string): boolean => (
+  currentScreen === 'list' && primaryDestinationIds.includes(activeTab)
+);
 
 const destinations = [
   { id: 'home' as const, label: 'Today', icon: Home, testId: 'nav-home' },
@@ -34,8 +39,8 @@ export function MobileBottomNavigation({ active, onNavigate, onCreate }: Navigat
         onClick={() => onNavigate(id)}
         className={`app-nav-item ${selected ? 'app-nav-item-active' : ''}`}
       >
-        <Icon aria-hidden="true" className="h-5 w-5" />
-        <span>{label}</span>
+        <span className="app-nav-icon" aria-hidden="true"><Icon className="h-[1.15rem] w-[1.15rem]" /></span>
+        <span className="app-nav-label">{label}</span>
       </button>
     );
   };
@@ -44,8 +49,8 @@ export function MobileBottomNavigation({ active, onNavigate, onCreate }: Navigat
     <nav aria-label="Primary" className="mobile-bottom-navigation bottom-nav-safe">
       {first.map(renderItem)}
       <button type="button" onClick={onCreate} className="app-create-button" aria-label="Create">
-        <Plus aria-hidden="true" className="h-6 w-6" />
-        <span>Create</span>
+        <span className="app-create-icon" aria-hidden="true"><Plus className="h-5 w-5" /></span>
+        <span className="app-nav-label">New</span>
       </button>
       {last.map(renderItem)}
     </nav>
@@ -121,58 +126,21 @@ interface ProfileActionSheetProps {
 }
 
 export function ProfileActionSheet({ open, profile, onClose, onSettings, onLock }: ProfileActionSheetProps) {
-  const closeRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('keydown', onKey); previous?.focus(); };
-  }, [open, onClose]);
-  if (!open) return null;
   return (
-    <OverlayPortal>
-      <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/35 p-3 backdrop-blur-sm md:items-center" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-        <section role="dialog" aria-modal="true" aria-label="Profile menu" className="surface-modal w-full max-w-sm p-4 mobile-overlay-safe">
-          <div className="flex items-center gap-3 border-b border-brand-border px-1 pb-4">
-            <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full" style={{ backgroundColor: profile.avatarColor }}><ProfileAvatar profile={profile} /></span>
-            <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">{profile.name}</p><p className="text-xs text-brand-text-muted">Your private journal space</p></div>
-            <button ref={closeRef} type="button" onClick={onClose} className="icon-button" aria-label="Close profile menu"><X className="h-5 w-5" /></button>
-          </div>
-          <div className="grid gap-2 pt-3">
-            <button type="button" onClick={() => { onSettings(); onClose(); }} className="flex min-h-12 items-center gap-3 rounded-xl px-3 text-sm font-bold hover:bg-brand-sage-light"><Settings className="h-5 w-5" />Settings</button>
-            <button type="button" data-testid="lock-app-button" onClick={() => { onLock(); onClose(); }} className="flex min-h-12 items-center gap-3 rounded-xl px-3 text-sm font-bold hover:bg-brand-sage-light"><Lock className="h-5 w-5" />Lock Dear Diary</button>
-          </div>
-        </section>
+    <BottomSheet open={open} onClose={onClose} title={profile.name} description="Your private journal space" label="Profile menu" className="md:max-w-sm">
+      <div className="mb-4 flex items-center gap-3">
+        <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full" style={{ backgroundColor: profile.avatarColor }}><ProfileAvatar profile={profile} /></span>
+        <p className="text-sm leading-relaxed text-ink-secondary">Manage your sanctuary or lock it before stepping away.</p>
       </div>
-    </OverlayPortal>
+      <div className="grid gap-1 border-t border-[var(--border-subtle)] pt-3">
+        <button type="button" onClick={() => { onSettings(); onClose(); }} className="flex min-h-12 items-center gap-3 rounded-[var(--radius-control)] px-3 text-sm font-bold hover:bg-surface-subtle"><Settings className="h-5 w-5" />Settings</button>
+        <button type="button" data-testid="lock-app-button" onClick={() => { onLock(); onClose(); }} className="flex min-h-12 items-center gap-3 rounded-[var(--radius-control)] px-3 text-sm font-bold hover:bg-surface-subtle"><Lock className="h-5 w-5" />Lock Dear Diary</button>
+      </div>
+    </BottomSheet>
   );
 }
 
 export function CreateActionSheet({ open, hasJournals, onClose, onNewEntry, onNewNote, onVoice, onPhoto, onNewJournal }: CreateActionSheetProps) {
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
-    closeRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-      if (event.key !== 'Tab') return;
-      const focusable: HTMLElement[] = dialogRef.current
-        ? Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input, select, textarea, [tabindex]:not([tabindex="-1"])'))
-        : [];
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('keydown', onKey); previous?.focus(); };
-  }, [open, onClose]);
-  if (!open) return null;
   const actions = [
     { label: 'New Journal Entry', detail: 'Write in a journal', onClick: onNewEntry, disabled: !hasJournals },
     { label: 'Quick Note', detail: 'Capture a thought', onClick: onNewNote },
@@ -181,18 +149,10 @@ export function CreateActionSheet({ open, hasJournals, onClose, onNewEntry, onNe
     { label: 'New Journal', detail: 'Create a private space', onClick: onNewJournal },
   ];
   return (
-    <OverlayPortal>
-      <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/35 p-3 backdrop-blur-sm md:items-center" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-        <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="create-sheet-title" className="surface-modal w-full max-w-md p-4 mobile-overlay-safe">
-          <div className="flex items-center justify-between px-1 pb-3">
-            <div><p className="app-eyebrow">Create</p><h2 id="create-sheet-title" className="font-serif-diary text-2xl font-semibold">What would you like to capture?</h2></div>
-            <button ref={closeRef} type="button" onClick={onClose} className="icon-button" aria-label="Close create menu"><X className="h-5 w-5" /></button>
-          </div>
-          <div className="grid gap-2">
-            {actions.map(action => <button key={action.label} type="button" disabled={action.disabled} onClick={() => { action.onClick(); onClose(); }} className="flex min-h-14 items-center justify-between rounded-xl border border-brand-border bg-brand-bg/45 px-4 py-3 text-left transition hover:border-brand-sage disabled:opacity-45"><span><span className="block text-sm font-bold">{action.label}</span><span className="block text-xs text-brand-text-muted">{action.disabled ? 'Create a journal first' : action.detail}</span></span><Plus className="h-4 w-4" /></button>)}
-          </div>
-        </section>
+    <BottomSheet open={open} onClose={onClose} title="What would you like to capture?" description="Choose a starting point. You can add more once you begin." className="md:max-w-md">
+      <div className="grid gap-1">
+        {actions.map(action => <button key={action.label} type="button" disabled={action.disabled} onClick={() => { action.onClick(); onClose(); }} className="group flex min-h-14 items-center justify-between rounded-[var(--radius-control)] px-3 py-3 text-left transition-colors hover:bg-surface-subtle disabled:opacity-45"><span><span className="block text-sm font-bold">{action.label}</span><span className="block text-xs text-ink-secondary">{action.disabled ? 'Create a journal first' : action.detail}</span></span><Plus className="h-4 w-4 text-ink-tertiary transition-transform group-hover:rotate-90" /></button>)}
       </div>
-    </OverlayPortal>
+    </BottomSheet>
   );
 }

@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { motion } from 'motion/react';
-import { 
-  Search, BookOpen, FileText, Image, ArrowRight, X, Filter, Download, RefreshCw
-} from 'lucide-react';
-import { AppSettings, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { motion, useAnimationControls, useReducedMotion } from 'motion/react';
+import { ArrowRight, BookOpen, Download, FileText, Filter, Image, RefreshCw, Search } from 'lucide-react';
+import type { AppSettings, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 import { diaryRepository } from '../repositories';
 import type { SettingsSection } from './AppSettingsScreen';
+import { AppButton, SearchField, StatusNotice } from './UiPrimitives';
+import { BottomSheet } from './ui/BottomSheet';
+import { EmptyState, LoadingSkeleton } from './ui/Feedback';
+import { motionTransitions } from './ui/motion';
 
 interface SearchScreenProps {
   settings: AppSettings;
@@ -24,666 +26,188 @@ interface SearchScreenProps {
 }
 
 type SearchResultItem = {
-  type: 'entry' | 'note';
-  id: string;
-  title: string;
-  body: string;
-  date: string;
-  tags: string[];
-  diaryName?: string;
-  photoCount?: number;
-  rawObj: any;
+  type: 'entry' | 'note'; id: string; title: string; body: string; date: string; tags: string[];
+  diaryName?: string; photoCount?: number; rawObj: any;
 };
 
 const formatArchiveRetryStatus = (archiveState?: PartitionHydrationState): string => {
   if (!archiveState || archiveState.status !== 'failed') return '';
-  if (archiveState.nextRetryAt && archiveState.nextRetryAt > Date.now()) {
-    return `Background restore will retry after ${new Date(archiveState.nextRetryAt).toLocaleString()}. Manual retry is available now.`;
-  }
+  if (archiveState.nextRetryAt && archiveState.nextRetryAt > Date.now()) return `Background restore will retry after ${new Date(archiveState.nextRetryAt).toLocaleString()}. Manual retry is available now.`;
   return 'The previous archive restore failed. Manual retry is available now.';
 };
 
-const highlightMatch = (value: string, query: string): React.ReactNode => {
+const highlightMatch = (value: string, query: string): ReactNode => {
   const needle = query.trim();
   if (!needle) return value;
   const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return value.split(new RegExp(`(${escaped})`, 'ig')).map((part, index) =>
-    part.toLocaleLowerCase() === needle.toLocaleLowerCase() ? <mark key={index} className="rounded bg-amber-200/70 px-0.5 text-inherit">{part}</mark> : part,
-  );
+  return value.split(new RegExp(`(${escaped})`, 'ig')).map((part, index) => part.toLocaleLowerCase() === needle.toLocaleLowerCase() ? <mark key={index} className="rounded-sm bg-amber-200/65 px-0.5 text-inherit dark:bg-amber-500/30">{part}</mark> : part);
 };
 
-export default function SearchScreen({
-  settings,
-  layout = 'mobile',
-  initialQuery,
-  excludeDiaryIds = [],
-  archiveMonths = [],
-  onHydrateArchiveMonth,
-  onHydrateAllArchiveMonths,
-  onOpenSettingsSection,
-  onNavigate,
-  onEditNote
-}: SearchScreenProps) {
+export default function SearchScreen({ settings, layout = 'mobile', initialQuery, excludeDiaryIds = [], archiveMonths = [], onHydrateArchiveMonth, onHydrateAllArchiveMonths, onOpenSettingsSection, onNavigate, onEditNote }: SearchScreenProps) {
   useScreenPerformance('search');
+  const searchFieldRef = useRef<HTMLDivElement>(null);
+  const searchFieldAnimation = useAnimationControls();
+  const prefersReducedMotion = useReducedMotion();
   const availableTags = getTagsForSettings(settings);
-  const [query, setQuery] = useState<string>('');
+  const [query, setQuery] = useState('');
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [selectedResultId, setSelectedResultId] = useState<string>('');
-  
-  // Filter states
+  const [selectedResultId, setSelectedResultId] = useState('');
   const [selectedSource, setSelectedSource] = useState<'all' | 'diaries' | 'notes'>('all');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [hasPhotos, setHasPhotos] = useState<boolean>(false);
-  const [fromDate, setFromDate] = useState<string>('');
-  const [toDate, setToDate] = useState<string>('');
-  const [showFilters, setShowFilters] = useState<boolean>(false);
+  const [hasPhotos, setHasPhotos] = useState(false);
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
   const [diaryNamesById, setDiaryNamesById] = useState<Record<string, string>>({});
-  const [restoringArchiveKey, setRestoringArchiveKey] = useState<string>('');
-  const [restoringAllArchives, setRestoringAllArchives] = useState<boolean>(false);
-  const [archiveRestoreError, setArchiveRestoreError] = useState<string>('');
+  const [restoringArchiveKey, setRestoringArchiveKey] = useState('');
+  const [restoringAllArchives, setRestoringAllArchives] = useState(false);
+  const [archiveRestoreError, setArchiveRestoreError] = useState('');
+  const [results, setResults] = useState<SearchResultItem[]>([]);
+  const excludeDiaryKey = excludeDiaryIds.join('|');
   const unloadedArchiveMonths = archiveMonths.filter(month => month.status !== 'hydrated');
   const failedArchiveMonths = unloadedArchiveMonths.filter(month => month.status === 'failed');
   const nextRestorableArchiveMonth = unloadedArchiveMonths.find(month => month.status !== 'hydrating');
-  const nextRestorableArchiveStatus = formatArchiveRetryStatus(nextRestorableArchiveMonth);
   const restorableArchiveMonths = unloadedArchiveMonths.filter(month => month.status !== 'hydrating');
-
-  const [results, setResults] = useState<SearchResultItem[]>([]);
+  const nextRestorableArchiveStatus = formatArchiveRetryStatus(nextRestorableArchiveMonth);
   const activeFilterCount = (selectedSource === 'all' ? 0 : 1) + selectedTags.length + (hasPhotos ? 1 : 0) + (fromDate ? 1 : 0) + (toDate ? 1 : 0);
-  const excludeDiaryKey = excludeDiaryIds.join('|');
+  const hasSearchIntent = Boolean(query.trim() || activeFilterCount > 0);
 
-  useEffect(() => {
-    if (initialQuery !== undefined) {
-      setQuery(initialQuery);
-    }
-  }, [initialQuery]);
+  useEffect(() => { if (initialQuery !== undefined) setQuery(initialQuery); }, [initialQuery]);
+
+  useLayoutEffect(() => {
+    searchFieldAnimation.set({ opacity: 1, x: 0, y: 0, scaleX: 1, scaleY: 1 });
+    if (layout !== 'desktop' || prefersReducedMotion) return;
+
+    const compactSearch = document.querySelector<HTMLInputElement>('[data-testid="nav-search"]');
+    const expandedSearch = searchFieldRef.current;
+    if (!compactSearch || !expandedSearch) return;
+
+    const compactRect = compactSearch.getBoundingClientRect();
+    const expandedRect = expandedSearch.getBoundingClientRect();
+    if (!compactRect.width || !compactRect.height || !expandedRect.width || !expandedRect.height) return;
+
+    searchFieldAnimation.set({
+      opacity: 0.82,
+      x: compactRect.left - expandedRect.left,
+      y: compactRect.top - expandedRect.top,
+      scaleX: compactRect.width / expandedRect.width,
+      scaleY: compactRect.height / expandedRect.height,
+      transformOrigin: 'left top',
+    });
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      void searchFieldAnimation.start({
+        opacity: 1,
+        x: 0,
+        y: 0,
+        scaleX: 1,
+        scaleY: 1,
+        transition: motionTransitions.sharedObject,
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      searchFieldAnimation.stop();
+    };
+  }, [layout, prefersReducedMotion, searchFieldAnimation]);
 
   useEffect(() => {
     let cancelled = false;
-    setIsSearching(true);
-    const loadDiaryNames = async () => {
-      const summaries = await diaryRepository.listDiarySummaries();
-      if (cancelled) return;
-      setDiaryNamesById(Object.fromEntries(summaries.map(diary => [diary.id, diary.name])));
-    };
+    const loadDiaryNames = async () => { const summaries = await diaryRepository.listDiarySummaries(); if (!cancelled) setDiaryNamesById(Object.fromEntries(summaries.map(diary => [diary.id, diary.name]))); };
     void loadDiaryNames();
-    const unsubscribe = diaryRepository.subscribeChanges((_revision, change) => {
-      if (!change || change.type.startsWith('diary-') || change.type === 'remote-batch-applied') {
-        void loadDiaryNames();
-      }
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
+    const unsubscribe = diaryRepository.subscribeChanges((_revision, change) => { if (!change || change.type.startsWith('diary-') || change.type === 'remote-batch-applied') void loadDiaryNames(); });
+    return () => { cancelled = true; unsubscribe(); };
   }, []);
 
   useEffect(() => {
     let cancelled = false;
+    setIsSearching(true);
     const timer = window.setTimeout(() => {
       void (async () => {
-        const filters = {
-          query: query.trim() || undefined,
-          tags: selectedTags,
-          fromDate: fromDate || undefined,
-          toDate: toDate || undefined,
-          hasPhotos: hasPhotos ? true : undefined,
-          excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [],
-          limit: 100,
-        };
+        const filters = { query: query.trim() || undefined, tags: selectedTags, fromDate: fromDate || undefined, toDate: toDate || undefined, hasPhotos: hasPhotos ? true : undefined, excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [], limit: 100 };
         const nextResults: SearchResultItem[] = [];
-
         if (selectedSource === 'all' || selectedSource === 'diaries') {
           const entryPage = await diaryRepository.searchEntries(filters);
-          entryPage.items.forEach(entry => {
-            nextResults.push({
-              type: 'entry',
-              id: entry.id,
-              title: entry.title,
-              body: richTextHtmlToPlainText(entry.body),
-              date: entry.date,
-              tags: entry.tags,
-              diaryName: diaryNamesById[entry.diaryId] || 'Unknown Journal',
-              photoCount: entry.photoCount,
-              rawObj: entry,
-            });
-          });
+          entryPage.items.forEach(entry => nextResults.push({ type: 'entry', id: entry.id, title: entry.title, body: richTextHtmlToPlainText(entry.body), date: entry.date, tags: entry.tags, diaryName: diaryNamesById[entry.diaryId] || 'Unknown Journal', photoCount: entry.photoCount, rawObj: entry }));
         }
-
         if (!hasPhotos && (selectedSource === 'all' || selectedSource === 'notes')) {
           const notePage = await diaryRepository.searchNotes(filters);
-          notePage.items.forEach(note => {
-            nextResults.push({
-              type: 'note',
-              id: note.id,
-              title: note.title,
-              body: richTextHtmlToPlainText(note.body),
-              date: new Date(note.updatedAt).toISOString().split('T')[0],
-              tags: note.tags,
-              diaryName: undefined,
-              photoCount: 0,
-              rawObj: note,
-            });
-          });
+          notePage.items.forEach(note => nextResults.push({ type: 'note', id: note.id, title: note.title, body: richTextHtmlToPlainText(note.body), date: new Date(note.updatedAt).toISOString().split('T')[0], tags: note.tags, rawObj: note }));
         }
-
         nextResults.sort((a, b) => b.date.localeCompare(a.date));
         if (!cancelled) { setResults(nextResults); setIsSearching(false); }
-      })();
+      })().catch(() => { if (!cancelled) setIsSearching(false); });
     }, 220);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [query, selectedSource, selectedTags, hasPhotos, fromDate, toDate, excludeDiaryKey, diaryNamesById]);
 
-  const handleTagToggle = (tag: string) => {
-    if (selectedTags.includes(tag)) {
-      setSelectedTags(prev => prev.filter(t => t !== tag));
-    } else {
-      setSelectedTags(prev => [...prev, tag]);
-    }
-  };
-
-  const clearAllFilters = () => {
-    setSelectedSource('all');
-    setSelectedTags([]);
-    setHasPhotos(false);
-    setFromDate('');
-    setToDate('');
-    setQuery('');
-  };
-
-  const handleResultClick = (item: SearchResultItem) => {
-    const committed = query.trim();
-    if (committed) setRecentSearches(previous => [committed, ...previous.filter(value => value !== committed)].slice(0, 5));
-    if (item.type === 'entry') {
-      onNavigate('diaries', 'diaryDetail', item.rawObj.diaryId, item.id);
-    } else {
-      onEditNote(item.rawObj);
-    }
-  };
-
+  const handleTagToggle = (tag: string) => setSelectedTags(previous => previous.includes(tag) ? previous.filter(item => item !== tag) : [...previous, tag]);
+  const clearAllFilters = () => { setSelectedSource('all'); setSelectedTags([]); setHasPhotos(false); setFromDate(''); setToDate(''); setQuery(''); };
+  const rememberSearch = () => { const committed = query.trim(); if (committed) setRecentSearches(previous => [committed, ...previous.filter(value => value !== committed)].slice(0, 5)); };
+  const handleResultClick = (item: SearchResultItem) => { rememberSearch(); if (item.type === 'entry') onNavigate('diaries', 'diaryDetail', item.rawObj.diaryId, item.id); else onEditNote(item.rawObj); };
   const selectedResult = results.find(item => item.id === selectedResultId) || results[0] || null;
-  const searchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== 'Enter') return;
-    const committed = query.trim();
-    if (committed) setRecentSearches(previous => [committed, ...previous.filter(value => value !== committed)].slice(0, 5));
-    if (layout === 'desktop' && selectedResult) handleResultClick(selectedResult);
+  const searchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => { if (event.key !== 'Enter') return; rememberSearch(); if (layout === 'desktop' && selectedResult) handleResultClick(selectedResult); };
+
+  const restoreOne = async () => {
+    if (!nextRestorableArchiveMonth || !onHydrateArchiveMonth) return;
+    setRestoringArchiveKey(String(nextRestorableArchiveMonth.partitionKey)); setArchiveRestoreError('');
+    try { await onHydrateArchiveMonth(String(nextRestorableArchiveMonth.partitionKey)); } catch (error: any) { setArchiveRestoreError(error?.message || 'Could not restore this archive month.'); } finally { setRestoringArchiveKey(''); }
+  };
+  const restoreAll = async () => {
+    if (!onHydrateAllArchiveMonths) return;
+    setRestoringAllArchives(true); setArchiveRestoreError('');
+    try { await onHydrateAllArchiveMonths(); } catch (error: any) { setArchiveRestoreError(error?.message || 'Could not restore all archive months.'); } finally { setRestoringAllArchives(false); }
   };
 
-  if (layout === 'desktop') {
-    const filterPanel = (
-      <aside className="space-y-6 rounded-[26px] border border-brand-border bg-white/68 p-5 shadow-[0_18px_55px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/60 xl:sticky xl:top-6 xl:max-h-[calc(100vh-9rem)] xl:overflow-y-auto 2xl:p-6">
-        <div>
-          <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Source</h2>
-          <div className="mt-4 space-y-2">
-            {(['all', 'diaries', 'notes'] as const).map(source => (
-              <button
-                key={source}
-                type="button"
-                onClick={() => setSelectedSource(source)}
-                className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left text-sm font-bold capitalize transition-all ${
-                  selectedSource === source
-                    ? 'border-brand-sage bg-white text-brand-plum shadow-[0_8px_24px_rgba(62,36,41,0.07)]'
-                    : 'border-brand-border bg-brand-bg/45 text-brand-text-muted hover:bg-white'
-                }`}
-              >
-                <span>{source === 'all' ? 'All Entries' : source}</span>
-                <span className={`h-3 w-3 rounded-full border ${selectedSource === source ? 'border-brand-sage bg-brand-sage' : 'border-brand-border'}`} />
-              </button>
-            ))}
-          </div>
-        </div>
+  const filterControls = (
+    <div className="space-y-6">
+      <fieldset><legend className="text-sm font-bold text-brand-plum dark:text-brand-text">Source</legend><div className="mt-3 grid grid-cols-3 gap-2">{(['all', 'diaries', 'notes'] as const).map(source => <button key={source} type="button" aria-pressed={selectedSource === source} onClick={() => setSelectedSource(source)} className={`min-h-11 rounded-full border px-3 text-sm font-bold capitalize ${selectedSource === source ? 'border-brand-sage bg-brand-sage text-white' : 'border-brand-border text-brand-text-muted'}`}>{source === 'diaries' ? 'Entries' : source}</button>)}</div></fieldset>
+      <fieldset><legend className="text-sm font-bold text-brand-plum dark:text-brand-text">Tags</legend><div className="mt-3 flex max-h-40 flex-wrap gap-2 overflow-y-auto">{availableTags.map(tag => <button key={tag} type="button" aria-pressed={selectedTags.includes(tag)} onClick={() => handleTagToggle(tag)} className={`rounded-full px-3 py-1.5 text-sm font-bold ${selectedTags.includes(tag) ? 'bg-brand-pink text-white' : 'bg-brand-sage-light text-brand-sage-dark'}`}>#{tag}</button>)}</div></fieldset>
+      <fieldset><legend className="text-sm font-bold text-brand-plum dark:text-brand-text">Date range</legend><div className="mt-3 grid grid-cols-2 gap-3"><label className="text-xs font-bold text-brand-text-muted">From<input aria-label="From date" type="date" value={fromDate} onChange={event => setFromDate(event.target.value)} className="mt-1 min-h-11 w-full rounded-xl border border-brand-border bg-brand-bg px-3 text-sm" /></label><label className="text-xs font-bold text-brand-text-muted">To<input aria-label="To date" type="date" value={toDate} onChange={event => setToDate(event.target.value)} className="mt-1 min-h-11 w-full rounded-xl border border-brand-border bg-brand-bg px-3 text-sm" /></label></div></fieldset>
+      <label className="flex min-h-12 items-center justify-between border-y border-brand-border/60 text-sm font-bold"><span className="flex items-center gap-2"><Image className="h-4 w-4 text-brand-sage" />Only entries with photos</span><input type="checkbox" checked={hasPhotos} onChange={event => setHasPhotos(event.target.checked)} className="h-5 w-5 accent-brand-sage" /></label>
+      <AppButton tone="quiet" onClick={clearAllFilters} disabled={!hasSearchIntent}>Clear all filters</AppButton>
+    </div>
+  );
 
-        <div>
-          <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Refine by tags</h2>
-          <div className="mt-4 flex max-h-40 flex-wrap gap-2 overflow-y-auto">
-            {availableTags.map(tag => {
-              const isSelected = selectedTags.includes(tag);
-              return (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => handleTagToggle(tag)}
-                  className={`rounded-full px-3 py-1.5 text-sm font-bold transition-all ${isSelected ? 'bg-brand-sage text-white' : 'bg-brand-sage-light text-brand-sage-dark hover:bg-brand-blush-light'}`}
-                >
-                  #{tag}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+  const archiveNotice = unloadedArchiveMonths.length > 0 ? (
+    <StatusNotice tone={failedArchiveMonths.length ? 'warning' : 'info'}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p>Some older memories are not downloaded. {unloadedArchiveMonths.length} archive month{unloadedArchiveMonths.length === 1 ? '' : 's'} can be included.</p>{nextRestorableArchiveStatus && <p className="mt-1 text-xs">{nextRestorableArchiveStatus}</p>}{archiveRestoreError && <p role="alert" className="mt-1 text-xs font-bold text-brand-rose">{archiveRestoreError}</p>}</div><div className="flex shrink-0 flex-wrap gap-2">{onHydrateArchiveMonth && nextRestorableArchiveMonth && <AppButton onClick={() => void restoreOne()} disabled={restoringAllArchives || Boolean(restoringArchiveKey)}>{restoringArchiveKey ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}{restoringArchiveKey ? 'Restoring' : 'Restore next'}</AppButton>}{onHydrateAllArchiveMonths && restorableArchiveMonths.length > 1 && <AppButton onClick={() => void restoreAll()} disabled={restoringAllArchives || Boolean(restoringArchiveKey)}>{restoringAllArchives ? 'Including…' : 'Include all'}</AppButton>}{onOpenSettingsSection && <AppButton tone="quiet" onClick={() => onOpenSettingsSection('data-storage')}>Manage storage</AppButton>}</div></div>
+    </StatusNotice>
+  ) : null;
 
-        <div>
-          <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Date range</h2>
-          <div className="mt-4 space-y-3">
-            <label className="block text-xs font-bold text-brand-text-muted">From date<input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className="mt-1 w-full rounded-xl border border-brand-border bg-white/70 px-4 py-3 text-sm font-bold text-brand-plum outline-none" /></label>
-            <label className="block text-xs font-bold text-brand-text-muted">To date<input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className="mt-1 w-full rounded-xl border border-brand-border bg-white/70 px-4 py-3 text-sm font-bold text-brand-plum outline-none" /></label>
-          </div>
-        </div>
+  const discovery = (
+    <div className="space-y-8 py-4">
+      {recentSearches.length > 0 && <section><h2 className="font-serif-diary text-2xl font-semibold">Recent searches</h2><div className="mt-3 flex flex-wrap gap-2">{recentSearches.map(value => <button type="button" key={value} onClick={() => setQuery(value)} className="rounded-full border border-brand-border px-4 py-2 text-sm font-bold">{value}</button>)}</div></section>}
+      <section><h2 className="font-serif-diary text-2xl font-semibold">Find a thread</h2><p className="mt-1 text-sm text-brand-text-muted">Start with a journal entry, a quick note, or a familiar theme.</p><div className="mt-4 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => { setSelectedSource('diaries'); setShowFilters(false); }} className="surface-paper flex min-h-24 items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left"><BookOpen className="h-6 w-6 text-brand-sage" /><span><span className="block font-bold">Journal entries</span><span className="text-xs text-brand-text-muted">Long-form pages and moments</span></span></button><button type="button" onClick={() => { setSelectedSource('notes'); setShowFilters(false); }} className="surface-paper flex min-h-24 items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left"><FileText className="h-6 w-6 text-brand-pink" /><span><span className="block font-bold">Quick notes</span><span className="text-xs text-brand-text-muted">Lightweight thoughts</span></span></button></div></section>
+      {availableTags.length > 0 && <section><h2 className="font-serif-diary text-2xl font-semibold">Suggested themes</h2><div className="mt-3 flex flex-wrap gap-2">{availableTags.slice(0, 8).map(tag => <button key={tag} type="button" onClick={() => handleTagToggle(tag)} className="rounded-full bg-brand-sage-light px-3 py-2 text-sm font-bold text-brand-sage-dark">#{tag}</button>)}</div></section>}
+      {!recentSearches.length && <p className="max-w-xl border-l-2 border-brand-pink/30 pl-4 font-serif-diary text-lg italic text-brand-text-muted">Search by a phrase you remember, a feeling you named, or a theme you want to revisit.</p>}
+    </div>
+  );
 
-        <label className="flex cursor-pointer items-center justify-between rounded-xl border border-brand-border bg-brand-bg/45 px-4 py-3">
-          <span className="text-sm font-bold text-brand-plum dark:text-brand-text">Requires Photos</span>
-          <input type="checkbox" checked={hasPhotos} onChange={(event) => setHasPhotos(event.target.checked)} className="h-5 w-5 accent-brand-sage" />
-        </label>
-
-        <button type="button" onClick={clearAllFilters} className="w-full rounded-full border border-brand-border bg-white/65 px-4 py-3 text-sm font-bold text-brand-sage hover:bg-white">
-          Clear Filters
-        </button>
-      </aside>
-    );
-
-    return (
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[280px_minmax(0,1fr)_320px] 2xl:gap-7">
-        {filterPanel}
-
-        <main className="min-w-0 space-y-6">
-          <header className="space-y-4">
-            <h1 className="font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">Global Search</h1>
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-brand-text-muted" />
-              <input
-                type="text"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={searchKeyDown}
-                placeholder="Search thoughts, memories, dreams..."
-                className="w-full rounded-full border border-brand-border bg-white/72 py-3.5 pl-12 pr-4 text-base font-semibold text-brand-plum outline-none transition-all focus:border-brand-sage focus:bg-white focus:shadow-[0_10px_34px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/70 dark:text-brand-text"
-              />
-            </div>
-            <p className="text-lg text-brand-text-muted" role="status">
-              {isSearching ? 'Searching… ' : ''}
-              Showing <strong className="text-brand-plum dark:text-brand-text">{results.length}</strong> result{results.length === 1 ? '' : 's'}
-              {query.trim() ? ` for "${query.trim()}"` : ''}
-              {activeFilterCount > 0 ? ` · ${activeFilterCount} active filters` : ''}
-            </p>
-          </header>
-
-          {!query.trim() && recentSearches.length > 0 && <section aria-labelledby="recent-searches"><h2 id="recent-searches" className="text-sm font-bold uppercase tracking-wider">Recent searches this session</h2><div className="mt-3 flex flex-wrap gap-2">{recentSearches.map(value => <button type="button" key={value} onClick={() => setQuery(value)} className="rounded-full border border-brand-border px-4 py-2 text-sm font-bold">{value}</button>)}</div></section>}
-
-          {unloadedArchiveMonths.length > 0 && (
-            <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-xs text-brand-sage-dark">
-              Some older memories are not downloaded. Include Older Memories or manage storage in Settings.
-              {onOpenSettingsSection && <button type="button" onClick={() => onOpenSettingsSection('data-storage')} className="ml-2 font-bold underline">Manage Storage</button>}
-            </div>
-          )}
-
-          <section className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
-            {results.map(item => {
-              const isSelected = selectedResult?.id === item.id;
-              return (
-                <button
-                  key={`${item.type}-${item.id}`}
-                  type="button"
-                  onClick={() => {
-                    const hasPreviewRail = typeof window !== 'undefined' && window.matchMedia('(min-width: 1536px)').matches;
-                    if (hasPreviewRail) {
-                      setSelectedResultId(item.id);
-                    } else {
-                      handleResultClick(item);
-                    }
-                  }}
-                  className={`min-h-[188px] rounded-[24px] border bg-white/74 p-5 text-left shadow-[0_12px_35px_rgba(62,36,41,0.06)] transition-colors hover:bg-white dark:bg-brand-card-bg/70 ${
-                    isSelected ? 'border-brand-sage ring-2 ring-brand-sage/15' : 'border-brand-border'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${item.type === 'entry' ? 'bg-brand-sage-light text-brand-sage-dark' : 'bg-brand-blush-light text-brand-pink-dark'}`}>
-                      {item.type === 'entry' ? 'Journal Entry' : 'Quick Note'}
-                    </span>
-                    <span className="text-xs font-bold text-brand-text-muted">{item.date}</span>
-                  </div>
-                  <h2 className="mt-5 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{highlightMatch(item.title, query)}</h2>
-                  <p className="mt-3 line-clamp-4 text-base leading-relaxed text-brand-plum/80 dark:text-brand-text/80">{highlightMatch(item.body, query)}</p>
-                  <div className="mt-4 flex flex-wrap gap-1.5">
-                    {item.tags.slice(0, 4).map(tag => (
-                      <span key={tag} className="rounded-full bg-brand-bg px-2 py-0.5 text-xs font-bold text-brand-sage-dark">
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
-                </button>
-              );
-            })}
-
-            {results.length === 0 && (
-              <div className="rounded-2xl border border-dashed border-brand-border bg-white/45 p-12 text-center 2xl:col-span-2">
-                <Search className="mx-auto h-12 w-12 text-brand-sage opacity-60" />
-                <h2 className="mt-4 font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">No results found</h2>
-                <p className="mt-2 text-sm text-brand-text-muted">Try adjusting text, filters, dates, or tags.</p>
-              </div>
-            )}
-          </section>
-        </main>
-
-        <aside className="hidden rounded-[28px] border border-brand-border bg-white/76 p-6 shadow-[0_18px_55px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/72 2xl:sticky 2xl:top-8 2xl:block 2xl:max-h-[calc(100vh-10rem)] 2xl:overflow-y-auto">
-          {selectedResult ? (
-            <div>
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-sm font-bold uppercase tracking-[0.2em] text-brand-sage">
-                    {selectedResult.type === 'entry' ? 'Journal Entry' : 'Quick Note'}
-                  </p>
-                  <h2 className="mt-4 font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">{selectedResult.title}</h2>
-                  <p className="mt-2 text-sm font-bold text-brand-text-muted">{selectedResult.date}</p>
-                </div>
-                <button type="button" onClick={() => setSelectedResultId('')} className="rounded-full p-2 text-brand-text-muted hover:bg-brand-blush-light">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="mt-7 flex flex-wrap gap-2">
-                {selectedResult.tags.map(tag => (
-                  <span key={tag} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-sm font-bold text-brand-sage-dark">
-                    #{tag}
-                  </span>
-                ))}
-              </div>
-
-              <p className="mt-7 whitespace-pre-line text-base leading-relaxed text-brand-plum/90 dark:text-brand-text/90">
-                {selectedResult.body}
-              </p>
-
-              <button
-                type="button"
-                onClick={() => handleResultClick(selectedResult)}
-                className="mt-8 inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-sage px-5 py-3 text-sm font-bold text-white hover:bg-brand-sage-dark"
-              >
-                Open {selectedResult.type === 'entry' ? 'Entry' : 'Note'}
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            </div>
-          ) : (
-            <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
-              <Search className="h-10 w-10 text-brand-sage" />
-              <h2 className="mt-4 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Select a result</h2>
-              <p className="mt-2 text-sm text-brand-text-muted">Preview a memory before opening it.</p>
-            </div>
-          )}
-        </aside>
-      </div>
-    );
-  }
+  const resultList = isSearching ? <LoadingSkeleton lines={6} className="py-8" label="Searching memories" /> : results.length === 0 ? <EmptyState icon={<Search className="h-5 w-5" />} title="No results found" description="Try another phrase or remove a filter." action={<AppButton tone="quiet" onClick={clearAllFilters}>Clear filters</AppButton>} /> : (
+    <section aria-label="Search results" className="divide-y divide-brand-border/60 border-y border-brand-border/60">
+      {results.map(item => <button key={`${item.type}-${item.id}`} type="button" onClick={() => layout === 'desktop' && window.matchMedia('(min-width: 1536px)').matches ? setSelectedResultId(item.id) : handleResultClick(item)} className={`block w-full px-1 py-5 text-left transition-colors hover:bg-brand-card-bg/40 ${selectedResult?.id === item.id && layout === 'desktop' ? 'border-l-2 border-brand-sage pl-4' : ''}`}><span className="flex items-center justify-between gap-3 text-xs text-brand-text-muted"><span className="flex items-center gap-1.5 font-bold">{item.type === 'entry' ? <BookOpen className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}{item.type === 'entry' ? item.diaryName : 'Quick note'}</span><span>{item.date}</span></span><h2 className="mt-2 font-serif-diary text-2xl font-semibold text-brand-plum dark:text-brand-text">{highlightMatch(item.title, query)}</h2><p className="mt-2 line-clamp-3 text-sm leading-relaxed text-brand-text-muted">{highlightMatch(item.body, query)}</p>{item.tags.length > 0 && <span className="mt-3 block text-xs font-semibold text-brand-sage">{item.tags.slice(0, 4).map(tag => `#${tag}`).join('  ')}</span>}</button>)}
+    </section>
+  );
 
   return (
-    <div className="flex flex-col gap-5 font-sans">
-      {/* Header */}
-      <header className="bg-brand-bg/95 backdrop-blur-md sticky top-0 py-3 z-30 flex flex-col gap-3">
-        <div className="flex justify-between items-center">
-          <h1 className="font-serif-diary text-3xl text-brand-plum tracking-tight font-bold">Search Sanctuary</h1>
-          <button 
-            onClick={() => setShowFilters(!showFilters)}
-            className={`p-2.5 rounded-full border transition-all flex items-center gap-1.5 text-xs font-bold ${
-              showFilters || selectedTags.length > 0 || hasPhotos || fromDate || toDate
-                ? 'bg-brand-pink text-white border-brand-pink shadow-sm'
-                : 'bg-brand-card-bg text-brand-sage border-brand-border hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
-            }`}
-          >
-            <Filter className="w-4 h-4" />
-            Filters
-            {(selectedTags.length > 0 || hasPhotos || fromDate || toDate) && (
-              <span className="w-2 h-2 bg-white rounded-full" />
-            )}
-          </button>
-        </div>
-
-        {/* Dynamic Text Input Box */}
-        <div className="relative">
-          <Search className="absolute left-4 top-3.5 w-4 h-4 text-brand-sage/60" />
-          <input 
-            type="text" 
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={searchKeyDown}
-            placeholder="Search keywords in diaries or notes..."
-            className="w-full bg-brand-card-bg text-sm text-brand-plum placeholder-brand-sage/50 pl-11 pr-4 py-3 rounded-2xl border border-brand-border focus:outline-none focus:ring-1 focus:ring-brand-sage journal-shadow"
-          />
-          {query && (
-            <button 
-              onClick={() => setQuery('')}
-              className="absolute right-4 top-3.5 text-brand-sage hover:text-brand-plum"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
+    <div className="pb-20">
+      <header className="surface-glass-strong sticky top-0 z-30 -mx-2 border-b border-brand-border/60 px-2 py-3">
+        <div className="flex items-end justify-between gap-4">{layout !== 'mobile' && <div><h1 className="font-serif-diary text-4xl font-semibold">Search</h1><p className="mt-1 text-sm text-brand-text-muted">Find a memory, not a record.</p></div>}<button type="button" onClick={() => setShowFilters(true)} className="ml-auto inline-flex min-h-11 items-center gap-2 rounded-full border border-brand-border px-4 text-sm font-bold text-brand-sage"><Filter className="h-4 w-4" />Filters{activeFilterCount > 0 && <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-pink px-1 text-xs text-white">{activeFilterCount}</span>}</button></div>
+        <motion.div ref={searchFieldRef} animate={searchFieldAnimation} className="mt-3 will-change-transform"><SearchField value={query} onChange={event => setQuery(event.target.value)} onKeyDown={searchKeyDown} onClear={() => setQuery('')} placeholder="Search thoughts, memories, dreams…" label="Search memories" className="text-base" /></motion.div>
       </header>
 
-      {/* Slide-down filter panel */}
-      {showFilters && (
-        <motion.div 
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          className="bg-brand-card-bg p-5 rounded-3xl border border-brand-border journal-shadow flex flex-col gap-4 overflow-hidden"
-        >
-          {/* Source filter */}
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Search Source</span>
-            <div className="grid grid-cols-3 gap-2">
-              {(['all', 'diaries', 'notes'] as const).map(source => (
-                <button
-                  key={source}
-                  onClick={() => setSelectedSource(source)}
-                  className={`py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${
-                    selectedSource === source 
-                      ? 'bg-brand-sage-light text-brand-sage-dark border-brand-sage' 
-                      : 'bg-brand-bg text-brand-sage border-brand-rose-light/50 hover:bg-brand-blush-light'
-                  }`}
-                >
-                  {source}
-                </button>
-              ))}
-            </div>
-          </div>
+      {activeFilterCount > 0 && <div className="no-scrollbar mt-4 flex gap-2 overflow-x-auto pb-1">{selectedSource !== 'all' && <button type="button" onClick={() => setSelectedSource('all')} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-xs font-bold text-brand-sage-dark">{selectedSource === 'diaries' ? 'Entries' : 'Notes'} ×</button>}{selectedTags.map(tag => <button key={tag} type="button" onClick={() => handleTagToggle(tag)} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-xs font-bold text-brand-sage-dark">#{tag} ×</button>)}{hasPhotos && <button type="button" onClick={() => setHasPhotos(false)} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-xs font-bold text-brand-sage-dark">Photos ×</button>}{(fromDate || toDate) && <button type="button" onClick={() => { setFromDate(''); setToDate(''); }} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-xs font-bold text-brand-sage-dark">Date range ×</button>}</div>}
 
-          {/* Tag multiselect picker */}
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Has Specific Tags</span>
-            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto no-scrollbar">
-              {availableTags.map(tag => {
-                const isSelected = selectedTags.includes(tag);
-                return (
-                  <button
-                    key={tag}
-                    onClick={() => handleTagToggle(tag)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all border ${
-                      isSelected 
-                        ? 'bg-brand-pink text-white border-brand-pink' 
-                        : 'bg-brand-bg text-brand-sage-dark border-brand-rose-light/40 hover:bg-brand-rose-light/25'
-                    }`}
-                  >
-                    #{tag}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Date from and to selectors */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="flex flex-col gap-1">
-              <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">From Date</span>
-              <input 
-                type="date" 
-                aria-label="From date"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-                className="bg-brand-bg border border-brand-rose-light text-xs font-serif-diary p-2 rounded-xl focus:outline-none"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">To Date</span>
-              <input 
-                type="date" 
-                aria-label="To date"
-                value={toDate}
-                onChange={(e) => setToDate(e.target.value)}
-                className="bg-brand-bg border border-brand-rose-light text-xs font-serif-diary p-2 rounded-xl focus:outline-none"
-              />
-            </div>
-          </div>
-
-          {/* Photo requirement switch */}
-          <div className="flex justify-between items-center py-1">
-            <div className="flex items-center gap-1.5 text-brand-plum">
-              <Image className="w-4 h-4 text-brand-sage" />
-              <span className="text-xs font-bold text-brand-plum">Requires Attached Photos</span>
-            </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input 
-                type="checkbox" 
-                checked={hasPhotos}
-                onChange={(e) => setHasPhotos(e.target.checked)}
-                className="sr-only peer" 
-              />
-              <div className="w-11 h-6 bg-brand-sage-light/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-brand-sage-light after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-sage" />
-            </label>
-          </div>
-
-          {/* Clear filters trigger */}
-          <button
-            onClick={clearAllFilters}
-            className="w-full py-2 bg-brand-blush-light text-brand-pink-dark rounded-xl text-xs font-bold hover:bg-brand-blush-dark transition-colors"
-          >
-            Clear Active Filters
-          </button>
-        </motion.div>
-      )}
-
-      {/* Results Header count summary */}
-      <div className="flex justify-between items-center">
-        <span className="text-xs text-brand-sage font-bold uppercase tracking-wider">
-          {results.length} results found
-        </span>
+      <div className={`mt-6 grid gap-7 ${layout === 'desktop' ? 'xl:grid-cols-[230px_minmax(0,1fr)] 2xl:grid-cols-[230px_minmax(0,1fr)_300px]' : ''}`}>
+        {layout === 'desktop' && <aside className="hidden border-r border-brand-border/60 pr-6 xl:block">{filterControls}</aside>}
+        <main className="min-w-0 space-y-5">{archiveNotice}{hasSearchIntent ? <><p role="status" className="text-sm text-brand-text-muted">{isSearching ? 'Searching…' : `${results.length} ${results.length === 1 ? 'memory' : 'memories'} found`}</p>{resultList}</> : discovery}</main>
+        {layout === 'desktop' && <aside className="hidden border-l border-brand-border/60 pl-6 2xl:block">{hasSearchIntent && selectedResult ? <div className="sticky top-28"><p className="app-eyebrow">Preview</p><h2 className="mt-3 font-serif-diary text-3xl font-semibold">{selectedResult.title}</h2><p className="mt-2 text-xs font-bold text-brand-text-muted">{selectedResult.date}</p><p className="mt-6 whitespace-pre-line text-sm leading-relaxed text-brand-text-muted">{selectedResult.body}</p><AppButton tone="primary" className="mt-6 w-full" onClick={() => handleResultClick(selectedResult)}>Open {selectedResult.type === 'entry' ? 'entry' : 'note'}<ArrowRight className="h-4 w-4" /></AppButton></div> : <EmptyState icon={<Search className="h-5 w-5" />} title="Memory preview" description="Select a result to read a little more before opening it." />}</aside>}
       </div>
 
-      {unloadedArchiveMonths.length > 0 && (
-        <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage-light/20 px-4 py-3 text-xs text-brand-sage-dark">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p>
-          Some older memories are not downloaded. {unloadedArchiveMonths.length} archive month{unloadedArchiveMonths.length === 1 ? '' : 's'} can be included on request.
-              {failedArchiveMonths.length > 0 && (
-                <> {failedArchiveMonths.length} month{failedArchiveMonths.length === 1 ? '' : 's'} need retry.</>
-              )}
-            </p>
-            <div className="flex shrink-0 flex-wrap gap-2">
-              {onHydrateArchiveMonth && nextRestorableArchiveMonth && (
-                <button
-                  type="button"
-                  disabled={restoringAllArchives || restoringArchiveKey === nextRestorableArchiveMonth.partitionKey}
-                  onClick={async () => {
-                    setRestoringArchiveKey(String(nextRestorableArchiveMonth.partitionKey));
-                    setArchiveRestoreError('');
-                    try {
-                      await onHydrateArchiveMonth(String(nextRestorableArchiveMonth.partitionKey));
-                    } catch (error: any) {
-                      setArchiveRestoreError(error?.message || 'Could not restore this archive month.');
-                    } finally {
-                      setRestoringArchiveKey('');
-                    }
-                  }}
-                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-brand-sage px-3 py-1.5 text-xs font-extrabold uppercase tracking-widest text-white transition-all hover:bg-brand-sage-dark disabled:cursor-wait disabled:bg-brand-sage/60"
-                >
-                  {restoringArchiveKey === nextRestorableArchiveMonth.partitionKey ? (
-                    <RefreshCw className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Download className="h-3 w-3" />
-                  )}
-                  {restoringArchiveKey === nextRestorableArchiveMonth.partitionKey
-                    ? 'Restoring'
-                    : `${nextRestorableArchiveMonth.status === 'failed' ? 'Retry' : 'Restore'} ${String(nextRestorableArchiveMonth.partitionKey).replace('month:', '')}`}
-                </button>
-              )}
-              {onHydrateAllArchiveMonths && restorableArchiveMonths.length > 1 && (
-                <button
-                  type="button"
-                  disabled={restoringAllArchives || Boolean(restoringArchiveKey)}
-                  onClick={async () => {
-                    setRestoringAllArchives(true);
-                    setArchiveRestoreError('');
-                    try {
-                      await onHydrateAllArchiveMonths();
-                    } catch (error: any) {
-                      setArchiveRestoreError(error?.message || 'Could not restore all archive months.');
-                    } finally {
-                      setRestoringAllArchives(false);
-                    }
-                  }}
-                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-brand-sage/40 bg-white/70 px-3 py-1.5 text-xs font-extrabold uppercase tracking-widest text-brand-sage-dark transition-all hover:bg-brand-sage-light/40 disabled:cursor-wait disabled:opacity-60"
-                >
-                  {restoringAllArchives ? (
-                    <RefreshCw className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Download className="h-3 w-3" />
-                  )}
-                  {restoringAllArchives ? 'Including older memories' : 'Include Older Memories'}
-                </button>
-              )}
-              {onOpenSettingsSection && <button type="button" onClick={() => onOpenSettingsSection('data-storage')} className="rounded-full border border-brand-sage/40 px-3 py-1.5 text-xs font-extrabold uppercase tracking-widest">Manage Storage</button>}
-            </div>
-          </div>
-          {nextRestorableArchiveStatus && (
-            <p className="mt-2 text-xs font-semibold text-brand-sage-dark">
-              {nextRestorableArchiveStatus}
-            </p>
-          )}
-          {archiveRestoreError && <p className="mt-2 text-xs font-bold text-red-600">{archiveRestoreError}</p>}
-        </div>
-      )}
-
-      {/* Results List */}
-      <div className="flex flex-col gap-4">
-        {results.map(item => (
-          <button
-            type="button"
-            key={`${item.type}-${item.id}`}
-            onClick={() => handleResultClick(item)}
-            className="bg-brand-card-bg p-4 rounded-2xl border border-brand-border hover:border-brand-pink/40 journal-shadow cursor-pointer flex flex-col gap-2 text-left transition-colors"
-          >
-            <div className="flex justify-between items-start">
-              <span className={`inline-flex items-center gap-1 text-xs font-bold uppercase tracking-widest px-2 py-0.5 rounded-full ${
-                item.type === 'entry' 
-                  ? 'bg-brand-sage-light/30 text-brand-sage-dark' 
-                  : 'bg-brand-blush-light text-brand-pink-dark'
-              }`}>
-                {item.type === 'entry' ? <BookOpen className="w-3 h-3" /> : <FileText className="w-3 h-3" />}
-                {item.type === 'entry' ? `Journal: ${item.diaryName}` : 'Note'}
-              </span>
-              <span className="text-xs text-brand-sage font-semibold">{item.date}</span>
-            </div>
-
-            <h3 className="font-serif-diary font-bold text-brand-plum text-sm">{highlightMatch(item.title, query)}</h3>
-            <p className="text-xs text-brand-plum/80 leading-relaxed line-clamp-2">{highlightMatch(item.body, query)}</p>
-
-            <div className="flex justify-between items-center border-t border-brand-rose-light/30 pt-2.5 mt-1.5">
-              <div className="flex flex-wrap gap-1">
-                {item.tags.map(tag => (
-                  <span key={tag} className="text-xs font-bold uppercase tracking-widest text-brand-sage-dark bg-brand-sage-light/10 border border-brand-sage-light/25 px-2 py-0.5 rounded-full">
-                    #{tag}
-                  </span>
-                ))}
-              </div>
-              <span className="text-xs font-bold text-brand-pink hover:underline uppercase tracking-wider flex items-center gap-0.5">
-                View detail
-                <ArrowRight className="w-2.5 h-2.5" />
-              </span>
-            </div>
-          </button>
-        ))}
-
-        {/* Empty State */}
-        {results.length === 0 && (
-          <div className="flex flex-col items-center justify-center text-center py-20 px-6 gap-3">
-            <Search className="w-12 h-12 text-brand-sage opacity-50" />
-            <h3 className="font-serif-diary text-lg font-bold text-brand-plum">No results found</h3>
-            <p className="text-xs text-brand-sage max-w-xs">
-              Try adjusting your text, source filters, date ranges, or tag multiselections.
-            </p>
-          </div>
-        )}
-      </div>
+      <BottomSheet open={showFilters && layout !== 'desktop'} title="Refine memories" description="Narrow the search without losing your place." onClose={() => setShowFilters(false)} footer={<><AppButton tone="quiet" onClick={clearAllFilters}>Clear all</AppButton><AppButton tone="primary" onClick={() => setShowFilters(false)}>Show results</AppButton></>}>{filterControls}</BottomSheet>
     </div>
   );
 }

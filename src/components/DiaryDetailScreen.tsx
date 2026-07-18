@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { 
   ArrowLeft, Edit, Download, Settings, ChevronLeft, ChevronRight, 
   Plus, Calendar, X, Maximize2,
@@ -15,6 +15,7 @@ import SanitizedRichText from './SanitizedRichText';
 import { resolveEntryIndexForEntryId } from './diaryDetailNavigation';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import JournalCover from './JournalCover';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
@@ -59,6 +60,7 @@ export default function DiaryDetailScreen({
   onHydrateArchiveMonth,
 }: DiaryDetailScreenProps) {
   useScreenPerformance('diaryDetail');
+  const prefersReducedMotion = useReducedMotion();
   const [diaryEntries, setDiaryEntries] = useState<Entry[]>([]);
   const [calendarEntryDates, setCalendarEntryDates] = useState<Set<string>>(() => new Set());
 
@@ -327,7 +329,11 @@ export default function DiaryDetailScreen({
   };
 
   // 3D paper fold and curling variants (Point 4)
-  const entryTransitionVariants = {
+  const entryTransitionVariants = prefersReducedMotion ? {
+    initial: { opacity: 0 },
+    animate: { opacity: 1, transition: { duration: 0.01 } },
+    exit: { opacity: 0, transition: { duration: 0.01 } },
+  } : {
     initial: (dir: 'left' | 'right') => ({
       rotateY: dir === 'left' ? 95 : -95,
       skewY: dir === 'left' ? -7 : 7,
@@ -341,8 +347,8 @@ export default function DiaryDetailScreen({
       opacity: 1,
       scale: 1,
       transition: {
-        duration: 0.75,
-        ease: [0.16, 1, 0.3, 1] // realistic elastic paper swing
+        duration: 0.28,
+        ease: [0.2, 0, 0, 1]
       }
     },
     exit: (dir: 'left' | 'right') => ({
@@ -352,17 +358,17 @@ export default function DiaryDetailScreen({
       scale: 0.94,
       transformOrigin: dir === 'left' ? 'left center' : 'right center',
       transition: {
-        duration: 0.65,
-        ease: [0.16, 1, 0.3, 1]
+        duration: 0.24,
+        ease: [0.2, 0, 0, 1]
       }
     })
   };
 
   if (layout === 'desktop') {
     return (
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[270px_minmax(0,1fr)] xl:gap-7 2xl:grid-cols-[290px_minmax(0,1fr)_280px] 2xl:gap-8">
-        <aside className="xl:sticky xl:top-6 flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-[26px] border border-brand-border bg-white/68 shadow-[0_18px_55px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/55">
-          <div className="border-b border-brand-border p-5">
+      <div className="grid grid-cols-1 gap-7 xl:grid-cols-[275px_minmax(0,1fr)] 2xl:grid-cols-[285px_minmax(0,1fr)_270px] 2xl:gap-9">
+        <aside className="xl:sticky xl:top-6 flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden border-r border-[var(--border-subtle)] pr-5">
+          <div className="border-b border-[var(--border-subtle)] pb-5">
             <button
               type="button"
               onClick={onBack}
@@ -372,9 +378,7 @@ export default function DiaryDetailScreen({
               Back to library
             </button>
             <div className="flex items-center gap-3">
-              <span className="flex h-12 w-12 items-center justify-center rounded-2xl text-2xl shadow-inner" style={{ backgroundColor: diary.color }}>
-                {diary.emoji}
-              </span>
+              <JournalCover diary={diary} variant="thumbnail" showTitle={false} />
               <div className="min-w-0">
                 <h1 className="truncate font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{diary.name}</h1>
                 <p className="text-xs font-semibold text-brand-text-muted">{diaryEntries.length} entries</p>
@@ -387,7 +391,7 @@ export default function DiaryDetailScreen({
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Search entries..."
-                className="w-full rounded-full border border-brand-border bg-brand-bg/65 py-2.5 pl-10 pr-4 text-sm font-semibold text-brand-plum outline-none focus:border-brand-sage dark:text-brand-text"
+                className="w-full rounded-[var(--radius-control)] border border-[var(--border-subtle)] bg-surface py-2.5 pl-10 pr-4 text-sm font-semibold text-ink outline-none focus:border-accent"
               />
             </div>
           </div>
@@ -424,7 +428,7 @@ export default function DiaryDetailScreen({
             })}
           </div>
 
-          <div className="border-t border-brand-border p-5">
+          <div className="border-t border-[var(--border-subtle)] pt-5">
             <button
               type="button"
               data-testid="diary-new-entry-button"
@@ -462,15 +466,15 @@ export default function DiaryDetailScreen({
               </button>
             </section>
           ) : (
-            <article className="rounded-[30px] border border-brand-border bg-white/86 px-7 py-8 shadow-[0_20px_65px_rgba(62,36,41,0.08)] dark:bg-brand-card-bg/80 xl:px-10 xl:py-10 2xl:px-12 2xl:py-11">
+            <article className="surface-paper mx-auto max-w-[52rem] px-7 py-9 xl:px-11 xl:py-12 2xl:px-14">
               <div className="flex flex-wrap items-start justify-between gap-5 xl:gap-6">
                 <div>
-                  <p className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em] text-brand-sage">
+                  <p className="flex items-center gap-2 text-xs font-bold tracking-[0.08em] text-accent">
                     {diary.isLocked && <Lock className="h-4 w-4" />}
                     {new Date(activeEntry.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
                     {activeEntry.time && ` - ${formatTime12(activeEntry.time)}`}
                   </p>
-                  <h1 className="mt-4 font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
+                  <h1 className="mt-4 font-serif-diary text-4xl font-semibold tracking-[-0.025em] text-ink xl:text-5xl">
                     {activeEntry.title === 'Untitled entry' ? 'Untitled Reflection' : activeEntry.title}
                   </h1>
                 </div>
@@ -485,7 +489,7 @@ export default function DiaryDetailScreen({
                 </button>
               </div>
 
-              <div className="mt-10 max-w-3xl font-serif-diary text-xl leading-[1.8] text-brand-plum/95 dark:text-brand-text xl:text-2xl">
+              <div className="mt-10 max-w-3xl font-serif-diary text-xl leading-[1.85] text-ink xl:text-2xl">
                 {activeEntry.isTimelineBifurcated && activeEntry.blocks && activeEntry.blocks.length > 0 ? (
                   <div className="space-y-8">
                     {activeEntry.blocks.map(block => (
@@ -538,9 +542,9 @@ export default function DiaryDetailScreen({
         <aside className="flex flex-col gap-5 overflow-visible xl:col-start-2 xl:row-start-2 2xl:sticky 2xl:top-8 2xl:col-start-auto 2xl:row-start-auto 2xl:max-h-[calc(100vh-10rem)] 2xl:overflow-y-auto">
           {activeEntry && (
             <>
-              <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+              <section className="border-t border-[var(--border-subtle)] pt-5">
                 <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Mood</h2>
-                <div className="mt-4 flex items-center gap-3 rounded-2xl bg-brand-bg/70 p-4">
+                <div className="mt-4 flex items-center gap-3">
                   <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-sage-light text-2xl">{activeEntry.moodEmoji}</span>
                   <div>
                     <p className="font-bold text-brand-plum dark:text-brand-text">{activeEntry.moodName}</p>
@@ -549,7 +553,7 @@ export default function DiaryDetailScreen({
                 </div>
               </section>
 
-              <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+              <section className="border-t border-[var(--border-subtle)] pt-5">
                 <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Tags</h2>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {activeEntry.tags.length > 0 ? activeEntry.tags.map(tag => (
@@ -563,7 +567,7 @@ export default function DiaryDetailScreen({
               </section>
 
               {allAudioUris.length > 0 && (
-                <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+                <section className="border-t border-[var(--border-subtle)] pt-5">
                   <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Voice Notes</h2>
                   <div className="mt-4 space-y-3">
                     {allAudioUris.map((audio, index) => (
@@ -575,7 +579,7 @@ export default function DiaryDetailScreen({
                 </section>
               )}
 
-              <section className="rounded-[24px] border border-brand-border bg-white/70 p-5 shadow-sm dark:bg-brand-card-bg/65">
+              <section className="border-t border-[var(--border-subtle)] pt-5">
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Scrapbook</h2>
                   <span className="text-xs font-bold text-brand-text-muted">{activeEntry.photoUris?.length || 0}</span>
@@ -647,10 +651,10 @@ export default function DiaryDetailScreen({
   }
 
   return (
-    <div className="flex flex-col gap-6 font-sans select-none relative">
+    <div className="relative flex flex-col gap-6 font-sans select-none">
       
       {/* Top Bar Navigation */}
-      <header className="flex justify-between items-center bg-brand-bg/95 backdrop-blur-md sticky top-0 py-3 z-30 border-b border-brand-border/40 select-none">
+      <header className="surface-glass-strong sticky top-0 z-30 -mx-1 flex items-center justify-between rounded-[var(--radius-modal)] px-1.5 py-2 select-none">
         <div className="flex items-center gap-2">
           <button 
             onClick={onBack}
@@ -659,36 +663,26 @@ export default function DiaryDetailScreen({
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <span className="text-xl">{diary.emoji}</span>
-          <h1 className="font-serif-diary text-lg font-bold text-brand-plum truncate max-w-[150px]">{diary.name}</h1>
+          <h1 className="max-w-[170px] truncate font-serif-diary text-lg font-semibold text-ink">{diary.name}</h1>
         </div>
         
         <div className="flex items-center gap-1.5 relative">
-          {activeEntry && (
-            <button 
-              data-testid="entry-edit-button"
-              onClick={() => onEditEntry(activeEntry.id)}
-              className="p-2 text-brand-pink hover:bg-brand-blush-light rounded-full transition-all"
-              title="Edit Page"
-            >
-              <Edit className="w-5 h-5" />
-            </button>
-          )}
-
           <button 
+            type="button"
             data-testid="diary-new-entry-button"
             onClick={() => onNewEntry(diary.id)}
-            className="bg-brand-pink text-white p-2.5 rounded-xl text-xs font-bold transition-transform hover:scale-105 active:scale-95 shadow-md shadow-brand-pink/15"
-            title="New Page"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--accent-secondary)] text-white shadow-sm transition-transform active:scale-95"
+            aria-label="New Page"
           >
             <Plus className="w-4 h-4" />
           </button>
 
           {/* More Options Button */}
           <button
+            type="button"
             onClick={() => setShowMoreMenu(!showMoreMenu)}
-            className={`p-2 text-brand-pink hover:bg-brand-blush-light rounded-full transition-all ${showMoreMenu ? 'bg-brand-blush-light' : ''}`}
-            title="More Options"
+            className={`p-2 text-accent hover:bg-accent-soft rounded-full transition-all ${showMoreMenu ? 'bg-accent-soft' : ''}`}
+            aria-label="More Options"
           >
             <MoreVertical className="w-5 h-5" />
           </button>
@@ -697,8 +691,10 @@ export default function DiaryDetailScreen({
           {showMoreMenu && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowMoreMenu(false)} />
-              <div className="absolute right-0 top-12 mt-2 w-56 rounded-2xl bg-white/95 dark:bg-brand-card-bg/95 backdrop-blur-md border border-brand-border/80 shadow-2xl z-50 p-2.5 flex flex-col gap-1">
+              <div className="surface-glass-strong absolute right-0 top-12 z-50 mt-2 flex w-56 flex-col gap-1 rounded-[var(--radius-modal)] p-2.5">
+                {activeEntry && <button type="button" data-testid="entry-edit-button" onClick={() => { setShowMoreMenu(false); onEditEntry(activeEntry.id); }} className="flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-left text-xs font-bold text-ink hover:bg-surface-subtle"><Edit className="h-4 w-4 text-[var(--accent-secondary)]" />Edit this entry</button>}
                 <button
+                  type="button"
                   onClick={() => {
                     setShowMoreMenu(false);
                     onOpenSettings(diary.id);
@@ -716,7 +712,7 @@ export default function DiaryDetailScreen({
 
       {/* Traversal Tools: Search Bar & TOC Button & Custom Date Picker Calendar */}
       <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-2 bg-white/70 dark:bg-brand-card-bg/50 border border-brand-border/60 p-3 rounded-2xl shadow-sm">
+        <div className="surface-glass flex items-center gap-2 rounded-[var(--radius-modal)] p-2">
           <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-brand-sage" />
             <input
@@ -948,8 +944,8 @@ export default function DiaryDetailScreen({
         <div className="flex flex-col gap-6 pb-16">
           
           {/* Header Pagination & Nav Buttons */}
-          <div className="flex flex-col items-center gap-2 bg-white/80 dark:bg-brand-card-bg/85 backdrop-blur-md p-4 rounded-[32px] border border-brand-border/50 shadow-sm">
-            <span className="text-xs font-extrabold text-brand-pink uppercase tracking-[0.2em]">
+          <div className="flex flex-col items-center gap-2 border-y border-[var(--border-subtle)] py-3">
+            <span className="text-xs font-bold text-[var(--accent-secondary)] tracking-[0.12em]">
               Page {activeEntryIndex + 1} of {filteredEntries.length} {searchQuery ? '(Filtered)' : ''}
             </span>
             
@@ -1009,7 +1005,7 @@ export default function DiaryDetailScreen({
           <div className="flex flex-col items-center gap-3">
             <div className="flex flex-wrap gap-2 justify-center">
               {/* Mood Badge */}
-              <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink-dark rounded-full text-xs font-bold shadow-sm">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--accent-secondary-soft)] px-3.5 py-1.5 text-xs font-bold text-[var(--accent-secondary)]">
                 <span>{activeEntry.moodEmoji}</span>
                 <span>{activeEntry.moodName}</span>
               </span>
@@ -1018,7 +1014,7 @@ export default function DiaryDetailScreen({
               {activeEntry.tags && activeEntry.tags.map(tag => (
                 <span 
                   key={tag}
-                  className="inline-flex items-center px-3 py-1.5 bg-brand-sage-light dark:bg-brand-sage-light/30 text-brand-sage-dark dark:text-brand-sage-dark rounded-full text-xs font-bold border border-brand-sage/20 shadow-sm"
+                  className="inline-flex items-center rounded-full bg-accent-soft px-3 py-1.5 text-xs font-bold text-accent-strong"
                 >
                   #{tag}
                 </span>
@@ -1032,7 +1028,7 @@ export default function DiaryDetailScreen({
 
           {/* Page body with swipe gestures and realistic 3D folding curves */}
           <div 
-            className="relative min-h-[300px] bg-white dark:bg-brand-card-bg p-5 sm:p-7 rounded-[32px] border border-brand-border/60 dark:border-brand-border/10 shadow-xl journal-shadow overflow-hidden" 
+            className="surface-paper relative min-h-[360px] overflow-hidden p-5 sm:p-8"
             style={{ perspective: '2000px' }}
           >
             {/* Elegant physical book spine crease shadow */}
@@ -1047,7 +1043,7 @@ export default function DiaryDetailScreen({
                 animate="animate"
                 exit="exit"
                 style={{ transformStyle: 'preserve-3d', backfaceVisibility: 'hidden' }}
-                className={`relative font-serif-diary text-lg md:text-xl text-brand-plum leading-relaxed border-l-2 border-brand-pink/15 pl-5 py-1 select-text rich-text-editor ${
+                className={`relative font-serif-diary text-lg md:text-xl text-ink leading-[1.8] border-l border-[var(--border-subtle)] pl-5 py-1 select-text rich-text-editor ${
                   activeEntry.isTimelineBifurcated ? '' : 'first-letter:text-5xl first-letter:font-serif first-letter:text-brand-pink first-letter:float-left first-letter:mr-3 first-letter:leading-none first-letter:font-bold first-letter:mt-1'
                 }`}
               >
@@ -1166,7 +1162,7 @@ export default function DiaryDetailScreen({
             </motion.button>
           </div>
 
-          <nav aria-label="Entry navigation" className="sticky bottom-3 z-30 mx-auto grid w-full max-w-sm grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg/95 p-2 shadow-lg backdrop-blur-xl">
+          <nav aria-label="Entry navigation" className="surface-glass-strong sticky bottom-3 z-30 mx-auto grid w-full max-w-sm grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-[var(--radius-modal)] p-2">
             <button type="button" onClick={handlePrev} disabled={activeEntryIndex === filteredEntries.length - 1} className="min-h-11 rounded-xl text-sm font-bold text-brand-sage disabled:opacity-35">Older</button>
             <button type="button" onClick={() => setShowTOC(true)} className="min-h-11 rounded-xl border border-brand-border px-3 text-sm font-bold text-brand-plum dark:text-brand-text" aria-label={`Open entry navigator, entry ${activeEntryIndex + 1} of ${filteredEntries.length}`}>{activeEntryIndex + 1} of {filteredEntries.length}</button>
             <button type="button" onClick={handleNext} disabled={activeEntryIndex === 0} className="min-h-11 rounded-xl text-sm font-bold text-brand-sage disabled:opacity-35">Newer</button>

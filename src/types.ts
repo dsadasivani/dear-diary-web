@@ -81,6 +81,7 @@ export interface AppSettings {
   customTags?: string[];
   customMoods?: Mood[];
   theme?: 'light' | 'dark';
+  /** @deprecated Retained for persisted-data compatibility; the ambient clock is always shown before PIN entry. */
   showAmbientLockScreen?: boolean;
 }
 

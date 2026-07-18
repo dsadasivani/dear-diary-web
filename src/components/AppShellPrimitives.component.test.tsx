@@ -2,9 +2,17 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { CreateActionSheet, MobileBottomNavigation } from './AppShellPrimitives';
+import { CreateActionSheet, MobileBottomNavigation, isRootDestinationScreen } from './AppShellPrimitives';
 
 describe('redesigned application shell', () => {
+  it('only classifies primary list screens as root destinations', () => {
+    expect(isRootDestinationScreen('home', 'list')).toBe(true);
+    expect(isRootDestinationScreen('diaries', 'diaryDetail')).toBe(false);
+    expect(isRootDestinationScreen('diaries', 'diarySettings')).toBe(false);
+    expect(isRootDestinationScreen('search', 'list')).toBe(false);
+    expect(isRootDestinationScreen('stats', 'appSettings')).toBe(false);
+  });
+
   it('exposes four primary mobile destinations plus Create', async () => {
     const user = userEvent.setup();
     const onNavigate = vi.fn();
