@@ -84,14 +84,18 @@ export const createCustomRecoveryQuestionId = (): string => (
   `${CUSTOM_RECOVERY_QUESTION_PREFIX}${Date.now()}`
 );
 
+const resolveRecoveryQuestionText = (config: SecurityConfig): string | undefined => (
+  config.recoveryQuestionText?.trim() ||
+  SECURITY_RECOVERY_QUESTIONS.find(question => question.id === config.recoveryQuestionId)?.question
+);
+
 export const getRecoveryQuestionText = (config: SecurityConfig): string => (
-  config.recoveryQuestionText ||
-  SECURITY_RECOVERY_QUESTIONS.find(question => question.id === config.recoveryQuestionId)?.question ||
-  'Your recovery question'
+  resolveRecoveryQuestionText(config) || 'Recovery question unavailable'
 );
 
 export const hasRecoveryQuestion = (config: SecurityConfig): boolean => Boolean(
   config.recoveryQuestionId &&
+  resolveRecoveryQuestionText(config) &&
   config.recoveryAnswerHash &&
   config.recoveryAnswerSalt &&
   config.recoveryAnswerIterations

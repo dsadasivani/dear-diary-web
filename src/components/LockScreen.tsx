@@ -631,6 +631,9 @@ export default function LockScreen({
     : 'bg-gradient-to-tr from-[#FAF7F2] via-[#FFF8F4] to-[#F4EFE7]';
 
   const showRecoveryForm = !showBackupChoice && setupStep !== 'complete' && (requiresRecoverySetup || setupStep === 'recovery');
+  const hasSecurityQuestionRecovery = hasRecoveryQuestion(security);
+  const hasGoogleRecovery = Boolean(security.linkedGoogleUserId || security.linkedGoogleUid);
+  const hasAvailablePinRecovery = hasSecurityQuestionRecovery || hasGoogleRecovery;
   const visiblePinLength = security.isPinCreated ? (security.pinLength || (pin.length > 4 ? 8 : 4)) : selectedPinLength;
   const accountSetupProgressMessage = successMsg || 'Opening Google account...';
   const accountSetupProgressKey = syncSetupProgressKeyForMessage(accountSetupProgressMessage);
@@ -1133,7 +1136,7 @@ export default function LockScreen({
                   </p>
                 )}
 
-                {security.isPinCreated && !requiresRecoverySetup && !isResetting && (
+                {security.isPinCreated && !requiresRecoverySetup && !isResetting && hasAvailablePinRecovery && (
                   <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
                     <button onClick={() => { triggerHaptic(15); setRecoveryMode('choosing'); }} className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors">
                       Forgot security passcode PIN?
@@ -1153,11 +1156,13 @@ export default function LockScreen({
                         {recoveryMode === 'choosing' && (
                           <div className="mt-3 flex w-full flex-col gap-3">
                             <p className="mx-auto mb-3 max-w-[260px] text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">Choose a verified recovery method to create a new passcode.</p>
-                            <button onClick={() => { setRecoveryMode('question'); setRecoveryAnswer(''); }} className="group w-full rounded-2xl border border-brand-border/65 bg-white/45 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-pink/40 hover:bg-brand-pink/8 dark:border-white/10 dark:bg-white/[0.04] dark:hover:bg-white/[0.07]">
-                              <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-pink">Recovery Method</span>
-                              <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">Answer Security Question</span>
-                            </button>
-                            {(security.linkedGoogleUserId || security.linkedGoogleUid) && (
+                            {hasSecurityQuestionRecovery && (
+                              <button onClick={() => { setRecoveryMode('question'); setRecoveryAnswer(''); }} className="group w-full rounded-2xl border border-brand-border/65 bg-white/45 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-pink/40 hover:bg-brand-pink/8 dark:border-white/10 dark:bg-white/[0.04] dark:hover:bg-white/[0.07]">
+                                <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-pink">Recovery Method</span>
+                                <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">Answer Security Question</span>
+                              </button>
+                            )}
+                            {hasGoogleRecovery && (
                               <button onClick={handleVerifyGoogleReset} disabled={isResetting} className="group w-full rounded-2xl border border-brand-sage/30 bg-brand-sage/12 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-sage/55 hover:bg-brand-sage/18 disabled:opacity-50 dark:border-brand-sage/35 dark:bg-brand-sage/10">
                                 <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-sage dark:text-brand-sage-light">Linked Account</span>
                                 <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">Verify Google Account</span>

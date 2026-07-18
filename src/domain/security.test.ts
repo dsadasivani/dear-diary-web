@@ -5,6 +5,8 @@ import {
   bindGoogleRecoveryAccount,
   createInitialPin,
   createInitialPinWithRecovery,
+  getRecoveryQuestionText,
+  hasRecoveryQuestion,
   resetPinAfterVerifiedRecovery,
   requiresRecoveryQuestionForDevice,
   unlockWithPin,
@@ -34,6 +36,20 @@ test('can create a local PIN before encrypted-account recovery is selected', () 
   const configured = createInitialPin(DEFAULT_SECURITY_CONFIG, '1234');
   assert.equal(verifyPin(configured, '1234'), true);
   assert.equal(configured.recoveryQuestionId, undefined);
+});
+
+test('requires displayable question text before offering security-question recovery', () => {
+  const incomplete = {
+    ...DEFAULT_SECURITY_CONFIG,
+    isPinCreated: true,
+    recoveryQuestionId: 'missing-question',
+    recoveryAnswerHash: 'answer-hash',
+    recoveryAnswerSalt: 'answer-salt',
+    recoveryAnswerIterations: 120_000,
+  };
+
+  assert.equal(hasRecoveryQuestion(incomplete), false);
+  assert.equal(getRecoveryQuestionText(incomplete), 'Recovery question unavailable');
 });
 
 test('changes and recovers a PIN while preserving recovery metadata', () => {

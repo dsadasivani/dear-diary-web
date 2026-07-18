@@ -233,6 +233,44 @@ describe('LockScreen first-run sync setup', () => {
     expect(screen.queryByText(/^erase$/i)).not.toBeInTheDocument();
   });
 
+  it('shows the configured recovery question for question-based PIN recovery', async () => {
+    const user = userEvent.setup();
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={savedSecurity}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    await user.click(await screen.findByRole('button', { name: /forgot security passcode pin/i }));
+    await user.click(screen.getByRole('button', { name: /answer security question/i }));
+
+    expect(screen.getByText('What was the name of your first pet?')).toBeInTheDocument();
+    expect(screen.queryByText(/recovery question unavailable/i)).not.toBeInTheDocument();
+  });
+
+  it('does not offer security-question recovery when only Google recovery is configured', async () => {
+    const user = userEvent.setup();
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={{ ...pinOnlySecurity, linkedGoogleUserId: googleSession.userId, linkedGoogleEmail: googleSession.email }}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    await user.click(await screen.findByRole('button', { name: /forgot security passcode pin/i }));
+
+    expect(screen.getByRole('button', { name: /verify google account/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /answer security question/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/recovery question unavailable/i)).not.toBeInTheDocument();
+  });
+
   it('unlocks a paired web companion with the transferred mobile PIN only', async () => {
     const user = userEvent.setup();
     const onUnlock = vi.fn();
