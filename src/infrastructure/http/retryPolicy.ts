@@ -24,5 +24,7 @@ export const fullJitterDelay = (
   attempt: number,
   policy: RetryPolicy,
   random: () => number = Math.random,
-): number => Math.floor(random() * Math.min(policy.maxDelayMs, policy.baseDelayMs * (2 ** Math.max(0, attempt - 1))));
-
+): number =>
+  Math.floor(
+    random() * Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** Math.max(0, attempt - 1)),
+  );

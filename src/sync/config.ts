@@ -3,8 +3,17 @@ import {
   type SupabaseControlPlaneConfig,
 } from './supabaseControlPlane';
 import { SyncV2ApiClient, type SyncV2AccessTokenProvider } from './v2';
-import { HttpTelemetryExporter, NOOP_TELEMETRY, PrivacySafeTelemetry, type Telemetry } from '../infrastructure/telemetry/Telemetry';
-import { AdapterCrashReporter, NOOP_CRASH_REPORTER, type CrashReporter } from '../infrastructure/telemetry/CrashReporter';
+import {
+  HttpTelemetryExporter,
+  NOOP_TELEMETRY,
+  PrivacySafeTelemetry,
+  type Telemetry,
+} from '../infrastructure/telemetry/Telemetry';
+import {
+  AdapterCrashReporter,
+  NOOP_CRASH_REPORTER,
+  type CrashReporter,
+} from '../infrastructure/telemetry/CrashReporter';
 
 export type SupabaseAccessTokenProvider = NonNullable<SupabaseControlPlaneConfig['accessToken']>;
 
@@ -30,31 +39,31 @@ export const getConfiguredSupabaseControlPlaneConfig = (
 
 export const createConfiguredSupabaseControlPlaneClient = (
   accessToken: SupabaseAccessTokenProvider,
-): SupabaseControlPlaneClient => new SupabaseControlPlaneClient(
-  getConfiguredSupabaseControlPlaneConfig(accessToken),
-);
+): SupabaseControlPlaneClient =>
+  new SupabaseControlPlaneClient(getConfiguredSupabaseControlPlaneConfig(accessToken));
 
 export const createConfiguredSyncV2ApiClient = (
   accessToken: SyncV2AccessTokenProvider,
-): SyncV2ApiClient => new SyncV2ApiClient({
-  baseUrl: getConfiguredSyncV2ApiUrl(),
-  accessToken,
-});
+): SyncV2ApiClient =>
+  new SyncV2ApiClient({
+    baseUrl: getConfiguredSyncV2ApiUrl(),
+    accessToken,
+  });
 
 export const createConfiguredTelemetry = (): Telemetry => {
   const endpoint = (import.meta.env.VITE_TELEMETRY_ENDPOINT as string | undefined)?.trim();
-  return endpoint
-    ? new PrivacySafeTelemetry(new HttpTelemetryExporter(endpoint))
-    : NOOP_TELEMETRY;
+  return endpoint ? new PrivacySafeTelemetry(new HttpTelemetryExporter(endpoint)) : NOOP_TELEMETRY;
 };
 
 export const createConfiguredCrashReporter = (): CrashReporter => {
   const endpoint = (import.meta.env.VITE_CRASH_REPORT_ENDPOINT as string | undefined)?.trim();
   if (!endpoint) return NOOP_CRASH_REPORTER;
-  return new AdapterCrashReporter(report => {
+  return new AdapterCrashReporter((report) => {
     void fetch(endpoint, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(report), keepalive: true,
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(report),
+      keepalive: true,
     }).catch(() => undefined);
   });
 };

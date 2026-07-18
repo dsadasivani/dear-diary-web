@@ -17,12 +17,7 @@ import {
 
 test('creates a PIN and verifies PIN and recovery answer without mutating its input', () => {
   const original = { ...DEFAULT_SECURITY_CONFIG };
-  const configured = createInitialPinWithRecovery(
-    original,
-    '1234',
-    'first-pet',
-    '  Sunday  ',
-  );
+  const configured = createInitialPinWithRecovery(original, '1234', 'first-pet', '  Sunday  ');
 
   assert.equal(original.isPinCreated, false);
   assert.equal(verifyPin(configured, '1234'), true);
@@ -96,8 +91,14 @@ test('does not require mobile recovery-question onboarding on a paired web compa
   assert.equal(requiresRecoveryQuestionForDevice(withoutRecovery, 'web_companion'), false);
   assert.equal(requiresRecoveryQuestionForDevice(withoutRecovery, 'primary_mobile'), true);
   assert.equal(requiresRecoveryQuestionForDevice(withoutRecovery), true);
-  assert.equal(requiresRecoveryQuestionForDevice({
-    ...withoutRecovery,
-    linkedGoogleUserId: 'google-user-1',
-  }, 'primary_mobile'), false);
+  assert.equal(
+    requiresRecoveryQuestionForDevice(
+      {
+        ...withoutRecovery,
+        linkedGoogleUserId: 'google-user-1',
+      },
+      'primary_mobile',
+    ),
+    false,
+  );
 });

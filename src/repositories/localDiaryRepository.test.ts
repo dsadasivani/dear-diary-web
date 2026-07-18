@@ -9,7 +9,14 @@ import type {
   LocalQueryPageResult,
   LocalStructuredRecordMutation,
 } from '../platform/storage';
-import type { AppSettings, Entry, Note, SecurityConfig, SyncOutboxOperation, UserProfile } from '../types';
+import type {
+  AppSettings,
+  Entry,
+  Note,
+  SecurityConfig,
+  SyncOutboxOperation,
+  UserProfile,
+} from '../types';
 import { LocalDiaryRepository } from './localDiaryRepository';
 import { createSyncDomainEvent } from '../sync/domainEvents';
 import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
@@ -89,74 +96,107 @@ class StructuredMemoryDataStore extends MemoryDataStore {
     const records = this.collections.get(key);
     if (!records) return undefined;
     this.recordReadCounts.set(key, this.recordReadCount(key) + 1);
-    const record = records.find(item => item.id === id);
-    return record ? cloneTestValue(record) as T : null;
+    const record = records.find((item) => item.id === id);
+    return record ? (cloneTestValue(record) as T) : null;
   }
 
-  async queryEntries(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<Entry> | undefined> {
+  async queryEntries(
+    options: LocalEntryQueryOptions,
+  ): Promise<LocalQueryPageResult<Entry> | undefined> {
     const records = this.collections.get('deardiary_entries') as Entry[] | undefined;
     if (!records) return undefined;
     this.entryQueryCount += 1;
     const allowed = options.allowedDiaryIds ? new Set(options.allowedDiaryIds) : null;
     const excluded = options.excludeDiaryIds ? new Set(options.excludeDiaryIds) : null;
     const query = options.query?.trim().toLowerCase();
-    const tags = options.tags?.map(tag => tag.toLowerCase()) || [];
+    const tags = options.tags?.map((tag) => tag.toLowerCase()) || [];
     const filtered = records
-      .filter(entry => !options.diaryId || entry.diaryId === options.diaryId)
-      .filter(entry => !options.yearMonth || entry.date.startsWith(options.yearMonth))
-      .filter(entry => !options.fromDate || entry.date >= options.fromDate)
-      .filter(entry => !options.toDate || entry.date <= options.toDate)
-      .filter(entry => !options.mood || entry.moodName === options.mood)
-      .filter(entry => options.hasPhotos === undefined || (entry.photoCount > 0) === options.hasPhotos)
-      .filter(entry => tags.length === 0 || tags.every(tag => entry.tags.some(entryTag => entryTag.toLowerCase() === tag)))
-      .filter(entry => !query || (
-        entry.title.toLowerCase().includes(query) ||
-        richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
-        entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
-        entry.moodName.toLowerCase().includes(query)
-      ))
-      .filter(entry => (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)));
-    return cloneTestValue(pageEntries(filtered, options, options.sort || 'date-desc')) as LocalQueryPageResult<Entry>;
+      .filter((entry) => !options.diaryId || entry.diaryId === options.diaryId)
+      .filter((entry) => !options.yearMonth || entry.date.startsWith(options.yearMonth))
+      .filter((entry) => !options.fromDate || entry.date >= options.fromDate)
+      .filter((entry) => !options.toDate || entry.date <= options.toDate)
+      .filter((entry) => !options.mood || entry.moodName === options.mood)
+      .filter(
+        (entry) => options.hasPhotos === undefined || entry.photoCount > 0 === options.hasPhotos,
+      )
+      .filter(
+        (entry) =>
+          tags.length === 0 ||
+          tags.every((tag) => entry.tags.some((entryTag) => entryTag.toLowerCase() === tag)),
+      )
+      .filter(
+        (entry) =>
+          !query ||
+          entry.title.toLowerCase().includes(query) ||
+          richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
+          entry.tags.some((tag) => tag.toLowerCase().includes(query)) ||
+          entry.moodName.toLowerCase().includes(query),
+      )
+      .filter(
+        (entry) =>
+          (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)),
+      );
+    return cloneTestValue(
+      pageEntries(filtered, options, options.sort || 'date-desc'),
+    ) as LocalQueryPageResult<Entry>;
   }
 
-  async queryNotes(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<Note> | undefined> {
+  async queryNotes(
+    options: LocalNoteQueryOptions,
+  ): Promise<LocalQueryPageResult<Note> | undefined> {
     const records = this.collections.get('deardiary_notes') as Note[] | undefined;
     if (!records) return undefined;
     this.noteQueryCount += 1;
     const query = options.query?.trim().toLowerCase();
-    const tags = options.tags?.map(tag => tag.toLowerCase()) || [];
+    const tags = options.tags?.map((tag) => tag.toLowerCase()) || [];
     const filtered = records
-      .filter(note => {
+      .filter((note) => {
         if (options.filter === 'pinned') return note.isPinned;
         if (options.filter === 'tagged') return note.tags.length > 0;
         if (options.filter === 'untagged') return note.tags.length === 0;
         return true;
       })
-      .filter(note => {
+      .filter((note) => {
         const date = new Date(note.updatedAt).toISOString().slice(0, 10);
-        return (!options.fromDate || date >= options.fromDate) && (!options.toDate || date <= options.toDate);
+        return (
+          (!options.fromDate || date >= options.fromDate) &&
+          (!options.toDate || date <= options.toDate)
+        );
       })
-      .filter(note => tags.length === 0 || tags.every(tag => note.tags.some(noteTag => noteTag.toLowerCase() === tag)))
-      .filter(note => !query || (
-        note.title.toLowerCase().includes(query) ||
-        richTextHtmlToPlainText(note.body).toLowerCase().includes(query) ||
-        note.tags.some(tag => tag.toLowerCase().includes(query))
-      ));
-    return cloneTestValue(pageNotes(filtered, options, options.sort || 'pinned-updated-desc')) as LocalQueryPageResult<Note>;
+      .filter(
+        (note) =>
+          tags.length === 0 ||
+          tags.every((tag) => note.tags.some((noteTag) => noteTag.toLowerCase() === tag)),
+      )
+      .filter(
+        (note) =>
+          !query ||
+          note.title.toLowerCase().includes(query) ||
+          richTextHtmlToPlainText(note.body).toLowerCase().includes(query) ||
+          note.tags.some((tag) => tag.toLowerCase().includes(query)),
+      );
+    return cloneTestValue(
+      pageNotes(filtered, options, options.sort || 'pinned-updated-desc'),
+    ) as LocalQueryPageResult<Note>;
   }
 
-  async queryEntryProjections(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<LocalEntryProjection> | undefined> {
+  async queryEntryProjections(
+    options: LocalEntryQueryOptions,
+  ): Promise<LocalQueryPageResult<LocalEntryProjection> | undefined> {
     const records = this.collections.get('deardiary_entries') as Entry[] | undefined;
     if (!records) return undefined;
     this.entryProjectionQueryCount += 1;
     const allowed = options.allowedDiaryIds ? new Set(options.allowedDiaryIds) : null;
     const excluded = options.excludeDiaryIds ? new Set(options.excludeDiaryIds) : null;
     const filtered = records
-      .filter(entry => !options.diaryId || entry.diaryId === options.diaryId)
-      .filter(entry => !options.fromDate || entry.date >= options.fromDate)
-      .filter(entry => !options.toDate || entry.date <= options.toDate)
-      .filter(entry => (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)))
-      .map(entry => ({
+      .filter((entry) => !options.diaryId || entry.diaryId === options.diaryId)
+      .filter((entry) => !options.fromDate || entry.date >= options.fromDate)
+      .filter((entry) => !options.toDate || entry.date <= options.toDate)
+      .filter(
+        (entry) =>
+          (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)),
+      )
+      .map((entry) => ({
         id: entry.id,
         diaryId: entry.diaryId,
         date: entry.date,
@@ -174,20 +214,26 @@ class StructuredMemoryDataStore extends MemoryDataStore {
     return cloneTestValue(pageEntries(filtered, options, options.sort || 'date-desc', 10_000));
   }
 
-  async queryNoteProjections(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<LocalNoteProjection> | undefined> {
+  async queryNoteProjections(
+    options: LocalNoteQueryOptions,
+  ): Promise<LocalQueryPageResult<LocalNoteProjection> | undefined> {
     const records = this.collections.get('deardiary_notes') as Note[] | undefined;
     if (!records) return undefined;
     this.noteProjectionQueryCount += 1;
-    const tags = (options.tags || []).map(tag => tag.toLowerCase());
+    const tags = (options.tags || []).map((tag) => tag.toLowerCase());
     const filtered = records
-      .filter(note => {
+      .filter((note) => {
         if (options.filter === 'pinned') return note.isPinned;
         if (options.filter === 'tagged') return note.tags.length > 0;
         if (options.filter === 'untagged') return note.tags.length === 0;
         return true;
       })
-      .filter(note => tags.length === 0 || tags.every(tag => note.tags.some(noteTag => noteTag.toLowerCase() === tag)))
-      .map(note => ({
+      .filter(
+        (note) =>
+          tags.length === 0 ||
+          tags.every((tag) => note.tags.some((noteTag) => noteTag.toLowerCase() === tag)),
+      )
+      .map((note) => ({
         id: note.id,
         title: note.title,
         isPinned: note.isPinned,
@@ -195,7 +241,9 @@ class StructuredMemoryDataStore extends MemoryDataStore {
         createdAt: note.createdAt,
         updatedAt: note.updatedAt,
       }));
-    return cloneTestValue(pageNotes(filtered, options, options.sort || 'pinned-updated-desc', 10_000));
+    return cloneTestValue(
+      pageNotes(filtered, options, options.sort || 'pinned-updated-desc', 10_000),
+    );
   }
 
   async commitStructuredRecords(input: {
@@ -215,8 +263,12 @@ class StructuredMemoryDataStore extends MemoryDataStore {
   }): Promise<void> {
     this.localMutationCommitCount += 1;
     this.applyStructuredRecordMutations(input.records);
-    const currentOutbox = JSON.parse(await this.getItem('deardiary_sync_outbox') || '{}') as Record<string, SyncOutboxOperation>;
-    const currentOutboxV2 = JSON.parse(await this.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+    const currentOutbox = JSON.parse(
+      (await this.getItem('deardiary_sync_outbox')) || '{}',
+    ) as Record<string, SyncOutboxOperation>;
+    const currentOutboxV2 = JSON.parse(
+      (await this.getItem('deardiary_sync_outbox_v2')) || '{}',
+    ) as Record<string, SyncOutboxOperationV2>;
     currentOutbox[input.outboxOperation.operationId] = cloneTestValue(input.outboxOperation);
     currentOutboxV2[input.outboxV2Operation.operationId] = cloneTestValue(input.outboxV2Operation);
     await this.setItems({
@@ -227,15 +279,20 @@ class StructuredMemoryDataStore extends MemoryDataStore {
   }
 
   private applyStructuredRecordMutations(records: LocalStructuredRecordMutation[]): void {
-    records.forEach(record => {
-      const collection = cloneTestValue(this.collections.get(record.key) || []) as StructuredTestRecord[];
+    records.forEach((record) => {
+      const collection = cloneTestValue(
+        this.collections.get(record.key) || [],
+      ) as StructuredTestRecord[];
       if (record.value === null) {
-        this.collections.set(record.key, collection.filter(item => item.id !== record.id));
+        this.collections.set(
+          record.key,
+          collection.filter((item) => item.id !== record.id),
+        );
         return;
       }
       const nextRecord = cloneTestValue(record.value as StructuredTestRecord);
-      const next = collection.map(item => item.id === record.id ? nextRecord : item);
-      if (!collection.some(item => item.id === record.id)) next.push(nextRecord);
+      const next = collection.map((item) => (item.id === record.id ? nextRecord : item));
+      if (!collection.some((item) => item.id === record.id)) next.push(nextRecord);
       this.collections.set(record.key, next);
     });
   }
@@ -247,7 +304,6 @@ class StructuredMemoryDataStore extends MemoryDataStore {
   recordReadCount(key: string): number {
     return this.recordReadCounts.get(key) || 0;
   }
-
 }
 
 const createRepository = async (store = new MemoryDataStore()): Promise<LocalDiaryRepository> => {
@@ -322,8 +378,14 @@ test('uses structured storage reads for direct entries and notes', async () => {
   assert.equal(store.collectionReadCount('deardiary_entries'), 0);
   assert.equal(store.collectionReadCount('deardiary_notes'), 0);
 
-  assert.deepEqual((await repository.listEntries()).map(item => item.id), [entry.id]);
-  assert.deepEqual((await repository.listNotes()).map(item => item.id), [note.id]);
+  assert.deepEqual(
+    (await repository.listEntries()).map((item) => item.id),
+    [entry.id],
+  );
+  assert.deepEqual(
+    (await repository.listNotes()).map((item) => item.id),
+    [note.id],
+  );
   assert.equal(store.collectionReadCount('deardiary_entries'), 1);
   assert.equal(store.collectionReadCount('deardiary_notes'), 1);
 });
@@ -403,19 +465,36 @@ test('uses storage-backed page queries for entry and note screens', async () => 
   const repository = await createRepository(store);
 
   const entryPage = await repository.listEntriesByDiary('diary-default', { limit: 1 });
-  assert.deepEqual(entryPage.items.map(item => item.id), ['entry-query-new']);
+  assert.deepEqual(
+    entryPage.items.map((item) => item.id),
+    ['entry-query-new'],
+  );
   assert.match(entryPage.nextCursor || '', /^ks:/);
   assert.equal(entryPage.total, 2);
   const nextEntryPage = await repository.listEntriesByDiary('diary-default', {
     limit: 1,
     cursor: entryPage.nextCursor,
   });
-  assert.deepEqual(nextEntryPage.items.map(item => item.id), ['entry-query-old']);
+  assert.deepEqual(
+    nextEntryPage.items.map((item) => item.id),
+    ['entry-query-old'],
+  );
   assert.equal(nextEntryPage.nextCursor, undefined);
 
-  const searchPage = await repository.searchEntries({ diaryId: 'diary-default', hasPhotos: false, limit: 5 });
-  assert.deepEqual(searchPage.items.map(item => item.id), ['entry-query-new', 'entry-query-old']);
-  const summarySearchPage = await repository.searchEntries({ diaryId: 'diary-default', includeBody: false, limit: 5 });
+  const searchPage = await repository.searchEntries({
+    diaryId: 'diary-default',
+    hasPhotos: false,
+    limit: 5,
+  });
+  assert.deepEqual(
+    searchPage.items.map((item) => item.id),
+    ['entry-query-new', 'entry-query-old'],
+  );
+  const summarySearchPage = await repository.searchEntries({
+    diaryId: 'diary-default',
+    includeBody: false,
+    limit: 5,
+  });
   assert.equal('body' in summarySearchPage.items[0], false);
   const querySearchPage = await repository.searchEntries({
     diaryId: 'diary-default',
@@ -423,13 +502,26 @@ test('uses storage-backed page queries for entry and note screens', async () => 
     tags: ['keep'],
     limit: 5,
   });
-  assert.deepEqual(querySearchPage.items.map(item => item.id), ['entry-query-new']);
+  assert.deepEqual(
+    querySearchPage.items.map((item) => item.id),
+    ['entry-query-new'],
+  );
 
   const notePage = await repository.listNotes({ filter: 'pinned', limit: 5 });
-  assert.deepEqual(notePage.items.map(item => item.id), ['note-query-pinned']);
+  assert.deepEqual(
+    notePage.items.map((item) => item.id),
+    ['note-query-pinned'],
+  );
   assert.equal('body' in notePage.items[0], false);
-  const noteSearchPage = await repository.searchNotes({ query: 'pinned', tags: ['keep'], limit: 5 });
-  assert.deepEqual(noteSearchPage.items.map(item => item.id), ['note-query-pinned']);
+  const noteSearchPage = await repository.searchNotes({
+    query: 'pinned',
+    tags: ['keep'],
+    limit: 5,
+  });
+  assert.deepEqual(
+    noteSearchPage.items.map((item) => item.id),
+    ['note-query-pinned'],
+  );
   assert.equal(store.entryQueryCount, 2);
   assert.equal(store.entryProjectionQueryCount, 3);
   assert.equal(store.noteQueryCount, 1);
@@ -439,30 +531,34 @@ test('uses storage-backed page queries for entry and note screens', async () => 
 });
 
 test('uses body-free projections for Home and Stats without reading full collections', async () => {
-  const entries: Entry[] = [{
-    id: 'entry-projection-home',
-    diaryId: 'diary-default',
-    date: '2026-07-12',
-    title: 'Projected entry',
-    body: '<p>private body must not be loaded</p>',
-    moodName: 'Calm',
-    moodEmoji: ':)',
-    tags: ['projection'],
-    photoUris: ['data:image/png;base64,cHJvamVjdGlvbg=='],
-    photoCount: 1,
-    wordCount: 6,
-    createdAt: 1,
-    updatedAt: 2,
-  }];
-  const notes: Note[] = [{
-    id: 'note-projection-home',
-    title: 'Projected note',
-    body: '<p>private note body must not be loaded</p>',
-    isPinned: true,
-    tags: ['projection'],
-    createdAt: 1,
-    updatedAt: 2,
-  }];
+  const entries: Entry[] = [
+    {
+      id: 'entry-projection-home',
+      diaryId: 'diary-default',
+      date: '2026-07-12',
+      title: 'Projected entry',
+      body: '<p>private body must not be loaded</p>',
+      moodName: 'Calm',
+      moodEmoji: ':)',
+      tags: ['projection'],
+      photoUris: ['data:image/png;base64,cHJvamVjdGlvbg=='],
+      photoCount: 1,
+      wordCount: 6,
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  const notes: Note[] = [
+    {
+      id: 'note-projection-home',
+      title: 'Projected note',
+      body: '<p>private note body must not be loaded</p>',
+      isPinned: true,
+      tags: ['projection'],
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
   const store = new StructuredMemoryDataStore({
     deardiary_entries: entries,
     deardiary_notes: notes,
@@ -494,10 +590,17 @@ test('uses body-free projections for Home and Stats without reading full collect
 
 test('rebuilds structured projections without changing authoritative records', async () => {
   const store = new StructuredMemoryDataStore({
-    deardiary_diaries: [], deardiary_entries: [], deardiary_notes: [],
+    deardiary_diaries: [],
+    deardiary_entries: [],
+    deardiary_notes: [],
   });
   const repository = await createRepository(store);
-  const note = await repository.createNote({ title: 'Projection source', body: '<p>Body</p>', isPinned: true, tags: ['safe'] });
+  const note = await repository.createNote({
+    title: 'Projection source',
+    body: '<p>Body</p>',
+    isPinned: true,
+    tags: ['safe'],
+  });
   await repository.rebuildDerivedProjections();
   assert.equal((await repository.getNote(note.id))?.title, 'Projection source');
 });
@@ -552,14 +655,22 @@ test('search excludes locked diary entries when locked diary IDs are provided', 
 
   assert.deepEqual(exactLockedQuery.items, []);
   assert.deepEqual(tagQuery.items, []);
-  assert.deepEqual(allVisible.items.map(entry => entry.diaryId), [openDiary.id]);
+  assert.deepEqual(
+    allVisible.items.map((entry) => entry.diaryId),
+    [openDiary.id],
+  );
 });
 
 test('uses structured record commits for note CRUD without reading the full note collection', async () => {
   const store = new StructuredMemoryDataStore({ deardiary_notes: [] });
   const repository = await createRepository(store);
 
-  const note = await repository.createNote({ title: 'Record note', body: 'One', isPinned: false, tags: [] });
+  const note = await repository.createNote({
+    title: 'Record note',
+    body: 'One',
+    isPinned: false,
+    tags: [],
+  });
   assert.equal(store.structuredCommitCount, 1);
   assert.equal(store.collectionReadCount('deardiary_notes'), 0);
   assert.equal((await repository.getNote(note.id))?.title, 'Record note');
@@ -614,7 +725,10 @@ test('uses atomic structured record and outbox commit for local-first note mutat
   assert.equal(outbox.length, 1);
   assert.equal(outbox[0].operationId, 'op-structured-local');
   assert.equal(outbox[0].state, 'prepared');
-  const outboxV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  const outboxV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+    string,
+    SyncOutboxOperationV2
+  >;
   assert.deepEqual(outboxV2['op-structured-local'], {
     operationId: 'op-structured-local',
     accountId: 'account-structured',
@@ -644,7 +758,9 @@ test('sanitizes malicious rich text when creating and updating entries and notes
     moodEmoji: '',
     tags: [],
     photoUris: [],
-    blocks: [{ id: 'block-1', time: '10:00', body: '<script>alert(1)</script><em data-x="1">kept</em>' }],
+    blocks: [
+      { id: 'block-1', time: '10:00', body: '<script>alert(1)</script><em data-x="1">kept</em>' },
+    ],
   });
   const note = await repository.createNote({
     title: 'Unsafe note',
@@ -672,12 +788,16 @@ test('sanitizes malicious rich text when creating and updating entries and notes
 
 test('serializes concurrent writes without losing notes', async () => {
   const repository = await createRepository();
-  await Promise.all(Array.from({ length: 20 }, (_, index) => repository.createNote({
-    title: `Note ${index}`,
-    body: `Body ${index}`,
-    isPinned: false,
-    tags: [],
-  })));
+  await Promise.all(
+    Array.from({ length: 20 }, (_, index) =>
+      repository.createNote({
+        title: `Note ${index}`,
+        body: `Body ${index}`,
+        isPinned: false,
+        tags: [],
+      }),
+    ),
+  );
 
   assert.equal((await repository.listNotes()).length, 20);
 });
@@ -734,7 +854,12 @@ test('sanitizes malicious rich text during snapshot import', async () => {
     tags: [],
     photoUris: [],
   });
-  const note = await source.createNote({ title: 'Imported note', body: '<p>safe</p>', isPinned: false, tags: [] });
+  const note = await source.createNote({
+    title: 'Imported note',
+    body: '<p>safe</p>',
+    isPinned: false,
+    tags: [],
+  });
   const snapshot = await source.exportSnapshot();
   snapshot.entries[0] = {
     ...entry,
@@ -804,10 +929,13 @@ test('portable restore preserves local security, reminders, theme, and backup id
 test('increments and publishes a content revision after portable writes only', async () => {
   const repository = await createRepository();
   const revisions: number[] = [];
-  const unsubscribe = repository.subscribeChanges(revision => revisions.push(revision));
+  const unsubscribe = repository.subscribeChanges((revision) => revisions.push(revision));
 
   await repository.createNote({ title: 'One', body: '', isPinned: false, tags: [] });
-  await repository.saveSecurityConfig({ ...(await repository.getSecurityConfig()), isLocked: false });
+  await repository.saveSecurityConfig({
+    ...(await repository.getSecurityConfig()),
+    isLocked: false,
+  });
   await repository.saveUserProfile({ ...(await repository.getUserProfile()), name: 'Updated' });
   unsubscribe();
 
@@ -884,18 +1012,27 @@ test('sanitizes malicious rich text during sync event replay', async () => {
     wordCount: 1,
     createdAt: 10,
     updatedAt: 10,
-    blocks: [{ id: 'block-1', time: '10:00', body: '<u style="x:1">under</u><img src=x onerror=alert(1)>' }],
+    blocks: [
+      {
+        id: 'block-1',
+        time: '10:00',
+        body: '<u style="x:1">under</u><img src=x onerror=alert(1)>',
+      },
+    ],
   };
 
-  await repository.applySyncEvent(createSyncDomainEvent({
-    accountId: 'account-1',
-    deviceId: 'device-2',
-    recordType: 'entry',
-    operation: 'upsert',
-    recordId: entry.id,
-    baseRecordVersion: 0,
-    payload: entry,
-  }), 3);
+  await repository.applySyncEvent(
+    createSyncDomainEvent({
+      accountId: 'account-1',
+      deviceId: 'device-2',
+      recordType: 'entry',
+      operation: 'upsert',
+      recordId: entry.id,
+      baseRecordVersion: 0,
+      payload: entry,
+    }),
+    3,
+  );
 
   const stored = await repository.getEntry(entry.id);
   assert.equal(stored?.body, '<p>Entry</p>');
@@ -906,25 +1043,53 @@ test('applies portable settings and profile events without replacing local remin
   const repository = await createRepository();
   await repository.saveSettings({ remindersEnabled: true, reminderTime: '07:30', theme: 'light' });
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const settingsEvent = createSyncDomainEvent({
-    accountId: 'account-1', deviceId: 'device-2', recordType: 'settings', operation: 'upsert',
-    recordId: 'settings', baseRecordVersion: 0,
-    payload: { remindersEnabled: false, reminderTime: '22:00', theme: 'dark', customTags: ['cloud'] },
+    accountId: 'account-1',
+    deviceId: 'device-2',
+    recordType: 'settings',
+    operation: 'upsert',
+    recordId: 'settings',
+    baseRecordVersion: 0,
+    payload: {
+      remindersEnabled: false,
+      reminderTime: '22:00',
+      theme: 'dark',
+      customTags: ['cloud'],
+    },
   });
   await repository.applySyncEvent(settingsEvent, 3);
   const profile = {
-    name: 'Cloud Writer', email: 'writer@example.com', bio: '', avatarEmoji: 'W',
-    avatarColor: '#000000', writingGoal: 500, joinedDate: '07/2026',
+    name: 'Cloud Writer',
+    email: 'writer@example.com',
+    bio: '',
+    avatarEmoji: 'W',
+    avatarColor: '#000000',
+    writingGoal: 500,
+    joinedDate: '07/2026',
   };
-  await repository.applySyncEvent(createSyncDomainEvent({
-    accountId: 'account-1', deviceId: 'device-2', recordType: 'profile', operation: 'upsert',
-    recordId: 'profile', baseRecordVersion: 0, payload: profile,
-  }), 4);
+  await repository.applySyncEvent(
+    createSyncDomainEvent({
+      accountId: 'account-1',
+      deviceId: 'device-2',
+      recordType: 'profile',
+      operation: 'upsert',
+      recordId: 'profile',
+      baseRecordVersion: 0,
+      payload: profile,
+    }),
+    4,
+  );
 
   const settings = await repository.getSettings();
   assert.equal(settings.remindersEnabled, true);
@@ -937,9 +1102,14 @@ test('applies portable settings and profile events without replacing local remin
 test('skips already-covered historical events during partition replay', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 50,
     linkedAt: 1,
   });
@@ -972,7 +1142,12 @@ test('skips already-covered historical events during partition replay', async ()
 
 test('exports, imports, and tracks monthly partition hydration state', async () => {
   const source = await createRepository();
-  const diary = await source.createDiary({ name: 'Travel', emoji: 'T', color: '#123456', isLocked: false });
+  const diary = await source.createDiary({
+    name: 'Travel',
+    emoji: 'T',
+    color: '#123456',
+    isLocked: false,
+  });
   await source.createEntry({
     diaryId: diary.id,
     date: '2026-07-04',
@@ -995,15 +1170,24 @@ test('exports, imports, and tracks monthly partition hydration state', async () 
   });
 
   const july = await source.exportPartitionSnapshot('month:2026-07');
-  assert.deepEqual(july.entries.map(entry => entry.title), ['July']);
+  assert.deepEqual(
+    july.entries.map((entry) => entry.title),
+    ['July'],
+  );
 
   const target = await createRepository();
   await target.importPartitionSnapshot('month:2026-07', july);
-  assert.deepEqual((await target.listEntries()).map(entry => entry.title), ['July']);
+  assert.deepEqual(
+    (await target.listEntries()).map((entry) => entry.title),
+    ['July'],
+  );
 
   await target.markPartitionHydrated('month:2026-07', 12);
   assert.equal((await target.getPartitionHydrationState('month:2026-07')).status, 'hydrated');
-  assert.deepEqual((await target.listAvailableArchiveMonths()).map(state => state.partitionKey), ['month:2026-07']);
+  assert.deepEqual(
+    (await target.listAvailableArchiveMonths()).map((state) => state.partitionKey),
+    ['month:2026-07'],
+  );
 
   await target.markPartitionAvailable('month:2021-03', 4);
   await target.markPartitionHydrating('month:2021-03');
@@ -1015,10 +1199,10 @@ test('exports, imports, and tracks monthly partition hydration state', async () 
   assert.equal(failedMarch.failureCount, 1);
   assert.ok((failedMarch.failedAt || 0) > 0);
   assert.ok((failedMarch.nextRetryAt || 0) > (failedMarch.failedAt || 0));
-  assert.deepEqual((await target.listAvailableArchiveMonths()).map(state => state.partitionKey), [
-    'month:2026-07',
-    'month:2021-03',
-  ]);
+  assert.deepEqual(
+    (await target.listAvailableArchiveMonths()).map((state) => state.partitionKey),
+    ['month:2026-07', 'month:2021-03'],
+  );
 });
 
 test('persists durable sync outbox operations', async () => {
@@ -1044,7 +1228,7 @@ test('persists durable sync outbox operations', async () => {
 test('emits sync status changes when durable outbox rows change', async () => {
   const repository = await createRepository();
   const pendingCounts: number[] = [];
-  const unsubscribe = repository.subscribeRepositoryChanges(change => {
+  const unsubscribe = repository.subscribeRepositoryChanges((change) => {
     if (change.type === 'sync-status-updated') {
       pendingCounts.push(change.status.pendingOutboxCount);
     }
@@ -1113,7 +1297,10 @@ test('atomically applies a local note mutation with its durable outbox operation
   assert.equal(operation.localApplied, true);
   assert.equal(operation.recordId, note.id);
   assert.deepEqual(operation.payload, note);
-  const outboxV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  const outboxV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+    string,
+    SyncOutboxOperationV2
+  >;
   assert.equal(outboxV2['operation-local-first'].recordType, 'NOTE');
   assert.equal(outboxV2['operation-local-first'].state, 'PENDING');
   assert.equal(outboxV2['operation-local-first'].baseRecordVersion, 0);
@@ -1174,13 +1361,18 @@ test('chains same-record local mutations once an earlier outbox operation is in 
   });
 
   const operations = await repository.listSyncOutboxOperations();
-  const secondOperation = operations.find(operation => operation.operationId === 'operation-chain-2');
+  const secondOperation = operations.find(
+    (operation) => operation.operationId === 'operation-chain-2',
+  );
   assert.equal(operations.length, 2);
   assert.equal(secondOperation?.dependsOnOperationId, 'operation-chain-1');
   assert.equal(secondOperation?.baseRecordVersion, 1);
   assert.equal((secondOperation?.payload as Note | undefined)?.title, 'Second edit');
   assert.equal((await repository.getNote(note.id))?.title, 'Second edit');
-  const outboxV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  const outboxV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+    string,
+    SyncOutboxOperationV2
+  >;
   assert.equal(outboxV2['operation-chain-2'].dependencyOperationId, 'operation-chain-1');
   assert.equal(outboxV2['operation-chain-2'].baseRecordVersion, 1);
 });
@@ -1202,24 +1394,52 @@ test('rapid same-record saves never reset an in-flight V2 operation', async () =
   });
   const account = (await repository.getLocalSyncAccountState())!;
   const note: Note = {
-    id: 'note-rapid', title: 'First', body: '<p>First.</p>', isPinned: false, tags: [], createdAt: 10, updatedAt: 10,
+    id: 'note-rapid',
+    title: 'First',
+    body: '<p>First.</p>',
+    isPinned: false,
+    tags: [],
+    createdAt: 10,
+    updatedAt: 10,
   };
   await repository.applyLocalMutationWithOutbox({
-    operationId: 'operation-rapid-1', recordType: 'note', recordId: note.id,
-    operation: 'upsert', account, localPayload: note,
+    operationId: 'operation-rapid-1',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account,
+    localPayload: note,
   });
-  const firstV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
-  await store.setItem('deardiary_sync_outbox_v2', JSON.stringify({
-    ...firstV2,
-    'operation-rapid-1': { ...firstV2['operation-rapid-1'], state: 'UPLOADING', leaseOwner: 'worker-1', leaseExpiresAt: 100 },
-  }));
+  const firstV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+    string,
+    SyncOutboxOperationV2
+  >;
+  await store.setItem(
+    'deardiary_sync_outbox_v2',
+    JSON.stringify({
+      ...firstV2,
+      'operation-rapid-1': {
+        ...firstV2['operation-rapid-1'],
+        state: 'UPLOADING',
+        leaseOwner: 'worker-1',
+        leaseExpiresAt: 100,
+      },
+    }),
+  );
 
   await repository.applyLocalMutationWithOutbox({
-    operationId: 'operation-rapid-2', recordType: 'note', recordId: note.id,
-    operation: 'upsert', account, localPayload: { ...note, title: 'Second', updatedAt: 20 },
+    operationId: 'operation-rapid-2',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account,
+    localPayload: { ...note, title: 'Second', updatedAt: 20 },
   });
 
-  const v2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  const v2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+    string,
+    SyncOutboxOperationV2
+  >;
   assert.equal(v2['operation-rapid-1'].state, 'UPLOADING');
   assert.equal(v2['operation-rapid-1'].leaseOwner, 'worker-1');
   assert.equal(v2['operation-rapid-2'].state, 'PENDING');
@@ -1324,7 +1544,10 @@ test('keeps local-first mutations and pending outbox rows after repository resta
   assert.equal(operation.operationId, 'operation-restart');
   assert.equal(operation.localApplied, true);
   assert.deepEqual(operation.payload, note);
-  const outboxV2 = JSON.parse(await store.getItem('deardiary_sync_outbox_v2') || '{}') as Record<string, SyncOutboxOperationV2>;
+  const outboxV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+    string,
+    SyncOutboxOperationV2
+  >;
   assert.equal(outboxV2['operation-restart'].state, 'PENDING');
 });
 

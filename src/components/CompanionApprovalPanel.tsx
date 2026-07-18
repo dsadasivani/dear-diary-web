@@ -4,11 +4,17 @@ import type { LocalSyncAccountState, PairingSession, SyncDevice } from '../types
 import { diaryRepository, eventSyncEngine } from '../repositories';
 import { approveCompanionPairing } from '../sync/companionPairing';
 import { createConfiguredSupabaseControlPlaneClient } from '../sync/config';
-import { resumePendingDeviceKeyRotation, revokeDeviceWithKeyRotation } from '../sync/deviceKeyRotation';
+import {
+  resumePendingDeviceKeyRotation,
+  revokeDeviceWithKeyRotation,
+} from '../sync/deviceKeyRotation';
 import { loadSyncSecrets } from '../sync/syncSecrets';
 import { restoreGoogleDriveSession } from '../utils/googleAuth';
 import type { SyncV2Device, SyncV2Pairing } from '../sync/v2/api/SyncV2ApiTypes';
-import { approveSyncV2CompanionPairing, listPendingSyncV2Pairings } from '../sync/v2/v2CompanionPairing';
+import {
+  approveSyncV2CompanionPairing,
+  listPendingSyncV2Pairings,
+} from '../sync/v2/v2CompanionPairing';
 import {
   listSyncV2Devices,
   resumePendingSyncV2DeviceRevocation,
@@ -64,16 +70,20 @@ export default function CompanionApprovalPanel() {
         const resumed = await resumePendingSyncV2DeviceRevocation();
         if (resumed === 'completed') setMessage('Pending companion revocation completed safely.');
         if (resumed === 'needs-passphrase') {
-          setError('A companion revocation needs the recovery passphrase to continue. Select that companion again.');
+          setError(
+            'A companion revocation needs the recovery passphrase to continue. Select that companion again.',
+          );
         }
         const [pendingPairings, accountDevices] = await Promise.all([
           listPendingSyncV2Pairings(state.deviceId),
           listSyncV2Devices(state.deviceId),
         ]);
         setV2Sessions(pendingPairings);
-        setV2Devices(accountDevices.filter(device =>
-          device.deviceRole === 'COMPANION' && device.deviceStatus === 'ACTIVE',
-        ));
+        setV2Devices(
+          accountDevices.filter(
+            (device) => device.deviceRole === 'COMPANION' && device.deviceStatus === 'ACTIVE',
+          ),
+        );
         return;
       }
       setV2Sessions([]);
@@ -83,8 +93,11 @@ export default function CompanionApprovalPanel() {
       // prevent the primary device from managing already-linked devices.
       const secrets = await loadSyncSecrets();
       if (!secrets) throw new Error('Encrypted sync credentials are unavailable.');
-      const controlPlane = createConfiguredSupabaseControlPlaneClient(secrets.supabaseSession.accessToken);
-      const googleSession = await restoreGoogleDriveSession(false).catch(() => null) || secrets.googleSession || null;
+      const controlPlane = createConfiguredSupabaseControlPlaneClient(
+        secrets.supabaseSession.accessToken,
+      );
+      const googleSession =
+        (await restoreGoogleDriveSession(false).catch(() => null)) || secrets.googleSession || null;
       const resumeResult = await resumePendingDeviceKeyRotation({
         repository: diaryRepository,
         controlPlane,
@@ -98,7 +111,9 @@ export default function CompanionApprovalPanel() {
         controlPlane.listAccountDevices(state.deviceId),
       ]);
       setSessions(pendingSessions);
-      setDevices(accountDevices.filter(device => device.role !== 'primary_mobile' && !device.revokedAt));
+      setDevices(
+        accountDevices.filter((device) => device.role !== 'primary_mobile' && !device.revokedAt),
+      );
     } catch (refreshError: any) {
       setError(refreshError?.message || 'Could not load companion requests.');
     } finally {
@@ -131,9 +146,13 @@ export default function CompanionApprovalPanel() {
       if (compatibilityError) throw new Error(compatibilityError);
       const secrets = await loadSyncSecrets();
       if (!secrets) throw new Error('Encrypted sync credentials are unavailable.');
-      const googleSession = await restoreGoogleDriveSession(false) || await restoreGoogleDriveSession(true);
-      if (!googleSession) throw new Error('Google Drive authorization is required to approve this companion.');
-      const controlPlane = createConfiguredSupabaseControlPlaneClient(secrets.supabaseSession.accessToken);
+      const googleSession =
+        (await restoreGoogleDriveSession(false)) || (await restoreGoogleDriveSession(true));
+      if (!googleSession)
+        throw new Error('Google Drive authorization is required to approve this companion.');
+      const controlPlane = createConfiguredSupabaseControlPlaneClient(
+        secrets.supabaseSession.accessToken,
+      );
       setMessage('Preparing an encrypted restore point for this companion...');
       await eventSyncEngine.createSnapshot();
       await approveCompanionPairing({
@@ -144,7 +163,7 @@ export default function CompanionApprovalPanel() {
         googleSession,
       });
       setMessage(`${session.requestedDisplayName} is now linked.`);
-      setCodes(current => ({ ...current, [session.id]: '' }));
+      setCodes((current) => ({ ...current, [session.id]: '' }));
       await refresh();
     } catch (approvalError: any) {
       setMessage('');
@@ -167,7 +186,7 @@ export default function CompanionApprovalPanel() {
       setMessage('Encrypting this diary key for the companion...');
       await approveSyncV2CompanionPairing(session, pairingCode);
       setMessage('Web browser approved. It is restoring the encrypted diary.');
-      setCodes(current => ({ ...current, [session.pairingId]: '' }));
+      setCodes((current) => ({ ...current, [session.pairingId]: '' }));
       await refresh();
     } catch (approvalError: any) {
       setMessage('');
@@ -231,9 +250,13 @@ export default function CompanionApprovalPanel() {
       await eventSyncEngine.pullPending();
       const secrets = await loadSyncSecrets();
       if (!secrets) throw new Error('Primary device credentials are unavailable.');
-      const controlPlane = createConfiguredSupabaseControlPlaneClient(secrets.supabaseSession.accessToken);
-      const googleSession = await restoreGoogleDriveSession(false) || await restoreGoogleDriveSession(true);
-      if (!googleSession) throw new Error('Google Drive authorization is required to distribute the new key epoch.');
+      const controlPlane = createConfiguredSupabaseControlPlaneClient(
+        secrets.supabaseSession.accessToken,
+      );
+      const googleSession =
+        (await restoreGoogleDriveSession(false)) || (await restoreGoogleDriveSession(true));
+      if (!googleSession)
+        throw new Error('Google Drive authorization is required to distribute the new key epoch.');
       const result = await revokeDeviceWithKeyRotation({
         repository: diaryRepository,
         controlPlane,
@@ -260,9 +283,13 @@ export default function CompanionApprovalPanel() {
     <section className="flex flex-col gap-3 rounded-2xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="rounded-lg bg-brand-sage/10 p-2.5 text-brand-sage"><Link2 className="h-4 w-4" /></span>
+          <span className="rounded-lg bg-brand-sage/10 p-2.5 text-brand-sage">
+            <Link2 className="h-4 w-4" />
+          </span>
           <div>
-            <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">Companion Devices</h3>
+            <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
+              Companion Devices
+            </h3>
             <p className="text-xs text-brand-sage">Approve a browser displaying a pairing code.</p>
           </div>
         </div>
@@ -277,14 +304,23 @@ export default function CompanionApprovalPanel() {
         </button>
       </div>
 
-      {!loading && sessions.length === 0 && v2Sessions.length === 0 && devices.length === 0 && v2Devices.length === 0 && !error && (
-        <p className="border-t border-brand-border pt-3 text-xs text-brand-text-muted">No browsers are waiting for approval.</p>
-      )}
-      {sessions.map(session => (
+      {!loading &&
+        sessions.length === 0 &&
+        v2Sessions.length === 0 &&
+        devices.length === 0 &&
+        v2Devices.length === 0 &&
+        !error && (
+          <p className="border-t border-brand-border pt-3 text-xs text-brand-text-muted">
+            No browsers are waiting for approval.
+          </p>
+        )}
+      {sessions.map((session) => (
         <div key={session.id} className="flex flex-col gap-3 border-t border-brand-border pt-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="truncate text-xs font-bold text-brand-plum dark:text-brand-text">{session.requestedDisplayName}</p>
+              <p className="truncate text-xs font-bold text-brand-plum dark:text-brand-text">
+                {session.requestedDisplayName}
+              </p>
               <p className="text-xs uppercase text-brand-text-muted">{session.requestedPlatform}</p>
             </div>
             <ShieldCheck className="h-4 w-4 shrink-0 text-brand-sage" />
@@ -294,10 +330,12 @@ export default function CompanionApprovalPanel() {
               inputMode="numeric"
               maxLength={8}
               value={codes[session.id] || ''}
-              onChange={event => setCodes(current => ({
-                ...current,
-                [session.id]: event.target.value.replace(/\D/g, '').slice(0, 8),
-              }))}
+              onChange={(event) =>
+                setCodes((current) => ({
+                  ...current,
+                  [session.id]: event.target.value.replace(/\D/g, '').slice(0, 8),
+                }))
+              }
               className="min-w-0 flex-1 rounded-lg border border-brand-border bg-brand-bg px-3 py-2 font-mono text-sm tracking-widest text-brand-plum outline-none focus:border-brand-pink"
               placeholder="8-digit code"
               aria-label={`Pairing code for ${session.requestedDisplayName}`}
@@ -309,16 +347,25 @@ export default function CompanionApprovalPanel() {
               className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-sage text-white disabled:opacity-40"
               title="Approve companion"
             >
-              {approvingId === session.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              {approvingId === session.id ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
             </button>
           </div>
         </div>
       ))}
-      {v2Sessions.map(session => (
-        <div key={session.pairingId} className="flex flex-col gap-3 border-t border-brand-border pt-3">
+      {v2Sessions.map((session) => (
+        <div
+          key={session.pairingId}
+          className="flex flex-col gap-3 border-t border-brand-border pt-3"
+        >
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="truncate text-xs font-bold text-brand-plum dark:text-brand-text">Web browser</p>
+              <p className="truncate text-xs font-bold text-brand-plum dark:text-brand-text">
+                Web browser
+              </p>
               <p className="text-xs uppercase text-brand-text-muted">{session.platform}</p>
             </div>
             <ShieldCheck className="h-4 w-4 shrink-0 text-brand-sage" />
@@ -328,10 +375,12 @@ export default function CompanionApprovalPanel() {
               inputMode="numeric"
               maxLength={8}
               value={codes[session.pairingId] || ''}
-              onChange={event => setCodes(current => ({
-                ...current,
-                [session.pairingId]: event.target.value.replace(/\D/g, '').slice(0, 8),
-              }))}
+              onChange={(event) =>
+                setCodes((current) => ({
+                  ...current,
+                  [session.pairingId]: event.target.value.replace(/\D/g, '').slice(0, 8),
+                }))
+              }
               className="min-w-0 flex-1 rounded-lg border border-brand-border bg-brand-bg px-3 py-2 font-mono text-sm tracking-widest text-brand-plum outline-none focus:border-brand-pink"
               placeholder="8-digit code"
               aria-label="Pairing code for Web browser"
@@ -339,11 +388,17 @@ export default function CompanionApprovalPanel() {
             <button
               type="button"
               onClick={() => void approveV2(session)}
-              disabled={approvingId === session.pairingId || (codes[session.pairingId] || '').length !== 8}
+              disabled={
+                approvingId === session.pairingId || (codes[session.pairingId] || '').length !== 8
+              }
               className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-sage text-white disabled:opacity-40"
               title="Approve companion"
             >
-              {approvingId === session.pairingId ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              {approvingId === session.pairingId ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
             </button>
           </div>
         </div>
@@ -351,12 +406,14 @@ export default function CompanionApprovalPanel() {
       {devices.length > 0 && (
         <div className="flex flex-col gap-2 border-t border-brand-border pt-3">
           <p className="text-xs font-bold uppercase text-brand-sage">Linked companions</p>
-          {devices.map(device => (
+          {devices.map((device) => (
             <div key={device.id} className="flex items-center justify-between gap-3 py-1">
               <div className="flex min-w-0 items-center gap-2">
                 <Monitor className="h-4 w-4 shrink-0 text-brand-sage" />
                 <div className="min-w-0">
-                  <p className="truncate text-xs font-semibold text-brand-plum dark:text-brand-text">{device.displayName}</p>
+                  <p className="truncate text-xs font-semibold text-brand-plum dark:text-brand-text">
+                    {device.displayName}
+                  </p>
                   <p className="text-xs uppercase text-brand-text-muted">{device.platform}</p>
                 </div>
               </div>
@@ -367,7 +424,11 @@ export default function CompanionApprovalPanel() {
                 className="flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 text-red-600 disabled:opacity-40"
                 title="Revoke companion"
               >
-                {approvingId === device.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {approvingId === device.id ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
               </button>
             </div>
           ))}
@@ -376,12 +437,14 @@ export default function CompanionApprovalPanel() {
       {v2Devices.length > 0 && (
         <div className="flex flex-col gap-2 border-t border-brand-border pt-3">
           <p className="text-xs font-bold uppercase text-brand-sage">Linked companions</p>
-          {v2Devices.map(device => (
+          {v2Devices.map((device) => (
             <div key={device.deviceId} className="flex items-center justify-between gap-3 py-1">
               <div className="flex min-w-0 items-center gap-2">
                 <Monitor className="h-4 w-4 shrink-0 text-brand-sage" />
                 <div className="min-w-0">
-                  <p className="truncate text-xs font-semibold text-brand-plum dark:text-brand-text">Web browser</p>
+                  <p className="truncate text-xs font-semibold text-brand-plum dark:text-brand-text">
+                    Web browser
+                  </p>
                   <p className="text-xs uppercase text-brand-text-muted">
                     {device.platform} · Last seen {new Date(device.lastSeenAt).toLocaleDateString()}
                   </p>
@@ -394,7 +457,11 @@ export default function CompanionApprovalPanel() {
                 className="flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 text-red-600 disabled:opacity-40"
                 title="Revoke companion"
               >
-                {approvingId === device.deviceId ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {approvingId === device.deviceId ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
               </button>
             </div>
           ))}
@@ -408,12 +475,12 @@ export default function CompanionApprovalPanel() {
         description={`This will revoke ${revocationTarget?.displayName || (v2RevocationTarget ? 'the selected web browser' : 'the selected companion')}, rotate your encrypted account key, and require the recovery passphrase before any key packages are published.`}
         confirmLabel="Revoke device"
         loading={Boolean(
-          (revocationTarget && approvingId === revocationTarget.id)
-          || (v2RevocationTarget && approvingId === v2RevocationTarget.deviceId)
+          (revocationTarget && approvingId === revocationTarget.id) ||
+          (v2RevocationTarget && approvingId === v2RevocationTarget.deviceId),
         )}
         error={revocationError}
         onCancel={closeRevocationDialog}
-        onConfirm={passphrase => {
+        onConfirm={(passphrase) => {
           if (revocationTarget) void revoke(revocationTarget, passphrase);
           else if (v2RevocationTarget) void revokeV2(v2RevocationTarget, passphrase);
         }}

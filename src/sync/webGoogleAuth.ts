@@ -17,28 +17,30 @@ const encryptedAuthStorage = new WebEncryptedKeyValueStore(SYNC_SECRET_STORE);
 
 const getClient = async (): Promise<SupabaseClient> => {
   if (!clientPromise) {
-    clientPromise = import('@supabase/supabase-js').then(({ createClient }) => createClient(
-      getConfiguredSupabaseUrl(),
-      getConfiguredSupabaseAnonKey(),
-      {
+    clientPromise = import('@supabase/supabase-js').then(({ createClient }) =>
+      createClient(getConfiguredSupabaseUrl(), getConfiguredSupabaseAnonKey(), {
         auth: {
           persistSession: true,
           autoRefreshToken: true,
           detectSessionInUrl: true,
           storage: encryptedAuthStorage,
         },
-      },
-    ));
+      }),
+    );
   }
   return clientPromise;
 };
 
 const mapSession = (session: Session): WebGoogleSyncSession => {
-  const googleIdentity = session.user.identities?.find(identity => identity.provider === 'google');
+  const googleIdentity = session.user.identities?.find(
+    (identity) => identity.provider === 'google',
+  );
   const identityData = googleIdentity?.identity_data || session.user.user_metadata || {};
   const googleUserId = identityData.sub || identityData.provider_id;
   if (!googleUserId || !session.provider_token) {
-    throw new Error('Google sign-in did not return the identity and Drive token required for pairing.');
+    throw new Error(
+      'Google sign-in did not return the identity and Drive token required for pairing.',
+    );
   }
   return {
     googleSession: {

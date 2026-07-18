@@ -29,13 +29,14 @@ const hydrateAudioReference = (reference: string, label: string): Promise<string
   if (cached) return Promise.resolve(cached);
   const existing = inFlightAudio.get(reference);
   if (existing) return existing;
-  const pending = eventSyncEngine.hydrateMediaReference(reference, label)
-    .then(resolved => {
+  const pending = eventSyncEngine
+    .hydrateMediaReference(reference, label)
+    .then((resolved) => {
       rememberResolvedAudio(reference, resolved);
       inFlightAudio.delete(reference);
       return resolved;
     })
-    .catch(error => {
+    .catch((error) => {
       inFlightAudio.delete(reference);
       throw error;
     });
@@ -43,11 +44,11 @@ const hydrateAudioReference = (reference: string, label: string): Promise<string
   return pending;
 };
 
-export default function AudioWaveformPlayer({ 
-  src, 
-  title = "Voice Note Sanctuary", 
+export default function AudioWaveformPlayer({
+  src,
+  title = 'Voice Note Sanctuary',
   onDelete,
-  variant = 'default'
+  variant = 'default',
 }: AudioWaveformPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [resolvedSrc, setResolvedSrc] = useState<string>(src);
@@ -63,9 +64,8 @@ export default function AudioWaveformPlayer({
   // Generate deterministic bar heights for the visual waveform
   const numBars = 35;
   const barHeights = [
-    30, 45, 60, 40, 55, 75, 90, 65, 50, 40, 35, 60, 80, 95, 70, 50,
-    30, 45, 55, 75, 85, 60, 45, 30, 40, 65, 80, 55, 45, 35, 50, 60,
-    45, 30, 20
+    30, 45, 60, 40, 55, 75, 90, 65, 50, 40, 35, 60, 80, 95, 70, 50, 30, 45, 55, 75, 85, 60, 45, 30,
+    40, 65, 80, 55, 45, 35, 50, 60, 45, 30, 20,
   ];
 
   useEffect(() => {
@@ -97,12 +97,12 @@ export default function AudioWaveformPlayer({
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
-    
+
     if (audioRef.current) {
       audioRef.current.load();
-      
+
       const audio = audioRef.current;
-      
+
       // Force duration discovery by seeking to the end and back
       // This is crucial for webm/blob recordings that lack duration headers
       const forceDurationDiscovery = () => {
@@ -130,7 +130,7 @@ export default function AudioWaveformPlayer({
       audio.addEventListener('loadedmetadata', handleLoadedMetadata);
       audio.addEventListener('durationchange', updateDuration);
       audio.addEventListener('canplaythrough', updateDuration);
-      
+
       // Polling for duration as Blobs sometimes don't report it immediately
       const interval = setInterval(() => {
         if (isFinite(audio.duration) && audio.duration > 0) {
@@ -171,8 +171,8 @@ export default function AudioWaveformPlayer({
           }
         }, 50);
       } else {
-        audioRef.current.play().catch(err => {
-          console.error("Audio playback error:", err);
+        audioRef.current.play().catch((err) => {
+          console.error('Audio playback error:', err);
         });
       }
     }
@@ -182,7 +182,11 @@ export default function AudioWaveformPlayer({
     if (audioRef.current) {
       setCurrentTime(audioRef.current.currentTime);
       // Continuous duration update if not yet set
-      if ((!duration || !isFinite(duration)) && isFinite(audioRef.current.duration) && audioRef.current.duration > 0) {
+      if (
+        (!duration || !isFinite(duration)) &&
+        isFinite(audioRef.current.duration) &&
+        audioRef.current.duration > 0
+      ) {
         setDuration(audioRef.current.duration);
       }
     }
@@ -207,7 +211,7 @@ export default function AudioWaveformPlayer({
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
-  const progressPercentage = (duration > 0 && isFinite(duration)) ? (currentTime / duration) : 0;
+  const progressPercentage = duration > 0 && isFinite(duration) ? currentTime / duration : 0;
   const activeBarIndex = Math.floor(progressPercentage * numBars);
 
   if (variant === 'minimal') {
@@ -244,7 +248,9 @@ export default function AudioWaveformPlayer({
             {formatTime(currentTime)} / {formatTime(duration || 0)}
           </span>
           {(isResolvingAudio || resolveError) && (
-            <span className={`mt-0.5 text-[0.6875rem] ${resolveError ? 'text-brand-rose' : 'text-brand-text-muted'}`}>
+            <span
+              className={`mt-0.5 text-[0.6875rem] ${resolveError ? 'text-brand-rose' : 'text-brand-text-muted'}`}
+            >
               {resolveError || 'Preparing audio…'}
             </span>
           )}
@@ -354,7 +360,10 @@ export default function AudioWaveformPlayer({
         </div>
       </div>
       {(isResolvingAudio || resolveError) && (
-        <p role={resolveError ? 'alert' : 'status'} className={`text-xs ${resolveError ? 'text-brand-rose' : 'text-brand-text-muted'}`}>
+        <p
+          role={resolveError ? 'alert' : 'status'}
+          className={`text-xs ${resolveError ? 'text-brand-rose' : 'text-brand-text-muted'}`}
+        >
           {resolveError || 'Preparing this voice note…'}
         </p>
       )}

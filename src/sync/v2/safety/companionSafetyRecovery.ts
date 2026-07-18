@@ -21,9 +21,10 @@ export const clearRecoverableCompanionSafetyStop = async (
   if (runtime.accountId !== account.accountId || runtime.lastAppliedSequence !== 0) return false;
 
   const safety = new PersistentSafetyStopStore(store);
-  if (!await safety.get(account.accountId)) return false;
-  const pendingLocalWrites = (await outbox.listByAccount(account.accountId))
-    .some(operation => operation.state !== 'ACKNOWLEDGED' && operation.state !== 'SUPERSEDED');
+  if (!(await safety.get(account.accountId))) return false;
+  const pendingLocalWrites = (await outbox.listByAccount(account.accountId)).some(
+    (operation) => operation.state !== 'ACKNOWLEDGED' && operation.state !== 'SUPERSEDED',
+  );
   if (pendingLocalWrites) return false;
 
   await safety.clearAfterVerifiedRecovery(account.accountId);

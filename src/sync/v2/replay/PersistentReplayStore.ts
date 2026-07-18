@@ -1,7 +1,10 @@
 import type { LocalDataStore } from '../../../platform/storage';
 import { SyncError } from '../../errors';
 import type { SyncV2RemoteEvent } from '../api/SyncV2ApiTypes';
-import type { DecryptedSyncV2EventMetadata, SyncInvariantValidator } from '../domain/SyncInvariantValidator';
+import type {
+  DecryptedSyncV2EventMetadata,
+  SyncInvariantValidator,
+} from '../domain/SyncInvariantValidator';
 import type { SyncV2LocalRuntime } from '../protocol/ProtocolBootstrap';
 
 export const SYNC_V2_RECORDS_KEY = 'deardiary_sync_v2_records';
@@ -57,7 +60,7 @@ export class PersistentReplayStore implements SyncV2ReplayStore {
 
   async hasAppliedEvent(eventId: string): Promise<boolean> {
     await this.tail;
-    return (await this.audit()).some(row => row.eventId === eventId);
+    return (await this.audit()).some((row) => row.eventId === eventId);
   }
 
   applyBatch(events: ReplayBatchEvent[]): Promise<number> {
@@ -70,15 +73,18 @@ export class PersistentReplayStore implements SyncV2ReplayStore {
         this.audit(),
         this.read<Record<string, string>>(MEDIA_KEY, {}),
       ]);
-      const appliedIds = new Set(audit.map(row => row.eventId));
-      const replayable = events.filter(item => {
+      const appliedIds = new Set(audit.map((row) => row.eventId));
+      const replayable = events.filter((item) => {
         if (item.envelope.sequence > runtime.lastAppliedSequence) return true;
-        const applied = audit.find(row => row.eventId === item.envelope.eventId);
+        const applied = audit.find((row) => row.eventId === item.envelope.eventId);
         if (applied?.sequence === item.envelope.sequence) return false;
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       });
       if (replayable.length === 0) return runtime.lastAppliedSequence;
-      this.validator.validateReplayPage(replayable.map(item => item.envelope), runtime.lastAppliedSequence);
+      this.validator.validateReplayPage(
+        replayable.map((item) => item.envelope),
+        runtime.lastAppliedSequence,
+      );
       const nextAudit = [...audit];
       let cursor = runtime.lastAppliedSequence;
       for (const item of replayable) {
@@ -96,7 +102,9 @@ export class PersistentReplayStore implements SyncV2ReplayStore {
         if (envelope.operationType === 'DELETE') delete records[recordKey];
         else records[recordKey] = event.payload;
         versions[recordKey] = envelope.recordVersion;
-        event.mediaPointers?.forEach(pointer => { media[pointer.mediaId] = pointer.objectKey; });
+        event.mediaPointers?.forEach((pointer) => {
+          media[pointer.mediaId] = pointer.objectKey;
+        });
         nextAudit.push({
           eventId: envelope.eventId,
           operationId: envelope.operationId,
@@ -130,12 +138,15 @@ export class PersistentReplayStore implements SyncV2ReplayStore {
 
   private async read<T>(key: string, fallback: T): Promise<T> {
     const raw = await this.store.getItem(key);
-    return raw ? JSON.parse(raw) as T : fallback;
+    return raw ? (JSON.parse(raw) as T) : fallback;
   }
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(work, work);
-    this.tail = result.then(() => undefined, () => undefined);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 }

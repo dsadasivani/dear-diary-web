@@ -71,4 +71,3 @@ export const pageMotion = (reduced: boolean | null | undefined) => ({
   exit: 'exit' as const,
   transition: reduced ? { duration: 0.01 } : motionTransitions.page,
 });
-

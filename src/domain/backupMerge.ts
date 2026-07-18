@@ -1,4 +1,11 @@
-import type { AppSettings, BackupMergePreview, BackupMergeResult, Diary, Mood, Note } from '../types';
+import type {
+  AppSettings,
+  BackupMergePreview,
+  BackupMergeResult,
+  Diary,
+  Mood,
+  Note,
+} from '../types';
 import type { RepositorySnapshot } from '../repositories/DiaryRepository';
 
 export type MergeIdFactory = (kind: 'diary' | 'entry' | 'note', sourceId: string) => string;
@@ -17,15 +24,15 @@ const comparableDiary = (diary: Diary): Omit<Diary, 'entryCount' | 'lastUpdated'
   return portable;
 };
 
-const equivalent = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
+const equivalent = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
 
-const recoveredTitle = (title: string): string => (
-  title.endsWith(' (Recovered conflict)') ? title : `${title} (Recovered conflict)`
-);
+const recoveredTitle = (title: string): string =>
+  title.endsWith(' (Recovered conflict)') ? title : `${title} (Recovered conflict)`;
 
 const uniqueRecoveredDiaryName = (name: string, diaries: Diary[]): string => {
   const base = `${name} (Recovered from Drive)`;
-  const names = new Set(diaries.map(diary => diary.name.toLocaleLowerCase()));
+  const names = new Set(diaries.map((diary) => diary.name.toLocaleLowerCase()));
   if (!names.has(base.toLocaleLowerCase())) return base;
   let index = 2;
   while (names.has(`${base} ${index}`.toLocaleLowerCase())) index += 1;
@@ -38,9 +45,15 @@ const mergeCatalogs = (
 ): { settings: AppSettings | undefined; moodConflicts: number } => {
   if (!local) return { settings: incoming ? clone(incoming) : undefined, moodConflicts: 0 };
   if (!incoming) return { settings: clone(local), moodConflicts: 0 };
-  const customTags = [...new Set([...(local.customTags || []), ...(incoming.customTags || [])].map(tag => tag.trim().toLowerCase()).filter(Boolean))];
+  const customTags = [
+    ...new Set(
+      [...(local.customTags || []), ...(incoming.customTags || [])]
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
   const customMoods = clone(local.customMoods || []);
-  const moodNames = new Map(customMoods.map(mood => [mood.name.toLocaleLowerCase(), mood]));
+  const moodNames = new Map(customMoods.map((mood) => [mood.name.toLocaleLowerCase(), mood]));
   let moodConflicts = 0;
   for (const mood of incoming.customMoods || []) {
     const existing = moodNames.get(mood.name.toLocaleLowerCase());
@@ -53,7 +66,8 @@ const mergeCatalogs = (
     moodConflicts += 1;
     let recoveredName = `${mood.name} (Recovered)`;
     let index = 2;
-    while (moodNames.has(recoveredName.toLocaleLowerCase())) recoveredName = `${mood.name} (Recovered ${index++})`;
+    while (moodNames.has(recoveredName.toLocaleLowerCase()))
+      recoveredName = `${mood.name} (Recovered ${index++})`;
     const recovered: Mood = { ...clone(mood), name: recoveredName };
     customMoods.push(recovered);
     moodNames.set(recoveredName.toLocaleLowerCase(), recovered);
@@ -80,7 +94,7 @@ export const buildPortableMergePlan = (
   const diaryMap = new Map<string, { targetId: string; cloneWholeDiary: boolean }>();
 
   for (const cloudDiary of incoming.diaries) {
-    const localDiary = diaries.find(diary => diary.id === cloudDiary.id);
+    const localDiary = diaries.find((diary) => diary.id === cloudDiary.id);
     if (!localDiary) {
       diaries.push(clone(cloudDiary));
       diaryMap.set(cloudDiary.id, { targetId: cloudDiary.id, cloneWholeDiary: false });
@@ -109,11 +123,15 @@ export const buildPortableMergePlan = (
     const mapping = diaryMap.get(cloudEntry.diaryId);
     if (!mapping) continue;
     if (mapping.cloneWholeDiary) {
-      entries.push({ ...clone(cloudEntry), id: idFactory('entry', cloudEntry.id), diaryId: mapping.targetId });
+      entries.push({
+        ...clone(cloudEntry),
+        id: idFactory('entry', cloudEntry.id),
+        diaryId: mapping.targetId,
+      });
       add.entries += 1;
       continue;
     }
-    const localEntry = entries.find(entry => entry.id === cloudEntry.id);
+    const localEntry = entries.find((entry) => entry.id === cloudEntry.id);
     if (!localEntry) {
       entries.push({ ...clone(cloudEntry), diaryId: mapping.targetId });
       add.entries += 1;
@@ -132,7 +150,7 @@ export const buildPortableMergePlan = (
   }
 
   for (const cloudNote of incoming.notes) {
-    const localNote = notes.find(note => note.id === cloudNote.id);
+    const localNote = notes.find((note) => note.id === cloudNote.id);
     if (!localNote) {
       notes.push(clone(cloudNote));
       add.notes += 1;

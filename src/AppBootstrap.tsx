@@ -26,7 +26,7 @@ const loadBootstrapData = (): Promise<BootstrapData> => {
       await hydrateNativeUiPreferences();
       await diaryRepository.initialize();
       await seedE2eRepositoryIfRequested();
-      await migrateLegacyDataUriMedia().catch(error => {
+      await migrateLegacyDataUriMedia().catch((error) => {
         console.warn('Legacy media migration will be retried on the next launch:', error);
       });
       initializeMediaGarbageCollection();
@@ -55,17 +55,22 @@ export default function AppBootstrap() {
       diaryRepository.getUserProfile(),
       diaryRepository.getLocalSyncAccountState(),
     ]);
-    setData({ settings, security, userProfile, syncAccount: syncAccount || linkedSyncAccount || null });
+    setData({
+      settings,
+      security,
+      userProfile,
+      syncAccount: syncAccount || linkedSyncAccount || null,
+    });
   }, []);
 
   useEffect(() => {
     let active = true;
     setError('');
     loadBootstrapData()
-      .then(result => {
+      .then((result) => {
         if (active) setData(result);
       })
-      .catch(bootstrapError => {
+      .catch((bootstrapError) => {
         bootstrapPromise = null;
         if (active) setError(bootstrapError?.message || 'Local storage could not be opened.');
       });
@@ -98,7 +103,7 @@ export default function AppBootstrap() {
           <p className="text-xs text-brand-pink-dark">{error}</p>
           <button
             type="button"
-            onClick={() => setAttempt(value => value + 1)}
+            onClick={() => setAttempt((value) => value + 1)}
             className="w-10 h-10 rounded-full bg-brand-sage text-white flex items-center justify-center shadow-sm"
             title="Retry local storage"
           >

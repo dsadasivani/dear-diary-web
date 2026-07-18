@@ -1,1 +1,31 @@
-{"title":"Dear Diary Sync Health","uid":"deardiary-sync-health","schemaVersion":39,"version":1,"time":{"from":"now-6h","to":"now"},"panels":[{"id":1,"type":"stat","title":"Commit success rate","targets":[{"expr":"sum(rate(sync_operation_commit_total{outcome=\"success\"}[5m])) / clamp_min(sum(rate(sync_operation_commit_total[5m])), 0.001)"}]},{"id":2,"type":"timeseries","title":"Sequence lag","targets":[{"expr":"sync_sequence_lag"}]},{"id":3,"type":"timeseries","title":"Notification outbox depth","targets":[{"expr":"sync_notification_outbox_depth"}]}]}
+{
+  "title": "Dear Diary Sync Health",
+  "uid": "deardiary-sync-health",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Commit success rate",
+      "targets": [
+        {
+          "expr": "sum(rate(sync_operation_commit_total{outcome=\"success\"}[5m])) / clamp_min(sum(rate(sync_operation_commit_total[5m])), 0.001)"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Sequence lag",
+      "targets": [{ "expr": "sync_sequence_lag" }]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Notification outbox depth",
+      "targets": [{ "expr": "sync_notification_outbox_depth" }]
+    }
+  ]
+}

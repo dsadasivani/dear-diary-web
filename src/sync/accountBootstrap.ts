@@ -37,10 +37,7 @@ import {
   savePendingPrimaryRecoverySecret,
   saveSyncSecrets,
 } from './syncSecrets';
-import {
-  encodeRepositorySnapshotPayload,
-  findLatestValidSnapshot,
-} from './syncSnapshot';
+import { encodeRepositorySnapshotPayload, findLatestValidSnapshot } from './syncSnapshot';
 import { recoverAccountRootKey } from './accountRecovery';
 import { restoreLatestPartitions } from './partitionedRestore';
 import type { SyncSecretStorage } from './syncSecrets';
@@ -92,16 +89,13 @@ const listAllSyncObjects = async (
   }
 };
 
-const isStaleRecoverySequenceError = (error: unknown): boolean => (
-  error instanceof SupabaseControlPlaneError && error.providerCode === 'stale_recovery_sequence'
-);
+const isStaleRecoverySequenceError = (error: unknown): boolean =>
+  error instanceof SupabaseControlPlaneError && error.providerCode === 'stale_recovery_sequence';
 
-const isAlreadyFinalizedRecoveryError = (error: unknown): boolean => (
-  error instanceof SupabaseControlPlaneError && (
-    error.providerCode === 'recovery_attempt_not_pending' ||
-    error.providerCode === 'recovery_attempt_not_found'
-  )
-);
+const isAlreadyFinalizedRecoveryError = (error: unknown): boolean =>
+  error instanceof SupabaseControlPlaneError &&
+  (error.providerCode === 'recovery_attempt_not_pending' ||
+    error.providerCode === 'recovery_attempt_not_found');
 
 export type PendingPrimaryRecoveryPhase =
   | 'registered'
@@ -160,24 +154,30 @@ const phaseAtLeast = (
   target: PendingPrimaryRecoveryPhase,
 ): boolean => PHASE_ORDER[phase] >= PHASE_ORDER[target];
 
-const encodeRootKeys = (rootKeys: Record<number, Uint8Array>): Record<string, string> => (
-  Object.fromEntries(Object.entries(rootKeys).map(([epoch, key]) => [epoch, encodeSyncSecretBytes(key)]))
-);
+const encodeRootKeys = (rootKeys: Record<number, Uint8Array>): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(rootKeys).map(([epoch, key]) => [epoch, encodeSyncSecretBytes(key)]),
+  );
 
-const decodeRootKeys = (rootKeys: Record<string, string>): Record<number, Uint8Array> => (
-  Object.fromEntries(Object.entries(rootKeys).map(([epoch, key]) => [Number(epoch), decodeSyncSecretBytes(key)]))
-);
+const decodeRootKeys = (rootKeys: Record<string, string>): Record<number, Uint8Array> =>
+  Object.fromEntries(
+    Object.entries(rootKeys).map(([epoch, key]) => [Number(epoch), decodeSyncSecretBytes(key)]),
+  );
 
 const accountRootKeyFromPending = (pending: PendingPrimaryRecovery): Uint8Array => {
   const key = decodeSyncSecretBytes(pending.accountRootKeyBase64);
-  if (key.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Pending primary recovery account key is damaged.');
+  if (key.byteLength !== ACCOUNT_ROOT_KEY_BYTES)
+    throw new Error('Pending primary recovery account key is damaged.');
   return key;
 };
 
-const accountRootKeysFromPending = (pending: PendingPrimaryRecovery): Record<number, Uint8Array> => {
+const accountRootKeysFromPending = (
+  pending: PendingPrimaryRecovery,
+): Record<number, Uint8Array> => {
   const rootKeys = decodeRootKeys(pending.accountRootKeysBase64);
-  Object.values(rootKeys).forEach(key => {
-    if (key.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Pending primary recovery epoch key is damaged.');
+  Object.values(rootKeys).forEach((key) => {
+    if (key.byteLength !== ACCOUNT_ROOT_KEY_BYTES)
+      throw new Error('Pending primary recovery epoch key is damaged.');
   });
   return rootKeys;
 };
@@ -196,7 +196,8 @@ export const loadPendingPrimaryRecovery = async (
     !pending.devicePrivateKeyJwk ||
     !pending.recoveryKeyDriveFileId ||
     !Number.isInteger(pending.currentSyncSequence)
-  ) return null;
+  )
+    return null;
   try {
     accountRootKeyFromPending(pending);
     accountRootKeysFromPending(pending);
@@ -230,15 +231,16 @@ const createRecoveredSecurityConfig = async (
   recoveryQuestion: RecoveryQuestionInput,
 ): Promise<SecurityConfig> => {
   const currentSecurity = await repository.getSecurityConfig();
-  const recoveredSecurity = currentSecurity.isPinCreated && hasRecoveryQuestion(currentSecurity)
-    ? currentSecurity
-    : createInitialPinWithRecovery(
-      currentSecurity,
-      localPin,
-      recoveryQuestion.questionId,
-      recoveryQuestion.answer,
-      recoveryQuestion.questionText,
-    );
+  const recoveredSecurity =
+    currentSecurity.isPinCreated && hasRecoveryQuestion(currentSecurity)
+      ? currentSecurity
+      : createInitialPinWithRecovery(
+          currentSecurity,
+          localPin,
+          recoveryQuestion.questionId,
+          recoveryQuestion.answer,
+          recoveryQuestion.questionText,
+        );
 
   return {
     ...recoveredSecurity,
@@ -284,7 +286,8 @@ const localStateFromPending = (
   googleEmail: pending.googleSession.email!,
   devicePublicKey: pending.device.publicKey,
   recoveryKeyDriveFileId: pending.recoveryKeyDriveFileId,
-  latestSnapshotDriveFileId: options.latestSnapshotDriveFileId || pending.latestSnapshotDriveFileId || '',
+  latestSnapshotDriveFileId:
+    options.latestSnapshotDriveFileId || pending.latestSnapshotDriveFileId || '',
   latestSnapshotSequence: options.latestSnapshotSequence ?? pending.latestSnapshotSequence,
   currentSyncSequence,
   keyEpoch: pending.account.currentKeyEpoch || pending.recoveryKeyEpoch || 1,
@@ -294,7 +297,7 @@ const localStateFromPending = (
   linkedAt: Date.now(),
 });
 
-const profilesMatch = (left: UserProfile, right: UserProfile): boolean => (
+const profilesMatch = (left: UserProfile, right: UserProfile): boolean =>
   left.name === right.name &&
   left.email === right.email &&
   left.bio === right.bio &&
@@ -302,8 +305,7 @@ const profilesMatch = (left: UserProfile, right: UserProfile): boolean => (
   left.avatarColor === right.avatarColor &&
   left.avatarUri === right.avatarUri &&
   left.writingGoal === right.writingGoal &&
-  left.joinedDate === right.joinedDate
-);
+  left.joinedDate === right.joinedDate;
 
 const populateLocalProfileFromGoogle = async (
   repository: DiaryRepository,
@@ -311,7 +313,11 @@ const populateLocalProfileFromGoogle = async (
   cacheGoogleAvatar?: AvatarCache,
 ): Promise<void> => {
   const profile = await repository.getUserProfile();
-  const updatedProfile = await populateUserProfileFromGoogle(profile, googleSession, cacheGoogleAvatar);
+  const updatedProfile = await populateUserProfileFromGoogle(
+    profile,
+    googleSession,
+    cacheGoogleAvatar,
+  );
   if (!profilesMatch(profile, updatedProfile)) {
     await repository.saveUserProfile(updatedProfile);
   }
@@ -354,7 +360,7 @@ const finalizeRecoveredPrimary = async (input: {
         accountRootKeys: input.accountRootKeys,
         googleSession: input.googleSession,
         download: input.download,
-        objects: objects.filter(object => object.sequence > localState.currentSyncSequence),
+        objects: objects.filter((object) => object.sequence > localState.currentSyncSequence),
       });
       await input.controlPlane.updateDeviceCursor({
         deviceId: localState.deviceId,
@@ -399,28 +405,29 @@ const savePendingRecoverySyncSecrets = async (
   pending: PendingPrimaryRecovery,
   storage?: SyncSecretStorage,
 ): Promise<void> => {
-  await saveSyncSecrets({
-    version: 1,
-    accountId: pending.account.id,
-    accountRootKey: accountRootKeyFromPending(pending),
-    accountRootKeys: accountRootKeysFromPending(pending),
-    devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
-    supabaseSession: pending.supabaseSession,
-    googleSession: pending.googleSession,
-  }, storage);
+  await saveSyncSecrets(
+    {
+      version: 1,
+      accountId: pending.account.id,
+      accountRootKey: accountRootKeyFromPending(pending),
+      accountRootKeys: accountRootKeysFromPending(pending),
+      devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
+      supabaseSession: pending.supabaseSession,
+      googleSession: pending.googleSession,
+    },
+    storage,
+  );
 };
 
-const finalizePendingPrimaryRecovery = async (
-  input: {
-    repository: DiaryRepository;
-    controlPlane: SupabaseControlPlaneClient;
-    pending: PendingPrimaryRecovery;
-    localState: LocalSyncAccountState;
-    googleSession: GoogleAccountSession;
-    download?: SyncObjectDownloader;
-    secretStorage?: SyncSecretStorage;
-  },
-): Promise<LocalSyncAccountState> => {
+const finalizePendingPrimaryRecovery = async (input: {
+  repository: DiaryRepository;
+  controlPlane: SupabaseControlPlaneClient;
+  pending: PendingPrimaryRecovery;
+  localState: LocalSyncAccountState;
+  googleSession: GoogleAccountSession;
+  download?: SyncObjectDownloader;
+  secretStorage?: SyncSecretStorage;
+}): Promise<LocalSyncAccountState> => {
   try {
     const finalized = await finalizeRecoveredPrimary({
       repository: input.repository,
@@ -432,30 +439,36 @@ const finalizePendingPrimaryRecovery = async (
       googleSession: input.googleSession,
       download: input.download,
     });
-    await updatePendingPrimaryRecovery(input.pending, {
-      phase: 'server_finalized',
-      currentSyncSequence: finalized.currentSyncSequence,
-    }, input.secretStorage);
+    await updatePendingPrimaryRecovery(
+      input.pending,
+      {
+        phase: 'server_finalized',
+        currentSyncSequence: finalized.currentSyncSequence,
+      },
+      input.secretStorage,
+    );
     await manualSyncFlowCheckpoint('md021:after-server-finalized');
     return finalized;
   } catch (error) {
     if (!isAlreadyFinalizedRecoveryError(error)) throw error;
-    if (!await primaryRecoveryAlreadyFinalized(input.pending, input.controlPlane)) throw error;
+    if (!(await primaryRecoveryAlreadyFinalized(input.pending, input.controlPlane))) throw error;
     const currentState = await input.repository.getLocalSyncAccountState();
     return currentState || input.localState;
   }
 };
 
-const ensurePendingRecoveryCursor = async (
-  input: {
-    repository: DiaryRepository;
-    controlPlane: SupabaseControlPlaneClient;
-    pending: PendingPrimaryRecovery;
-    secretStorage?: SyncSecretStorage;
-  },
-): Promise<{ pending: PendingPrimaryRecovery; localState: LocalSyncAccountState }> => {
+const ensurePendingRecoveryCursor = async (input: {
+  repository: DiaryRepository;
+  controlPlane: SupabaseControlPlaneClient;
+  pending: PendingPrimaryRecovery;
+  secretStorage?: SyncSecretStorage;
+}): Promise<{ pending: PendingPrimaryRecovery; localState: LocalSyncAccountState }> => {
   const localState = await input.repository.getLocalSyncAccountState();
-  if (!localState || localState.accountId !== input.pending.account.id || localState.deviceId !== input.pending.device.id) {
+  if (
+    !localState ||
+    localState.accountId !== input.pending.account.id ||
+    localState.deviceId !== input.pending.device.id
+  ) {
     throw new Error('Pending primary recovery local state is unavailable.');
   }
   if (!phaseAtLeast(input.pending.phase, 'cursor_updated')) {
@@ -465,10 +478,14 @@ const ensurePendingRecoveryCursor = async (
     });
     return {
       localState,
-      pending: await updatePendingPrimaryRecovery(input.pending, {
-        phase: 'cursor_updated',
-        currentSyncSequence: localState.currentSyncSequence,
-      }, input.secretStorage),
+      pending: await updatePendingPrimaryRecovery(
+        input.pending,
+        {
+          phase: 'cursor_updated',
+          currentSyncSequence: localState.currentSyncSequence,
+        },
+        input.secretStorage,
+      ),
     };
   }
   return { pending: input.pending, localState };
@@ -484,25 +501,36 @@ const continuePendingPrimaryRecovery = async (input: {
   onProgress?: (message: string) => void;
 }): Promise<BootstrapNewMobileAccountResult> => {
   let pending = input.pending;
-  const googleSession = input.googleSession?.accessToken ? input.googleSession : pending.googleSession;
-  if (!googleSession.accessToken) throw new Error('Google Drive appDataFolder access is required to resume account recovery.');
+  const googleSession = input.googleSession?.accessToken
+    ? input.googleSession
+    : pending.googleSession;
+  if (!googleSession.accessToken)
+    throw new Error('Google Drive appDataFolder access is required to resume account recovery.');
   const accountRootKey = accountRootKeyFromPending(pending);
   const accountRootKeys = accountRootKeysFromPending(pending);
 
   if (!phaseAtLeast(pending.phase, 'local_empty_state_saved')) {
     input.onProgress?.('Restoring local recovery state...');
     const localState = await savePendingRecoveryEmptyLocalState(input.repository, pending);
-    pending = await updatePendingPrimaryRecovery(pending, {
-      phase: 'local_empty_state_saved',
-      currentSyncSequence: localState.currentSyncSequence,
-    }, input.secretStorage);
+    pending = await updatePendingPrimaryRecovery(
+      pending,
+      {
+        phase: 'local_empty_state_saved',
+        currentSyncSequence: localState.currentSyncSequence,
+      },
+      input.secretStorage,
+    );
     await manualSyncFlowCheckpoint('md021:after-local-empty-state');
   }
 
   if (!phaseAtLeast(pending.phase, 'sync_secrets_saved')) {
     input.onProgress?.('Securing recovered account keys...');
     await savePendingRecoverySyncSecrets(pending, input.secretStorage);
-    pending = await updatePendingPrimaryRecovery(pending, { phase: 'sync_secrets_saved' }, input.secretStorage);
+    pending = await updatePendingPrimaryRecovery(
+      pending,
+      { phase: 'sync_secrets_saved' },
+      input.secretStorage,
+    );
     await manualSyncFlowCheckpoint('md021:after-sync-secrets-saved');
   }
 
@@ -512,8 +540,9 @@ const continuePendingPrimaryRecovery = async (input: {
     pending.phase === 'sync_secrets_saved'
   ) {
     input.onProgress?.('Restoring diary data...');
-    const localState = (await input.repository.getLocalSyncAccountState())
-      || await savePendingRecoveryEmptyLocalState(input.repository, pending);
+    const localState =
+      (await input.repository.getLocalSyncAccountState()) ||
+      (await savePendingRecoveryEmptyLocalState(input.repository, pending));
     let partitioned: Awaited<ReturnType<typeof restoreLatestPartitions>> | null = null;
     let partitionedFailure: unknown = null;
     try {
@@ -528,16 +557,23 @@ const continuePendingPrimaryRecovery = async (input: {
       });
     } catch (error) {
       partitionedFailure = error;
-      console.warn('Partitioned primary recovery restore failed; trying legacy snapshot restore:', error);
+      console.warn(
+        'Partitioned primary recovery restore failed; trying legacy snapshot restore:',
+        error,
+      );
     }
     if (partitioned?.mode === 'partitioned') {
       const restoredState = (await input.repository.getLocalSyncAccountState()) || localState;
-      pending = await updatePendingPrimaryRecovery(pending, {
-        phase: 'partition_restore_completed',
-        currentSyncSequence: partitioned.currentSyncSequence,
-        latestSnapshotDriveFileId: restoredState.latestSnapshotDriveFileId,
-        latestSnapshotSequence: restoredState.latestSnapshotSequence,
-      }, input.secretStorage);
+      pending = await updatePendingPrimaryRecovery(
+        pending,
+        {
+          phase: 'partition_restore_completed',
+          currentSyncSequence: partitioned.currentSyncSequence,
+          latestSnapshotDriveFileId: restoredState.latestSnapshotDriveFileId,
+          latestSnapshotSequence: restoredState.latestSnapshotSequence,
+        },
+        input.secretStorage,
+      );
       await manualSyncFlowCheckpoint('md021:after-restore-completed');
     } else {
       try {
@@ -565,22 +601,26 @@ const continuePendingPrimaryRecovery = async (input: {
           accountRootKeys,
           googleSession,
           download: input.download,
-          objects: allObjects.filter(object => object.sequence > latestSnapshot.sequence),
+          objects: allObjects.filter((object) => object.sequence > latestSnapshot.sequence),
         });
-        pending = await updatePendingPrimaryRecovery(pending, {
-          phase: 'legacy_snapshot_restored',
-          latestSnapshotDriveFileId: latestSnapshot.driveFileId,
-          latestSnapshotSequence: latestSnapshot.sequence,
-          currentSyncSequence: replayedState.currentSyncSequence,
-        }, input.secretStorage);
+        pending = await updatePendingPrimaryRecovery(
+          pending,
+          {
+            phase: 'legacy_snapshot_restored',
+            latestSnapshotDriveFileId: latestSnapshot.driveFileId,
+            latestSnapshotSequence: latestSnapshot.sequence,
+            currentSyncSequence: replayedState.currentSyncSequence,
+          },
+          input.secretStorage,
+        );
         await manualSyncFlowCheckpoint('md021:after-restore-completed');
       } catch (legacyError) {
         if (partitionedFailure) {
           throw new AggregateError(
             [partitionedFailure, legacyError],
-            `Partitioned restore failed and no legacy encrypted snapshot could be restored. `
-            + `${String((partitionedFailure as { message?: string })?.message || partitionedFailure)}; `
-            + `${String((legacyError as { message?: string })?.message || legacyError)}`,
+            `Partitioned restore failed and no legacy encrypted snapshot could be restored. ` +
+              `${String((partitionedFailure as { message?: string })?.message || partitionedFailure)}; ` +
+              `${String((legacyError as { message?: string })?.message || legacyError)}`,
           );
         }
         throw legacyError;
@@ -597,7 +637,10 @@ const continuePendingPrimaryRecovery = async (input: {
     secretStorage: input.secretStorage,
   });
   pending = cursor.pending;
-  if (!phaseAtLeast(preCursorPhase, 'cursor_updated') && phaseAtLeast(pending.phase, 'cursor_updated')) {
+  if (
+    !phaseAtLeast(preCursorPhase, 'cursor_updated') &&
+    phaseAtLeast(pending.phase, 'cursor_updated')
+  ) {
     await manualSyncFlowCheckpoint('md021:after-cursor-updated');
   }
   const finalized = await finalizePendingPrimaryRecovery({
@@ -609,10 +652,13 @@ const continuePendingPrimaryRecovery = async (input: {
     download: input.download,
     secretStorage: input.secretStorage,
   });
-  await savePendingRecoverySyncSecrets({
-    ...pending,
-    googleSession,
-  }, input.secretStorage);
+  await savePendingRecoverySyncSecrets(
+    {
+      ...pending,
+      googleSession,
+    },
+    input.secretStorage,
+  );
   await clearPendingPrimaryRecoverySecret(input.secretStorage);
   return {
     localState: finalized,
@@ -649,12 +695,14 @@ const abortPendingPrimaryRecovery = async (
     secretStorage?: SyncSecretStorage;
   },
 ): Promise<void> => {
-  if (!await primaryRecoveryAlreadyFinalized(pending, input.controlPlane)) {
-    await input.controlPlane.abortPrimaryMobileRecovery(pending.attempt.id, pending.device.id).catch(abortError => {
-      if (!isAlreadyFinalizedRecoveryError(abortError)) {
-        console.warn('Pending primary recovery could not be aborted:', abortError);
-      }
-    });
+  if (!(await primaryRecoveryAlreadyFinalized(pending, input.controlPlane))) {
+    await input.controlPlane
+      .abortPrimaryMobileRecovery(pending.attempt.id, pending.device.id)
+      .catch((abortError) => {
+        if (!isAlreadyFinalizedRecoveryError(abortError)) {
+          console.warn('Pending primary recovery could not be aborted:', abortError);
+        }
+      });
   }
   await clearPendingPrimaryRecoverySecret(input.secretStorage);
 };
@@ -673,7 +721,9 @@ const recoverExistingMobileAccount = async ({
   download,
   secretStorage,
   onProgress,
-}: BootstrapNewMobileAccountInput & { existingAccount: SyncAccount }): Promise<BootstrapNewMobileAccountResult> => {
+}: BootstrapNewMobileAccountInput & {
+  existingAccount: SyncAccount;
+}): Promise<BootstrapNewMobileAccountResult> => {
   const rollbackSnapshot = await repository.exportSnapshot();
   const rollbackSyncState = await repository.getLocalSyncAccountState();
   const rollbackSecrets = await loadSyncSecrets(secretStorage).catch(() => null);
@@ -693,13 +743,21 @@ const recoverExistingMobileAccount = async ({
   const currentKeyEpoch = existingAccount.currentKeyEpoch || recoveredKeyEpoch || 1;
   const recoveredRootKeys = {
     ...recoveredKey.accountRootKeys,
-    [recoveredKeyEpoch]: recoveredKey.accountRootKeys[recoveredKeyEpoch] || recoveredKey.accountRootKey,
+    [recoveredKeyEpoch]:
+      recoveredKey.accountRootKeys[recoveredKeyEpoch] || recoveredKey.accountRootKey,
   };
   const accountRootKey = recoveredRootKeys[currentKeyEpoch] || recoveredKey.accountRootKey;
   if (!recoveredRootKeys[currentKeyEpoch]) {
-    throw new Error('Recovery key material for the current encrypted account epoch was not found. Try the current recovery passphrase from the active primary device.');
+    throw new Error(
+      'Recovery key material for the current encrypted account epoch was not found. Try the current recovery passphrase from the active primary device.',
+    );
   }
-  const securityConfig = await createRecoveredSecurityConfig(repository, googleSession, localPin, recoveryQuestion);
+  const securityConfig = await createRecoveredSecurityConfig(
+    repository,
+    googleSession,
+    localPin,
+    recoveryQuestion,
+  );
   const driveBackupSettings = await createRecoveredDriveBackupSettings(repository, googleSession);
 
   onProgress?.('Registering this device...');
@@ -748,21 +806,28 @@ const recoverExistingMobileAccount = async ({
       onProgress,
     });
   } catch (error) {
-    const finalized = await primaryRecoveryAlreadyFinalized(pending, controlPlane).catch(() => false);
+    const finalized = await primaryRecoveryAlreadyFinalized(pending, controlPlane).catch(
+      () => false,
+    );
     if (finalized) {
-      console.warn('Primary recovery finalized remotely but local cleanup failed; leaving pending recovery for retry:', error);
+      console.warn(
+        'Primary recovery finalized remotely but local cleanup failed; leaving pending recovery for retry:',
+        error,
+      );
       throw error;
     }
     await abortPendingPrimaryRecovery(pending, { controlPlane, secretStorage });
     await repository.clearLocalSyncAccountState().catch(() => undefined);
-    await repository.importSnapshot(rollbackSnapshot, 'replace').catch(rollbackError => {
+    await repository.importSnapshot(rollbackSnapshot, 'replace').catch((rollbackError) => {
       console.warn('Local content could not be restored after failed recovery:', rollbackError);
     });
     if (rollbackSnapshot.security) {
       await repository.saveSecurityConfig(rollbackSnapshot.security).catch(() => undefined);
     }
     if (rollbackSnapshot.driveBackupSettings) {
-      await repository.saveDriveBackupSettings(rollbackSnapshot.driveBackupSettings).catch(() => undefined);
+      await repository
+        .saveDriveBackupSettings(rollbackSnapshot.driveBackupSettings)
+        .catch(() => undefined);
     }
     if (rollbackSyncState) {
       await repository.saveLocalSyncAccountState(rollbackSyncState).catch(() => undefined);
@@ -793,14 +858,19 @@ export const bootstrapNewMobileAccount = async ({
   preflightAccount,
   onProgress,
 }: BootstrapNewMobileAccountInput): Promise<BootstrapNewMobileAccountResult> => {
-  if (!googleSession.email) throw new Error('Google must return an email address to create a Dear Diary account.');
-  if (!googleSession.accessToken) throw new Error('Google Drive appDataFolder access is required for account setup.');
-  if (!supabaseSession.accessToken) throw new Error('Supabase sign-in is required before creating account metadata.');
+  if (!googleSession.email)
+    throw new Error('Google must return an email address to create a Dear Diary account.');
+  if (!googleSession.accessToken)
+    throw new Error('Google Drive appDataFolder access is required for account setup.');
+  if (!supabaseSession.accessToken)
+    throw new Error('Supabase sign-in is required before creating account metadata.');
 
   const pendingRecovery = await loadPendingPrimaryRecovery(secretStorage);
   if (pendingRecovery) {
     if (pendingRecovery.googleSession.userId !== googleSession.userId) {
-      throw new Error('A primary recovery is already pending for another Google account. Finish or clear that recovery before linking a different account.');
+      throw new Error(
+        'A primary recovery is already pending for another Google account. Finish or clear that recovery before linking a different account.',
+      );
     }
     return continuePendingPrimaryRecovery({
       repository,
@@ -818,14 +888,17 @@ export const bootstrapNewMobileAccount = async ({
   }
 
   onProgress?.('Checking account status...');
-  const existingAccount = preflightAccount === undefined
-    ? await controlPlane.lookupCurrentGoogleAccount()
-    : preflightAccount;
+  const existingAccount =
+    preflightAccount === undefined
+      ? await controlPlane.lookupCurrentGoogleAccount()
+      : preflightAccount;
   if (accountMode === 'recover' && !existingAccount) {
     throw new Error('No existing encrypted Dear Diary account was found for this Google account.');
   }
   if (accountMode === 'create' && existingAccount) {
-    throw new Error('An encrypted Dear Diary account already exists for this Google account. Enter its recovery passphrase to restore it.');
+    throw new Error(
+      'An encrypted Dear Diary account already exists for this Google account. Enter its recovery passphrase to restore it.',
+    );
   }
   if (existingAccount) {
     return recoverExistingMobileAccount({
@@ -865,12 +938,16 @@ export const bootstrapNewMobileAccount = async ({
 
   onProgress?.('Encrypting recovery key...');
   const initialKeyEpoch = created.account.currentKeyEpoch || 1;
-  const recoveryKeyPackage = await wrapAccountRootKeyForRecovery(accountRootKey, recoveryPassphrase, {
-    accountId: created.account.id,
-    keyEpoch: initialKeyEpoch,
-    keyVersion: 1,
-    accountRootKeys: { [initialKeyEpoch]: accountRootKey },
-  });
+  const recoveryKeyPackage = await wrapAccountRootKeyForRecovery(
+    accountRootKey,
+    recoveryPassphrase,
+    {
+      accountId: created.account.id,
+      keyEpoch: initialKeyEpoch,
+      keyVersion: 1,
+      accountRootKeys: { [initialKeyEpoch]: accountRootKey },
+    },
+  );
   const recoveryKeyBytes = encodeRecoveryKeyPackage(recoveryKeyPackage);
   onProgress?.('Saving recovery key to Drive...');
   const recoveryKeyFile = await uploadDriveSyncObject({
@@ -886,7 +963,7 @@ export const bootstrapNewMobileAccount = async ({
   });
   const recoveryKeyHash = await crypto.subtle.digest('SHA-256', recoveryKeyBytes);
   const recoveryKeySha256 = Array.from(new Uint8Array(recoveryKeyHash))
-    .map(byte => byte.toString(16).padStart(2, '0'))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
   const keyObject = await controlPlane.commitSyncObject({
     deviceId: created.device.id,
@@ -900,8 +977,14 @@ export const bootstrapNewMobileAccount = async ({
 
   onProgress?.('Encrypting diary snapshot...');
   const localSnapshot = await repository.exportSnapshot();
-  const snapshotPayload = encodeRepositorySnapshotPayload(localSnapshot, created.account.id, keyObject.sequence);
-  const snapshot = await encryptSyncPayload(accountRootKey, 'snapshot', snapshotPayload, { keyEpoch: initialKeyEpoch });
+  const snapshotPayload = encodeRepositorySnapshotPayload(
+    localSnapshot,
+    created.account.id,
+    keyObject.sequence,
+  );
+  const snapshot = await encryptSyncPayload(accountRootKey, 'snapshot', snapshotPayload, {
+    keyEpoch: initialKeyEpoch,
+  });
   onProgress?.('Saving diary snapshot to Drive...');
   const snapshotFile = await uploadDriveSyncObject({
     session: googleSession,
@@ -966,15 +1049,18 @@ export const bootstrapNewMobileAccount = async ({
   };
   await repository.saveLocalSyncAccountState(localState);
   onProgress?.('Securing account keys...');
-  await saveSyncSecrets({
-    version: 1,
-    accountId: created.account.id,
-    accountRootKey,
-    accountRootKeys: { [initialKeyEpoch]: accountRootKey },
-    devicePrivateKeyJwk: deviceKeys.privateKeyJwk,
-    supabaseSession,
-    googleSession,
-  }, secretStorage);
+  await saveSyncSecrets(
+    {
+      version: 1,
+      accountId: created.account.id,
+      accountRootKey,
+      accountRootKeys: { [initialKeyEpoch]: accountRootKey },
+      devicePrivateKeyJwk: deviceKeys.privateKeyJwk,
+      supabaseSession,
+      googleSession,
+    },
+    secretStorage,
+  );
   return {
     localState: (await repository.getLocalSyncAccountState()) || localState,
     supabaseAccountId: created.account.id,

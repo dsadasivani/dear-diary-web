@@ -7,11 +7,11 @@ services:
       POSTGRES_USER: dear_diary_sync
       POSTGRES_PASSWORD: dear_diary_local
     ports:
-      - "5432:5432"
+      - '5432:5432'
     volumes:
       - dear-diary-sync-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dear_diary_sync -d dear_diary_sync"]
+      test: ['CMD-SHELL', 'pg_isready -U dear_diary_sync -d dear_diary_sync']
       interval: 3s
       timeout: 3s
       retries: 20
@@ -23,10 +23,10 @@ services:
     environment:
       MINIO_ROOT_USER: dear_diary_local
       MINIO_ROOT_PASSWORD: dear_diary_local_secret
-      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost"
+      MINIO_API_CORS_ALLOW_ORIGIN: 'http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost'
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - '9000:9000'
+      - '9001:9001'
     volumes:
       - dear-diary-sync-minio:/data
 

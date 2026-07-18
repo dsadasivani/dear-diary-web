@@ -8,7 +8,11 @@ import {
   unwrapAccountRootKeysFromRecovery,
   wrapAccountRootKeyForRecovery,
 } from '../e2eeKeyPackage';
-import { createConfiguredSyncV2ApiClient, getConfiguredSupabaseAnonKey, getConfiguredSupabaseUrl } from '../config';
+import {
+  createConfiguredSyncV2ApiClient,
+  getConfiguredSupabaseAnonKey,
+  getConfiguredSupabaseUrl,
+} from '../config';
 import { refreshSupabaseSession } from '../supabaseAuth';
 import { downloadDriveSyncObject } from '../driveSyncObjects';
 import { restoreGoogleDriveSession } from '../../utils/googleAuth';
@@ -21,7 +25,10 @@ import {
   saveSyncSecrets,
   withAccountRootKeyForEpoch,
 } from '../syncSecrets';
-import { SyncV2RotationCoordinator, type WorkflowJournalStore } from './advanced/AdvancedWorkflowCoordinators';
+import {
+  SyncV2RotationCoordinator,
+  type WorkflowJournalStore,
+} from './advanced/AdvancedWorkflowCoordinators';
 import type { SyncV2Device, SyncV2UploadInstruction } from './api/SyncV2ApiTypes';
 import { BoundedObjectTransfer } from './operation/BoundedObjectTransfer';
 
@@ -44,23 +51,36 @@ interface RotationJournal {
 
 const bytesToBase64 = (bytes: Uint8Array): string => {
   let binary = '';
-  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
-  return typeof btoa === 'function' ? btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return typeof btoa === 'function'
+    ? btoa(binary)
+    : Buffer.from(binary, 'binary').toString('base64');
 };
 
 const base64ToBytes = (value: string): Uint8Array => {
-  const binary = typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
-  return Uint8Array.from(binary, character => character.charCodeAt(0));
+  const binary =
+    typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 };
 
 const sign = async (privateKeyBundle: string, message: string): Promise<string> => {
   const bundle = parseDevicePrivateKeyBundle(privateKeyBundle);
   const key = await crypto.subtle.importKey(
-    'jwk', bundle.signing, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'],
+    'jwk',
+    bundle.signing,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
   );
-  const p1363 = new Uint8Array(await crypto.subtle.sign(
-    { name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(message),
-  ));
+  const p1363 = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      key,
+      new TextEncoder().encode(message),
+    ),
+  );
   // WebCrypto emits IEEE-P1363 while the Java verifier expects DER.
   const trim = (input: Uint8Array) => {
     let start = 0;
@@ -70,7 +90,16 @@ const sign = async (privateKeyBundle: string, message: string): Promise<string> 
   };
   const r = trim(p1363.slice(0, 32));
   const s = trim(p1363.slice(32));
-  const der = Uint8Array.from([0x30, 2 + r.length + 2 + s.length, 0x02, r.length, ...r, 0x02, s.length, ...s]);
+  const der = Uint8Array.from([
+    0x30,
+    2 + r.length + 2 + s.length,
+    0x02,
+    r.length,
+    ...r,
+    0x02,
+    s.length,
+    ...s,
+  ]);
   return bytesToBase64(der);
 };
 
@@ -83,10 +112,14 @@ const journal: WorkflowJournalStore<RotationJournal> = {
 const primaryAccessToken = async (): Promise<string> => {
   const secrets = await loadSyncSecrets();
   if (!secrets) throw new Error('Encrypted sync authorization is unavailable.');
-  if (!secrets.supabaseSession.expiresAt || secrets.supabaseSession.expiresAt > Math.floor(Date.now() / 1000) + 60) {
+  if (
+    !secrets.supabaseSession.expiresAt ||
+    secrets.supabaseSession.expiresAt > Math.floor(Date.now() / 1000) + 60
+  ) {
     return secrets.supabaseSession.accessToken;
   }
-  if (!secrets.supabaseSession.refreshToken) throw new Error('Encrypted sync authorization expired. Reconnect your account.');
+  if (!secrets.supabaseSession.refreshToken)
+    throw new Error('Encrypted sync authorization expired. Reconnect your account.');
   const supabaseSession = await refreshSupabaseSession({
     supabaseUrl: getConfiguredSupabaseUrl(),
     anonKey: getConfiguredSupabaseAnonKey(),
@@ -106,9 +139,16 @@ export const revokeSyncV2Device = async (input: {
   recoveryPassphrase: string;
 }): Promise<void> => {
   const [state, secrets, security] = await Promise.all([
-    diaryRepository.getLocalSyncAccountState(), loadSyncSecrets(), diaryRepository.getSecurityConfig(),
+    diaryRepository.getLocalSyncAccountState(),
+    loadSyncSecrets(),
+    diaryRepository.getSecurityConfig(),
   ]);
-  if (!state || state.syncProtocolVersion !== 2 || state.deviceRole !== 'primary_mobile' || !secrets) {
+  if (
+    !state ||
+    state.syncProtocolVersion !== 2 ||
+    state.deviceRole !== 'primary_mobile' ||
+    !secrets
+  ) {
     throw new Error('Only the active Sync V2 primary mobile can revoke a companion.');
   }
   const pending = await journal.load();
@@ -122,15 +162,23 @@ export const revokeSyncV2Device = async (input: {
     throw new Error('Secure companion revocation is temporarily disabled by the sync service.');
   }
   const devices = await api.listDevices(state.deviceId);
-  const target = devices.find(device => device.deviceId === targetDeviceId);
-  if (!pending && (!target || target.deviceRole !== 'COMPANION' || target.deviceStatus !== 'ACTIVE')) {
+  const target = devices.find((device) => device.deviceId === targetDeviceId);
+  if (
+    !pending &&
+    (!target || target.deviceRole !== 'COMPANION' || target.deviceStatus !== 'ACTIVE')
+  ) {
     throw new Error('The selected companion is no longer active.');
   }
-  const recipients = devices.filter(device =>
-    device.deviceRole === 'COMPANION' && device.deviceStatus === 'ACTIVE' && device.deviceId !== targetDeviceId,
+  const recipients = devices.filter(
+    (device) =>
+      device.deviceRole === 'COMPANION' &&
+      device.deviceStatus === 'ACTIVE' &&
+      device.deviceId !== targetDeviceId,
   );
-  if (recipients.some(device => !device.encryptionPublicKey)) {
-    throw new Error('A linked companion is missing encryption metadata and must be re-paired before rotation.');
+  if (recipients.some((device) => !device.encryptionPublicKey)) {
+    throw new Error(
+      'A linked companion is missing encryption metadata and must be re-paired before rotation.',
+    );
   }
   const transfer = new BoundedObjectTransfer({ maximumObjectBytes: protocol.maximumSnapshotBytes });
   if (!pending) {
@@ -140,28 +188,36 @@ export const revokeSyncV2Device = async (input: {
       if (!recoveryPackage.downloadUrl || !recoveryPackage.sha256 || !recoveryPackage.sizeBytes) {
         throw new Error('The account recovery package is unavailable.');
       }
-      [recoveryBytes] = await transfer.download([{
-        downloadUrl: recoveryPackage.downloadUrl,
-        sha256: recoveryPackage.sha256,
-        sizeBytes: recoveryPackage.sizeBytes,
-      }]);
+      [recoveryBytes] = await transfer.download([
+        {
+          downloadUrl: recoveryPackage.downloadUrl,
+          sha256: recoveryPackage.sha256,
+          sizeBytes: recoveryPackage.sizeBytes,
+        },
+      ]);
     } catch (error) {
       // Accounts migrated before V25 have their current recovery package in
       // the legacy Drive control plane. Verify that package once; this
       // rotation publishes the first V2-native recovery package.
       if (!state.recoveryKeyDriveFileId) throw error;
-      const googleSession = await restoreGoogleDriveSession(false) || secrets.googleSession;
-      if (!googleSession) throw new Error('Google Drive authorization is required to verify the migrated recovery key.');
+      const googleSession = (await restoreGoogleDriveSession(false)) || secrets.googleSession;
+      if (!googleSession)
+        throw new Error(
+          'Google Drive authorization is required to verify the migrated recovery key.',
+        );
       recoveryBytes = await downloadDriveSyncObject(googleSession, state.recoveryKeyDriveFileId);
     }
     const recovered = await unwrapAccountRootKeysFromRecovery(
-      decodeRecoveryKeyPackage(recoveryBytes), input.recoveryPassphrase,
+      decodeRecoveryKeyPackage(recoveryBytes),
+      input.recoveryPassphrase,
     );
     const epoch = state.keyEpoch || 1;
     const recoveredCurrent = recovered.accountRootKeys[epoch] || recovered.accountRootKey;
     const localCurrent = getAccountRootKeyForEpoch(secrets, epoch);
-    if (recoveredCurrent.byteLength !== localCurrent.byteLength
-        || recoveredCurrent.some((value, index) => value !== localCurrent[index])) {
+    if (
+      recoveredCurrent.byteLength !== localCurrent.byteLength ||
+      recoveredCurrent.some((value, index) => value !== localCurrent[index])
+    ) {
       throw new Error('The recovery passphrase does not match this encrypted account.');
     }
   }
@@ -169,26 +225,43 @@ export const revokeSyncV2Device = async (input: {
     createEncryptedAccountKey: async () => {
       return bytesToBase64(generateAccountRootKey());
     },
-    activeDeviceIds: async () => recipients.map(device => device.deviceId),
+    activeDeviceIds: async () => recipients.map((device) => device.deviceId),
     recoveryTargetDeviceId: async () => state.deviceId,
     packageForTarget: async (handle, targetDeviceId, purpose) => {
       const rootKey = base64ToBytes(handle);
       const nextEpoch = (state.keyEpoch || 1) + 1;
-      const epochKeys = { ...(secrets.accountRootKeys || {}), [state.keyEpoch || 1]: secrets.accountRootKey, [nextEpoch]: rootKey };
+      const epochKeys = {
+        ...(secrets.accountRootKeys || {}),
+        [state.keyEpoch || 1]: secrets.accountRootKey,
+        [nextEpoch]: rootKey,
+      };
       if (purpose === 'RECOVERY') {
-        return encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(rootKey, input.recoveryPassphrase, {
-          accountId: state.accountId, keyEpoch: nextEpoch, keyVersion: nextEpoch, accountRootKeys: epochKeys,
-        }));
+        return encodeRecoveryKeyPackage(
+          await wrapAccountRootKeyForRecovery(rootKey, input.recoveryPassphrase, {
+            accountId: state.accountId,
+            keyEpoch: nextEpoch,
+            keyVersion: nextEpoch,
+            accountRootKeys: epochKeys,
+          }),
+        );
       }
-      const recipient = recipients.find(device => device.deviceId === targetDeviceId);
-      if (!recipient?.encryptionPublicKey) throw new Error('Companion encryption metadata is unavailable.');
-      return encodeCompanionKeyPackage(await wrapRootKeyForCompanion(rootKey, state.accountId, recipient.encryptionPublicKey, {
-        keyEpoch: nextEpoch,
-        accountRootKeys: epochKeys,
-        pinVerifier: security?.isPinCreated ? {
-          version: 1, pinHash: security.pinHash, pinSalt: security.pinSalt, pinLength: security.pinLength || 4,
-        } : undefined,
-      }));
+      const recipient = recipients.find((device) => device.deviceId === targetDeviceId);
+      if (!recipient?.encryptionPublicKey)
+        throw new Error('Companion encryption metadata is unavailable.');
+      return encodeCompanionKeyPackage(
+        await wrapRootKeyForCompanion(rootKey, state.accountId, recipient.encryptionPublicKey, {
+          keyEpoch: nextEpoch,
+          accountRootKeys: epochKeys,
+          pinVerifier: security?.isPinCreated
+            ? {
+                version: 1,
+                pinHash: security.pinHash,
+                pinSalt: security.pinSalt,
+                pinLength: security.pinLength || 4,
+              }
+            : undefined,
+        }),
+      );
     },
     upload: async (bytes, instruction: SyncV2UploadInstruction) => {
       await transfer.upload([{ objectKey: instruction.objectKey, bytes }], [instruction]);
@@ -200,12 +273,14 @@ export const revokeSyncV2Device = async (input: {
       await saveSyncSecrets(withAccountRootKeyForEpoch(latestSecrets, epoch, rootKey));
       await diaryRepository.saveLocalSyncAccountState({ ...state, keyEpoch: epoch });
     },
-    sign: message => sign(secrets.devicePrivateKeyJwk, message),
+    sign: (message) => sign(secrets.devicePrivateKeyJwk, message),
   });
   await coordinator.run(state.deviceId, targetDeviceId);
 };
 
-export const resumePendingSyncV2DeviceRevocation = async (): Promise<'none' | 'completed' | 'needs-passphrase'> => {
+export const resumePendingSyncV2DeviceRevocation = async (): Promise<
+  'none' | 'completed' | 'needs-passphrase'
+> => {
   const pending = await journal.load();
   if (!pending?.revokedDeviceId) return 'none';
   if (!pending.packages) return 'needs-passphrase';

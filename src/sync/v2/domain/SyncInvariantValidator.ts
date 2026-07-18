@@ -19,7 +19,10 @@ const invariant = (condition: unknown): void => {
 export class SyncInvariantValidator {
   validateSequences(localSequence: number, remoteSequence?: number): void {
     invariant(Number.isSafeInteger(localSequence) && localSequence >= 0);
-    invariant(remoteSequence === undefined || (Number.isSafeInteger(remoteSequence) && remoteSequence >= localSequence));
+    invariant(
+      remoteSequence === undefined ||
+        (Number.isSafeInteger(remoteSequence) && remoteSequence >= localSequence),
+    );
   }
 
   validateOperation(operation: SyncOutboxOperationV2, accountId: string, deviceId: string): void {
@@ -34,7 +37,7 @@ export class SyncInvariantValidator {
 
   validateReplayPage(events: SyncV2RemoteEvent[], afterSequence: number): void {
     let expected = afterSequence + 1;
-    events.forEach(event => {
+    events.forEach((event) => {
       invariant(event.sequence === expected);
       invariant(event.recordVersion >= 1);
       expected += 1;

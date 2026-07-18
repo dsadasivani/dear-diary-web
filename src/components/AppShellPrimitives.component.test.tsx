@@ -2,7 +2,11 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { CreateActionSheet, MobileBottomNavigation, isRootDestinationScreen } from './AppShellPrimitives';
+import {
+  CreateActionSheet,
+  MobileBottomNavigation,
+  isRootDestinationScreen,
+} from './AppShellPrimitives';
 
 describe('redesigned application shell', () => {
   it('only classifies primary list screens as root destinations', () => {
@@ -46,7 +50,9 @@ describe('redesigned application shell', () => {
       />,
     );
 
-    expect(screen.getByRole('dialog', { name: 'What would you like to capture?' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('dialog', { name: 'What would you like to capture?' }),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /New Journal Entry/ })).toBeDisabled();
     expect(screen.getAllByText('Create a journal first').length).toBeGreaterThan(0);
     await user.keyboard('{Escape}');

@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+*.jar binary
+*.jks binary
+*.keystore binary
+*.png binary
+*.webp binary

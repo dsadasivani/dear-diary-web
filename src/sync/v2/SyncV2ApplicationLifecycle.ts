@@ -7,10 +7,18 @@ import type {
   SyncDomainEvent,
   SyncRecordType,
 } from '../../types';
-import { createInitialPin, createInitialPinWithRecovery, hasRecoveryQuestion } from '../../domain/security';
+import {
+  createInitialPin,
+  createInitialPinWithRecovery,
+  hasRecoveryQuestion,
+} from '../../domain/security';
 import { createDefaultDriveBackupSettings } from '../../repositories/defaults';
 import { populateUserProfileFromGoogle } from '../../utils/googleProfile';
-import { getConfiguredSupabaseAnonKey, getConfiguredSupabaseUrl, createConfiguredSyncV2ApiClient } from '../config';
+import {
+  getConfiguredSupabaseAnonKey,
+  getConfiguredSupabaseUrl,
+  createConfiguredSyncV2ApiClient,
+} from '../config';
 import { decryptSyncPayload, encryptSyncPayload } from '../encryptedSyncObject';
 import type { EventSyncEngine, SyncRuntimeDelegate } from '../eventSyncEngine';
 import { refreshSupabaseSession } from '../supabaseAuth';
@@ -39,7 +47,11 @@ import {
   validateRecoveryPassphrase,
   wrapAccountRootKeyForRecovery,
 } from '../e2eeKeyPackage';
-import { SYNC_V2_OUTBOX_STORAGE_KEY, type OutboxRepository, type SyncOutboxOperationV2 } from '../outbox';
+import {
+  SYNC_V2_OUTBOX_STORAGE_KEY,
+  type OutboxRepository,
+  type SyncOutboxOperationV2,
+} from '../outbox';
 import { SyncV2ApiClient } from './api/SyncV2ApiClient';
 import type { SyncV2Protocol } from './api/SyncV2ApiTypes';
 import { PersistentSyncConflictStore } from './conflict/PersistentSyncConflictStore';
@@ -51,8 +63,16 @@ import {
   type OperationAcknowledgmentStore,
 } from './operation/PersistentOperationAcknowledgmentStore';
 import { SyncV2OperationProcessor } from './operation/SyncV2OperationProcessor';
-import { ProtocolBootstrap, SyncV2RuntimeStore, type SyncV2LocalRuntime } from './protocol/ProtocolBootstrap';
-import { isCanaryEnabled, isVersionAtLeast, RuntimeControlStore } from './protocol/RuntimeControlStore';
+import {
+  ProtocolBootstrap,
+  SyncV2RuntimeStore,
+  type SyncV2LocalRuntime,
+} from './protocol/ProtocolBootstrap';
+import {
+  isCanaryEnabled,
+  isVersionAtLeast,
+  RuntimeControlStore,
+} from './protocol/RuntimeControlStore';
 import {
   PersistentReplayStore,
   SYNC_V2_RECORDS_KEY,
@@ -65,11 +85,17 @@ import {
 import { RemoteEventPuller } from './replay/RemoteEventPuller';
 import { PersistentSafetyStopStore } from './safety/PersistentSafetyStopStore';
 import { clearRecoverableCompanionSafetyStop } from './safety/companionSafetyRecovery';
-import { PersistentSyncV2SnapshotStore, type SyncV2CanonicalSnapshotState } from './snapshot/PersistentSyncV2SnapshotStore';
+import {
+  PersistentSyncV2SnapshotStore,
+  type SyncV2CanonicalSnapshotState,
+} from './snapshot/PersistentSyncV2SnapshotStore';
 import { AccountKeySyncV2SnapshotCodec } from './snapshot/SyncV2SnapshotCodec';
 import { SyncV2SnapshotCoordinator } from './snapshot/SyncV2SnapshotCoordinator';
 import { SyncV2RuntimeCoordinator, type SyncV2BackgroundWorker } from './SyncV2RuntimeCoordinator';
-import { PersistentWorkflowJournalStore, SyncV2MigrationCoordinator } from './advanced/AdvancedWorkflowCoordinators';
+import {
+  PersistentWorkflowJournalStore,
+  SyncV2MigrationCoordinator,
+} from './advanced/AdvancedWorkflowCoordinators';
 import { reportUnexpectedError } from '../../infrastructure/telemetry/reportUnexpectedError';
 import { signWithDeviceBundle } from './v2CompanionPairing';
 import { clearSyncV2LocalCache } from './clearSyncV2LocalCache';
@@ -82,7 +108,11 @@ const MAX_WORK_PER_FLUSH = 100;
 const COMPANION_AUTHORIZATION_CHECK_INTERVAL_MS = 5_000;
 
 const recordTypeToLegacy: Record<SyncOutboxOperationV2['recordType'], SyncRecordType> = {
-  DIARY: 'diary', ENTRY: 'entry', NOTE: 'note', SETTINGS: 'settings', PROFILE: 'profile',
+  DIARY: 'diary',
+  ENTRY: 'entry',
+  NOTE: 'note',
+  SETTINGS: 'settings',
+  PROFILE: 'profile',
 };
 
 const canonicalJson = (value: unknown): string => {
@@ -95,22 +125,32 @@ const canonicalJson = (value: unknown): string => {
     .join(',')}}`;
 };
 
-export const repositorySnapshotToV2State = (snapshot: RepositorySnapshot): SyncV2CanonicalSnapshotState => {
+export const repositorySnapshotToV2State = (
+  snapshot: RepositorySnapshot,
+): SyncV2CanonicalSnapshotState => {
   const records: Record<string, unknown> = {};
-  snapshot.diaries.forEach(value => { records[`DIARY:${value.id}`] = value; });
-  snapshot.entries.forEach(value => { records[`ENTRY:${value.id}`] = value; });
-  snapshot.notes.forEach(value => { records[`NOTE:${value.id}`] = value; });
+  snapshot.diaries.forEach((value) => {
+    records[`DIARY:${value.id}`] = value;
+  });
+  snapshot.entries.forEach((value) => {
+    records[`ENTRY:${value.id}`] = value;
+  });
+  snapshot.notes.forEach((value) => {
+    records[`NOTE:${value.id}`] = value;
+  });
   if (snapshot.settings) records['SETTINGS:settings'] = snapshot.settings;
   if (snapshot.userProfile) records['PROFILE:profile'] = snapshot.userProfile;
   if (snapshot.security) records['SECURITY:security'] = snapshot.security;
   return {
     records,
-    recordVersions: Object.fromEntries(Object.keys(records).map(key => [key, 0])),
+    recordVersions: Object.fromEntries(Object.keys(records).map((key) => [key, 0])),
     mediaPointers: {},
   };
 };
 
-const repositorySnapshotFromV2State = (state: SyncV2CanonicalSnapshotState): RepositorySnapshot => ({
+const repositorySnapshotFromV2State = (
+  state: SyncV2CanonicalSnapshotState,
+): RepositorySnapshot => ({
   diaries: Object.entries(state.records)
     .filter(([key]) => key.startsWith('DIARY:'))
     .map(([, value]) => value as RepositorySnapshot['diaries'][number]),
@@ -123,23 +163,34 @@ const repositorySnapshotFromV2State = (state: SyncV2CanonicalSnapshotState): Rep
   settings: state.records['SETTINGS:settings'] as RepositorySnapshot['settings'],
   userProfile: state.records['PROFILE:profile'] as RepositorySnapshot['userProfile'],
   security: state.records['SECURITY:security'] as RepositorySnapshot['security'],
-  syncRecordVersions: Object.fromEntries(Object.entries(state.recordVersions).map(([key, version]) => {
-    const separator = key.indexOf(':');
-    return [`${key.slice(0, separator).toLowerCase()}${key.slice(separator)}`, version];
-  })),
+  syncRecordVersions: Object.fromEntries(
+    Object.entries(state.recordVersions).map(([key, version]) => {
+      const separator = key.indexOf(':');
+      return [`${key.slice(0, separator).toLowerCase()}${key.slice(separator)}`, version];
+    }),
+  ),
 });
 
-const stateDigest = async (state: SyncV2CanonicalSnapshotState): Promise<string> => (
-  sha256Hex(new TextEncoder().encode(canonicalJson(state)))
-);
+const stateDigest = async (state: SyncV2CanonicalSnapshotState): Promise<string> =>
+  sha256Hex(new TextEncoder().encode(canonicalJson(state)));
 
 class MemoryDataStore implements LocalDataStore {
   private readonly values = new Map<string, string>();
-  async getItem(key: string) { return this.values.get(key) || null; }
-  async setItem(key: string, value: string) { this.values.set(key, value); }
-  async setItems(items: Record<string, string>) { Object.entries(items).forEach(([key, value]) => this.values.set(key, value)); }
-  async removeItem(key: string) { this.values.delete(key); }
-  async clear() { this.values.clear(); }
+  async getItem(key: string) {
+    return this.values.get(key) || null;
+  }
+  async setItem(key: string, value: string) {
+    this.values.set(key, value);
+  }
+  async setItems(items: Record<string, string>) {
+    Object.entries(items).forEach(([key, value]) => this.values.set(key, value));
+  }
+  async removeItem(key: string) {
+    this.values.delete(key);
+  }
+  async clear() {
+    this.values.clear();
+  }
 }
 
 class IntervalWorker implements SyncV2BackgroundWorker {
@@ -159,7 +210,10 @@ class IntervalWorker implements SyncV2BackgroundWorker {
       void this.task().catch(this.onError);
     }, this.intervalMs);
   }
-  stop(): void { if (this.timer) clearInterval(this.timer); this.timer = null; }
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
 }
 
 class RuntimeDelegate implements SyncRuntimeDelegate {
@@ -176,15 +230,24 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     private readonly onError: (context: string, error: unknown) => void | Promise<void>,
   ) {}
   start(): Promise<void> {
-    if (!this.starting) this.starting = this.coordinator.start().then(result => {
-      this.pullAllowed = result.pullAllowed;
-      this.writesAllowed = result.writesAllowed;
-      if (this.assertAuthorized && !this.authorizationTimer) {
-        this.authorizationTimer = setInterval(() => {
-          void this.assertAuthorized!().catch(error => this.onError('sync.v2.authorization', error));
-        }, COMPANION_AUTHORIZATION_CHECK_INTERVAL_MS);
-      }
-    }).catch(error => { this.starting = null; throw error; });
+    if (!this.starting)
+      this.starting = this.coordinator
+        .start()
+        .then((result) => {
+          this.pullAllowed = result.pullAllowed;
+          this.writesAllowed = result.writesAllowed;
+          if (this.assertAuthorized && !this.authorizationTimer) {
+            this.authorizationTimer = setInterval(() => {
+              void this.assertAuthorized!().catch((error) =>
+                this.onError('sync.v2.authorization', error),
+              );
+            }, COMPANION_AUTHORIZATION_CHECK_INTERVAL_MS);
+          }
+        })
+        .catch((error) => {
+          this.starting = null;
+          throw error;
+        });
     return this.starting;
   }
   async stop(): Promise<void> {
@@ -198,15 +261,29 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     this.writesAllowed = false;
   }
   async pullPending(): Promise<void> {
-    try { await this.start(); if (this.pullAllowed) await this.puller.pull(); }
-    catch (error) { await this.onError('sync.v2.pull', error); throw error; }
+    try {
+      await this.start();
+      if (this.pullAllowed) await this.puller.pull();
+    } catch (error) {
+      await this.onError('sync.v2.pull', error);
+      throw error;
+    }
   }
   async flushPendingOutbox(): Promise<void> {
     try {
       await this.start();
       if (!this.writesAllowed) return;
-      for (let count = 0; count < MAX_WORK_PER_FLUSH && await this.processor.runOnce(); count += 1) { /* bounded drain */ }
-    } catch (error) { await this.onError('sync.v2.outbox', error); throw error; }
+      for (
+        let count = 0;
+        count < MAX_WORK_PER_FLUSH && (await this.processor.runOnce());
+        count += 1
+      ) {
+        /* bounded drain */
+      }
+    } catch (error) {
+      await this.onError('sync.v2.outbox', error);
+      throw error;
+    }
   }
   requestOutboxFlush(delayMs = 0): void {
     if (this.flushTimer) return;
@@ -222,29 +299,42 @@ class RepositoryReplayStore implements SyncV2ReplayStore {
     private readonly persistent: PersistentReplayStore,
     private readonly repository: DiaryRepository,
   ) {}
-  getLastAppliedSequence() { return this.persistent.getLastAppliedSequence(); }
-  hasAppliedEvent(eventId: string) { return this.persistent.hasAppliedEvent(eventId); }
+  getLastAppliedSequence() {
+    return this.persistent.getLastAppliedSequence();
+  }
+  hasAppliedEvent(eventId: string) {
+    return this.persistent.hasAppliedEvent(eventId);
+  }
   async applyBatch(events: ReplayBatchEvent[]): Promise<number> {
     for (const { envelope, event } of events) {
-      await this.repository.applySyncEvent(toDomainEvent(envelope.deviceId, envelope.eventId, event), envelope.sequence);
+      await this.repository.applySyncEvent(
+        toDomainEvent(envelope.deviceId, envelope.eventId, event),
+        envelope.sequence,
+      );
     }
     return this.persistent.applyBatch(events);
   }
 }
 
-const toDomainEvent = (deviceId: string, eventId: string, event: DecryptedSyncV2Event): SyncDomainEvent => ({
-  version: 1,
-  eventId,
-  accountId: event.accountId,
-  deviceId,
-  createdAt: new Date().toISOString(),
-  operation: event.operationType === 'DELETE' ? 'delete' : event.recordVersion === 1 ? 'create' : 'update',
-  recordType: recordTypeToLegacy[event.recordType],
-  recordId: event.recordId,
-  baseRecordVersion: event.recordVersion - 1,
-  recordVersion: event.recordVersion,
-  payload: event.payload,
-} as SyncDomainEvent);
+const toDomainEvent = (
+  deviceId: string,
+  eventId: string,
+  event: DecryptedSyncV2Event,
+): SyncDomainEvent =>
+  ({
+    version: 1,
+    eventId,
+    accountId: event.accountId,
+    deviceId,
+    createdAt: new Date().toISOString(),
+    operation:
+      event.operationType === 'DELETE' ? 'delete' : event.recordVersion === 1 ? 'create' : 'update',
+    recordType: recordTypeToLegacy[event.recordType],
+    recordId: event.recordId,
+    baseRecordVersion: event.recordVersion - 1,
+    recordVersion: event.recordVersion,
+    payload: event.payload,
+  }) as SyncDomainEvent;
 
 class RepositoryAcknowledgmentStore implements OperationAcknowledgmentStore {
   constructor(
@@ -252,7 +342,10 @@ class RepositoryAcknowledgmentStore implements OperationAcknowledgmentStore {
     private readonly repository: DiaryRepository,
     private readonly store: LocalDataStore,
   ) {}
-  async acknowledge(operation: SyncOutboxOperationV2, result: Parameters<OperationAcknowledgmentStore['acknowledge']>[1]): Promise<void> {
+  async acknowledge(
+    operation: SyncOutboxOperationV2,
+    result: Parameters<OperationAcknowledgmentStore['acknowledge']>[1],
+  ): Promise<void> {
     const payload = await loadRecord(this.repository, operation);
     const event = toDomainEvent(operation.deviceId, operation.operationId, {
       accountId: operation.accountId,
@@ -267,21 +360,30 @@ class RepositoryAcknowledgmentStore implements OperationAcknowledgmentStore {
     await this.repository.acknowledgeLocalMutation({ event, sequence: result.sequence });
     await this.persistent.acknowledge(operation, result);
     const raw = await this.store.getItem(SYNC_V2_RECORDS_KEY);
-    const records = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    const records = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     const key = `${operation.recordType}:${operation.recordId}`;
-    if (operation.operationType === 'DELETE') delete records[key]; else records[key] = payload;
+    if (operation.operationType === 'DELETE') delete records[key];
+    else records[key] = payload;
     await this.store.setItem(SYNC_V2_RECORDS_KEY, JSON.stringify(records));
     await this.repository.removeSyncOutboxOperation(operation.operationId);
   }
 }
 
-const loadRecord = async (repository: DiaryRepository, operation: SyncOutboxOperationV2): Promise<unknown | null> => {
+const loadRecord = async (
+  repository: DiaryRepository,
+  operation: SyncOutboxOperationV2,
+): Promise<unknown | null> => {
   switch (operation.recordType) {
-    case 'DIARY': return repository.getDiary(operation.recordId);
-    case 'ENTRY': return repository.getEntry(operation.recordId);
-    case 'NOTE': return repository.getNote(operation.recordId);
-    case 'SETTINGS': return repository.getSettings();
-    case 'PROFILE': return repository.getUserProfile();
+    case 'DIARY':
+      return repository.getDiary(operation.recordId);
+    case 'ENTRY':
+      return repository.getEntry(operation.recordId);
+    case 'NOTE':
+      return repository.getNote(operation.recordId);
+    case 'SETTINGS':
+      return repository.getSettings();
+    case 'PROFILE':
+      return repository.getUserProfile();
   }
 };
 
@@ -341,7 +443,8 @@ export class SyncV2ApplicationLifecycle {
   ) {}
 
   async hasExistingPrimaryAccount(supabaseSession: SupabaseAuthSession): Promise<boolean> {
-    if (!supabaseSession.accessToken) throw new Error('Account authorization is unavailable. Sign in again.');
+    if (!supabaseSession.accessToken)
+      throw new Error('Account authorization is unavailable. Sign in again.');
     const api = createConfiguredSyncV2ApiClient(async () => supabaseSession.accessToken);
     try {
       await api.getRecoveryStatus();
@@ -352,10 +455,15 @@ export class SyncV2ApplicationLifecycle {
     }
   }
 
-  async recoverPrimaryAccount(input: CreatePrimarySyncAccountInput): Promise<LocalSyncAccountState> {
-    if (!input.googleSession.email) throw new Error('Google must return an email address to restore your Dear Diary account.');
-    if (!input.supabaseSession.accessToken) throw new Error('Account authorization is unavailable. Sign in again.');
-    if (await this.repository.getLocalSyncAccountState()) throw new Error('Sync & Backup is already configured on this device.');
+  async recoverPrimaryAccount(
+    input: CreatePrimarySyncAccountInput,
+  ): Promise<LocalSyncAccountState> {
+    if (!input.googleSession.email)
+      throw new Error('Google must return an email address to restore your Dear Diary account.');
+    if (!input.supabaseSession.accessToken)
+      throw new Error('Account authorization is unavailable. Sign in again.');
+    if (await this.repository.getLocalSyncAccountState())
+      throw new Error('Sync & Backup is already configured on this device.');
     validateExistingRecoveryPassphrase(input.recoveryPassphrase);
 
     const api = createConfiguredSyncV2ApiClient(async () => input.supabaseSession.accessToken);
@@ -366,12 +474,15 @@ export class SyncV2ApplicationLifecycle {
     }
 
     let pending = await loadPendingPrimaryAccountRecoverySecret<PendingPrimaryAccountRecovery>();
-    if (pending && (
-      pending.version !== 1
-      || pending.googleUserId !== input.googleSession.userId
-      || pending.googleEmail.toLowerCase() !== input.googleSession.email.toLowerCase()
-    )) {
-      throw new Error('An unfinished recovery belongs to another Google account. Clear this app\'s data before continuing.');
+    if (
+      pending &&
+      (pending.version !== 1 ||
+        pending.googleUserId !== input.googleSession.userId ||
+        pending.googleEmail.toLowerCase() !== input.googleSession.email.toLowerCase())
+    ) {
+      throw new Error(
+        "An unfinished recovery belongs to another Google account. Clear this app's data before continuing.",
+      );
     }
     if (!pending) {
       const deviceKeys = await generateDeviceKeyPair();
@@ -401,22 +512,37 @@ export class SyncV2ApplicationLifecycle {
       if (!recoveryPackage?.downloadUrl || !recoveryPackage.sha256 || !recoveryPackage.sizeBytes) {
         throw new Error('The encrypted recovery package is unavailable.');
       }
-      const transfer = new BoundedObjectTransfer({ maximumObjectBytes: protocol.maximumSnapshotBytes });
-      const [recoveryBytes] = await transfer.download([{
-        downloadUrl: recoveryPackage.downloadUrl,
-        sha256: recoveryPackage.sha256,
-        sizeBytes: recoveryPackage.sizeBytes,
-      }]);
+      const transfer = new BoundedObjectTransfer({
+        maximumObjectBytes: protocol.maximumSnapshotBytes,
+      });
+      const [recoveryBytes] = await transfer.download([
+        {
+          downloadUrl: recoveryPackage.downloadUrl,
+          sha256: recoveryPackage.sha256,
+          sizeBytes: recoveryPackage.sizeBytes,
+        },
+      ]);
       pending = { ...pending, recoveryPackageBase64: encodeSyncSecretBytes(recoveryBytes) };
       await savePendingPrimaryAccountRecoverySecret(pending);
     }
 
     input.onProgress?.('Unlocking your encrypted diary...');
-    const keyPackage = decodeRecoveryKeyPackage(decodeSyncSecretBytes(pending.recoveryPackageBase64));
-    const recoveredKeys = await unwrapAccountRootKeysFromRecovery(keyPackage, input.recoveryPassphrase);
+    const keyPackage = decodeRecoveryKeyPackage(
+      decodeSyncSecretBytes(pending.recoveryPackageBase64),
+    );
+    const recoveredKeys = await unwrapAccountRootKeysFromRecovery(
+      keyPackage,
+      input.recoveryPassphrase,
+    );
     const accountId = keyPackage.accountId;
-    const keyEpoch = keyPackage.keyEpoch || Math.max(...Object.keys(recoveredKeys.accountRootKeys).map(Number));
-    if (!accountId || !Number.isInteger(keyEpoch) || keyEpoch < 1 || !recoveredKeys.accountRootKeys[keyEpoch]) {
+    const keyEpoch =
+      keyPackage.keyEpoch || Math.max(...Object.keys(recoveredKeys.accountRootKeys).map(Number));
+    if (
+      !accountId ||
+      !Number.isInteger(keyEpoch) ||
+      keyEpoch < 1 ||
+      !recoveredKeys.accountRootKeys[keyEpoch]
+    ) {
       throw new Error('The encrypted recovery package is incomplete.');
     }
 
@@ -458,7 +584,7 @@ export class SyncV2ApplicationLifecycle {
       api,
       transfer,
       snapshotStore,
-      new AccountKeySyncV2SnapshotCodec(async epoch => {
+      new AccountKeySyncV2SnapshotCodec(async (epoch) => {
         const key = recoveredKeys.accountRootKeys[epoch];
         if (!key) throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', safetyRelevant: true });
         return key;
@@ -496,22 +622,35 @@ export class SyncV2ApplicationLifecycle {
     await this.repository.saveLocalSyncAccountState(recoveredAccount);
 
     const validator = new SyncInvariantValidator();
-    const replay = new RepositoryReplayStore(new PersistentReplayStore(this.store, validator), this.repository);
-    const puller = new RemoteEventPuller(api, transfer, {
-      hasKeyEpoch: async epoch => Boolean(recoveredKeys.accountRootKeys[epoch]),
-      decrypt: async (bytes, epoch) => {
-        const key = recoveredKeys.accountRootKeys[epoch];
-        if (!key) throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', safetyRelevant: true });
-        const decrypted = await decryptSyncPayload(key, bytes);
-        if (decrypted.objectKind !== 'event') throw new Error('Downloaded encrypted object is not a diary event.');
-        return JSON.parse(new TextDecoder().decode(decrypted.payload)) as DecryptedSyncV2Event;
+    const replay = new RepositoryReplayStore(
+      new PersistentReplayStore(this.store, validator),
+      this.repository,
+    );
+    const puller = new RemoteEventPuller(
+      api,
+      transfer,
+      {
+        hasKeyEpoch: async (epoch) => Boolean(recoveredKeys.accountRootKeys[epoch]),
+        decrypt: async (bytes, epoch) => {
+          const key = recoveredKeys.accountRootKeys[epoch];
+          if (!key) throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', safetyRelevant: true });
+          const decrypted = await decryptSyncPayload(key, bytes);
+          if (decrypted.objectKind !== 'event')
+            throw new Error('Downloaded encrypted object is not a diary event.');
+          return JSON.parse(new TextDecoder().decode(decrypted.payload)) as DecryptedSyncV2Event;
+        },
       },
-    }, replay, validator, safety, this.repository, {
-      accountId,
-      deviceId: pending.deviceId,
-      eventSchemaVersion: protocol.eventSchemaVersion,
-      replayBatchSize: 1,
-    });
+      replay,
+      validator,
+      safety,
+      this.repository,
+      {
+        accountId,
+        deviceId: pending.deviceId,
+        eventSchemaVersion: protocol.eventSchemaVersion,
+        replayBatchSize: 1,
+      },
+    );
     let currentSequence: number;
     try {
       currentSequence = await puller.pull();
@@ -536,13 +675,15 @@ export class SyncV2ApplicationLifecycle {
         : null;
     const security = {
       ...localPinSecurity,
-      ...(recoveryMetadata ? {
-        recoveryQuestionId: recoveryMetadata.recoveryQuestionId,
-        recoveryQuestionText: recoveryMetadata.recoveryQuestionText,
-        recoveryAnswerHash: recoveryMetadata.recoveryAnswerHash,
-        recoveryAnswerSalt: recoveryMetadata.recoveryAnswerSalt,
-        recoveryAnswerIterations: recoveryMetadata.recoveryAnswerIterations,
-      } : {}),
+      ...(recoveryMetadata
+        ? {
+            recoveryQuestionId: recoveryMetadata.recoveryQuestionId,
+            recoveryQuestionText: recoveryMetadata.recoveryQuestionText,
+            recoveryAnswerHash: recoveryMetadata.recoveryAnswerHash,
+            recoveryAnswerSalt: recoveryMetadata.recoveryAnswerSalt,
+            recoveryAnswerIterations: recoveryMetadata.recoveryAnswerIterations,
+          }
+        : {}),
       isLocked: false,
     };
     await this.repository.saveSecurityConfig({
@@ -572,7 +713,10 @@ export class SyncV2ApplicationLifecycle {
     });
     await api.finalizeRecovery(pending.attemptId, pending.deviceId);
 
-    const account: LocalSyncAccountState = { ...recoveredAccount, currentSyncSequence: currentSequence };
+    const account: LocalSyncAccountState = {
+      ...recoveredAccount,
+      currentSyncSequence: currentSequence,
+    };
     await this.repository.saveLocalSyncAccountState(account);
     await runtimeStore.save({
       ...(await runtimeStore.load())!,
@@ -586,26 +730,35 @@ export class SyncV2ApplicationLifecycle {
   }
 
   async createPrimaryAccount(input: CreatePrimarySyncAccountInput): Promise<LocalSyncAccountState> {
-    if (!input.googleSession.email) throw new Error('Google must return an email address to create a Dear Diary account.');
-    if (!input.supabaseSession.accessToken) throw new Error('Account authorization is unavailable. Sign in again.');
-    if (await this.repository.getLocalSyncAccountState()) throw new Error('Sync & Backup is already configured on this device.');
+    if (!input.googleSession.email)
+      throw new Error('Google must return an email address to create a Dear Diary account.');
+    if (!input.supabaseSession.accessToken)
+      throw new Error('Account authorization is unavailable. Sign in again.');
+    if (await this.repository.getLocalSyncAccountState())
+      throw new Error('Sync & Backup is already configured on this device.');
     validateRecoveryPassphrase(input.recoveryPassphrase);
 
     const api = createConfiguredSyncV2ApiClient(async () => input.supabaseSession.accessToken);
     input.onProgress?.('Preparing secure sync...');
     const protocol = await api.getProtocol();
-    if (!protocol.featureFlags.snapshotCreationEnabled || !protocol.featureFlags.primaryRecoveryEnabled) {
+    if (
+      !protocol.featureFlags.snapshotCreationEnabled ||
+      !protocol.featureFlags.primaryRecoveryEnabled
+    ) {
       throw new Error('Secure sync setup is temporarily unavailable. Try again later.');
     }
 
     input.onProgress?.('Creating encryption keys...');
     let pending = await loadPendingPrimaryAccountSetupSecret<PendingPrimaryAccountSetup>();
-    if (pending && (
-      pending.version !== 1
-      || pending.googleUserId !== input.googleSession.userId
-      || pending.googleEmail.toLowerCase() !== input.googleSession.email.toLowerCase()
-    )) {
-      throw new Error('An unfinished setup belongs to another Google account. Clear this app\'s data before continuing.');
+    if (
+      pending &&
+      (pending.version !== 1 ||
+        pending.googleUserId !== input.googleSession.userId ||
+        pending.googleEmail.toLowerCase() !== input.googleSession.email.toLowerCase())
+    ) {
+      throw new Error(
+        "An unfinished setup belongs to another Google account. Clear this app's data before continuing.",
+      );
     }
     if (!pending) {
       const accountRootKey = generateAccountRootKey();
@@ -633,7 +786,9 @@ export class SyncV2ApplicationLifecycle {
       initialKeyEpoch: 1,
     });
     if (pending.accountId && pending.accountId !== registration.accountId) {
-      throw new Error('Secure account setup returned an unexpected account. Clear this app\'s data before continuing.');
+      throw new Error(
+        "Secure account setup returned an unexpected account. Clear this app's data before continuing.",
+      );
     }
     if (!pending.accountId) {
       pending = { ...pending, accountId: registration.accountId };
@@ -642,12 +797,15 @@ export class SyncV2ApplicationLifecycle {
 
     input.onProgress?.('Personalizing your diary...');
     const profile = await populateUserProfileFromGoogle(
-      await this.repository.getUserProfile(), input.googleSession,
+      await this.repository.getUserProfile(),
+      input.googleSession,
     );
     await this.repository.saveUserProfile(profile);
     const security = createInitialPinWithRecovery(
-      await this.repository.getSecurityConfig(), input.localPin,
-      input.recoveryQuestion.questionId, input.recoveryQuestion.answer,
+      await this.repository.getSecurityConfig(),
+      input.localPin,
+      input.recoveryQuestion.questionId,
+      input.recoveryQuestion.answer,
       input.recoveryQuestion.questionText,
     );
     await this.repository.saveSecurityConfig({
@@ -684,14 +842,14 @@ export class SyncV2ApplicationLifecycle {
 
     input.onProgress?.('Securing account recovery...');
     if (!pending.recoveryPackageBase64 || !pending.recoveryPackageSha256) {
-      const recoveryBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
-        accountRootKey, input.recoveryPassphrase, {
+      const recoveryBytes = encodeRecoveryKeyPackage(
+        await wrapAccountRootKeyForRecovery(accountRootKey, input.recoveryPassphrase, {
           accountId: registration.accountId,
           keyEpoch: 1,
           keyVersion: 1,
           accountRootKeys: { 1: accountRootKey },
-        },
-      ));
+        }),
+      );
       pending = {
         ...pending,
         recoveryPackageBase64: encodeSyncSecretBytes(recoveryBytes),
@@ -713,7 +871,9 @@ export class SyncV2ApplicationLifecycle {
       packageSchemaVersion: 1,
     });
     if (!recoveryUpload.upload) throw new Error('Secure recovery storage is unavailable.');
-    const transfer = new BoundedObjectTransfer({ maximumObjectBytes: protocol.maximumSnapshotBytes });
+    const transfer = new BoundedObjectTransfer({
+      maximumObjectBytes: protocol.maximumSnapshotBytes,
+    });
     await transfer.upload(
       [{ objectKey: recoveryUpload.upload.objectKey, bytes: recoveryBytes }],
       [recoveryUpload.upload],
@@ -725,8 +885,9 @@ export class SyncV2ApplicationLifecycle {
       api,
       transfer,
       new PersistentSyncV2SnapshotStore(this.store),
-      new AccountKeySyncV2SnapshotCodec(async epoch => {
-        if (epoch !== 1) throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', safetyRelevant: true });
+      new AccountKeySyncV2SnapshotCodec(async (epoch) => {
+        if (epoch !== 1)
+          throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', safetyRelevant: true });
         return accountRootKey;
       }),
       new PersistentSafetyStopStore(this.store),
@@ -759,16 +920,37 @@ export class SyncV2ApplicationLifecycle {
   async getStatus(options: { resetClient?: boolean } = {}): Promise<SyncV2LifecycleStatus> {
     if (options.resetClient) this.api = null;
     const account = await this.repository.getLocalSyncAccountState();
-    if (!account) return { mode: 'NOT_CONFIGURED', eligible: false, reason: 'Encrypted sync is not configured.' };
-    if (await this.store.getItem(MIGRATION_JOURNAL_KEY)) return { mode: 'MIGRATING', eligible: true };
+    if (!account)
+      return {
+        mode: 'NOT_CONFIGURED',
+        eligible: false,
+        reason: 'Encrypted sync is not configured.',
+      };
+    if (await this.store.getItem(MIGRATION_JOURNAL_KEY))
+      return { mode: 'MIGRATING', eligible: true };
     if (account.syncProtocolVersion === 2) return { mode: 'V2', eligible: true };
-    if (account.deviceRole !== 'primary_mobile') return { mode: 'V1', eligible: false, reason: 'Migration must be started on the primary mobile device.' };
+    if (account.deviceRole !== 'primary_mobile')
+      return {
+        mode: 'V1',
+        eligible: false,
+        reason: 'Migration must be started on the primary mobile device.',
+      };
     try {
       const protocol = await this.client().getProtocol();
       const eligibility = await this.migrationEligibility(account, protocol);
-      return { mode: 'V1', ...eligibility, rolloutPercentage: protocol.syncV2RolloutPercentage, featureFlags: protocol.featureFlags };
+      return {
+        mode: 'V1',
+        ...eligibility,
+        rolloutPercentage: protocol.syncV2RolloutPercentage,
+        featureFlags: protocol.featureFlags,
+      };
     } catch (error) {
-      return { mode: 'V1', eligible: false, reason: error instanceof Error ? error.message : 'Sync V2 availability could not be checked.' };
+      return {
+        mode: 'V1',
+        eligible: false,
+        reason:
+          error instanceof Error ? error.message : 'Sync V2 availability could not be checked.',
+      };
     }
   }
 
@@ -794,7 +976,8 @@ export class SyncV2ApplicationLifecycle {
     if (!account) return;
     if (await this.store.getItem(MIGRATION_JOURNAL_KEY)) {
       const runtime = await new SyncV2RuntimeStore(this.store).load();
-      if (!runtime) throw new Error('Sync V2 migration state is incomplete. Restart migration from Settings.');
+      if (!runtime)
+        throw new Error('Sync V2 migration state is incomplete. Restart migration from Settings.');
       const registration = await this.registerV2Device(account);
       if (registration.accountId !== runtime.accountId) {
         throw new Error('Sync V2 registration does not match the resumable migration state.');
@@ -813,7 +996,11 @@ export class SyncV2ApplicationLifecycle {
       await this.reconcileAcknowledgedOutbox();
       account = await this.applyAvailableDeviceKeyPackage(account);
       if (!this.companionRecoveryAttempts.has(account.accountId)) {
-        const recovered = await clearRecoverableCompanionSafetyStop(this.store, this.outbox, account);
+        const recovered = await clearRecoverableCompanionSafetyStop(
+          this.store,
+          this.outbox,
+          account,
+        );
         if (recovered) {
           this.companionRecoveryAttempts.add(account.accountId);
           await this.delegate?.stop();
@@ -834,7 +1021,9 @@ export class SyncV2ApplicationLifecycle {
     }
   }
 
-  async stop(): Promise<void> { await this.delegate?.stop(); }
+  async stop(): Promise<void> {
+    await this.delegate?.stop();
+  }
 
   private async reconcileAcknowledgedOutbox(): Promise<void> {
     const raw = await this.store.getItem(SYNC_V2_OUTBOX_STORAGE_KEY);
@@ -842,8 +1031,8 @@ export class SyncV2ApplicationLifecycle {
     const v2Outbox = JSON.parse(raw) as Record<string, SyncOutboxOperationV2>;
     const acknowledgedIds = new Set(
       Object.values(v2Outbox)
-        .filter(operation => operation.state === 'ACKNOWLEDGED')
-        .map(operation => operation.operationId),
+        .filter((operation) => operation.state === 'ACKNOWLEDGED')
+        .map((operation) => operation.operationId),
     );
     if (acknowledgedIds.size === 0) return;
     const legacyOutbox = await this.repository.listSyncOutboxOperations();
@@ -872,12 +1061,15 @@ export class SyncV2ApplicationLifecycle {
       await this.repository.clearLocalSyncAccountState();
       await clearSyncV2LocalCache(this.store);
       await this.repository.resetContent();
-      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('deardiary-device-revoked'));
+      if (typeof window !== 'undefined')
+        window.dispatchEvent(new CustomEvent('deardiary-device-revoked'));
     })();
     return this.revocationHandling;
   }
 
-  private async applyAvailableDeviceKeyPackage(account: LocalSyncAccountState): Promise<LocalSyncAccountState> {
+  private async applyAvailableDeviceKeyPackage(
+    account: LocalSyncAccountState,
+  ): Promise<LocalSyncAccountState> {
     const packages = await this.client().listDeviceKeyPackages(account.deviceId);
     const latest = packages[0];
     if (!latest) return account;
@@ -885,14 +1077,22 @@ export class SyncV2ApplicationLifecycle {
       throw new Error('The pending device key package is incomplete.');
     }
     const protocol = await this.client().getProtocol();
-    const transfer = new BoundedObjectTransfer({ maximumObjectBytes: protocol.maximumSnapshotBytes });
-    const [bytes] = await transfer.download([{
-      downloadUrl: latest.downloadUrl, sha256: latest.sha256, sizeBytes: latest.sizeBytes,
-    }]);
+    const transfer = new BoundedObjectTransfer({
+      maximumObjectBytes: protocol.maximumSnapshotBytes,
+    });
+    const [bytes] = await transfer.download([
+      {
+        downloadUrl: latest.downloadUrl,
+        sha256: latest.sha256,
+        sizeBytes: latest.sizeBytes,
+      },
+    ]);
     const secrets = await loadSyncSecrets();
     if (!secrets) throw new Error('Encrypted sync keys are unavailable.');
     const unwrapped = await unwrapRootKeysForCompanion(
-      decodeCompanionKeyPackage(bytes), account.devicePublicKey, secrets.devicePrivateKeyJwk,
+      decodeCompanionKeyPackage(bytes),
+      account.devicePublicKey,
+      secrets.devicePrivateKeyJwk,
     );
     if (unwrapped.keyEpoch !== latest.keyEpoch || unwrapped.keyEpoch < (account.keyEpoch || 1)) {
       throw new Error('The pending device key package epoch is invalid.');
@@ -906,9 +1106,11 @@ export class SyncV2ApplicationLifecycle {
     await this.repository.saveLocalSyncAccountState(updated);
     const runtimeStore = new SyncV2RuntimeStore(this.store);
     const runtime = await runtimeStore.load();
-    if (runtime) await runtimeStore.save({ ...runtime, keyEpoch: unwrapped.keyEpoch, updatedAt: Date.now() });
+    if (runtime)
+      await runtimeStore.save({ ...runtime, keyEpoch: unwrapped.keyEpoch, updatedAt: Date.now() });
     const proof = await signWithDeviceBundle(
-      secrets.devicePrivateKeyJwk, `key-package-applied:${latest.keyPackageId}:${latest.keyEpoch}`,
+      secrets.devicePrivateKeyJwk,
+      `key-package-applied:${latest.keyPackageId}:${latest.keyEpoch}`,
     );
     await this.client().applyDeviceKeyPackage(latest.keyPackageId, account.deviceId, proof);
     return updated;
@@ -921,13 +1123,19 @@ export class SyncV2ApplicationLifecycle {
 
   private async accessToken(): Promise<string> {
     const secrets = await loadSyncSecrets();
-    if (!secrets) throw new Error('Encrypted sync authorization is unavailable. Reconnect your account.');
-    if (!secrets.supabaseSession.expiresAt || secrets.supabaseSession.expiresAt > Math.floor(Date.now() / 1000) + 60) {
+    if (!secrets)
+      throw new Error('Encrypted sync authorization is unavailable. Reconnect your account.');
+    if (
+      !secrets.supabaseSession.expiresAt ||
+      secrets.supabaseSession.expiresAt > Math.floor(Date.now() / 1000) + 60
+    ) {
       return secrets.supabaseSession.accessToken;
     }
-    if (!secrets.supabaseSession.refreshToken) throw new Error('Encrypted sync authorization expired. Reconnect your account.');
+    if (!secrets.supabaseSession.refreshToken)
+      throw new Error('Encrypted sync authorization expired. Reconnect your account.');
     const supabaseSession = await refreshSupabaseSession({
-      supabaseUrl: getConfiguredSupabaseUrl(), anonKey: getConfiguredSupabaseAnonKey(),
+      supabaseUrl: getConfiguredSupabaseUrl(),
+      anonKey: getConfiguredSupabaseAnonKey(),
       refreshToken: secrets.supabaseSession.refreshToken,
     });
     await saveSyncSecrets({ ...secrets, supabaseSession });
@@ -938,7 +1146,8 @@ export class SyncV2ApplicationLifecycle {
     const account = await this.repository.getLocalSyncAccountState();
     if (!account) throw new Error('Encrypted sync is not configured.');
     if (account.syncProtocolVersion === 2) throw new Error('This account already uses Sync V2.');
-    if (account.deviceRole !== 'primary_mobile') throw new Error('Migration must be started on the primary mobile device.');
+    if (account.deviceRole !== 'primary_mobile')
+      throw new Error('Migration must be started on the primary mobile device.');
     return account;
   }
 
@@ -953,15 +1162,38 @@ export class SyncV2ApplicationLifecycle {
     });
   }
 
-  private async migrationEligibility(account: LocalSyncAccountState, protocol: SyncV2Protocol): Promise<{ eligible: boolean; reason?: string }> {
-    if (protocol.emergencyMode) return { eligible: false, reason: 'Sync V2 migration is paused by the service.' };
-    if (!await isCanaryEnabled(account.accountId, protocol.syncV2RolloutPercentage, protocol.rolloutSaltVersion)) {
-      return { eligible: false, reason: `This account is not yet in the ${protocol.syncV2RolloutPercentage}% Sync V2 rollout.` };
+  private async migrationEligibility(
+    account: LocalSyncAccountState,
+    protocol: SyncV2Protocol,
+  ): Promise<{ eligible: boolean; reason?: string }> {
+    if (protocol.emergencyMode)
+      return { eligible: false, reason: 'Sync V2 migration is paused by the service.' };
+    if (
+      !(await isCanaryEnabled(
+        account.accountId,
+        protocol.syncV2RolloutPercentage,
+        protocol.rolloutSaltVersion,
+      ))
+    ) {
+      return {
+        eligible: false,
+        reason: `This account is not yet in the ${protocol.syncV2RolloutPercentage}% Sync V2 rollout.`,
+      };
     }
-    if (!protocol.featureFlags.syncWritesEnabled || !protocol.featureFlags.remotePullEnabled || !protocol.featureFlags.snapshotCreationEnabled) {
-      return { eligible: false, reason: 'The service has not enabled all migration safety controls.' };
+    if (
+      !protocol.featureFlags.syncWritesEnabled ||
+      !protocol.featureFlags.remotePullEnabled ||
+      !protocol.featureFlags.snapshotCreationEnabled
+    ) {
+      return {
+        eligible: false,
+        reason: 'The service has not enabled all migration safety controls.',
+      };
     }
-    if (PROTOCOL_VERSION < protocol.minimumReadProtocolVersion || PROTOCOL_VERSION < protocol.minimumWriteProtocolVersion) {
+    if (
+      PROTOCOL_VERSION < protocol.minimumReadProtocolVersion ||
+      PROTOCOL_VERSION < protocol.minimumWriteProtocolVersion
+    ) {
       return { eligible: false, reason: 'This app must be upgraded before migration.' };
     }
     if (!isVersionAtLeast(APP_VERSION, protocol.minimumSupportedAppVersion)) {
@@ -970,7 +1202,11 @@ export class SyncV2ApplicationLifecycle {
     return { eligible: true };
   }
 
-  private async seedV2State(account: LocalSyncAccountState, v2AccountId: string, protocol: SyncV2Protocol): Promise<void> {
+  private async seedV2State(
+    account: LocalSyncAccountState,
+    v2AccountId: string,
+    protocol: SyncV2Protocol,
+  ): Promise<void> {
     const state = repositorySnapshotToV2State(await this.repository.exportSnapshot());
     const runtime: SyncV2LocalRuntime = {
       accountId: v2AccountId,
@@ -991,11 +1227,17 @@ export class SyncV2ApplicationLifecycle {
     });
   }
 
-  private async runMigration(account: LocalSyncAccountState, v2AccountId: string, protocol: SyncV2Protocol): Promise<void> {
+  private async runMigration(
+    account: LocalSyncAccountState,
+    v2AccountId: string,
+    protocol: SyncV2Protocol,
+  ): Promise<void> {
     const api = this.client();
-    const transfer = new BoundedObjectTransfer({ maximumObjectBytes: protocol.maximumSnapshotBytes });
+    const transfer = new BoundedObjectTransfer({
+      maximumObjectBytes: protocol.maximumSnapshotBytes,
+    });
     const safety = new PersistentSafetyStopStore(this.store);
-    const codec = new AccountKeySyncV2SnapshotCodec(epoch => this.keyForEpoch(epoch));
+    const codec = new AccountKeySyncV2SnapshotCodec((epoch) => this.keyForEpoch(epoch));
     const snapshotStore = new PersistentSyncV2SnapshotStore(this.store);
     const refreshCanonicalState = async (): Promise<SyncV2CanonicalSnapshotState> => {
       const state = repositorySnapshotToV2State(await this.repository.exportSnapshot());
@@ -1007,8 +1249,11 @@ export class SyncV2ApplicationLifecycle {
       return state;
     };
     const snapshots = new SyncV2SnapshotCoordinator(api, transfer, snapshotStore, codec, safety, {
-      accountId: v2AccountId, deviceId: account.deviceId, protocolVersion: PROTOCOL_VERSION,
-      snapshotSchemaVersion: protocol.snapshotSchemaVersion, maximumSnapshotBytes: protocol.maximumSnapshotBytes,
+      accountId: v2AccountId,
+      deviceId: account.deviceId,
+      protocolVersion: PROTOCOL_VERSION,
+      snapshotSchemaVersion: protocol.snapshotSchemaVersion,
+      maximumSnapshotBytes: protocol.maximumSnapshotBytes,
       currentKeyEpoch: async () => account.keyEpoch || 1,
     });
     const journal = new PersistentWorkflowJournalStore<any>(this.store, MIGRATION_JOURNAL_KEY);
@@ -1017,28 +1262,50 @@ export class SyncV2ApplicationLifecycle {
         await this.legacyEngine.flushPendingOutbox();
         await this.legacyEngine.pullPending();
         const pending = await this.repository.listSyncOutboxOperations();
-        if (pending.some(operation => !['applied', 'conflict_preserved'].includes(operation.state))) {
-          throw new Error('V1 still has pending or failed changes. Retry encrypted sync before migrating.');
+        if (
+          pending.some((operation) => !['applied', 'conflict_preserved'].includes(operation.state))
+        ) {
+          throw new Error(
+            'V1 still has pending or failed changes. Retry encrypted sync before migrating.',
+          );
         }
       },
       canonicalDigest: async () => stateDigest(await refreshCanonicalState()),
       baselineSequence: async () => account.currentSyncSequence,
-      createSnapshot: async () => { await refreshCanonicalState(); return snapshots.create(); },
-      verifyTemporaryRestore: async snapshotId => {
+      createSnapshot: async () => {
+        await refreshCanonicalState();
+        return snapshots.create();
+      },
+      verifyTemporaryRestore: async (snapshotId) => {
         const temporary = new MemoryDataStore();
-        await temporary.setItem(SYNC_V2_RUNTIME_KEY, JSON.stringify({
-          ...(await new SyncV2RuntimeStore(this.store).load())!, lastAppliedSequence: 0, updatedAt: Date.now(),
-        }));
+        await temporary.setItem(
+          SYNC_V2_RUNTIME_KEY,
+          JSON.stringify({
+            ...(await new SyncV2RuntimeStore(this.store).load())!,
+            lastAppliedSequence: 0,
+            updatedAt: Date.now(),
+          }),
+        );
         const temporaryStore = new PersistentSyncV2SnapshotStore(temporary);
-        const restore = new SyncV2SnapshotCoordinator(api, transfer, temporaryStore, codec,
-          new PersistentSafetyStopStore(temporary), {
-            accountId: v2AccountId, deviceId: account.deviceId, protocolVersion: PROTOCOL_VERSION,
-            snapshotSchemaVersion: protocol.snapshotSchemaVersion, maximumSnapshotBytes: protocol.maximumSnapshotBytes,
+        const restore = new SyncV2SnapshotCoordinator(
+          api,
+          transfer,
+          temporaryStore,
+          codec,
+          new PersistentSafetyStopStore(temporary),
+          {
+            accountId: v2AccountId,
+            deviceId: account.deviceId,
+            protocolVersion: PROTOCOL_VERSION,
+            snapshotSchemaVersion: protocol.snapshotSchemaVersion,
+            maximumSnapshotBytes: protocol.maximumSnapshotBytes,
             currentKeyEpoch: async () => account.keyEpoch || 1,
-          });
+          },
+        );
         await restore.restoreLatest();
         const latest = await api.getLatestSnapshot(protocol.snapshotSchemaVersion);
-        if (latest.snapshotId !== snapshotId) throw new Error('The migration snapshot is no longer the latest snapshot.');
+        if (latest.snapshotId !== snapshotId)
+          throw new Error('The migration snapshot is no longer the latest snapshot.');
         return stateDigest((await temporaryStore.exportAccountState(v2AccountId)).state);
       },
       activateV2: async () => this.activateLocalV2(account, v2AccountId),
@@ -1046,9 +1313,13 @@ export class SyncV2ApplicationLifecycle {
     await coordinator.run(account.deviceId);
   }
 
-  private async activateLocalV2(account: LocalSyncAccountState, v2AccountId: string): Promise<void> {
+  private async activateLocalV2(
+    account: LocalSyncAccountState,
+    v2AccountId: string,
+  ): Promise<void> {
     const secrets = await loadSyncSecrets();
-    if (!secrets) throw new Error('Encrypted sync keys are unavailable. Unlock and retry migration.');
+    if (!secrets)
+      throw new Error('Encrypted sync keys are unavailable. Unlock and retry migration.');
     const activeAccount: LocalSyncAccountState = {
       ...account,
       accountId: v2AccountId,
@@ -1079,11 +1350,19 @@ export class SyncV2ApplicationLifecycle {
   private async composeRuntime(account: LocalSyncAccountState): Promise<RuntimeDelegate> {
     const api = this.client();
     const controls = new RuntimeControlStore(this.store);
-    const protocol = await api.getProtocol().then(async value => { await controls.save(value); return value; })
+    const protocol = await api
+      .getProtocol()
+      .then(async (value) => {
+        await controls.save(value);
+        return value;
+      })
       .catch(async () => controls.asProtocol(await controls.loadSafeFallback()));
     const runtime = await new SyncV2RuntimeStore(this.store).load();
-    if (!runtime || runtime.accountId !== account.accountId) throw new Error('Sync V2 runtime state does not match the local account.');
-    const transfer = new BoundedObjectTransfer({ maximumObjectBytes: Math.max(protocol.maximumEventBytes, 1) });
+    if (!runtime || runtime.accountId !== account.accountId)
+      throw new Error('Sync V2 runtime state does not match the local account.');
+    const transfer = new BoundedObjectTransfer({
+      maximumObjectBytes: Math.max(protocol.maximumEventBytes, 1),
+    });
     const validator = new SyncInvariantValidator();
     const safety = new PersistentSafetyStopStore(this.store);
     const persistentReplay = new PersistentReplayStore(this.store, validator);
@@ -1096,50 +1375,109 @@ export class SyncV2ApplicationLifecycle {
       },
       decrypt: async (bytes: Uint8Array, epoch: number): Promise<DecryptedSyncV2Event> => {
         const decrypted = await decryptSyncPayload(await this.keyForEpoch(epoch), bytes);
-        if (decrypted.objectKind !== 'event') throw new Error('Downloaded Sync V2 object is not an event.');
+        if (decrypted.objectKind !== 'event')
+          throw new Error('Downloaded Sync V2 object is not an event.');
         return JSON.parse(new TextDecoder().decode(decrypted.payload)) as DecryptedSyncV2Event;
       },
     };
-    const puller = new RemoteEventPuller(api, transfer, decryptor, replay, validator, safety, this.repository, {
-      accountId: account.accountId, deviceId: account.deviceId, eventSchemaVersion: protocol.eventSchemaVersion,
-      replayBatchSize: 1,
-    });
+    const puller = new RemoteEventPuller(
+      api,
+      transfer,
+      decryptor,
+      replay,
+      validator,
+      safety,
+      this.repository,
+      {
+        accountId: account.accountId,
+        deviceId: account.deviceId,
+        eventSchemaVersion: protocol.eventSchemaVersion,
+        replayBatchSize: 1,
+      },
+    );
     const preparer = new CanonicalSyncV2OperationPreparer({
       eventSchemaVersion: protocol.eventSchemaVersion,
-      loadAuthoritativeRecord: operation => loadRecord(this.repository, operation),
+      loadAuthoritativeRecord: (operation) => loadRecord(this.repository, operation),
       determinePartitionKey: async () => 'account',
-      currentKeyEpoch: async () => (await this.repository.getLocalSyncAccountState())?.keyEpoch || 1,
-      validateEvent: event => {
-        if (event.accountId !== account.accountId || event.deviceId !== account.deviceId) throw new Error('Sync V2 event identity mismatch.');
+      currentKeyEpoch: async () =>
+        (await this.repository.getLocalSyncAccountState())?.keyEpoch || 1,
+      validateEvent: (event) => {
+        if (event.accountId !== account.accountId || event.deviceId !== account.deviceId)
+          throw new Error('Sync V2 event identity mismatch.');
       },
-      encryptEvent: async (event, epoch) => (
-        await encryptSyncPayload(await this.keyForEpoch(epoch), 'event', new TextEncoder().encode(canonicalJson(event)), { keyEpoch: epoch })
-      ).bytes,
+      encryptEvent: async (event, epoch) =>
+        (
+          await encryptSyncPayload(
+            await this.keyForEpoch(epoch),
+            'event',
+            new TextEncoder().encode(canonicalJson(event)),
+            { keyEpoch: epoch },
+          )
+        ).bytes,
     });
     const acknowledgments = new RepositoryAcknowledgmentStore(
-      new PersistentOperationAcknowledgmentStore(this.store), this.repository, this.store,
+      new PersistentOperationAcknowledgmentStore(this.store),
+      this.repository,
+      this.store,
     );
     const processor = new SyncV2OperationProcessor(
-      this.outbox, api, transfer, preparer, acknowledgments, new PersistentSyncConflictStore(this.store),
-      validator, safety, { accountId: account.accountId, deviceId: account.deviceId, protocolVersion: PROTOCOL_VERSION, workerId: `app:${account.deviceId}` },
+      this.outbox,
+      api,
+      transfer,
+      preparer,
+      acknowledgments,
+      new PersistentSyncConflictStore(this.store),
+      validator,
+      safety,
+      {
+        accountId: account.accountId,
+        deviceId: account.deviceId,
+        protocolVersion: PROTOCOL_VERSION,
+        workerId: `app:${account.deviceId}`,
+      },
     );
-    const handleWorkerError = (context: string) => (error: unknown) => this.handleRuntimeError(context, error);
+    const handleWorkerError = (context: string) => (error: unknown) =>
+      this.handleRuntimeError(context, error);
     const pullWorker = new IntervalWorker(
-      async () => { await puller.pull(); }, 90_000, handleWorkerError('sync.v2.pull.worker'),
+      async () => {
+        await puller.pull();
+      },
+      90_000,
+      handleWorkerError('sync.v2.pull.worker'),
     );
-    const outboxWorker = new IntervalWorker(async () => {
-      for (let count = 0; count < MAX_WORK_PER_FLUSH && await processor.runOnce(); count += 1) { /* bounded drain */ }
-    }, 30_000, handleWorkerError('sync.v2.outbox.worker'));
+    const outboxWorker = new IntervalWorker(
+      async () => {
+        for (let count = 0; count < MAX_WORK_PER_FLUSH && (await processor.runOnce()); count += 1) {
+          /* bounded drain */
+        }
+      },
+      30_000,
+      handleWorkerError('sync.v2.outbox.worker'),
+    );
     const bootstrap = new ProtocolBootstrap(
-      new SyncV2RuntimeStore(this.store), api, this.outbox, this.repository, safety, PROTOCOL_VERSION,
-      Date.now, APP_VERSION, account.v1AccountId || account.accountId, controls,
+      new SyncV2RuntimeStore(this.store),
+      api,
+      this.outbox,
+      this.repository,
+      safety,
+      PROTOCOL_VERSION,
+      Date.now,
+      APP_VERSION,
+      account.v1AccountId || account.accountId,
+      controls,
     );
-    const assertAuthorized = account.deviceRole === 'web_companion'
-      ? async () => { await api.listDeviceKeyPackages(account.deviceId); }
-      : null;
+    const assertAuthorized =
+      account.deviceRole === 'web_companion'
+        ? async () => {
+            await api.listDeviceKeyPackages(account.deviceId);
+          }
+        : null;
     return new RuntimeDelegate(
-      new SyncV2RuntimeCoordinator(bootstrap, pullWorker, outboxWorker), puller, processor,
-      assertAuthorized, (context, error) => this.handleRuntimeError(context, error),
+      new SyncV2RuntimeCoordinator(bootstrap, pullWorker, outboxWorker),
+      puller,
+      processor,
+      assertAuthorized,
+      (context, error) => this.handleRuntimeError(context, error),
     );
   }
 }

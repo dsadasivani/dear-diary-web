@@ -5,7 +5,10 @@ import { mapDriveError, mapSupabaseError, SyncError } from './index';
 test('maps provider status and codes without parsing external messages', () => {
   assert.equal(mapDriveError({ status: 401, message: 'anything' }).code, 'AUTH_EXPIRED');
   assert.equal(mapDriveError({ status: 503, message: 'anything' }).code, 'SERVER_UNAVAILABLE');
-  assert.equal(mapSupabaseError({ code: 'RECORD_VERSION_CONFLICT', message: 'localized text' }).code, 'RECORD_VERSION_CONFLICT');
+  assert.equal(
+    mapSupabaseError({ code: 'RECORD_VERSION_CONFLICT', message: 'localized text' }).code,
+    'RECORD_VERSION_CONFLICT',
+  );
 });
 
 test('unknown errors default to a non-retryable safety-relevant failure', () => {

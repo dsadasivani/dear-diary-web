@@ -43,12 +43,22 @@ const security: SecurityConfig = {
 describe('DiarySettingsScreen', () => {
   beforeEach(() => {
     repositoryMocks.deleteDiary.mockReset().mockResolvedValue(true);
-    repositoryMocks.listEntriesByDiary.mockReset().mockResolvedValue({ items: [], nextCursor: undefined });
+    repositoryMocks.listEntriesByDiary
+      .mockReset()
+      .mockResolvedValue({ items: [], nextCursor: undefined });
     verifyPinMock.mockReset().mockReturnValue(true);
   });
 
   it('opens appearance from the mobile section navigation', async () => {
-    render(<DiarySettingsScreen diary={diary} layout="mobile" security={security} onBack={vi.fn()} onRefreshDiaries={vi.fn()} />);
+    render(
+      <DiarySettingsScreen
+        diary={diary}
+        layout="mobile"
+        security={security}
+        onBack={vi.fn()}
+        onRefreshDiaries={vi.fn()}
+      />,
+    );
 
     const appearanceSectionLink = screen.getByRole('link', { name: 'Appearance' });
     expect(screen.getByRole('button', { expanded: false })).toBeInTheDocument();
@@ -62,7 +72,14 @@ describe('DiarySettingsScreen', () => {
   it('requires the exact journal name and PIN before deleting a protected journal', async () => {
     const onBack = vi.fn();
     const onRefreshDiaries = vi.fn();
-    render(<DiarySettingsScreen diary={diary} security={security} onBack={onBack} onRefreshDiaries={onRefreshDiaries} />);
+    render(
+      <DiarySettingsScreen
+        diary={diary}
+        security={security}
+        onBack={onBack}
+        onRefreshDiaries={onRefreshDiaries}
+      />,
+    );
 
     await userEvent.click(screen.getByRole('button', { name: 'Review deletion' }));
     const confirmButton = await screen.findByTestId('confirm-delete-journal-button');
@@ -70,7 +87,9 @@ describe('DiarySettingsScreen', () => {
     expect(confirmButton).toBeDisabled();
     await userEvent.type(nameField, 'Locked journal');
     expect(confirmButton).toBeDisabled();
-    fireEvent.change(screen.getByTestId('delete-journal-name-confirmation'), { target: { value: diary.name } });
+    fireEvent.change(screen.getByTestId('delete-journal-name-confirmation'), {
+      target: { value: diary.name },
+    });
     expect(screen.getByTestId('confirm-delete-journal-button')).toBeDisabled();
     fireEvent.change(screen.getByLabelText('App PIN'), { target: { value: '1234' } });
     await waitFor(() => expect(screen.getByTestId('confirm-delete-journal-button')).toBeEnabled());

@@ -28,7 +28,8 @@ export default function useResponsiveLayout(): ResponsiveLayout {
       else query.addListener(update);
     };
     const unlisten = (query: MediaQueryList) => {
-      if (typeof query.removeEventListener === 'function') query.removeEventListener('change', update);
+      if (typeof query.removeEventListener === 'function')
+        query.removeEventListener('change', update);
       else query.removeListener(update);
     };
     listen(medium);

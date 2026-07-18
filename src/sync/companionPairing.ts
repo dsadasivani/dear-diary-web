@@ -32,16 +32,15 @@ export interface PendingCompanionPairing {
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
-export const hashPairingCode = (pairingCode: string): Promise<string> => (
-  sha256Hex(new TextEncoder().encode(pairingCode))
-);
+export const hashPairingCode = (pairingCode: string): Promise<string> =>
+  sha256Hex(new TextEncoder().encode(pairingCode));
 
 const createPairingCode = (): string => {
   const values = crypto.getRandomValues(new Uint32Array(2));
-  return Array.from(values, value => String(value % 10_000).padStart(4, '0')).join('');
+  return Array.from(values, (value) => String(value % 10_000).padStart(4, '0')).join('');
 };
 
 const listAllSyncObjects = async (
@@ -92,14 +91,21 @@ export const approveCompanionPairing = async (input: {
 }): Promise<PairingSession> => {
   const state = await input.repository.getLocalSyncAccountState();
   const secrets = await (input.loadSecrets || loadSyncSecrets)();
-  if (!state || state.deviceRole !== 'primary_mobile' || !secrets || secrets.accountId !== state.accountId) {
+  if (
+    !state ||
+    state.deviceRole !== 'primary_mobile' ||
+    !secrets ||
+    secrets.accountId !== state.accountId
+  ) {
     throw new Error('Only the active primary mobile can approve a companion.');
   }
   const details = await input.controlPlane.getPairingSession(input.sessionId);
-  if (details.session.accountId !== state.accountId) throw new Error('Pairing request belongs to another account.');
+  if (details.session.accountId !== state.accountId)
+    throw new Error('Pairing request belongs to another account.');
   if (details.session.approvedAt) throw new Error('Pairing request was already approved.');
-  if (new Date(details.session.expiresAt).getTime() <= Date.now()) throw new Error('Pairing request expired.');
-  if (await hashPairingCode(input.pairingCode) !== details.session.pairingCodeHash) {
+  if (new Date(details.session.expiresAt).getTime() <= Date.now())
+    throw new Error('Pairing request expired.');
+  if ((await hashPairingCode(input.pairingCode)) !== details.session.pairingCodeHash) {
     throw new Error('Pairing code is incorrect.');
   }
 
@@ -158,23 +164,32 @@ export const completeCompanionPairing = async (input: {
 }): Promise<LocalSyncAccountState | null> => {
   const details = await input.controlPlane.getPairingSession(input.pending.session.id);
   if (!details.session.approvedAt) {
-    if (new Date(details.session.expiresAt).getTime() <= Date.now()) throw new Error('Pairing request expired.');
+    if (new Date(details.session.expiresAt).getTime() <= Date.now())
+      throw new Error('Pairing request expired.');
     return null;
   }
-  if (!details.device || !details.keyObject) throw new Error('Approved pairing is missing device provisioning metadata.');
+  if (!details.device || !details.keyObject)
+    throw new Error('Approved pairing is missing device provisioning metadata.');
   if (details.session.requestedDevicePublicKey !== input.pending.devicePublicKey) {
     throw new Error('Approved pairing targets another device key.');
   }
 
-  const keyBytes = await downloadVerifiedSyncObject(input.googleSession, details.keyObject, input.download);
+  const keyBytes = await downloadVerifiedSyncObject(
+    input.googleSession,
+    details.keyObject,
+    input.download,
+  );
   const keyPackage = decodeCompanionKeyPackage(keyBytes);
   const packageKeyEpoch = keyPackage.keyEpoch || 1;
   const metadataKeyEpoch = details.keyObject.keyEpoch || 1;
   if (packageKeyEpoch !== metadataKeyEpoch) {
-    console.warn('Companion key package epoch differed from sync metadata; using verified package epoch.', {
-      packageKeyEpoch,
-      metadataKeyEpoch,
-    });
+    console.warn(
+      'Companion key package epoch differed from sync metadata; using verified package epoch.',
+      {
+        packageKeyEpoch,
+        metadataKeyEpoch,
+      },
+    );
   }
   const unwrappedKeys = await unwrapRootKeysForCompanion(
     keyPackage,
@@ -219,7 +234,8 @@ export const completeCompanionPairing = async (input: {
   });
   if (partitioned.mode === 'partitioned') {
     const restoredState = await input.repository.getLocalSyncAccountState();
-    if (!restoredState) throw new Error('Partitioned companion restore did not create local account state.');
+    if (!restoredState)
+      throw new Error('Partitioned companion restore did not create local account state.');
     await input.controlPlane.updateDeviceCursor({
       deviceId: restoredState.deviceId,
       lastAppliedSequence: restoredState.currentSyncSequence,
@@ -235,34 +251,36 @@ export const completeCompanionPairing = async (input: {
     accountRootKeys,
     googleSession: input.googleSession,
     download: input.download,
-  }).then(async validSnapshot => {
-    const snapshotObject = validSnapshot.object;
-    await input.repository.importSnapshot(validSnapshot.snapshot, 'replace-portable');
-    const snapshotState = {
-      ...localState,
-      latestSnapshotDriveFileId: snapshotObject.driveFileId,
-      latestSnapshotSequence: snapshotObject.sequence,
-      currentSyncSequence: snapshotObject.sequence,
-    };
-    await input.repository.saveLocalSyncAccountState(snapshotState);
-    const replayed = await replaySyncObjects({
-      repository: input.repository,
-      localState: snapshotState,
-      accountRootKey,
-      accountRootKeys,
-      googleSession: input.googleSession,
-      objects: objects.filter(object => object.sequence > snapshotObject.sequence),
-      download: input.download,
+  })
+    .then(async (validSnapshot) => {
+      const snapshotObject = validSnapshot.object;
+      await input.repository.importSnapshot(validSnapshot.snapshot, 'replace-portable');
+      const snapshotState = {
+        ...localState,
+        latestSnapshotDriveFileId: snapshotObject.driveFileId,
+        latestSnapshotSequence: snapshotObject.sequence,
+        currentSyncSequence: snapshotObject.sequence,
+      };
+      await input.repository.saveLocalSyncAccountState(snapshotState);
+      const replayed = await replaySyncObjects({
+        repository: input.repository,
+        localState: snapshotState,
+        accountRootKey,
+        accountRootKeys,
+        googleSession: input.googleSession,
+        objects: objects.filter((object) => object.sequence > snapshotObject.sequence),
+        download: input.download,
+      });
+      await input.controlPlane.updateDeviceCursor({
+        deviceId: replayed.deviceId,
+        lastAppliedSequence: replayed.currentSyncSequence,
+      });
+      return replayed;
+    })
+    .catch((error) => {
+      console.warn('Legacy companion snapshot restore failed.', error);
+      return null;
     });
-    await input.controlPlane.updateDeviceCursor({
-      deviceId: replayed.deviceId,
-      lastAppliedSequence: replayed.currentSyncSequence,
-    });
-    return replayed;
-  }).catch(error => {
-    console.warn('Legacy companion snapshot restore failed.', error);
-    return null;
-  });
   if (snapshotRestored) return snapshotRestored;
   throw new Error('No valid encrypted snapshot could be restored.');
 };

@@ -8,7 +8,11 @@ const recorder = () => {
   const patches: SyncHealthPatch[] = [];
   return {
     patches,
-    store: { updateSyncHealth: async (patch: SyncHealthPatch) => { patches.push(patch); } },
+    store: {
+      updateSyncHealth: async (patch: SyncHealthPatch) => {
+        patches.push(patch);
+      },
+    },
   };
 };
 
@@ -26,7 +30,12 @@ test('preserves typed failures and records non-destructive warning health', asyn
   const service = new SyncHealthService(store, () => 20);
   const failure = new SyncError({ code: 'OFFLINE', retryable: true });
 
-  await assert.rejects(service.track('PULL', async () => { throw failure; }), error => error === failure);
+  await assert.rejects(
+    service.track('PULL', async () => {
+      throw failure;
+    }),
+    (error) => error === failure,
+  );
   assert.deepEqual(patches, [
     { lastPullAttemptAt: 20 },
     { lastErrorCode: 'OFFLINE', lastErrorAt: 20, integrityState: 'WARNING' },
@@ -38,8 +47,11 @@ test('converts unexpected failures into a persistent safety stop', async () => {
   const service = new SyncHealthService(store, () => 30);
 
   await assert.rejects(
-    service.track('PUSH', async () => { throw new Error('unexpected external detail'); }),
-    (error: unknown) => error instanceof SyncError && error.code === 'UNKNOWN' && error.safetyRelevant,
+    service.track('PUSH', async () => {
+      throw new Error('unexpected external detail');
+    }),
+    (error: unknown) =>
+      error instanceof SyncError && error.code === 'UNKNOWN' && error.safetyRelevant,
   );
   assert.deepEqual(patches, [
     { lastPushAttemptAt: 30 },

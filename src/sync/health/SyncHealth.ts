@@ -36,9 +36,10 @@ export const createDefaultSyncHealth = (now = Date.now()): SyncHealth => ({
   failedOperationCount: 0,
   localSequence: 0,
   authState: 'UNKNOWN',
-  connectivityState: typeof window !== 'undefined' && typeof navigator !== 'undefined' && !navigator.onLine
-    ? 'OFFLINE'
-    : 'ONLINE',
+  connectivityState:
+    typeof window !== 'undefined' && typeof navigator !== 'undefined' && !navigator.onLine
+      ? 'OFFLINE'
+      : 'ONLINE',
   realtimeState: 'DISABLED',
   integrityState: 'HEALTHY',
   updatedAt: now,

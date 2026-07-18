@@ -14,7 +14,9 @@ const forbiddenPatterns = [
 ];
 
 const allowed = new Set(['.env.example']);
-const violations = tracked.filter(file => !allowed.has(file) && forbiddenPatterns.some(pattern => pattern.test(file)));
+const violations = tracked.filter(
+  (file) => !allowed.has(file) && forbiddenPatterns.some((pattern) => pattern.test(file)),
+);
 
 if (violations.length > 0) {
   console.error('Tracked secret or generated data artifacts found:');

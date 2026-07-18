@@ -20,9 +20,7 @@ const accountState: LocalSyncAccountState = {
   linkedAt: 1,
 };
 
-const createRuntime = (
-  controlPlane: SupabaseControlPlaneClient,
-): ArchiveHydrationRuntime => ({
+const createRuntime = (controlPlane: SupabaseControlPlaneClient): ArchiveHydrationRuntime => ({
   state: accountState,
   secrets: {
     version: 1,
@@ -52,11 +50,12 @@ const createRepository = (
   states: Map<string, PartitionHydrationState>;
   failedPartitions: Array<{ partitionKey: string; error: string }>;
 } => {
-  const states = new Map(partitions.map(partition => [partition.partitionKey, { ...partition }]));
+  const states = new Map(partitions.map((partition) => [partition.partitionKey, { ...partition }]));
   const failedPartitions: Array<{ partitionKey: string; error: string }> = [];
   const repository = {
     getLocalSyncAccountState: async () => accountState,
-    listAvailableArchiveMonths: async () => Array.from(states.values()).map(state => ({ ...state })),
+    listAvailableArchiveMonths: async () =>
+      Array.from(states.values()).map((state) => ({ ...state })),
     markPartitionHydrating: async (partitionKey: string) => {
       const current = states.get(partitionKey);
       states.set(partitionKey, {
@@ -86,11 +85,12 @@ const createRepository = (
         error,
       });
     },
-    getPartitionHydrationState: async (partitionKey: string) => states.get(partitionKey) || {
-      partitionKey,
-      status: 'not_available',
-      lastAppliedSequence: 0,
-    },
+    getPartitionHydrationState: async (partitionKey: string) =>
+      states.get(partitionKey) || {
+        partitionKey,
+        status: 'not_available',
+        lastAppliedSequence: 0,
+      },
   } as unknown as DiaryRepository;
   return { repository, states, failedPartitions };
 };
@@ -98,8 +98,18 @@ const createRepository = (
 test('background archive hydration processes available and retryable partitions', async () => {
   const { repository, states } = createRepository([
     { partitionKey: 'month:2026-06', status: 'available', lastAppliedSequence: 0 },
-    { partitionKey: 'month:2026-05', status: 'failed', lastAppliedSequence: 0, nextRetryAt: 30_001 },
-    { partitionKey: 'month:2026-04', status: 'failed', lastAppliedSequence: 0, nextRetryAt: 29_999 },
+    {
+      partitionKey: 'month:2026-05',
+      status: 'failed',
+      lastAppliedSequence: 0,
+      nextRetryAt: 30_001,
+    },
+    {
+      partitionKey: 'month:2026-04',
+      status: 'failed',
+      lastAppliedSequence: 0,
+      nextRetryAt: 29_999,
+    },
   ]);
   const hydratedPartitions: string[] = [];
   const partitionCursors: Array<{ partitionKey: string; lastAppliedSequence: number }> = [];
@@ -121,7 +131,7 @@ test('background archive hydration processes available and retryable partitions'
       isWifi: true,
       isCharging: true,
     }),
-    hydrateArchivePartition: async input => {
+    hydrateArchivePartition: async (input) => {
       hydratedPartitions.push(input.partitionKey);
       const sequence = 100 + hydratedPartitions.length;
       await input.repository.markPartitionHydrated(input.partitionKey, sequence);
@@ -145,13 +155,16 @@ test('background archive hydration processes available and retryable partitions'
   assert.deepEqual(result.hydratedPartitionKeys, ['month:2026-06', 'month:2026-04']);
   assert.deepEqual(hydratedPartitions, ['month:2026-06', 'month:2026-04']);
   assert.equal(states.get('month:2026-05')?.status, 'failed');
-  assert.deepEqual(partitionCursors.map(cursor => ({
-    partitionKey: cursor.partitionKey,
-    lastAppliedSequence: cursor.lastAppliedSequence,
-  })), [
-    { partitionKey: 'month:2026-06', lastAppliedSequence: 101 },
-    { partitionKey: 'month:2026-04', lastAppliedSequence: 102 },
-  ]);
+  assert.deepEqual(
+    partitionCursors.map((cursor) => ({
+      partitionKey: cursor.partitionKey,
+      lastAppliedSequence: cursor.lastAppliedSequence,
+    })),
+    [
+      { partitionKey: 'month:2026-06', lastAppliedSequence: 101 },
+      { partitionKey: 'month:2026-04', lastAppliedSequence: 102 },
+    ],
+  );
   assert.deepEqual(deviceCursors, [101, 102]);
   assert.deepEqual(activeDeviceChecks, ['device-1']);
 });
@@ -174,7 +187,7 @@ test('background archive hydration stops after the first failed partition', asyn
       isWifi: true,
       isCharging: true,
     }),
-    hydrateArchivePartition: async input => {
+    hydrateArchivePartition: async (input) => {
       attempted.push(input.partitionKey);
       throw new Error(`restore failed for ${input.partitionKey}`);
     },
@@ -188,8 +201,10 @@ test('background archive hydration stops after the first failed partition', asyn
 
   assert.deepEqual(result.hydratedPartitionKeys, []);
   assert.deepEqual(attempted, ['month:2026-06']);
-  assert.deepEqual(failedPartitions, [{
-    partitionKey: 'month:2026-06',
-    error: 'restore failed for month:2026-06',
-  }]);
+  assert.deepEqual(failedPartitions, [
+    {
+      partitionKey: 'month:2026-06',
+      error: 'restore failed for month:2026-06',
+    },
+  ]);
 });

@@ -30,7 +30,20 @@ export function ContextMenu({ open, onClose, x, y, label, children }: ContextMen
     };
   }, [onClose, open]);
   if (!open) return null;
-  return <div ref={menuRef} role="menu" aria-label={label} className="surface-glass-strong fixed z-[130] min-w-48 rounded-[var(--radius-control)] border border-[var(--border-subtle)] p-1 shadow-[var(--elevation-floating)]" style={{ left: Math.min(x, window.innerWidth - 208), top: Math.min(y, window.innerHeight - 240) }}>{children}</div>;
+  return (
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-label={label}
+      className="surface-glass-strong fixed z-[130] min-w-48 rounded-[var(--radius-control)] border border-[var(--border-subtle)] p-1 shadow-[var(--elevation-floating)]"
+      style={{
+        left: Math.min(x, window.innerWidth - 208),
+        top: Math.min(y, window.innerHeight - 240),
+      }}
+    >
+      {children}
+    </div>
+  );
 }
 
 interface OverflowMenuProps {
@@ -40,7 +53,12 @@ interface OverflowMenuProps {
   className?: string;
 }
 
-export function OverflowMenu({ label, children, align = 'end', className = '' }: OverflowMenuProps) {
+export function OverflowMenu({
+  label,
+  children,
+  align = 'end',
+  className = '',
+}: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -60,11 +78,30 @@ export function OverflowMenu({ label, children, align = 'end', className = '' }:
   }, [open]);
   return (
     <div ref={rootRef} className={`relative ${className}`}>
-      <button type="button" className="icon-button" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(previous => !previous)}><MoreHorizontal className="h-5 w-5" /></button>
-      {open && <div role="menu" aria-label={label} className={`surface-glass-strong absolute top-full z-50 mt-1 min-w-48 rounded-[var(--radius-control)] border border-[var(--border-subtle)] p-1 shadow-[var(--elevation-floating)] ${align === 'end' ? 'right-0' : 'left-0'}`} onClick={() => setOpen(false)}>{children}</div>}
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={label}
+        title={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((previous) => !previous)}
+      >
+        <MoreHorizontal className="h-5 w-5" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label={label}
+          className={`surface-glass-strong absolute top-full z-50 mt-1 min-w-48 rounded-[var(--radius-control)] border border-[var(--border-subtle)] p-1 shadow-[var(--elevation-floating)] ${align === 'end' ? 'right-0' : 'left-0'}`}
+          onClick={() => setOpen(false)}
+        >
+          {children}
+        </div>
+      )}
     </div>
   );
 }
 
-export const menuItemClassName = 'flex min-h-11 w-full items-center gap-2 rounded-[calc(var(--radius-control)-0.25rem)] px-3 py-2 text-left text-sm font-semibold text-ink hover:bg-surface-subtle focus-visible:bg-surface-subtle';
-
+export const menuItemClassName =
+  'flex min-h-11 w-full items-center gap-2 rounded-[calc(var(--radius-control)-0.25rem)] px-3 py-2 text-left text-sm font-semibold text-ink hover:bg-surface-subtle focus-visible:bg-surface-subtle';

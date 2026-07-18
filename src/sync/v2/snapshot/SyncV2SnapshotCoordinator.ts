@@ -2,7 +2,11 @@ import { NOOP_TELEMETRY, type Telemetry } from '../../../infrastructure/telemetr
 import { SyncError, isSyncError } from '../../errors';
 import type { SyncV2ApiClient } from '../api/SyncV2ApiClient';
 import type { SyncV2Snapshot } from '../api/SyncV2ApiTypes';
-import { InjectedSyncCrash, NOOP_SYNC_FAULT_INJECTOR, type SyncFaultInjector } from '../faults/SyncFaultInjector';
+import {
+  InjectedSyncCrash,
+  NOOP_SYNC_FAULT_INJECTOR,
+  type SyncFaultInjector,
+} from '../faults/SyncFaultInjector';
 import { BoundedObjectTransfer, sha256Hex } from '../operation/BoundedObjectTransfer';
 import type { PersistentSafetyStopStore } from '../safety/PersistentSafetyStopStore';
 import type { SyncV2SnapshotCodec } from './SyncV2SnapshotCodec';
@@ -34,7 +38,8 @@ export interface SyncV2SnapshotCoordinatorOptions {
   currentKeyEpoch(): Promise<number>;
 }
 
-type SnapshotApi = Pick<SyncV2ApiClient,
+type SnapshotApi = Pick<
+  SyncV2ApiClient,
   'initiateSnapshot' | 'registerSnapshot' | 'getLatestSnapshot' | 'acknowledgeCursor'
 >;
 
@@ -72,7 +77,10 @@ export class SyncV2SnapshotCoordinator {
       });
       await this.faults.hit('AFTER_UPLOAD_INITIATE');
       await this.faults.hit('DURING_OBJECT_UPLOAD');
-      await this.transfer.upload([{ objectKey: initiated.upload.objectKey, bytes: encrypted }], [initiated.upload]);
+      await this.transfer.upload(
+        [{ objectKey: initiated.upload.objectKey, bytes: encrypted }],
+        [initiated.upload],
+      );
       await this.faults.hit('AFTER_OBJECT_UPLOAD_BEFORE_LOCAL_PERSIST');
       const registered = await this.api.registerSnapshot(snapshotId, this.options.deviceId);
       await this.state.clearCreationJournal(snapshotId);
@@ -83,9 +91,15 @@ export class SyncV2SnapshotCoordinator {
       if (error instanceof InjectedSyncCrash) throw error;
       const typed = isSyncError(error) ? error : new SyncError({ code: 'UNKNOWN', cause: error });
       if (typed.safetyRelevant) {
-        await this.safetyStop.engage(this.options.accountId, typed.code, `snapshot-create:${typed.code}`);
+        await this.safetyStop.engage(
+          this.options.accountId,
+          typed.code,
+          `snapshot-create:${typed.code}`,
+        );
       }
-      this.telemetry.counter('deardiary.sync.snapshot_create.failure', 1, { error_code: typed.code });
+      this.telemetry.counter('deardiary.sync.snapshot_create.failure', 1, {
+        error_code: typed.code,
+      });
       span.end(typed.code);
       throw typed;
     }
@@ -104,7 +118,9 @@ export class SyncV2SnapshotCoordinator {
       }
       this.assertSize(snapshot.sizeBytes);
       await this.faults.hit('BEFORE_REMOTE_DOWNLOAD');
-      const [encrypted] = await this.transfer.download([snapshot as SyncV2Snapshot & { downloadUrl: string }]);
+      const [encrypted] = await this.transfer.download([
+        snapshot as SyncV2Snapshot & { downloadUrl: string },
+      ]);
       await this.faults.hit('AFTER_REMOTE_DOWNLOAD');
       await this.faults.hit('AFTER_HASH_VERIFICATION');
       const plaintext = await this.codec.decrypt(encrypted, snapshot.keyEpoch);
@@ -129,7 +145,9 @@ export class SyncV2SnapshotCoordinator {
       if (typed.safetyRelevant) {
         await this.safetyStop.engage(this.options.accountId, typed.code, `snapshot:${typed.code}`);
       }
-      this.telemetry.counter('deardiary.sync.snapshot_restore.failure', 1, { error_code: typed.code });
+      this.telemetry.counter('deardiary.sync.snapshot_restore.failure', 1, {
+        error_code: typed.code,
+      });
       span.end(typed.code);
       throw typed;
     }
@@ -145,14 +163,18 @@ export class SyncV2SnapshotCoordinator {
   }): Promise<SyncV2SnapshotCreationJournal> {
     const existing = await this.state.loadCreationJournal();
     if (
-      existing
-      && existing.accountId === this.options.accountId
-      && existing.throughSequence === exported.throughSequence
-      && existing.snapshotSchemaVersion === this.options.snapshotSchemaVersion
+      existing &&
+      existing.accountId === this.options.accountId &&
+      existing.throughSequence === exported.throughSequence &&
+      existing.snapshotSchemaVersion === this.options.snapshotSchemaVersion
     ) {
       const encrypted = this.fromBase64(existing.encryptedBase64);
       this.assertSize(encrypted.byteLength);
-      if (encrypted.byteLength === existing.sizeBytes && await sha256Hex(encrypted) === existing.sha256) return existing;
+      if (
+        encrypted.byteLength === existing.sizeBytes &&
+        (await sha256Hex(encrypted)) === existing.sha256
+      )
+        return existing;
       throw new SyncError({ code: 'HASH_MISMATCH', safetyRelevant: true });
     }
     const keyEpoch = await this.options.currentKeyEpoch();
@@ -183,13 +205,13 @@ export class SyncV2SnapshotCoordinator {
   private parse(bytes: Uint8Array, snapshot: SyncV2Snapshot): SyncV2SnapshotPayload {
     const payload = JSON.parse(decoder.decode(bytes)) as SyncV2SnapshotPayload;
     if (
-      payload.kind !== 'sync_v2_snapshot'
-      || payload.schemaVersion !== snapshot.snapshotSchemaVersion
-      || payload.schemaVersion !== this.options.snapshotSchemaVersion
-      || payload.accountId !== this.options.accountId
-      || payload.partitionKey !== snapshot.partitionKey
-      || payload.throughSequence !== snapshot.throughSequence
-      || !payload.state
+      payload.kind !== 'sync_v2_snapshot' ||
+      payload.schemaVersion !== snapshot.snapshotSchemaVersion ||
+      payload.schemaVersion !== this.options.snapshotSchemaVersion ||
+      payload.accountId !== this.options.accountId ||
+      payload.partitionKey !== snapshot.partitionKey ||
+      payload.throughSequence !== snapshot.throughSequence ||
+      !payload.state
     ) {
       throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
     }
@@ -197,14 +219,18 @@ export class SyncV2SnapshotCoordinator {
   }
 
   private assertSize(sizeBytes: number): void {
-    if (!Number.isInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > this.options.maximumSnapshotBytes) {
+    if (
+      !Number.isInteger(sizeBytes) ||
+      sizeBytes < 1 ||
+      sizeBytes > this.options.maximumSnapshotBytes
+    ) {
       throw new SyncError({ code: 'OBJECT_SIZE_MISMATCH', safetyRelevant: true });
     }
   }
 
   private canonicalJson(value: unknown): string {
     if (value === null || typeof value !== 'object') return JSON.stringify(value);
-    if (Array.isArray(value)) return `[${value.map(item => this.canonicalJson(item)).join(',')}]`;
+    if (Array.isArray(value)) return `[${value.map((item) => this.canonicalJson(item)).join(',')}]`;
     return `{${Object.entries(value as Record<string, unknown>)
       .filter(([, item]) => item !== undefined)
       .sort(([left], [right]) => left.localeCompare(right))
@@ -212,18 +238,20 @@ export class SyncV2SnapshotCoordinator {
       .join(',')}}`;
   }
 
-
   private toBase64(bytes: Uint8Array): string {
     let binary = '';
     const chunkSize = 0x8000;
     for (let offset = 0; offset < bytes.length; offset += chunkSize) {
       binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
     }
-    return typeof btoa === 'function' ? btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
+    return typeof btoa === 'function'
+      ? btoa(binary)
+      : Buffer.from(binary, 'binary').toString('base64');
   }
 
   private fromBase64(value: string): Uint8Array {
-    const binary = typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
-    return Uint8Array.from(binary, character => character.charCodeAt(0));
+    const binary =
+      typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
   }
 }

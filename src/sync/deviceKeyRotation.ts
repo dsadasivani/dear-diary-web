@@ -79,7 +79,8 @@ export type DeviceKeyRotationResult =
       message: string;
     };
 
-export type DeviceKeyRotationControlPlane = Pick<SupabaseControlPlaneClient,
+export type DeviceKeyRotationControlPlane = Pick<
+  SupabaseControlPlaneClient,
   | 'abortDeviceKeyRotation'
   | 'beginDeviceKeyRotation'
   | 'commitSyncObject'
@@ -120,7 +121,7 @@ const nowMs = (now?: () => number): number => (now ? now() : Date.now());
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 const equalBytes = (left: Uint8Array, right: Uint8Array): boolean => {
@@ -138,13 +139,11 @@ const phaseAtLeast = (
 const laterPhase = (
   left: PendingDeviceKeyRotationPhase,
   right: PendingDeviceKeyRotationPhase,
-): PendingDeviceKeyRotationPhase => (
-  PHASE_ORDER[left] >= PHASE_ORDER[right] ? left : right
-);
+): PendingDeviceKeyRotationPhase => (PHASE_ORDER[left] >= PHASE_ORDER[right] ? left : right);
 
-const recoveryOperationId = (pending: Pick<PendingDeviceKeyRotation, 'accountId' | 'nextKeyEpoch' | 'rotationId'>) => (
-  `key-epoch-recovery:${pending.accountId}:${pending.nextKeyEpoch}:${pending.rotationId}`
-);
+const recoveryOperationId = (
+  pending: Pick<PendingDeviceKeyRotation, 'accountId' | 'nextKeyEpoch' | 'rotationId'>,
+) => `key-epoch-recovery:${pending.accountId}:${pending.nextKeyEpoch}:${pending.rotationId}`;
 
 const companionOperationId = (
   pending: Pick<PendingDeviceKeyRotation, 'accountId' | 'nextKeyEpoch' | 'rotationId'>,
@@ -155,17 +154,16 @@ const companionOperationPrefix = (
   pending: Pick<PendingDeviceKeyRotation, 'accountId' | 'nextKeyEpoch' | 'rotationId'>,
 ) => `key-epoch:${pending.accountId}:${pending.nextKeyEpoch}:${pending.rotationId}:`;
 
-const rotationErrorMessage = (error: unknown): string => (
-  error instanceof Error ? error.message : String(error || '')
-);
+const rotationErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error || '');
 
-const isAlreadyFinalizedRotationError = (error: unknown): boolean => (
-  /key_rotation_not_pending|stale_key_rotation_epoch|key_rotation_not_found/.test(rotationErrorMessage(error))
-);
+const isAlreadyFinalizedRotationError = (error: unknown): boolean =>
+  /key_rotation_not_pending|stale_key_rotation_epoch|key_rotation_not_found/.test(
+    rotationErrorMessage(error),
+  );
 
-const isAbortSafeRotationError = (error: unknown): boolean => (
-  /key_rotation_not_pending|key_rotation_not_found/.test(rotationErrorMessage(error))
-);
+const isAbortSafeRotationError = (error: unknown): boolean =>
+  /key_rotation_not_pending|key_rotation_not_found/.test(rotationErrorMessage(error));
 
 const requireGoogleSession = (session?: GoogleAccountSession | null): GoogleAccountSession => {
   if (!session?.accessToken) {
@@ -182,7 +180,9 @@ const requirePendingRootKey = (pending: PendingDeviceKeyRotation): Uint8Array =>
   return nextRootKey;
 };
 
-const assertValidPending = (pending: PendingDeviceKeyRotation | null): PendingDeviceKeyRotation | null => {
+const assertValidPending = (
+  pending: PendingDeviceKeyRotation | null,
+): PendingDeviceKeyRotation | null => {
   if (!pending) return null;
   if (
     pending.version !== 1 ||
@@ -209,9 +209,8 @@ const assertValidPending = (pending: PendingDeviceKeyRotation | null): PendingDe
 
 export const loadPendingDeviceKeyRotation = async (
   storage?: SyncSecretStorage,
-): Promise<PendingDeviceKeyRotation | null> => (
-  assertValidPending(await loadPendingDeviceKeyRotationSecret<PendingDeviceKeyRotation>(storage))
-);
+): Promise<PendingDeviceKeyRotation | null> =>
+  assertValidPending(await loadPendingDeviceKeyRotationSecret<PendingDeviceKeyRotation>(storage));
 
 const savePendingDeviceKeyRotation = async (
   pending: PendingDeviceKeyRotation,
@@ -246,7 +245,12 @@ const requirePrimaryStateAndSecrets = (
   secrets: SyncSecrets | null,
   accountId?: string,
 ): { state: LocalSyncAccountState; secrets: SyncSecrets } => {
-  if (!state || state.deviceRole !== 'primary_mobile' || !secrets || secrets.accountId !== state.accountId) {
+  if (
+    !state ||
+    state.deviceRole !== 'primary_mobile' ||
+    !secrets ||
+    secrets.accountId !== state.accountId
+  ) {
     throw new Error('Only the active primary mobile can rotate device keys.');
   }
   if (accountId && state.accountId !== accountId) {
@@ -267,7 +271,7 @@ const latestRecoveryPackageForAccount = async ({
   download?: SyncObjectDownloader;
 }): Promise<{ object: SyncObjectMetadata; keyPackage: RecoveryKeyPackage }> => {
   const candidates = objects
-    .filter(object => object.objectKind === 'key_package')
+    .filter((object) => object.objectKind === 'key_package')
     .sort((left, right) => right.sequence - left.sequence);
 
   for (const object of candidates) {
@@ -298,10 +302,15 @@ const verifyRecoveryPassphraseForRotation = async ({
   googleSession: GoogleAccountSession;
   download?: SyncObjectDownloader;
 }): Promise<{ keyPackage: RecoveryKeyPackage }> => {
-  const latest = await latestRecoveryPackageForAccount({ accountId, objects, googleSession, download });
+  const latest = await latestRecoveryPackageForAccount({
+    accountId,
+    objects,
+    googleSession,
+    download,
+  });
   const recoveredRootKey = await unwrapAccountRootKeyFromRecovery(latest.keyPackage, passphrase);
   const knownRootKeys = [secrets.accountRootKey, ...Object.values(secrets.accountRootKeys || {})];
-  if (!knownRootKeys.some(key => equalBytes(key, recoveredRootKey))) {
+  if (!knownRootKeys.some((key) => equalBytes(key, recoveredRootKey))) {
     throw new Error('The recovery package does not match this device account.');
   }
   return { keyPackage: latest.keyPackage };
@@ -326,14 +335,19 @@ const recoverCommittedPackageProgress = async (
   pending: PendingDeviceKeyRotation,
   input: Pick<DeviceKeyRotationDependencies, 'controlPlane' | 'secretStorage' | 'now'>,
 ): Promise<PendingDeviceKeyRotation> => {
-  const objects = await listAllSyncObjectsAfter(input.controlPlane, pending.primaryDeviceId, pending.startingSequence);
-  const relevant = objects.filter(object => (
-    object.accountId === pending.accountId &&
-    object.objectKind === 'key_package' &&
-    (object.keyEpoch || 1) === pending.nextKeyEpoch &&
-    object.sequence > pending.startingSequence
-  ));
-  const recovery = relevant.find(object => object.operationId === recoveryOperationId(pending));
+  const objects = await listAllSyncObjectsAfter(
+    input.controlPlane,
+    pending.primaryDeviceId,
+    pending.startingSequence,
+  );
+  const relevant = objects.filter(
+    (object) =>
+      object.accountId === pending.accountId &&
+      object.objectKind === 'key_package' &&
+      (object.keyEpoch || 1) === pending.nextKeyEpoch &&
+      object.sequence > pending.startingSequence,
+  );
+  const recovery = relevant.find((object) => object.operationId === recoveryOperationId(pending));
   const companionIds = new Set(pending.companionPackageDeviceIds);
   const prefix = companionOperationPrefix(pending);
   let lastKeyPackageSequence = pending.lastKeyPackageSequence;
@@ -348,29 +362,32 @@ const recoverCommittedPackageProgress = async (
     phase = laterPhase(phase, 'recovery_package_committed');
   }
 
-  relevant.forEach(object => {
+  relevant.forEach((object) => {
     if (!object.operationId?.startsWith(prefix)) return;
     companionIds.add(object.operationId.slice(prefix.length));
     lastKeyPackageSequence = Math.max(lastKeyPackageSequence, object.sequence);
   });
 
   const recoveredCompanionIds = [...companionIds];
-  const changed = (
+  const changed =
     phase !== pending.phase ||
     lastKeyPackageSequence !== pending.lastKeyPackageSequence ||
     recoveryPackageSequence !== pending.recoveryPackageSequence ||
     recoveryPackageDriveFileId !== pending.recoveryPackageDriveFileId ||
-    recoveredCompanionIds.length !== pending.companionPackageDeviceIds.length
-  );
+    recoveredCompanionIds.length !== pending.companionPackageDeviceIds.length;
 
   if (!changed) return pending;
-  return updatePendingDeviceKeyRotation(pending, {
-    phase,
-    lastKeyPackageSequence,
-    recoveryPackageSequence,
-    recoveryPackageDriveFileId,
-    companionPackageDeviceIds: recoveredCompanionIds,
-  }, input);
+  return updatePendingDeviceKeyRotation(
+    pending,
+    {
+      phase,
+      lastKeyPackageSequence,
+      recoveryPackageSequence,
+      recoveryPackageDriveFileId,
+      companionPackageDeviceIds: recoveredCompanionIds,
+    },
+    input,
+  );
 };
 
 const publishRecoveryKeyEpochPackage = async (
@@ -417,12 +434,16 @@ const publishRecoveryKeyEpochPackage = async (
     operationId: recoveryOperationId(pending),
     keyEpoch: pending.nextKeyEpoch,
   });
-  return updatePendingDeviceKeyRotation(pending, {
-    phase: laterPhase(pending.phase, 'recovery_package_committed'),
-    recoveryPackageSequence: committed.sequence,
-    recoveryPackageDriveFileId: committed.driveFileId,
-    lastKeyPackageSequence: Math.max(pending.lastKeyPackageSequence, committed.sequence),
-  }, input);
+  return updatePendingDeviceKeyRotation(
+    pending,
+    {
+      phase: laterPhase(pending.phase, 'recovery_package_committed'),
+      recoveryPackageSequence: committed.sequence,
+      recoveryPackageDriveFileId: committed.driveFileId,
+      lastKeyPackageSequence: Math.max(pending.lastKeyPackageSequence, committed.sequence),
+    },
+    input,
+  );
 };
 
 const publishCompanionKeyEpochPackages = async (
@@ -439,19 +460,26 @@ const publishCompanionKeyEpochPackages = async (
     ...(primary.secrets.accountRootKeys || {}),
     [pending.nextKeyEpoch]: nextRootKey,
   };
-  const remainingDevices = (await input.controlPlane.listAccountDevices(pending.primaryDeviceId))
-    .filter(candidate => (
+  const remainingDevices = (
+    await input.controlPlane.listAccountDevices(pending.primaryDeviceId)
+  ).filter(
+    (candidate) =>
       candidate.role !== 'primary_mobile' &&
       candidate.id !== pending.revokedDeviceId &&
-      !candidate.revokedAt
-    ));
+      !candidate.revokedAt,
+  );
   let working = pending;
   for (const device of remainingDevices) {
     if (working.companionPackageDeviceIds.includes(device.id)) continue;
-    const keyPackage = await wrapRootKeyForCompanion(nextRootKey, pending.accountId, device.publicKey, {
-      keyEpoch: pending.nextKeyEpoch,
-      accountRootKeys,
-    });
+    const keyPackage = await wrapRootKeyForCompanion(
+      nextRootKey,
+      pending.accountId,
+      device.publicKey,
+      {
+        keyEpoch: pending.nextKeyEpoch,
+        accountRootKeys,
+      },
+    );
     const bytes = encodeCompanionKeyPackage(keyPackage);
     const file = await (input.upload || uploadDriveSyncObject)({
       session: googleSession,
@@ -476,14 +504,22 @@ const publishCompanionKeyEpochPackages = async (
       operationId: companionOperationId(pending, device.id),
       keyEpoch: pending.nextKeyEpoch,
     });
-    working = await updatePendingDeviceKeyRotation(working, {
-      companionPackageDeviceIds: [...new Set([...working.companionPackageDeviceIds, device.id])],
-      lastKeyPackageSequence: Math.max(working.lastKeyPackageSequence, committed.sequence),
-    }, input);
+    working = await updatePendingDeviceKeyRotation(
+      working,
+      {
+        companionPackageDeviceIds: [...new Set([...working.companionPackageDeviceIds, device.id])],
+        lastKeyPackageSequence: Math.max(working.lastKeyPackageSequence, committed.sequence),
+      },
+      input,
+    );
   }
-  return updatePendingDeviceKeyRotation(working, {
-    phase: laterPhase(working.phase, 'companion_packages_committed'),
-  }, input);
+  return updatePendingDeviceKeyRotation(
+    working,
+    {
+      phase: laterPhase(working.phase, 'companion_packages_committed'),
+    },
+    input,
+  );
 };
 
 const stageFutureRootKey = async (
@@ -494,17 +530,24 @@ const stageFutureRootKey = async (
   const primary = requirePrimaryStateAndSecrets(state, secrets, pending.accountId);
   const nextRootKey = requirePendingRootKey(pending);
   const currentRootKey = getAccountRootKeyForEpoch(primary.secrets, pending.currentKeyEpoch);
-  await saveSyncSecrets({
-    ...primary.secrets,
-    accountRootKeys: {
-      [pending.currentKeyEpoch]: currentRootKey,
-      ...(primary.secrets.accountRootKeys || {}),
-      [pending.nextKeyEpoch]: nextRootKey,
+  await saveSyncSecrets(
+    {
+      ...primary.secrets,
+      accountRootKeys: {
+        [pending.currentKeyEpoch]: currentRootKey,
+        ...(primary.secrets.accountRootKeys || {}),
+        [pending.nextKeyEpoch]: nextRootKey,
+      },
     },
-  }, input.secretStorage);
-  return updatePendingDeviceKeyRotation(pending, {
-    phase: laterPhase(pending.phase, 'future_key_staged'),
-  }, input);
+    input.secretStorage,
+  );
+  return updatePendingDeviceKeyRotation(
+    pending,
+    {
+      phase: laterPhase(pending.phase, 'future_key_staged'),
+    },
+    input,
+  );
 };
 
 const promoteFinalizedPendingRotation = async (
@@ -515,13 +558,17 @@ const promoteFinalizedPendingRotation = async (
   const primary = requirePrimaryStateAndSecrets(state, secrets, pending.accountId);
   const nextRootKey = requirePendingRootKey(pending);
   const currentRootKey = getAccountRootKeyForEpoch(primary.secrets, pending.currentKeyEpoch);
-  const promotedSecrets = withAccountRootKeyForEpoch({
-    ...primary.secrets,
-    accountRootKeys: {
-      [pending.currentKeyEpoch]: currentRootKey,
-      ...(primary.secrets.accountRootKeys || {}),
+  const promotedSecrets = withAccountRootKeyForEpoch(
+    {
+      ...primary.secrets,
+      accountRootKeys: {
+        [pending.currentKeyEpoch]: currentRootKey,
+        ...(primary.secrets.accountRootKeys || {}),
+      },
     },
-  }, pending.nextKeyEpoch, nextRootKey);
+    pending.nextKeyEpoch,
+    nextRootKey,
+  );
   await saveSyncSecrets(promotedSecrets, input.secretStorage);
 
   const currentSyncSequence = Math.max(
@@ -532,7 +579,8 @@ const promoteFinalizedPendingRotation = async (
   await input.repository.saveLocalSyncAccountState({
     ...primary.state,
     keyEpoch: Math.max(primary.state.keyEpoch || 1, pending.nextKeyEpoch),
-    recoveryKeyDriveFileId: pending.recoveryPackageDriveFileId || primary.state.recoveryKeyDriveFileId,
+    recoveryKeyDriveFileId:
+      pending.recoveryPackageDriveFileId || primary.state.recoveryKeyDriveFileId,
     currentSyncSequence,
   });
   if (currentSyncSequence > primary.state.currentSyncSequence) {
@@ -564,9 +612,13 @@ const abortPendingRotation = async (
   input: DeviceKeyRotationDependencies,
 ): Promise<DeviceKeyRotationResult> => {
   if (await accountEpochAlreadyAdvanced(pending, input.controlPlane)) {
-    const finalized = await updatePendingDeviceKeyRotation(pending, {
-      phase: 'server_finalized',
-    }, input);
+    const finalized = await updatePendingDeviceKeyRotation(
+      pending,
+      {
+        phase: 'server_finalized',
+      },
+      input,
+    );
     return promoteFinalizedPendingRotation(finalized, input);
   }
   try {
@@ -592,22 +644,33 @@ const finalizePendingRotation = async (
       rotationId: pending.rotationId,
       keyPackageSequence: pending.lastKeyPackageSequence,
     });
-    return updatePendingDeviceKeyRotation(pending, {
-      phase: 'server_finalized',
-      lastKeyPackageSequence: Math.max(
-        pending.lastKeyPackageSequence,
-        finalized.rotation.keyPackageSequence || 0,
-        finalized.account.currentSyncSequence,
-      ),
-    }, input);
+    return updatePendingDeviceKeyRotation(
+      pending,
+      {
+        phase: 'server_finalized',
+        lastKeyPackageSequence: Math.max(
+          pending.lastKeyPackageSequence,
+          finalized.rotation.keyPackageSequence || 0,
+          finalized.account.currentSyncSequence,
+        ),
+      },
+      input,
+    );
   } catch (error) {
     if (!isAlreadyFinalizedRotationError(error)) throw error;
     const account = await accountEpochAlreadyAdvanced(pending, input.controlPlane);
     if (!account) throw error;
-    return updatePendingDeviceKeyRotation(pending, {
-      phase: 'server_finalized',
-      lastKeyPackageSequence: Math.max(pending.lastKeyPackageSequence, account.currentSyncSequence),
-    }, input);
+    return updatePendingDeviceKeyRotation(
+      pending,
+      {
+        phase: 'server_finalized',
+        lastKeyPackageSequence: Math.max(
+          pending.lastKeyPackageSequence,
+          account.currentSyncSequence,
+        ),
+      },
+      input,
+    );
   }
 };
 
@@ -655,11 +718,13 @@ export const resumePendingDeviceKeyRotation = async (
   return continuePendingDeviceKeyRotation({ ...input, pending });
 };
 
-export const revokeDeviceWithKeyRotation = async (input: DeviceKeyRotationDependencies & {
-  targetDevice: SyncDevice;
-  recoveryPassphrase: string;
-  reason?: string;
-}): Promise<DeviceKeyRotationResult> => {
+export const revokeDeviceWithKeyRotation = async (
+  input: DeviceKeyRotationDependencies & {
+    targetDevice: SyncDevice;
+    recoveryPassphrase: string;
+    reason?: string;
+  },
+): Promise<DeviceKeyRotationResult> => {
   const { state, secrets } = await loadPrimaryStateAndSecrets(input);
   const primary = requirePrimaryStateAndSecrets(state, secrets);
 
@@ -668,11 +733,15 @@ export const revokeDeviceWithKeyRotation = async (input: DeviceKeyRotationDepend
     const result = await continuePendingDeviceKeyRotation({
       ...input,
       pending: existing,
-      recoveryPassphrase: existing.revokedDeviceId === input.targetDevice.id ? input.recoveryPassphrase : undefined,
+      recoveryPassphrase:
+        existing.revokedDeviceId === input.targetDevice.id ? input.recoveryPassphrase : undefined,
     });
     if (existing.revokedDeviceId === input.targetDevice.id) return result;
-    const message = result.status === 'none' ? 'No pending key rotation was found.' : result.message;
-    throw new Error(`${message} Retry the requested revocation after the recovered rotation is complete.`);
+    const message =
+      result.status === 'none' ? 'No pending key rotation was found.' : result.message;
+    throw new Error(
+      `${message} Retry the requested revocation after the recovered rotation is complete.`,
+    );
   }
 
   const googleSession = requireGoogleSession(input.googleSession);

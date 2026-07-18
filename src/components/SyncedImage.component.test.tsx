@@ -24,9 +24,11 @@ describe('SyncedImage', () => {
 
   it('shows a neutral placeholder while hydrating synced media', async () => {
     let resolveHydration: (value: string) => void = () => undefined;
-    mocks.hydrateMediaReference.mockReturnValue(new Promise<string>(resolve => {
-      resolveHydration = resolve;
-    }));
+    mocks.hydrateMediaReference.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveHydration = resolve;
+      }),
+    );
 
     render(
       <SyncedImage

@@ -28,7 +28,7 @@ export const setupCapacitorBootstrap = async (): Promise<void> => {
   });
 
   requestAnimationFrame(() => {
-    SplashScreen.hide().catch(error => {
+    SplashScreen.hide().catch((error) => {
       console.warn('Splash screen hide failed:', error);
     });
   });
@@ -58,7 +58,7 @@ export const addNativeAppStateListener = (
   if (!isCapacitorNative()) return () => undefined;
   let listener: PluginListenerHandle | null = null;
   let disposed = false;
-  void CapacitorApp.addListener('appStateChange', handler).then(handle => {
+  void CapacitorApp.addListener('appStateChange', handler).then((handle) => {
     if (disposed) {
       void handle.remove();
       return;
@@ -77,7 +77,7 @@ export const addNativeUrlOpenListener = (
   if (!isCapacitorNative()) return () => undefined;
   let listener: PluginListenerHandle | null = null;
   let disposed = false;
-  void CapacitorApp.addListener('appUrlOpen', handler).then(handle => {
+  void CapacitorApp.addListener('appUrlOpen', handler).then((handle) => {
     if (disposed) {
       void handle.remove();
       return;

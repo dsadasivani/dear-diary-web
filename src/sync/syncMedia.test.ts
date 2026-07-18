@@ -23,13 +23,18 @@ test('round-trips portable media references', () => {
   const reference = createSyncMediaReference(17, 'media-1');
   assert.deepEqual(parseSyncMediaReference(reference), { sequence: 17, mediaId: 'media-1' });
   const stableReference = createStableSyncMediaReference('media-2', 'drive_file-2');
-  assert.deepEqual(parseSyncMediaReference(stableReference), { mediaId: 'media-2', driveFileId: 'drive_file-2' });
+  assert.deepEqual(parseSyncMediaReference(stableReference), {
+    mediaId: 'media-2',
+    driveFileId: 'drive_file-2',
+  });
   assert.equal(parseSyncMediaReference('https://local/photo.jpg'), null);
 });
 
 test('round-trips encrypted thumbnail payload input', () => {
   const bytes = Uint8Array.from([7, 8, 9]);
-  const decoded = decodeSyncThumbnailPayload(encodeSyncThumbnailPayload('media-thumb', 'image/jpeg', bytes));
+  const decoded = decodeSyncThumbnailPayload(
+    encodeSyncThumbnailPayload('media-thumb', 'image/jpeg', bytes),
+  );
   assert.equal(decoded.mediaId, 'media-thumb');
   assert.equal(decoded.mimeType, 'image/jpeg');
   assert.equal(decoded.source, 'thumbnail');

@@ -42,10 +42,13 @@ test('uses resumable upload for large encrypted sync objects', async () => {
         headers: { Location: 'https://upload.example/session-1' },
       });
     }
-    return new Response(JSON.stringify({ id: 'large-file', name: '/media/large.ddmedia', size: '5242881' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ id: 'large-file', name: '/media/large.ddmedia', size: '5242881' }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
   }) as typeof fetch;
   try {
     const result = await uploadDriveSyncObject({
@@ -57,7 +60,10 @@ test('uses resumable upload for large encrypted sync objects', async () => {
     assert.equal(result.id, 'large-file');
     assert.equal(calls.length, 2);
     assert.match(calls[0].url, /uploadType=resumable/);
-    assert.equal(new Headers(calls[0].init.headers).get('X-Upload-Content-Length'), String(RESUMABLE_UPLOAD_THRESHOLD_BYTES + 1));
+    assert.equal(
+      new Headers(calls[0].init.headers).get('X-Upload-Content-Length'),
+      String(RESUMABLE_UPLOAD_THRESHOLD_BYTES + 1),
+    );
     assert.equal(calls[1].url, 'https://upload.example/session-1');
     assert.equal(calls[1].init.method, 'PUT');
   } finally {
@@ -67,17 +73,21 @@ test('uses resumable upload for large encrypted sync objects', async () => {
 
 test('reads Google Drive storage quota values', async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(JSON.stringify({
-    storageQuota: {
-      limit: '16106127360',
-      usage: '5368709120',
-      usageInDrive: '1073741824',
-      usageInDriveTrash: '1048576',
-    },
-  }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })) as typeof fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        storageQuota: {
+          limit: '16106127360',
+          usage: '5368709120',
+          usageInDrive: '1073741824',
+          usageInDriveTrash: '1048576',
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    )) as typeof fetch;
   try {
     const quota = await getDriveStorageQuota({
       userId: 'google-1',

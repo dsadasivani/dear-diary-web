@@ -6,7 +6,11 @@ import {
   decodeCompanionKeyPackage,
   unwrapRootKeysForCompanion,
 } from './companionKeyPackage';
-import { downloadVerifiedSyncObject, replaySyncObjects, type SyncObjectDownloader } from './eventReplay';
+import {
+  downloadVerifiedSyncObject,
+  replaySyncObjects,
+  type SyncObjectDownloader,
+} from './eventReplay';
 import { listPartitionKeysInSnapshot, recentPartitionKeys } from './syncPartitioning';
 import type { SupabaseControlPlaneClient } from './supabaseControlPlane';
 import { type SyncSecrets, withAccountRootKeyForEpoch } from './syncSecrets';
@@ -51,7 +55,11 @@ export class RemotePullService {
       return;
     }
     while (true) {
-      const objects = await runtime.controlPlane.listSyncObjectsAfter(state.deviceId, state.currentSyncSequence, 100);
+      const objects = await runtime.controlPlane.listSyncObjectsAfter(
+        state.deviceId,
+        state.currentSyncSequence,
+        100,
+      );
       if (objects.length === 0) break;
       const processedKeyPackageSequence = await this.processKeyPackages(runtime, objects);
       state = await replaySyncObjects({
@@ -60,7 +68,7 @@ export class RemotePullService {
         accountRootKey: runtime.secrets.accountRootKey,
         accountRootKeys: runtime.secrets.accountRootKeys,
         googleSession: runtime.googleSession,
-        objects: objects.filter(object => object.objectKind !== 'key_package'),
+        objects: objects.filter((object) => object.objectKind !== 'key_package'),
       });
       if (processedKeyPackageSequence > state.currentSyncSequence) {
         state = {
@@ -91,10 +99,11 @@ export class RemotePullService {
       this.repository.listAvailableArchiveMonths(),
     ]);
     const partitionStates = [coreState, ...archiveMonths]
-      .filter(partition => partition.status === 'hydrated')
-      .filter((partition, index, all) => (
-        all.findIndex(candidate => candidate.partitionKey === partition.partitionKey) === index
-      ));
+      .filter((partition) => partition.status === 'hydrated')
+      .filter(
+        (partition, index, all) =>
+          all.findIndex((candidate) => candidate.partitionKey === partition.partitionKey) === index,
+      );
     if (partitionStates.length === 0) {
       await runtime.controlPlane.updateDeviceCursor({
         deviceId: state.deviceId,
@@ -120,7 +129,7 @@ export class RemotePullService {
           accountRootKey: runtime.secrets.accountRootKey,
           accountRootKeys: runtime.secrets.accountRootKeys,
           googleSession: runtime.googleSession,
-          objects: objects.filter(object => object.objectKind !== 'key_package'),
+          objects: objects.filter((object) => object.objectKind !== 'key_package'),
           download: this.download,
           allowHistorical: true,
         });
@@ -131,7 +140,7 @@ export class RemotePullService {
           };
           await this.repository.saveLocalSyncAccountState(state);
         }
-        afterSequence = Math.max(afterSequence, ...objects.map(object => object.sequence));
+        afterSequence = Math.max(afterSequence, ...objects.map((object) => object.sequence));
         if (objects.length < 100) break;
       }
       if (afterSequence > partition.lastAppliedSequence) {
@@ -160,14 +169,17 @@ export class RemotePullService {
 
     const heads = await runtime.controlPlane.listPartitionHeads(state.deviceId);
     const recentKeys = new Set<string>(recentPartitionKeys(new Date(this.now())));
-    const candidates = heads.filter(head => (
-      recentKeys.has(head.partitionKey) &&
-      head.latestEventSequence > 0 &&
-      head.latestSnapshotSequence === 0
-    ));
+    const candidates = heads.filter(
+      (head) =>
+        recentKeys.has(head.partitionKey) &&
+        head.latestEventSequence > 0 &&
+        head.latestSnapshotSequence === 0,
+    );
     if (candidates.length === 0) return;
 
-    const localKeys = new Set<string>(listPartitionKeysInSnapshot(await this.repository.exportSnapshot()));
+    const localKeys = new Set<string>(
+      listPartitionKeysInSnapshot(await this.repository.exportSnapshot()),
+    );
     for (const head of candidates) {
       const hydration = await this.repository.getPartitionHydrationState(head.partitionKey);
       if (hydration.status !== 'not_available') continue;
@@ -190,11 +202,12 @@ export class RemotePullService {
     objects: SyncObjectMetadata[],
   ): Promise<number> {
     const keyPackages = objects
-      .filter(object => object.objectKind === 'key_package')
+      .filter((object) => object.objectKind === 'key_package')
       .sort((left, right) => left.sequence - right.sequence);
     if (keyPackages.length === 0) return 0;
 
-    const hasAccountEpochLookup = typeof runtime.controlPlane.lookupCurrentGoogleAccount === 'function';
+    const hasAccountEpochLookup =
+      typeof runtime.controlPlane.lookupCurrentGoogleAccount === 'function';
     const account = hasAccountEpochLookup
       ? await runtime.controlPlane.lookupCurrentGoogleAccount().catch(() => null)
       : null;
@@ -203,14 +216,19 @@ export class RemotePullService {
       : Number.MAX_SAFE_INTEGER;
     let maxProcessedSequence = 0;
     for (const object of keyPackages) {
-      if (object.accountId !== runtime.state.accountId) throw new Error('Sync metadata belongs to another account.');
+      if (object.accountId !== runtime.state.accountId)
+        throw new Error('Sync metadata belongs to another account.');
       const objectEpoch = object.keyEpoch || 1;
       if (objectEpoch > currentAccountEpoch) {
-        emitSyncTelemetry('sync.key_package.future_epoch_deferred', {
-          sequence: object.sequence,
-          keyEpoch: objectEpoch,
-          currentAccountEpoch,
-        }, 'warn');
+        emitSyncTelemetry(
+          'sync.key_package.future_epoch_deferred',
+          {
+            sequence: object.sequence,
+            keyEpoch: objectEpoch,
+            currentAccountEpoch,
+          },
+          'warn',
+        );
         continue;
       }
       if (runtime.secrets.accountRootKeys?.[objectEpoch]) {
@@ -220,32 +238,48 @@ export class RemotePullService {
 
       let decoded;
       try {
-        const bytes = await downloadVerifiedSyncObject(runtime.googleSession, object, this.download);
+        const bytes = await downloadVerifiedSyncObject(
+          runtime.googleSession,
+          object,
+          this.download,
+        );
         decoded = decodeCompanionKeyPackage(bytes);
       } catch (error) {
-        emitSyncTelemetry('sync.key_package.read_failed', {
-          sequence: object.sequence,
-          keyEpoch: object.keyEpoch || 1,
-        }, 'warn');
+        emitSyncTelemetry(
+          'sync.key_package.read_failed',
+          {
+            sequence: object.sequence,
+            keyEpoch: object.keyEpoch || 1,
+          },
+          'warn',
+        );
         console.warn('Encrypted key package could not be read and will be retried later:', error);
         continue;
       }
 
       const packageEpoch = decoded.keyEpoch || objectEpoch;
       if (packageEpoch !== objectEpoch) {
-        emitSyncTelemetry('sync.key_package.epoch_mismatch', {
-          sequence: object.sequence,
-          objectEpoch,
-          packageEpoch,
-        }, 'warn');
+        emitSyncTelemetry(
+          'sync.key_package.epoch_mismatch',
+          {
+            sequence: object.sequence,
+            objectEpoch,
+            packageEpoch,
+          },
+          'warn',
+        );
         console.warn('Encrypted key package epoch did not match control-plane metadata.');
         continue;
       }
       if (decoded.accountId !== runtime.state.accountId) {
-        emitSyncTelemetry('sync.key_package.account_mismatch', {
-          sequence: object.sequence,
-          keyEpoch: packageEpoch,
-        }, 'warn');
+        emitSyncTelemetry(
+          'sync.key_package.account_mismatch',
+          {
+            sequence: object.sequence,
+            keyEpoch: packageEpoch,
+          },
+          'warn',
+        );
         console.warn('Encrypted key package belongs to another account.');
         continue;
       }
@@ -263,26 +297,35 @@ export class RemotePullService {
           runtime.secrets.devicePrivateKeyJwk,
         );
       } catch (error: any) {
-        if (error instanceof CompanionKeyPackageError && error.code === 'TARGET_DEVICE_MISMATCH') continue;
-        emitSyncTelemetry('sync.key_package.open_failed', {
-          sequence: object.sequence,
-          keyEpoch: packageEpoch,
-          error: error?.message || 'Encrypted key package could not be opened.',
-        }, 'warn');
+        if (error instanceof CompanionKeyPackageError && error.code === 'TARGET_DEVICE_MISMATCH')
+          continue;
+        emitSyncTelemetry(
+          'sync.key_package.open_failed',
+          {
+            sequence: object.sequence,
+            keyEpoch: packageEpoch,
+            error: error?.message || 'Encrypted key package could not be opened.',
+          },
+          'warn',
+        );
         console.warn('Encrypted key package could not be opened and will be retried later:', error);
         continue;
       }
 
       const latestSecrets = (await this.dependencies.loadSecrets()) || runtime.secrets;
       const previousEpoch = runtime.state.keyEpoch || 1;
-      const updatedSecrets = withAccountRootKeyForEpoch({
-        ...latestSecrets,
-        accountRootKeys: {
-          ...(latestSecrets.accountRootKeys || {}),
-          [previousEpoch]: latestSecrets.accountRootKey,
-          ...unwrappedKeys.accountRootKeys,
+      const updatedSecrets = withAccountRootKeyForEpoch(
+        {
+          ...latestSecrets,
+          accountRootKeys: {
+            ...(latestSecrets.accountRootKeys || {}),
+            [previousEpoch]: latestSecrets.accountRootKey,
+            ...unwrappedKeys.accountRootKeys,
+          },
         },
-      }, packageEpoch, unwrappedKeys.accountRootKeys[packageEpoch] || unwrappedKeys.accountRootKey);
+        packageEpoch,
+        unwrappedKeys.accountRootKeys[packageEpoch] || unwrappedKeys.accountRootKey,
+      );
       await this.dependencies.saveSecrets(updatedSecrets);
       runtime.secrets = updatedSecrets;
 
@@ -309,10 +352,17 @@ export class RemotePullService {
     let scanAfterSequence = state.currentSyncSequence;
     let maxProcessedSequence = 0;
     while (true) {
-      const objects = await runtime.controlPlane.listSyncObjectsAfter(state.deviceId, scanAfterSequence, 100);
+      const objects = await runtime.controlPlane.listSyncObjectsAfter(
+        state.deviceId,
+        scanAfterSequence,
+        100,
+      );
       if (objects.length === 0) break;
-      maxProcessedSequence = Math.max(maxProcessedSequence, await this.processKeyPackages(runtime, objects));
-      scanAfterSequence = Math.max(scanAfterSequence, ...objects.map(object => object.sequence));
+      maxProcessedSequence = Math.max(
+        maxProcessedSequence,
+        await this.processKeyPackages(runtime, objects),
+      );
+      scanAfterSequence = Math.max(scanAfterSequence, ...objects.map((object) => object.sequence));
       if (objects.length < 100) break;
     }
     if (maxProcessedSequence > state.currentSyncSequence) {

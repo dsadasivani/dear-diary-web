@@ -42,7 +42,8 @@ export default function PassphraseConfirmationDialog({
       setPassphrase('');
       return;
     }
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => {
       setPassphrase('');
@@ -62,8 +63,7 @@ export default function PassphraseConfirmationDialog({
       const focusable = Array.from(
         dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) || [],
       ) as HTMLElement[];
-      const enabledFocusable = focusable
-        .filter(element => !element.hasAttribute('disabled'));
+      const enabledFocusable = focusable.filter((element) => !element.hasAttribute('disabled'));
       if (enabledFocusable.length === 0) return;
       const first = enabledFocusable[0];
       const last = enabledFocusable[enabledFocusable.length - 1];
@@ -100,10 +100,16 @@ export default function PassphraseConfirmationDialog({
                 <ShieldCheck className="h-5 w-5" />
               </span>
               <div>
-                <h2 id="passphrase-confirm-title" className="text-sm font-extrabold text-brand-plum dark:text-brand-text">
+                <h2
+                  id="passphrase-confirm-title"
+                  className="text-sm font-extrabold text-brand-plum dark:text-brand-text"
+                >
                   {title}
                 </h2>
-                <p id="passphrase-confirm-description" className="mt-1 text-xs leading-relaxed text-brand-text-muted">
+                <p
+                  id="passphrase-confirm-description"
+                  className="mt-1 text-xs leading-relaxed text-brand-text-muted"
+                >
                   {description}
                 </p>
               </div>
@@ -121,13 +127,16 @@ export default function PassphraseConfirmationDialog({
 
           <form
             className="mt-5 space-y-4"
-            onSubmit={event => {
+            onSubmit={(event) => {
               event.preventDefault();
               if (trimmedPassphrase && !loading) onConfirm(trimmedPassphrase);
             }}
           >
             <div>
-              <label htmlFor="recovery-passphrase-confirmation" className="text-xs font-bold uppercase text-brand-sage">
+              <label
+                htmlFor="recovery-passphrase-confirmation"
+                className="text-xs font-bold uppercase text-brand-sage"
+              >
                 Recovery passphrase
               </label>
               <input
@@ -136,7 +145,7 @@ export default function PassphraseConfirmationDialog({
                 type="password"
                 autoComplete="current-password"
                 value={passphrase}
-                onChange={event => setPassphrase(event.target.value)}
+                onChange={(event) => setPassphrase(event.target.value)}
                 disabled={loading}
                 aria-invalid={Boolean(error)}
                 aria-describedby={error ? 'passphrase-confirm-error' : undefined}
@@ -145,7 +154,11 @@ export default function PassphraseConfirmationDialog({
             </div>
 
             {error && (
-              <p id="passphrase-confirm-error" role="alert" className="flex items-start gap-2 text-xs font-semibold text-red-600 dark:text-red-300">
+              <p
+                id="passphrase-confirm-error"
+                role="alert"
+                className="flex items-start gap-2 text-xs font-semibold text-red-600 dark:text-red-300"
+              >
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{error}</span>
               </p>

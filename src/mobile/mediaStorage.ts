@@ -18,9 +18,8 @@ const extensionFromMime = (mimeType: string, fallback: string): string => {
   return subtype || fallback;
 };
 
-const base64FromDataUri = (dataUri: string): string => (
-  dataUri.includes(',') ? dataUri.split(',')[1] : dataUri
-);
+const base64FromDataUri = (dataUri: string): string =>
+  dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
 
 export const persistMediaDataUri = async (
   dataUri: string,
@@ -40,12 +39,14 @@ export const persistMediaDataUri = async (
   } catch (error) {
     console.warn(`Failed to persist ${kind} media to native filesystem:`, error);
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('deardiary-media-storage-warning', {
-        detail: {
-          kind,
-          message: `${kind} storage failed; keeping an inline copy until storage is available.`,
-        },
-      }));
+      window.dispatchEvent(
+        new CustomEvent('deardiary-media-storage-warning', {
+          detail: {
+            kind,
+            message: `${kind} storage failed; keeping an inline copy until storage is available.`,
+          },
+        }),
+      );
     }
     return dataUri;
   }
@@ -60,7 +61,9 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
   return btoa(binary);
 };
 
-export const readImageAsDataUri = async (uri: string): Promise<{ dataUri: string; mimeType: string } | null> => {
+export const readImageAsDataUri = async (
+  uri: string,
+): Promise<{ dataUri: string; mimeType: string } | null> => {
   if (uri.startsWith('data:')) {
     const match = /^data:([^;,]+)[;,]/.exec(uri);
     const mimeType = match?.[1] || '';
@@ -70,7 +73,8 @@ export const readImageAsDataUri = async (uri: string): Promise<{ dataUri: string
   const response = await fetch(uri);
   if (!response.ok) throw new Error(`Unable to download profile image (${response.status}).`);
   const blob = await response.blob();
-  if (!blob.type.startsWith('image/')) throw new Error('Google profile image response was not an image.');
+  if (!blob.type.startsWith('image/'))
+    throw new Error('Google profile image response was not an image.');
   const bytes = new Uint8Array(await blob.arrayBuffer());
   return {
     dataUri: `data:${blob.type};base64,${bytesToBase64(bytes)}`,

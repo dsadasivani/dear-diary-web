@@ -1,8 +1,24 @@
 import React, { Suspense, useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { 
-  AlertCircle, ArrowLeft, BarChart2, BookOpen, Check, ClipboardList, Eye, EyeOff,
-  Fingerprint, Home, LoaderCircle, Lock, Plus, RefreshCw, Search, ShieldCheck, WifiOff, X
+import {
+  AlertCircle,
+  ArrowLeft,
+  BarChart2,
+  BookOpen,
+  Check,
+  ClipboardList,
+  Eye,
+  EyeOff,
+  Fingerprint,
+  Home,
+  LoaderCircle,
+  Lock,
+  Plus,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  WifiOff,
+  X,
 } from 'lucide-react';
 
 import OverlayPortal from './components/OverlayPortal';
@@ -16,11 +32,26 @@ import {
   isRootDestinationScreen,
 } from './components/AppShellPrimitives';
 
-import { AppSettings, Diary, Entry, PartitionHydrationState, ResponsiveLayout, SecurityConfig, UserProfile } from './types';
+import {
+  AppSettings,
+  Diary,
+  Entry,
+  PartitionHydrationState,
+  ResponsiveLayout,
+  SecurityConfig,
+  UserProfile,
+} from './types';
 import type { NoteConversionRequest } from './components/NotesScreen';
 import type { SettingsSection } from './components/AppSettingsScreen';
 import type { RepositoryChange, SyncStatusSummary } from './repositories';
-import { addNativeAppStateListener, addNativeBackListener, addNativeUrlOpenListener, exitNativeApp, getNativeLaunchUrl, syncNativeStatusBar } from './mobile/capacitorBootstrap';
+import {
+  addNativeAppStateListener,
+  addNativeBackListener,
+  addNativeUrlOpenListener,
+  exitNativeApp,
+  getNativeLaunchUrl,
+  syncNativeStatusBar,
+} from './mobile/capacitorBootstrap';
 import { DearDiaryDeepLinkTarget, parseDearDiaryDeepLink } from './mobile/deepLinks';
 import { isAndroid, isNativePlatform } from './platform';
 
@@ -36,7 +67,11 @@ import { resumePendingDeviceKeyRotation } from './sync/deviceKeyRotation';
 import { loadSyncSecrets } from './sync/syncSecrets';
 import { restoreGoogleDriveSession } from './utils/googleAuth';
 import { reportUnexpectedError } from './infrastructure/telemetry/reportUnexpectedError';
-import { applyThemePreference, getLocalThemePreference, setLocalThemePreference } from './utils/themePreference';
+import {
+  applyThemePreference,
+  getLocalThemePreference,
+  setLocalThemePreference,
+} from './utils/themePreference';
 import { measureAsync } from './utils/performance';
 import { pageMotion } from './components/ui/motion';
 
@@ -85,9 +120,13 @@ const GlobalLoaderOverlay = ({ loading }: { loading: GlobalLoadingState | null }
               <LoaderCircle className="h-6 w-6 animate-spin" />
             </span>
             <div className="space-y-1">
-              <p className="text-sm font-extrabold text-brand-plum dark:text-brand-text">{loading.message}</p>
+              <p className="text-sm font-extrabold text-brand-plum dark:text-brand-text">
+                {loading.message}
+              </p>
               {loading.detail && (
-                <p className="text-[11px] font-semibold leading-relaxed text-brand-text-muted">{loading.detail}</p>
+                <p className="text-[11px] font-semibold leading-relaxed text-brand-text-muted">
+                  {loading.detail}
+                </p>
               )}
             </div>
           </motion.div>
@@ -125,13 +164,17 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator === 'undefined' || navigator.onLine);
+  const [isOnline, setIsOnline] = useState<boolean>(
+    () => typeof navigator === 'undefined' || navigator.onLine,
+  );
   const [syncAuthorizationMessage, setSyncAuthorizationMessage] = useState('');
   const [isReauthorizingSync, setIsReauthorizingSync] = useState(false);
   const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
   const [searchInitialQuery, setSearchInitialQuery] = useState('');
-  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(undefined);
-  
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(
+    undefined,
+  );
+
   // Navigation states
   const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
   const [currentScreen, setCurrentScreen] = useState<string>('list'); // list, diaryDetail, diarySettings, entryEditor, appSettings
@@ -147,7 +190,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     localFocusedFlowBackRef.current = active ? onBack || null : null;
     setIsLocalFocusedFlow(active);
   }, []);
-  
+
   // Selected resource IDs for deep links
   const [selectedDiaryId, setSelectedDiaryId] = useState<string>('');
   const [selectedEntryId, setSelectedEntryId] = useState<string>('');
@@ -161,33 +204,38 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [diaryUnlockError, setDiaryUnlockError] = useState<string>('');
   const [diaryUnlockSuccess, setDiaryUnlockSuccess] = useState<string>('');
   const [isDiaryBiometricUnlocking, setIsDiaryBiometricUnlocking] = useState<boolean>(false);
-  
+
   // Toast notification state
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    type: 'success' | 'error' | 'info' | 'warning';
+  } | null>(null);
   const [globalLoading, setGlobalLoading] = useState<GlobalLoadingState | null>(null);
   const loadingDepthRef = React.useRef(0);
   const pendingDeepLinkRef = React.useRef<DearDiaryDeepLinkTarget | null>(null);
 
-  const showToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
+  const showToast = (
+    message: string,
+    type: 'success' | 'error' | 'info' | 'warning' = 'success',
+  ) => {
     setToast({ message, type });
   };
 
-  const runWithGlobalLoader = useCallback(async (
-    message: string,
-    operation: () => Promise<void>,
-    detail?: string
-  ) => {
-    loadingDepthRef.current += 1;
-    setGlobalLoading({ message, detail });
-    try {
-      await operation();
-    } finally {
-      loadingDepthRef.current = Math.max(0, loadingDepthRef.current - 1);
-      if (loadingDepthRef.current === 0) {
-        setGlobalLoading(null);
+  const runWithGlobalLoader = useCallback(
+    async (message: string, operation: () => Promise<void>, detail?: string) => {
+      loadingDepthRef.current += 1;
+      setGlobalLoading({ message, detail });
+      try {
+        await operation();
+      } finally {
+        loadingDepthRef.current = Math.max(0, loadingDepthRef.current - 1);
+        if (loadingDepthRef.current === 0) {
+          setGlobalLoading(null);
+        }
       }
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (toast) {
@@ -208,51 +256,69 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
   const [homeStreak, setHomeStreak] = useState(0);
 
-  const lockedDiaryIds = React.useMemo(() => (
-    diaries
-      .filter(diary => diary.isLocked && !unlockedDiaryIds.has(diary.id))
-      .map(diary => diary.id)
-  ), [diaries, unlockedDiaryIds]);
+  const lockedDiaryIds = React.useMemo(
+    () =>
+      diaries
+        .filter((diary) => diary.isLocked && !unlockedDiaryIds.has(diary.id))
+        .map((diary) => diary.id),
+    [diaries, unlockedDiaryIds],
+  );
 
   const accessibleEntries = React.useMemo(() => {
     const lockedDiaryIdSet = new Set(lockedDiaryIds);
-    return entries.filter(entry => !lockedDiaryIdSet.has(entry.diaryId));
+    return entries.filter((entry) => !lockedDiaryIdSet.has(entry.diaryId));
   }, [entries, lockedDiaryIds]);
 
   const visibleStreak = React.useMemo(
-    () => accessibleEntries.length > 0 ? calculateStreak(accessibleEntries) : homeStreak,
+    () => (accessibleEntries.length > 0 ? calculateStreak(accessibleEntries) : homeStreak),
     [accessibleEntries, homeStreak],
   );
 
   // Reload data from the async repository. SQLite is authoritative on native.
   const reloadData = async () => {
     await measureAsync('app.reloadData', async () => {
-    const [storedDiaries, storedEntries, storedProfile, storedSettings, storedSecurity, storedArchiveMonths, storedSyncStatus] = await Promise.all([
-      diaryRepository.listDiaries(),
-      diaryRepository.listEntries(),
-      diaryRepository.getUserProfile(),
-      diaryRepository.getSettings(),
-      diaryRepository.getSecurityConfig(),
-      diaryRepository.listAvailableArchiveMonths(),
-      diaryRepository.getSyncStatusSummary(),
-    ]);
-    setDiaries(storedDiaries);
-    setEntries(storedEntries);
-    setUserProfile(storedProfile);
-    setHomeStreak(calculateStreak(storedEntries));
-    const currentTheme = getLocalThemePreference(storedSettings.theme || 'light');
-    setSettings({ ...storedSettings, theme: currentTheme });
-    setSecurity(storedSecurity);
-    setArchiveMonths(storedArchiveMonths);
-    setSyncStatus(storedSyncStatus);
-    applyThemePreference(currentTheme);
-    void syncNativeStatusBar(currentTheme);
+      const [
+        storedDiaries,
+        storedEntries,
+        storedProfile,
+        storedSettings,
+        storedSecurity,
+        storedArchiveMonths,
+        storedSyncStatus,
+      ] = await Promise.all([
+        diaryRepository.listDiaries(),
+        diaryRepository.listEntries(),
+        diaryRepository.getUserProfile(),
+        diaryRepository.getSettings(),
+        diaryRepository.getSecurityConfig(),
+        diaryRepository.listAvailableArchiveMonths(),
+        diaryRepository.getSyncStatusSummary(),
+      ]);
+      setDiaries(storedDiaries);
+      setEntries(storedEntries);
+      setUserProfile(storedProfile);
+      setHomeStreak(calculateStreak(storedEntries));
+      const currentTheme = getLocalThemePreference(storedSettings.theme || 'light');
+      setSettings({ ...storedSettings, theme: currentTheme });
+      setSecurity(storedSecurity);
+      setArchiveMonths(storedArchiveMonths);
+      setSyncStatus(storedSyncStatus);
+      applyThemePreference(currentTheme);
+      void syncNativeStatusBar(currentTheme);
     });
   };
 
   const reloadShellData = async () => {
     await measureAsync('app.reloadShellData', async () => {
-      const [storedDiaries, storedProfile, storedSettings, storedSecurity, storedArchiveMonths, storedSyncStatus, storedHomeSummary] = await Promise.all([
+      const [
+        storedDiaries,
+        storedProfile,
+        storedSettings,
+        storedSecurity,
+        storedArchiveMonths,
+        storedSyncStatus,
+        storedHomeSummary,
+      ] = await Promise.all([
         diaryRepository.listDiaries(),
         diaryRepository.getUserProfile(),
         diaryRepository.getSettings(),
@@ -276,33 +342,52 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   const handleLocalThemeChange = (nextTheme: 'light' | 'dark') => {
     setLocalThemePreference(nextTheme);
-    setSettings(prev => ({ ...prev, theme: nextTheme }));
+    setSettings((prev) => ({ ...prev, theme: nextTheme }));
     void syncNativeStatusBar(nextTheme);
   };
 
   const applyRepositoryChange = useCallback((change: RepositoryChange) => {
     switch (change.type) {
       case 'entry-created':
-        setEntries(prev => [...prev.filter(entry => entry.id !== change.entry.id), change.entry]);
-        void diaryRepository.listDiaries().then(setDiaries).catch(() => undefined);
+        setEntries((prev) => [
+          ...prev.filter((entry) => entry.id !== change.entry.id),
+          change.entry,
+        ]);
+        void diaryRepository
+          .listDiaries()
+          .then(setDiaries)
+          .catch(() => undefined);
         break;
       case 'entry-updated':
-        setEntries(prev => prev.map(entry => entry.id === change.entry.id ? change.entry : entry));
-        void diaryRepository.listDiaries().then(setDiaries).catch(() => undefined);
+        setEntries((prev) =>
+          prev.map((entry) => (entry.id === change.entry.id ? change.entry : entry)),
+        );
+        void diaryRepository
+          .listDiaries()
+          .then(setDiaries)
+          .catch(() => undefined);
         break;
       case 'entry-deleted':
-        setEntries(prev => prev.filter(entry => entry.id !== change.entryId));
-        void diaryRepository.listDiaries().then(setDiaries).catch(() => undefined);
+        setEntries((prev) => prev.filter((entry) => entry.id !== change.entryId));
+        void diaryRepository
+          .listDiaries()
+          .then(setDiaries)
+          .catch(() => undefined);
         break;
       case 'diary-created':
-        setDiaries(prev => [...prev.filter(diary => diary.id !== change.diary.id), change.diary]);
+        setDiaries((prev) => [
+          ...prev.filter((diary) => diary.id !== change.diary.id),
+          change.diary,
+        ]);
         break;
       case 'diary-updated':
-        setDiaries(prev => prev.map(diary => diary.id === change.diary.id ? change.diary : diary));
+        setDiaries((prev) =>
+          prev.map((diary) => (diary.id === change.diary.id ? change.diary : diary)),
+        );
         break;
       case 'diary-deleted':
-        setDiaries(prev => prev.filter(diary => diary.id !== change.diaryId));
-        setEntries(prev => prev.filter(entry => entry.diaryId !== change.diaryId));
+        setDiaries((prev) => prev.filter((diary) => diary.id !== change.diaryId));
+        setEntries((prev) => prev.filter((entry) => entry.diaryId !== change.diaryId));
         break;
       case 'note-created':
       case 'note-updated':
@@ -348,16 +433,20 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     if (activeV2Account?.syncProtocolVersion === 2) return activeV2Account;
     const secrets = await loadSyncSecrets();
     const pendingRecovery = await loadPendingPrimaryRecovery();
-    const accessToken = secrets?.supabaseSession.accessToken || pendingRecovery?.supabaseSession.accessToken;
+    const accessToken =
+      secrets?.supabaseSession.accessToken || pendingRecovery?.supabaseSession.accessToken;
     if (pendingRecovery && !accessToken) {
-      throw new Error('Primary recovery is pending but sync authorization is unavailable. Reconnect Google and Supabase to finish recovery.');
+      throw new Error(
+        'Primary recovery is pending but sync authorization is unavailable. Reconnect Google and Supabase to finish recovery.',
+      );
     }
     if (pendingRecovery && accessToken) {
       const controlPlane = createConfiguredSupabaseControlPlaneClient(accessToken);
-      const googleSession = await restoreGoogleDriveSession(false).catch(() => null)
-        || secrets?.googleSession
-        || pendingRecovery.googleSession
-        || null;
+      const googleSession =
+        (await restoreGoogleDriveSession(false).catch(() => null)) ||
+        secrets?.googleSession ||
+        pendingRecovery.googleSession ||
+        null;
       const result = await resumePendingPrimaryRecovery({
         repository: diaryRepository,
         controlPlane,
@@ -369,11 +458,17 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       }
     }
     const refreshedAccount = await diaryRepository.getLocalSyncAccountState();
-    if (!refreshedAccount || refreshedAccount.deviceRole !== 'primary_mobile') return refreshedAccount;
+    if (!refreshedAccount || refreshedAccount.deviceRole !== 'primary_mobile')
+      return refreshedAccount;
     const refreshedSecrets = await loadSyncSecrets();
     if (!refreshedSecrets) return refreshedAccount;
-    const controlPlane = createConfiguredSupabaseControlPlaneClient(refreshedSecrets.supabaseSession.accessToken);
-    const googleSession = await restoreGoogleDriveSession(false).catch(() => null) || refreshedSecrets.googleSession || null;
+    const controlPlane = createConfiguredSupabaseControlPlaneClient(
+      refreshedSecrets.supabaseSession.accessToken,
+    );
+    const googleSession =
+      (await restoreGoogleDriveSession(false).catch(() => null)) ||
+      refreshedSecrets.googleSession ||
+      null;
     const result = await resumePendingDeviceKeyRotation({
       repository: diaryRepository,
       controlPlane,
@@ -387,20 +482,24 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const handleUnlock = async () => {
-    await runWithGlobalLoader('Unlocking your diary', async () => {
-      await measureAsync('app.pinUnlock', () => reloadShellData());
-      setUnlockedDiaryIds(new Set());
-      setIsAuthenticated(true);
-    }, 'Loading your latest local data.');
+    await runWithGlobalLoader(
+      'Unlocking your diary',
+      async () => {
+        await measureAsync('app.pinUnlock', () => reloadShellData());
+        setUnlockedDiaryIds(new Set());
+        setIsAuthenticated(true);
+      },
+      'Loading your latest local data.',
+    );
     if (isE2eAppMode()) return;
     void resumePendingSyncWorkAfterUnlock()
-      .then(syncAccount => {
+      .then((syncAccount) => {
         if (syncAccount) {
           eventSyncEngine.requestOutboxFlush();
           eventSyncEngine.startPolling();
         }
       })
-      .catch(err => {
+      .catch((err) => {
         showToast(err?.message || 'Encrypted sync could not resume after unlock.', 'warning');
         console.warn('Unable to start sync polling after unlock:', err);
       });
@@ -416,11 +515,14 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   useEffect(() => {
     if (isAuthenticated || isNativePlatform()) return;
     let cancelled = false;
-    void diaryRepository.getLocalSyncAccountState().then(async syncAccount => {
-      if (cancelled || syncAccount?.deviceRole !== 'web_companion') return;
-      await syncV2Application.startIfActive();
-      eventSyncEngine.startPolling();
-    }).catch(() => undefined);
+    void diaryRepository
+      .getLocalSyncAccountState()
+      .then(async (syncAccount) => {
+        if (cancelled || syncAccount?.deviceRole !== 'web_companion') return;
+        await syncV2Application.startIfActive();
+        eventSyncEngine.startPolling();
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -432,23 +534,31 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       setSyncAuthorizationMessage(detail?.message || 'Reconnect your account to resume sync.');
     };
     window.addEventListener('deardiary-sync-auth-required', handleAuthorizationRequired);
-    return () => window.removeEventListener('deardiary-sync-auth-required', handleAuthorizationRequired);
+    return () =>
+      window.removeEventListener('deardiary-sync-auth-required', handleAuthorizationRequired);
   }, []);
 
   useEffect(() => {
     const handleMediaStorageWarning = (event: Event) => {
       const detail = (event as CustomEvent<{ message?: string }>).detail;
-      showToast(detail?.message || 'Media storage failed; keeping an inline copy for now.', 'warning');
+      showToast(
+        detail?.message || 'Media storage failed; keeping an inline copy for now.',
+        'warning',
+      );
     };
     window.addEventListener('deardiary-media-storage-warning', handleMediaStorageWarning);
-    return () => window.removeEventListener('deardiary-media-storage-warning', handleMediaStorageWarning);
+    return () =>
+      window.removeEventListener('deardiary-media-storage-warning', handleMediaStorageWarning);
   }, []);
 
   useEffect(() => {
     const handleSyncConflict = (event: Event) => {
       const detail = (event as CustomEvent<{ message?: string }>).detail;
       showToast(detail?.message || 'Conflict preserved as recovered copy.', 'warning');
-      void diaryRepository.getSyncStatusSummary().then(setSyncStatus).catch(() => undefined);
+      void diaryRepository
+        .getSyncStatusSummary()
+        .then(setSyncStatus)
+        .catch(() => undefined);
     };
     window.addEventListener('deardiary-sync-conflict', handleSyncConflict);
     return () => window.removeEventListener('deardiary-sync-conflict', handleSyncConflict);
@@ -457,11 +567,15 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const handleSyncReauthorization = async () => {
     setIsReauthorizingSync(true);
     try {
-      await runWithGlobalLoader('Reconnecting encrypted sync', async () => {
-        await eventSyncEngine.reauthorize();
-        setSyncAuthorizationMessage('');
-        await eventSyncEngine.pullPending();
-      }, 'Checking Google Drive and bringing in pending updates.');
+      await runWithGlobalLoader(
+        'Reconnecting encrypted sync',
+        async () => {
+          await eventSyncEngine.reauthorize();
+          setSyncAuthorizationMessage('');
+          await eventSyncEngine.pullPending();
+        },
+        'Checking Google Drive and bringing in pending updates.',
+      );
       showToast('Encrypted sync reconnected.', 'success');
     } catch (reauthorizationError: any) {
       showToast(reauthorizationError?.message || 'Sync reconnection failed.', 'error');
@@ -473,10 +587,14 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const handleHydrateArchiveMonth = async (partitionKey: string) => {
     try {
       showToast('Restoring that archive month…', 'info');
-      await runWithGlobalLoader('Restoring archive month', async () => {
-        await eventSyncEngine.hydrateArchivePartition(partitionKey);
-        await reloadShellData();
-      }, 'Downloading older encrypted entries.');
+      await runWithGlobalLoader(
+        'Restoring archive month',
+        async () => {
+          await eventSyncEngine.hydrateArchivePartition(partitionKey);
+          await reloadShellData();
+        },
+        'Downloading older encrypted entries.',
+      );
       showToast('Archive month restored.', 'success');
     } catch (archiveError: any) {
       const message = archiveError?.message || 'Could not restore that archive month yet.';
@@ -487,8 +605,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const handleHydrateAllArchiveMonths = async () => {
-    const candidates = (await diaryRepository.listAvailableArchiveMonths())
-      .filter(month => month.status !== 'hydrated' && month.status !== 'not_available' && month.status !== 'hydrating');
+    const candidates = (await diaryRepository.listAvailableArchiveMonths()).filter(
+      (month) =>
+        month.status !== 'hydrated' &&
+        month.status !== 'not_available' &&
+        month.status !== 'hydrating',
+    );
     if (candidates.length === 0) {
       showToast('All available archive months are already restored.', 'info');
       return;
@@ -501,33 +623,46 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
     let restoredCount = 0;
     let failedCount = 0;
-    showToast(`Restoring ${candidates.length} archive month${candidates.length === 1 ? '' : 's'} on Wi-Fi…`, 'info');
-    await runWithGlobalLoader(`Restoring ${candidates.length} archive month${candidates.length === 1 ? '' : 's'}`, async () => {
-      for (const candidate of candidates) {
-        try {
-          await eventSyncEngine.hydrateArchivePartition(String(candidate.partitionKey));
-          restoredCount += 1;
-          await reloadShellData();
-        } catch {
-          failedCount += 1;
+    showToast(
+      `Restoring ${candidates.length} archive month${candidates.length === 1 ? '' : 's'} on Wi-Fi…`,
+      'info',
+    );
+    await runWithGlobalLoader(
+      `Restoring ${candidates.length} archive month${candidates.length === 1 ? '' : 's'}`,
+      async () => {
+        for (const candidate of candidates) {
+          try {
+            await eventSyncEngine.hydrateArchivePartition(String(candidate.partitionKey));
+            restoredCount += 1;
+            await reloadShellData();
+          } catch {
+            failedCount += 1;
+          }
         }
-      }
-      await reloadShellData();
-    }, 'Keep the app open while older entries come back.');
+        await reloadShellData();
+      },
+      'Keep the app open while older entries come back.',
+    );
     if (failedCount > 0) {
       const message = `Restored ${restoredCount} archive month${restoredCount === 1 ? '' : 's'}. ${failedCount} need retry later.`;
       showToast(message, restoredCount > 0 ? 'warning' : 'error');
       if (restoredCount === 0) throw new Error(message);
       return;
     }
-    showToast(`Restored ${restoredCount} archive month${restoredCount === 1 ? '' : 's'}.`, 'success');
+    showToast(
+      `Restored ${restoredCount} archive month${restoredCount === 1 ? '' : 's'}.`,
+      'success',
+    );
   };
 
   useEffect(() => {
     const updateOnlineState = () => {
       setIsOnline(navigator.onLine);
       if (navigator.onLine) eventSyncEngine.requestOutboxFlush();
-      void diaryRepository.getSyncStatusSummary().then(setSyncStatus).catch(() => undefined);
+      void diaryRepository
+        .getSyncStatusSummary()
+        .then(setSyncStatus)
+        .catch(() => undefined);
     };
     window.addEventListener('online', updateOnlineState);
     window.addEventListener('offline', updateOnlineState);
@@ -537,14 +672,18 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     };
   }, []);
 
-  useEffect(() => diaryRepository.subscribeChanges((_revision, change) => {
-    if (!isAuthenticated) return;
-    if (change) {
-      applyRepositoryChange(change);
-      return;
-    }
-    void reloadShellData();
-  }), [applyRepositoryChange, isAuthenticated]);
+  useEffect(
+    () =>
+      diaryRepository.subscribeChanges((_revision, change) => {
+        if (!isAuthenticated) return;
+        if (change) {
+          applyRepositoryChange(change);
+          return;
+        }
+        void reloadShellData();
+      }),
+    [applyRepositoryChange, isAuthenticated],
+  );
 
   useEffect(() => {
     const handleUnexpectedRejection = (event: PromiseRejectionEvent) => {
@@ -558,13 +697,13 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   // Handler to navigate between tabs & sub-screens
   const handleNavigate = (
-    tab: string, 
-    screen: string = 'list', 
-    diaryId: string = '', 
-    entryId: string = '', 
-    dateStr: string = '', 
+    tab: string,
+    screen: string = 'list',
+    diaryId: string = '',
+    entryId: string = '',
+    dateStr: string = '',
     noteId: string = '',
-    promptText: string = ''
+    promptText: string = '',
   ) => {
     localFocusedFlowBackRef.current = null;
     setIsLocalFocusedFlow(false);
@@ -620,13 +759,14 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     );
   };
 
-  const rootPageTitle = () => ({
-    home: 'Today',
-    diaries: 'Journals',
-    notes: 'Notes',
-    search: 'Search',
-    stats: currentScreen === 'appSettings' ? 'Settings' : 'Insights',
-  }[activeTab] || 'Dear Diary');
+  const rootPageTitle = () =>
+    ({
+      home: 'Today',
+      diaries: 'Journals',
+      notes: 'Notes',
+      search: 'Search',
+      stats: currentScreen === 'appSettings' ? 'Settings' : 'Insights',
+    })[activeTab] || 'Dear Diary';
 
   const navigateToDeepLink = useCallback(async (target: DearDiaryDeepLinkTarget) => {
     switch (target.kind) {
@@ -671,26 +811,31 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     }
   }, []);
 
-  const handleDeepLinkUrl = useCallback((url: string) => {
-    const target = parseDearDiaryDeepLink(url);
-    if (!target) {
-      showToast('That Dear Diary link could not be opened.', 'warning');
-      return;
-    }
-    if (!isAuthenticated) {
-      pendingDeepLinkRef.current = target;
-      showToast('Unlock Dear Diary to continue.', 'info');
-      return;
-    }
-    void navigateToDeepLink(target);
-  }, [isAuthenticated, navigateToDeepLink]);
+  const handleDeepLinkUrl = useCallback(
+    (url: string) => {
+      const target = parseDearDiaryDeepLink(url);
+      if (!target) {
+        showToast('That Dear Diary link could not be opened.', 'warning');
+        return;
+      }
+      if (!isAuthenticated) {
+        pendingDeepLinkRef.current = target;
+        showToast('Unlock Dear Diary to continue.', 'info');
+        return;
+      }
+      void navigateToDeepLink(target);
+    },
+    [isAuthenticated, navigateToDeepLink],
+  );
 
   useEffect(() => {
     if (!isNativePlatform()) return undefined;
     let disposed = false;
-    void getNativeLaunchUrl().then(url => {
-      if (!disposed && url) handleDeepLinkUrl(url);
-    }).catch(() => undefined);
+    void getNativeLaunchUrl()
+      .then((url) => {
+        if (!disposed && url) handleDeepLinkUrl(url);
+      })
+      .catch(() => undefined);
     const removeListener = addNativeUrlOpenListener(({ url }) => handleDeepLinkUrl(url));
     return () => {
       disposed = true;
@@ -714,7 +859,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   }, [selectedDiaryId, currentScreen]);
 
   const markDiaryUnlocked = (diaryId: string) => {
-    setUnlockedDiaryIds(prev => {
+    setUnlockedDiaryIds((prev) => {
       const next = new Set(prev);
       next.add(diaryId);
       return next;
@@ -780,7 +925,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     } catch (err: any) {
       console.error(err);
       setDiaryUnlockSuccess('');
-      setDiaryUnlockError(err?.name === 'NotAllowedError' ? 'Biometric prompt closed. Use your app PIN.' : (err?.message || 'Biometric unlock failed. Use your app PIN.'));
+      setDiaryUnlockError(
+        err?.name === 'NotAllowedError'
+          ? 'Biometric prompt closed. Use your app PIN.'
+          : err?.message || 'Biometric unlock failed. Use your app PIN.',
+      );
     } finally {
       setIsDiaryBiometricUnlocking(false);
     }
@@ -869,13 +1018,21 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     if (isAndroid()) {
       void exitNativeApp();
     }
-  }, [activeTab, currentScreen, isAuthenticated, isEditorFocusMode, isLocalFocusedFlow, selectedDiaryId, selectedPrompt]);
+  }, [
+    activeTab,
+    currentScreen,
+    isAuthenticated,
+    isEditorFocusMode,
+    isLocalFocusedFlow,
+    selectedDiaryId,
+    selectedPrompt,
+  ]);
 
   useEffect(() => addNativeBackListener(handleBackNavigation), [handleBackNavigation]);
 
   // Convert quick note into formal diary entry helper
   const handleConvertToDiaryEntry = async (request: NoteConversionRequest) => {
-    const targetDiary = diaries.find(diary => diary.id === request.journalId);
+    const targetDiary = diaries.find((diary) => diary.id === request.journalId);
     if (!targetDiary) return;
 
     await measureAsync('app.quickNote.convertToEntry', async () => {
@@ -885,9 +1042,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         title: request.title,
         body: request.body,
         moodName: 'Reflective',
-      moodEmoji: '💭',
+        moodEmoji: '💭',
         tags: request.tags,
-        photoUris: []
+        photoUris: [],
       });
 
       if (request.disposition === 'delete') {
@@ -906,7 +1063,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         title: noteText.substring(0, 24) || 'Untitled quick thought',
         body: noteText,
         isPinned: false,
-        tags: ['thoughts']
+        tags: ['thoughts'],
       });
     });
     showToast('Saved to this device.', 'success');
@@ -916,7 +1073,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const handleOpenNewEntryWithPrompt = (promptText: string) => {
     const targetDiary = diaries[0];
     if (!targetDiary) return;
-    
+
     // We navigate to entry editor in diaries tab
     handleNavigate('diaries', 'entryEditor', targetDiary.id, '', '', '', promptText);
   };
@@ -962,7 +1119,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 {diary.name}
               </h2>
               <p className="text-xs leading-relaxed text-brand-text-muted">
-                This journal is private. Confirm your app PIN{canUseBiometricDiaryUnlock ? ' or biometric identity' : ''} to open it for this session.
+                This journal is private. Confirm your app PIN
+                {canUseBiometricDiaryUnlock ? ' or biometric identity' : ''} to open it for this
+                session.
               </p>
             </div>
 
@@ -973,8 +1132,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 disabled={isDiaryBiometricUnlocking}
                 className="flex w-full items-center justify-center gap-2.5 rounded-xl border border-brand-pink/20 bg-brand-pink/10 py-3 text-xs font-bold uppercase tracking-wider text-brand-pink transition-all hover:bg-brand-pink hover:text-white disabled:opacity-50"
               >
-                <Fingerprint className={`w-4 h-4 ${isDiaryBiometricUnlocking ? 'animate-pulse' : ''}`} />
-                <span>{isDiaryBiometricUnlocking ? 'Checking Identity' : 'Unlock with Biometrics'}</span>
+                <Fingerprint
+                  className={`w-4 h-4 ${isDiaryBiometricUnlocking ? 'animate-pulse' : ''}`}
+                />
+                <span>
+                  {isDiaryBiometricUnlocking ? 'Checking Identity' : 'Unlock with Biometrics'}
+                </span>
               </button>
             )}
 
@@ -986,7 +1149,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               className="flex flex-col gap-4"
             >
               <label className="flex flex-col gap-2 text-left">
-                <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-brand-sage">App Security PIN</span>
+                <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-brand-sage">
+                  App Security PIN
+                </span>
                 <div className="relative">
                   <input
                     type={showDiaryUnlockPin ? 'text' : 'password'}
@@ -1003,11 +1168,15 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                   />
                   <button
                     type="button"
-                    onClick={() => setShowDiaryUnlockPin(prev => !prev)}
+                    onClick={() => setShowDiaryUnlockPin((prev) => !prev)}
                     className="absolute inset-y-0 right-3 flex items-center text-brand-sage transition-colors hover:text-brand-pink"
                     title={showDiaryUnlockPin ? 'Hide PIN' : 'Show PIN'}
                   >
-                    {showDiaryUnlockPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {showDiaryUnlockPin ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
                   </button>
                 </div>
               </label>
@@ -1051,7 +1220,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     switch (activeTab) {
       case 'home':
         return (
-          <HomeScreen 
+          <HomeScreen
             userProfile={userProfile}
             layout={layout}
             excludeDiaryIds={lockedDiaryIds}
@@ -1063,24 +1232,34 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
       case 'diaries':
         {
-          const selectedDiary = diaries.find(d => d.id === selectedDiaryId);
-          const lockedDiaryScreen = ['diaryDetail', 'diarySettings', 'entryEditor'].includes(currentScreen);
-          if (selectedDiary?.isLocked && lockedDiaryScreen && !unlockedDiaryIds.has(selectedDiary.id)) {
+          const selectedDiary = diaries.find((d) => d.id === selectedDiaryId);
+          const lockedDiaryScreen = ['diaryDetail', 'diarySettings', 'entryEditor'].includes(
+            currentScreen,
+          );
+          if (
+            selectedDiary?.isLocked &&
+            lockedDiaryScreen &&
+            !unlockedDiaryIds.has(selectedDiary.id)
+          ) {
             return renderDiaryUnlockPrompt(selectedDiary);
           }
         }
 
         if (currentScreen === 'diaryDetail') {
-          const selectedDiary = diaries.find(d => d.id === selectedDiaryId);
+          const selectedDiary = diaries.find((d) => d.id === selectedDiaryId);
           if (selectedDiary) {
             return (
-              <DiaryDetailScreen 
+              <DiaryDetailScreen
                 diary={selectedDiary}
                 entryId={selectedEntryId}
                 layout={layout}
                 onBack={() => handleNavigate('diaries', 'list')}
-                onEditEntry={(entryId) => handleNavigate('diaries', 'entryEditor', selectedDiaryId, entryId)}
-                onNewEntry={(diaryId, dateStr) => handleNavigate('diaries', 'entryEditor', diaryId, '', dateStr)}
+                onEditEntry={(entryId) =>
+                  handleNavigate('diaries', 'entryEditor', selectedDiaryId, entryId)
+                }
+                onNewEntry={(diaryId, dateStr) =>
+                  handleNavigate('diaries', 'entryEditor', diaryId, '', dateStr)
+                }
                 onOpenSettings={(diaryId) => handleNavigate('diaries', 'diarySettings', diaryId)}
                 onRefreshEntries={refreshEntries}
                 archiveMonths={archiveMonths}
@@ -1091,10 +1270,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         }
 
         if (currentScreen === 'diarySettings') {
-          const selectedDiary = diaries.find(d => d.id === selectedDiaryId);
+          const selectedDiary = diaries.find((d) => d.id === selectedDiaryId);
           if (selectedDiary) {
             return (
-              <DiarySettingsScreen 
+              <DiarySettingsScreen
                 diary={selectedDiary}
                 layout={layout}
                 security={security}
@@ -1107,7 +1286,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
         if (currentScreen === 'entryEditor') {
           return (
-            <EntryEditorScreen 
+            <EntryEditorScreen
               diaries={diaries}
               settings={settings}
               diaryId={selectedDiaryId}
@@ -1136,7 +1315,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         }
 
         return (
-          <DiariesScreen 
+          <DiariesScreen
             diaries={diaries}
             layout={layout}
             onNavigate={handleNavigate}
@@ -1147,7 +1326,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
       case 'notes':
         return (
-          <NotesScreen 
+          <NotesScreen
             settings={settings}
             diaries={diaries}
             layout={layout}
@@ -1160,7 +1339,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
       case 'search':
         return (
-          <SearchScreen 
+          <SearchScreen
             settings={settings}
             layout={layout}
             initialQuery={searchInitialQuery}
@@ -1168,7 +1347,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             archiveMonths={archiveMonths}
             onHydrateArchiveMonth={handleHydrateArchiveMonth}
             onHydrateAllArchiveMonths={handleHydrateAllArchiveMonths}
-            onOpenSettingsSection={(section) => { setSettingsInitialSection(section); handleNavigate('stats', 'appSettings'); }}
+            onOpenSettingsSection={(section) => {
+              setSettingsInitialSection(section);
+              handleNavigate('stats', 'appSettings');
+            }}
             onNavigate={handleNavigate}
             onEditNote={(note) => {
               // Deep-link note editing from search results
@@ -1180,7 +1362,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       case 'stats':
         if (currentScreen === 'appSettings') {
           return (
-            <AppSettingsScreen 
+            <AppSettingsScreen
               initialSettings={settings}
               initialSecurity={security}
               initialProfile={userProfile}
@@ -1202,7 +1384,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         }
 
         return (
-          <StatsScreen 
+          <StatsScreen
             diaries={diaries}
             excludeDiaryIds={lockedDiaryIds}
             archiveMonths={archiveMonths}
@@ -1217,37 +1399,39 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const renderSuspendedContent = () => (
-    <Suspense fallback={<ScreenFallback />}>
-      {renderContent()}
-    </Suspense>
+    <Suspense fallback={<ScreenFallback />}>{renderContent()}</Suspense>
   );
 
-  const renderSyncAuthorizationBanner = () => syncAuthorizationMessage ? (
-    <div className="fixed inset-x-3 top-3 z-[91] mx-auto flex max-w-sm items-center gap-3 rounded-lg bg-brand-plum px-3 py-2 text-white shadow-lg">
-      <p className="min-w-0 flex-1 text-xs font-semibold">{syncAuthorizationMessage}</p>
-      <button
-        type="button"
-        onClick={() => void handleSyncReauthorization()}
-        disabled={isReauthorizingSync}
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15 disabled:opacity-50"
-        title="Reconnect encrypted sync"
-      >
-        <RefreshCw className={`h-4 w-4 ${isReauthorizingSync ? 'animate-spin' : ''}`} />
-      </button>
-    </div>
-  ) : null;
+  const renderSyncAuthorizationBanner = () =>
+    syncAuthorizationMessage ? (
+      <div className="fixed inset-x-3 top-3 z-[91] mx-auto flex max-w-sm items-center gap-3 rounded-lg bg-brand-plum px-3 py-2 text-white shadow-lg">
+        <p className="min-w-0 flex-1 text-xs font-semibold">{syncAuthorizationMessage}</p>
+        <button
+          type="button"
+          onClick={() => void handleSyncReauthorization()}
+          disabled={isReauthorizingSync}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15 disabled:opacity-50"
+          title="Reconnect encrypted sync"
+        >
+          <RefreshCw className={`h-4 w-4 ${isReauthorizingSync ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+    ) : null;
 
   const getSyncStatusDisplay = () => {
     if (!syncStatus || syncAuthorizationMessage) return null;
     const pending = syncStatus.pendingOutboxCount;
     const failed = syncStatus.failedOperationCount;
-    const label = failed > 0
-      ? `${failed} sync item${failed === 1 ? '' : 's'} need attention`
-      : !isOnline || syncStatus.isOffline
-        ? pending > 0 ? `${pending} waiting for internet` : 'Offline'
-        : pending > 0
-          ? `${pending} syncing`
-          : syncStatus.currentActivity || '';
+    const label =
+      failed > 0
+        ? `${failed} sync item${failed === 1 ? '' : 's'} need attention`
+        : !isOnline || syncStatus.isOffline
+          ? pending > 0
+            ? `${pending} waiting for internet`
+            : 'Offline'
+          : pending > 0
+            ? `${pending} syncing`
+            : syncStatus.currentActivity || '';
     if (!label) return null;
     if (failed === 0 && pending === 0 && (!isOnline || syncStatus.isOffline)) return null;
     return {
@@ -1255,20 +1439,23 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       pending,
       failed,
       spinning: pending > 0 && failed === 0 && isOnline && !syncStatus.isOffline,
-      tone: failed > 0 ? 'attention' : (!isOnline || syncStatus.isOffline) ? 'offline' : 'syncing',
+      tone: failed > 0 ? 'attention' : !isOnline || syncStatus.isOffline ? 'offline' : 'syncing',
     };
   };
 
   const renderSyncStatusBadge = (placement: 'desktop' | 'floating' = 'floating') => {
     const status = getSyncStatusDisplay();
     if (!status) return null;
-    const toneClass = status.tone === 'attention'
-      ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200'
-      : status.tone === 'offline'
-        ? 'border-brand-border bg-white/86 text-brand-plum dark:bg-brand-card-bg/86 dark:text-brand-text'
-        : 'border-brand-border bg-white/86 text-brand-sage dark:bg-brand-card-bg/86 dark:text-brand-sage-light';
+    const toneClass =
+      status.tone === 'attention'
+        ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200'
+        : status.tone === 'offline'
+          ? 'border-brand-border bg-white/86 text-brand-plum dark:bg-brand-card-bg/86 dark:text-brand-text'
+          : 'border-brand-border bg-white/86 text-brand-sage dark:bg-brand-card-bg/86 dark:text-brand-sage-light';
     const chip = (
-      <div className={`flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-[11px] font-extrabold shadow-sm backdrop-blur-md ${toneClass}`}>
+      <div
+        className={`flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-[11px] font-extrabold shadow-sm backdrop-blur-md ${toneClass}`}
+      >
         <RefreshCw className={`h-3.5 w-3.5 shrink-0 ${status.spinning ? 'animate-spin' : ''}`} />
         <span className="truncate">{status.label}</span>
       </div>
@@ -1277,7 +1464,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       return <div className="hidden max-w-[14rem] lg:block">{chip}</div>;
     }
     return (
-      <div className={`fixed left-4 z-[38] max-w-[calc(100vw-2rem)] ${currentScreen !== 'entryEditor' ? 'bottom-[calc(5.75rem+var(--safe-area-inset-bottom))]' : 'bottom-[calc(1rem+var(--safe-area-inset-bottom))]'}`}>
+      <div
+        className={`fixed left-4 z-[38] max-w-[calc(100vw-2rem)] ${currentScreen !== 'entryEditor' ? 'bottom-[calc(5.75rem+var(--safe-area-inset-bottom))]' : 'bottom-[calc(1rem+var(--safe-area-inset-bottom))]'}`}
+      >
         {chip}
       </div>
     );
@@ -1290,13 +1479,18 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           initial={{ opacity: 0, y: -40, scale: 0.92, x: '-50%' }}
           animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
           exit={{ opacity: 0, y: -15, scale: 0.95, x: '-50%' }}
-          transition={{ type: "spring", stiffness: 350, damping: 25 }}
+          transition={{ type: 'spring', stiffness: 350, damping: 25 }}
           className="fixed top-6 left-1/2 z-50 flex items-center gap-3 bg-white/95 dark:bg-brand-card-bg/95 backdrop-blur-md px-5 py-3.5 rounded-2xl border border-brand-border/80 shadow-2xl max-w-sm w-[90%] select-none pointer-events-auto toast-safe"
         >
-          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 animate-pulse ${
-            toast.type === 'success' ? 'bg-brand-sage' :
-            toast.type === 'error' ? 'bg-brand-rose' : 'bg-brand-pink'
-          }`} />
+          <div
+            className={`w-2.5 h-2.5 rounded-full flex-shrink-0 animate-pulse ${
+              toast.type === 'success'
+                ? 'bg-brand-sage'
+                : toast.type === 'error'
+                  ? 'bg-brand-rose'
+                  : 'bg-brand-pink'
+            }`}
+          />
 
           <p className="text-xs font-bold text-brand-plum leading-snug flex-grow">
             {toast.message}
@@ -1316,16 +1510,19 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const desktopPageTitle = () => {
     if (activeTab === 'stats' && currentScreen === 'appSettings') return 'Settings';
     if (activeTab === 'stats') return 'Insights';
-    if (activeTab === 'diaries' && currentScreen === 'entryEditor') return selectedEntryId ? 'Edit Entry' : 'New Entry';
+    if (activeTab === 'diaries' && currentScreen === 'entryEditor')
+      return selectedEntryId ? 'Edit Entry' : 'New Entry';
     if (activeTab === 'diaries' && currentScreen === 'diaryDetail') {
-      return diaries.find(diary => diary.id === selectedDiaryId)?.name || 'My Journal';
+      return diaries.find((diary) => diary.id === selectedDiaryId)?.name || 'My Journal';
     }
-    return {
-      home: 'Today',
-      diaries: 'Journals',
-      notes: 'Notes',
-      search: 'Search',
-    }[activeTab] || 'Dear Diary';
+    return (
+      {
+        home: 'Today',
+        diaries: 'Journals',
+        notes: 'Notes',
+        search: 'Search',
+      }[activeTab] || 'Dear Diary'
+    );
   };
 
   const renderDesktopBackground = () => (
@@ -1338,10 +1535,34 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   const renderDesktopShell = () => {
     const navItems = [
-      { id: 'home', label: 'Today', icon: Home, onClick: () => handleNavigate('home'), active: activeTab === 'home' },
-      { id: 'diaries', label: 'Journals', icon: BookOpen, onClick: () => handleNavigate('diaries'), active: activeTab === 'diaries' },
-      { id: 'notes', label: 'Notes', icon: ClipboardList, onClick: () => handleNavigate('notes'), active: activeTab === 'notes' },
-      { id: 'stats', label: 'Insights', icon: BarChart2, onClick: () => handleNavigate('stats'), active: activeTab === 'stats' && currentScreen !== 'appSettings' },
+      {
+        id: 'home',
+        label: 'Today',
+        icon: Home,
+        onClick: () => handleNavigate('home'),
+        active: activeTab === 'home',
+      },
+      {
+        id: 'diaries',
+        label: 'Journals',
+        icon: BookOpen,
+        onClick: () => handleNavigate('diaries'),
+        active: activeTab === 'diaries',
+      },
+      {
+        id: 'notes',
+        label: 'Notes',
+        icon: ClipboardList,
+        onClick: () => handleNavigate('notes'),
+        active: activeTab === 'notes',
+      },
+      {
+        id: 'stats',
+        label: 'Insights',
+        icon: BarChart2,
+        onClick: () => handleNavigate('stats'),
+        active: activeTab === 'stats' && currentScreen !== 'appSettings',
+      },
     ];
 
     return (
@@ -1350,7 +1571,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         <GlobalLoaderOverlay loading={globalLoading} />
         {renderDesktopBackground()}
         {!isOnline && (
-          <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg" role="status">
+          <div
+            className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg"
+            role="status"
+          >
             <WifiOff className="h-4 w-4" />
             <span>Offline. Synced changes are paused.</span>
           </div>
@@ -1363,13 +1587,17 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 <BookOpen className="h-5 w-5 xl:h-6 xl:w-6" />
               </div>
               <div className="min-w-0">
-                <h1 className="font-serif-diary text-2xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-3xl">Dear Diary</h1>
-                <p className="mt-0.5 text-xs font-semibold text-brand-text-muted">{visibleStreak} Day Streak</p>
+                <h1 className="font-serif-diary text-2xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-3xl">
+                  Dear Diary
+                </h1>
+                <p className="mt-0.5 text-xs font-semibold text-brand-text-muted">
+                  {visibleStreak} Day Streak
+                </p>
               </div>
             </div>
 
             <nav className="mt-9 flex flex-col gap-1.5 xl:mt-14 xl:gap-2">
-              {navItems.map(item => {
+              {navItems.map((item) => {
                 const Icon = item.icon;
                 return (
                   <button
@@ -1383,7 +1611,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                         : 'text-brand-plum/72 hover:bg-white/55 hover:text-brand-plum dark:text-brand-text/75 dark:hover:bg-white/5'
                     }`}
                   >
-                    <Icon className={`h-5 w-5 ${item.active ? 'text-brand-sage' : 'text-brand-plum/75 dark:text-brand-text/70'}`} />
+                    <Icon
+                      className={`h-5 w-5 ${item.active ? 'text-brand-sage' : 'text-brand-plum/75 dark:text-brand-text/70'}`}
+                    />
                     <span>{item.label}</span>
                   </button>
                 );
@@ -1392,10 +1622,18 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
             <div className="mt-auto flex flex-col gap-4">
               <div className="hidden rounded-2xl border border-brand-border/70 bg-white/62 p-4 shadow-sm dark:bg-white/5 xl:block">
-                <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-brand-sage">Private Vault</p>
-                <p className="mt-2 text-xs leading-relaxed text-brand-text-muted">Local-first, encrypted sync aware, and ready to lock instantly.</p>
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-brand-sage">
+                  Private Vault
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-brand-text-muted">
+                  Local-first, encrypted sync aware, and ready to lock instantly.
+                </p>
               </div>
-              <button type="button" onClick={() => handleNavigate('stats', 'appSettings')} className="flex min-h-11 w-full items-center gap-3 rounded-xl px-4 text-sm font-bold text-brand-plum hover:bg-white/60 dark:text-brand-text dark:hover:bg-white/5">
+              <button
+                type="button"
+                onClick={() => handleNavigate('stats', 'appSettings')}
+                className="flex min-h-11 w-full items-center gap-3 rounded-xl px-4 text-sm font-bold text-brand-plum hover:bg-white/60 dark:text-brand-text dark:hover:bg-white/5"
+              >
                 <ShieldCheck className="h-5 w-5" /> Settings
               </button>
               <button
@@ -1413,13 +1651,20 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           <section className="flex min-w-0 flex-1 flex-col">
             <header className="flex h-16 shrink-0 items-center justify-between border-b border-brand-border/55 bg-brand-bg/78 px-5 backdrop-blur-2xl dark:bg-brand-bg/70 xl:h-20 xl:px-10">
               <div className="min-w-0">
-                <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-brand-sage">Dear Diary</p>
-                <h2 className="truncate font-serif-diary text-xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-2xl">{desktopPageTitle()}</h2>
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-brand-sage">
+                  Dear Diary
+                </p>
+                <h2 className="truncate font-serif-diary text-xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-2xl">
+                  {desktopPageTitle()}
+                </h2>
               </div>
 
               <div className="flex min-w-0 items-center gap-3 xl:gap-4">
                 {renderSyncStatusBadge('desktop')}
-                <form onSubmit={handleDesktopSearchSubmit} className="relative hidden w-[18rem] max-w-[30vw] lg:block xl:w-[28rem] xl:max-w-[36vw]">
+                <form
+                  onSubmit={handleDesktopSearchSubmit}
+                  className="relative hidden w-[18rem] max-w-[30vw] lg:block xl:w-[28rem] xl:max-w-[36vw]"
+                >
                   <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
                   <input
                     type="text"
@@ -1478,7 +1723,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       <GlobalLoaderOverlay loading={globalLoading} />
       {renderDesktopBackground()}
       {!isOnline && (
-        <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg" role="status">
+        <div
+          className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg"
+          role="status"
+        >
           <WifiOff className="h-4 w-4" />
           <span>Offline. Synced changes are paused.</span>
         </div>
@@ -1516,14 +1764,15 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         {renderSyncStatusBadge()}
         <GlobalLoaderOverlay loading={globalLoading} />
         {!isOnline && (
-          <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg" role="status">
+          <div
+            className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg"
+            role="status"
+          >
             <WifiOff className="h-4 w-4" />
             <span>Offline. Synced changes are paused.</span>
           </div>
         )}
-        <div className="z-10 flex-grow flex flex-col">
-          {renderSuspendedContent()}
-        </div>
+        <div className="z-10 flex-grow flex flex-col">{renderSuspendedContent()}</div>
         {renderToast()}
       </div>
     );
@@ -1538,7 +1787,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   }
 
   return (
-    <div className={`app-canvas tablet-shell-content min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none relative safe-area-root app-shell ${layout === 'mobile' && showRootNavigation ? 'app-shell-with-navigation' : ''}`}>
+    <div
+      className={`app-canvas tablet-shell-content min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none relative safe-area-root app-shell ${layout === 'mobile' && showRootNavigation ? 'app-shell-with-navigation' : ''}`}
+    >
       {renderSyncAuthorizationBanner()}
       {renderSyncStatusBadge()}
       <GlobalLoaderOverlay loading={globalLoading} />
@@ -1553,12 +1804,15 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         />
       )}
       {!isOnline && (
-        <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg" role="status">
+        <div
+          className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg"
+          role="status"
+        >
           <WifiOff className="h-4 w-4" />
           <span>Offline. Synced changes are paused.</span>
         </div>
       )}
-      
+
       {/* Main Container */}
       <main className="w-full max-w-lg z-10 px-4 pt-1 pb-6 flex-grow flex flex-col justify-between app-main">
         {currentScreen === 'list' && !isLocalFocusedFlow && (
@@ -1581,7 +1835,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       </main>
 
       {layout === 'mobile' && showRootNavigation && (
-        <MobileBottomNavigation active={activeTab} onNavigate={(destination) => handleNavigate(destination)} onCreate={() => setIsCreateSheetOpen(true)} />
+        <MobileBottomNavigation
+          active={activeTab}
+          onNavigate={(destination) => handleNavigate(destination)}
+          onCreate={() => setIsCreateSheetOpen(true)}
+        />
       )}
 
       <CreateActionSheet

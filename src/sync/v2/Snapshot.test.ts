@@ -21,16 +21,24 @@ import type {
 
 class MemoryStore implements LocalDataStore {
   readonly values = new Map<string, string>();
-  async getItem(key: string): Promise<string | null> { return this.values.get(key) ?? null; }
-  async setItem(key: string, value: string): Promise<void> { this.values.set(key, value); }
+  async getItem(key: string): Promise<string | null> {
+    return this.values.get(key) ?? null;
+  }
+  async setItem(key: string, value: string): Promise<void> {
+    this.values.set(key, value);
+  }
   async setItems(items: Record<string, string>): Promise<void> {
     const next = new Map(this.values);
     Object.entries(items).forEach(([key, value]) => next.set(key, value));
     this.values.clear();
     next.forEach((value, key) => this.values.set(key, value));
   }
-  async removeItem(key: string): Promise<void> { this.values.delete(key); }
-  async clear(): Promise<void> { this.values.clear(); }
+  async removeItem(key: string): Promise<void> {
+    this.values.delete(key);
+  }
+  async clear(): Promise<void> {
+    this.values.clear();
+  }
 }
 
 class SnapshotApi {
@@ -40,7 +48,9 @@ class SnapshotApi {
   acknowledged: number[] = [];
   initiatedSnapshotIds: string[] = [];
 
-  initiateSnapshot = async (request: InitiateSyncV2SnapshotRequest): Promise<InitiateSyncV2SnapshotResponse> => {
+  initiateSnapshot = async (
+    request: InitiateSyncV2SnapshotRequest,
+  ): Promise<InitiateSyncV2SnapshotResponse> => {
     this.initiatedSnapshotIds.push(request.snapshotId);
     this.request = request;
     this.objectKey = `snapshot/${request.snapshotId}`;
@@ -48,7 +58,12 @@ class SnapshotApi {
       snapshotId: request.snapshotId,
       status: 'UPLOADING',
       existing: false,
-      upload: { objectKey: this.objectKey, uploadUrl: 'https://objects.test/upload', headers: {}, expiresAt: new Date().toISOString() },
+      upload: {
+        objectKey: this.objectKey,
+        uploadUrl: 'https://objects.test/upload',
+        headers: {},
+        expiresAt: new Date().toISOString(),
+      },
     };
   };
   registerSnapshot = async (snapshotId: string): Promise<SyncV2Snapshot> => {
@@ -82,14 +97,24 @@ class SnapshotApi {
   }
 }
 
-const seedRuntime = async (store: MemoryStore, sequence: number, records: Record<string, unknown> = {}): Promise<void> => {
+const seedRuntime = async (
+  store: MemoryStore,
+  sequence: number,
+  records: Record<string, unknown> = {},
+): Promise<void> => {
   await store.setItems({
     [SYNC_V2_RUNTIME_KEY]: JSON.stringify({
-      accountId: 'account-1', protocolVersion: 2, eventSchemaVersion: 2,
-      snapshotSchemaVersion: 2, lastAppliedSequence: sequence, updatedAt: 1,
+      accountId: 'account-1',
+      protocolVersion: 2,
+      eventSchemaVersion: 2,
+      snapshotSchemaVersion: 2,
+      lastAppliedSequence: sequence,
+      updatedAt: 1,
     }),
     [SYNC_V2_RECORDS_KEY]: JSON.stringify(records),
-    [SYNC_V2_VERSIONS_KEY]: JSON.stringify(Object.fromEntries(Object.keys(records).map(key => [key, 1]))),
+    [SYNC_V2_VERSIONS_KEY]: JSON.stringify(
+      Object.fromEntries(Object.keys(records).map((key) => [key, 1])),
+    ),
   });
 };
 
@@ -114,20 +139,47 @@ const harness = async () => {
   const key = new Uint8Array(32).fill(7);
   const codec = new AccountKeySyncV2SnapshotCodec(async () => key);
   const options = {
-    accountId: 'account-1', deviceId: 'device-1', protocolVersion: 2,
-    snapshotSchemaVersion: 2, maximumSnapshotBytes: 1024 * 1024,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    protocolVersion: 2,
+    snapshotSchemaVersion: 2,
+    maximumSnapshotBytes: 1024 * 1024,
     currentKeyEpoch: async () => 1,
   };
-  const createWithFaults = (faults = new TestSyncFaultInjector()) => new SyncV2SnapshotCoordinator(
-    api, transfer, new PersistentSyncV2SnapshotStore(source), codec,
-    new PersistentSafetyStopStore(source), options, undefined, faults,
-  );
+  const createWithFaults = (faults = new TestSyncFaultInjector()) =>
+    new SyncV2SnapshotCoordinator(
+      api,
+      transfer,
+      new PersistentSyncV2SnapshotStore(source),
+      codec,
+      new PersistentSafetyStopStore(source),
+      options,
+      undefined,
+      faults,
+    );
   const create = createWithFaults();
-  const restore = (faults = new TestSyncFaultInjector()) => new SyncV2SnapshotCoordinator(
-    api, transfer, new PersistentSyncV2SnapshotStore(destination), codec,
-    new PersistentSafetyStopStore(destination), options, undefined, faults,
-  );
-  return { source, destination, api, create, createWithFaults, restore, setCorrupt: (value: boolean) => { corruptDownload = value; } };
+  const restore = (faults = new TestSyncFaultInjector()) =>
+    new SyncV2SnapshotCoordinator(
+      api,
+      transfer,
+      new PersistentSyncV2SnapshotStore(destination),
+      codec,
+      new PersistentSafetyStopStore(destination),
+      options,
+      undefined,
+      faults,
+    );
+  return {
+    source,
+    destination,
+    api,
+    create,
+    createWithFaults,
+    restore,
+    setCorrupt: (value: boolean) => {
+      corruptDownload = value;
+    },
+  };
 };
 
 test('creates, registers, restores, and acknowledges an integrity-verified account snapshot', async () => {
@@ -137,7 +189,10 @@ test('creates, registers, restores, and acknowledges an integrity-verified accou
   assert.deepEqual(JSON.parse((await context.destination.getItem(SYNC_V2_RECORDS_KEY))!), {
     'ENTRY:entry-1': { title: 'encrypted before transport' },
   });
-  assert.equal(JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence, 2);
+  assert.equal(
+    JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence,
+    2,
+  );
   assert.deepEqual(context.api.acknowledged, [2]);
 });
 
@@ -149,10 +204,16 @@ test('snapshot import crash leaves local state untouched and a restart can resto
     /Injected sync crash/,
   );
   assert.deepEqual(JSON.parse((await context.destination.getItem(SYNC_V2_RECORDS_KEY))!), {});
-  assert.equal(JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence, 0);
+  assert.equal(
+    JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence,
+    0,
+  );
 
   await context.restore().restoreLatest();
-  assert.equal(JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence, 2);
+  assert.equal(
+    JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence,
+    2,
+  );
 });
 
 test('snapshot creation resumes with the same encrypted journal after a crash', async () => {
@@ -170,11 +231,19 @@ test('corrupt snapshot engages a safety stop without replacing working local sta
   const context = await harness();
   await context.create.create();
   context.setCorrupt(true);
-  await assert.rejects(context.restore().restoreLatest(), error => (
-    typeof error === 'object' && error !== null && 'code' in error && error.code === 'HASH_MISMATCH'
-  ));
+  await assert.rejects(
+    context.restore().restoreLatest(),
+    (error) =>
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'HASH_MISMATCH',
+  );
   assert.deepEqual(JSON.parse((await context.destination.getItem(SYNC_V2_RECORDS_KEY))!), {});
-  assert.equal(JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence, 0);
+  assert.equal(
+    JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence,
+    0,
+  );
   assert.ok(await new PersistentSafetyStopStore(context.destination).get('account-1'));
 });
 
@@ -191,13 +260,28 @@ test('restore refuses to overwrite a non-empty local V2 state', async () => {
 test('restore refuses to bypass an unresolved local write', async () => {
   const context = await harness();
   await context.create.create();
-  await context.destination.setItem(SYNC_V2_OUTBOX_STORAGE_KEY, JSON.stringify({
-    'operation-1': {
-      operationId: 'operation-1', accountId: 'account-1', deviceId: 'device-1',
-      recordType: 'NOTE', recordId: 'note-1', operationType: 'UPSERT', baseRecordVersion: 0,
-      state: 'PENDING', retryCount: 0, nextAttemptAt: 0, createdAt: 1, updatedAt: 1,
-    },
-  }));
+  await context.destination.setItem(
+    SYNC_V2_OUTBOX_STORAGE_KEY,
+    JSON.stringify({
+      'operation-1': {
+        operationId: 'operation-1',
+        accountId: 'account-1',
+        deviceId: 'device-1',
+        recordType: 'NOTE',
+        recordId: 'note-1',
+        operationType: 'UPSERT',
+        baseRecordVersion: 0,
+        state: 'PENDING',
+        retryCount: 0,
+        nextAttemptAt: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    }),
+  );
   await assert.rejects(context.restore().restoreLatest());
-  assert.equal(JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence, 0);
+  assert.equal(
+    JSON.parse((await context.destination.getItem(SYNC_V2_RUNTIME_KEY))!).lastAppliedSequence,
+    0,
+  );
 });

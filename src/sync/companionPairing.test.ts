@@ -3,7 +3,12 @@ import test from 'node:test';
 import type { PairingSession, SyncObjectMetadata } from '../types';
 import type { SyncSecrets } from './syncSecrets';
 import { EventSyncEngine } from './eventSyncEngine';
-import { approveCompanionPairing, completeCompanionPairing, createCompanionPairingRequest, hashPairingCode } from './companionPairing';
+import {
+  approveCompanionPairing,
+  completeCompanionPairing,
+  createCompanionPairingRequest,
+  hashPairingCode,
+} from './companionPairing';
 import type { SupabaseControlPlaneClient } from './supabaseControlPlane';
 import { createRepository } from './testSupport';
 import { generateDeviceKeyPair } from './deviceKeys';
@@ -14,7 +19,7 @@ import { createStableSyncMediaReference, encodeSyncMediaPayload } from './syncMe
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 test('creates a short-lived web pairing request with hashed code and device key bundle', async () => {
@@ -37,7 +42,11 @@ test('creates a short-lived web pairing request with hashed code and device key 
   const controlPlane = {
     createPairingSession: async (input: any) => {
       request = input;
-      return { ...session, requestedDevicePublicKey: input.requestedDevicePublicKey, pairingCodeHash: input.pairingCodeHash };
+      return {
+        ...session,
+        requestedDevicePublicKey: input.requestedDevicePublicKey,
+        pairingCodeHash: input.pairingCodeHash,
+      };
     },
   } as unknown as SupabaseControlPlaneClient;
 
@@ -134,11 +143,14 @@ test('approves companions with an epoch-aware key package', async () => {
   let uploadedBody = '';
   globalThis.fetch = async (_input: RequestInfo | URL, init: RequestInit = {}) => {
     uploadedBody = Buffer.from(init.body as ArrayBuffer).toString('utf8');
-    return new Response(JSON.stringify({
-      id: 'drive-key-epoch',
-      name: '/key-packages/companion-pair-epoch.ddkey',
-      size: '1234',
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    return new Response(
+      JSON.stringify({
+        id: 'drive-key-epoch',
+        name: '/key-packages/companion-pair-epoch.ddkey',
+        size: '1234',
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
   };
   try {
     await approveCompanionPairing({
@@ -146,7 +158,12 @@ test('approves companions with an epoch-aware key package', async () => {
       pairingCode,
       repository,
       controlPlane,
-      googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token' },
+      googleSession: {
+        userId: 'google-1',
+        email: 'writer@example.com',
+        displayName: null,
+        accessToken: 'drive-token',
+      },
       loadSecrets: async () => secrets,
     });
   } finally {
@@ -175,12 +192,34 @@ test('newly paired companion can hydrate media encrypted before key rotation', a
     { keyEpoch: 1 },
   );
   const snapshot = {
-    diaries: [{ id: 'diary-default', name: 'Diary', emoji: 'D', color: '#000', isLocked: false, entryCount: 1, lastUpdated: 'Today' }],
-    entries: [{
-      id: 'entry-photo', diaryId: 'diary-default', date: '2026-07-06', title: 'Photo',
-      body: '', moodName: 'Calm', moodEmoji: '', tags: [], photoUris: [photoReference],
-      photoCount: 1, wordCount: 0, createdAt: 1, updatedAt: 2,
-    }],
+    diaries: [
+      {
+        id: 'diary-default',
+        name: 'Diary',
+        emoji: 'D',
+        color: '#000',
+        isLocked: false,
+        entryCount: 1,
+        lastUpdated: 'Today',
+      },
+    ],
+    entries: [
+      {
+        id: 'entry-photo',
+        diaryId: 'diary-default',
+        date: '2026-07-06',
+        title: 'Photo',
+        body: '',
+        moodName: 'Calm',
+        moodEmoji: '',
+        tags: [],
+        photoUris: [photoReference],
+        photoCount: 1,
+        wordCount: 0,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    ],
     notes: [],
     syncRecordVersions: { 'entry:entry-photo': 1 },
     syncMediaPointers: {
@@ -202,22 +241,36 @@ test('newly paired companion can hydrate media encrypted before key rotation', a
     encodeRepositorySnapshotPayload(snapshot, 'account-1', 6),
     { keyEpoch: 2 },
   );
-  const keyPackageBytes = encodeCompanionKeyPackage(await wrapRootKeyForCompanion(
-    epochTwoRootKey,
-    'account-1',
-    companion.publicKey,
-    { keyEpoch: 2, accountRootKeys: { 1: epochOneRootKey, 2: epochTwoRootKey } },
-  ));
+  const keyPackageBytes = encodeCompanionKeyPackage(
+    await wrapRootKeyForCompanion(epochTwoRootKey, 'account-1', companion.publicKey, {
+      keyEpoch: 2,
+      accountRootKeys: { 1: epochOneRootKey, 2: epochTwoRootKey },
+    }),
+  );
   const objects: SyncObjectMetadata[] = [
     {
-      id: 'key-object', accountId: 'account-1', sequence: 2, driveFileId: 'drive-key',
-      objectKind: 'key_package', sha256: await sha256Hex(keyPackageBytes), sizeBytes: keyPackageBytes.byteLength,
-      createdByDeviceId: 'primary', createdAt: '2026-07-06T00:00:00.000Z', keyEpoch: 2,
+      id: 'key-object',
+      accountId: 'account-1',
+      sequence: 2,
+      driveFileId: 'drive-key',
+      objectKind: 'key_package',
+      sha256: await sha256Hex(keyPackageBytes),
+      sizeBytes: keyPackageBytes.byteLength,
+      createdByDeviceId: 'primary',
+      createdAt: '2026-07-06T00:00:00.000Z',
+      keyEpoch: 2,
     },
     {
-      id: 'snapshot-object', accountId: 'account-1', sequence: 6, driveFileId: 'drive-snapshot',
-      objectKind: 'snapshot', sha256: encryptedSnapshot.sha256, sizeBytes: encryptedSnapshot.bytes.byteLength,
-      createdByDeviceId: 'primary', createdAt: '2026-07-06T00:00:01.000Z', keyEpoch: 2,
+      id: 'snapshot-object',
+      accountId: 'account-1',
+      sequence: 6,
+      driveFileId: 'drive-snapshot',
+      objectKind: 'snapshot',
+      sha256: encryptedSnapshot.sha256,
+      sizeBytes: encryptedSnapshot.bytes.byteLength,
+      createdByDeviceId: 'primary',
+      createdAt: '2026-07-06T00:00:01.000Z',
+      keyEpoch: 2,
     },
   ];
   const approvedSession: PairingSession = {
@@ -240,19 +293,31 @@ test('newly paired companion can hydrate media encrypted before key rotation', a
     getPairingSession: async () => ({
       session: approvedSession,
       device: {
-        id: 'web-2', accountId: 'account-1', role: 'web_companion', publicKey: companion.publicKey,
-        displayName: 'Browser', platform: 'web', createdAt: '', lastSeenAt: '',
-        revokedAt: null, replacedByDeviceId: null,
+        id: 'web-2',
+        accountId: 'account-1',
+        role: 'web_companion',
+        publicKey: companion.publicKey,
+        displayName: 'Browser',
+        platform: 'web',
+        createdAt: '',
+        lastSeenAt: '',
+        revokedAt: null,
+        replacedByDeviceId: null,
       },
       keyObject: objects[0],
     }),
     getLatestRestoreManifest: async () => {
       calls.push('manifest');
-      return { manifestObject: null, coreSnapshotObject: null, currentSyncSequence: 6, keyEpoch: 2 };
+      return {
+        manifestObject: null,
+        coreSnapshotObject: null,
+        currentSyncSequence: 6,
+        keyEpoch: 2,
+      };
     },
     listSyncObjectsAfter: async (_deviceId: string, afterSequence: number) => {
       calls.push('legacy-list');
-      return objects.filter(object => object.sequence > afterSequence);
+      return objects.filter((object) => object.sequence > afterSequence);
     },
     updateDeviceCursor: async () => ({}),
   } as unknown as SupabaseControlPlaneClient;
@@ -272,9 +337,20 @@ test('newly paired companion can hydrate media encrypted before key rotation', a
     },
     repository,
     controlPlane,
-    googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token' },
-    supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
-    saveSecrets: async secrets => { savedSecrets = secrets; },
+    googleSession: {
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
+    },
+    supabaseSession: {
+      accessToken: 'supabase-token',
+      refreshToken: 'refresh',
+      expiresAt: 2_000_000_000,
+    },
+    saveSecrets: async (secrets) => {
+      savedSecrets = secrets;
+    },
     download: async (_session, fileId) => files.get(fileId)!,
   });
 
@@ -285,7 +361,12 @@ test('newly paired companion can hydrate media encrypted before key rotation', a
   const engine = new EventSyncEngine(repository, {
     isOnline: () => true,
     loadSecrets: async () => savedSecrets,
-    restoreGoogleSession: async () => ({ userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token' }),
+    restoreGoogleSession: async () => ({
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
+    }),
     createControlPlane: () => controlPlane,
     download: async (_session, fileId) => files.get(fileId)!,
   });
@@ -298,16 +379,23 @@ test('companion restore does not fall back to full snapshot when a manifest rest
   const repository = await createRepository();
   const companion = await generateDeviceKeyPair();
   const accountRootKey = crypto.getRandomValues(new Uint8Array(32));
-  const keyPackageBytes = encodeCompanionKeyPackage(await wrapRootKeyForCompanion(
-    accountRootKey,
-    'account-1',
-    companion.publicKey,
-    { keyEpoch: 1, accountRootKeys: { 1: accountRootKey } },
-  ));
+  const keyPackageBytes = encodeCompanionKeyPackage(
+    await wrapRootKeyForCompanion(accountRootKey, 'account-1', companion.publicKey, {
+      keyEpoch: 1,
+      accountRootKeys: { 1: accountRootKey },
+    }),
+  );
   const keyObject: SyncObjectMetadata = {
-    id: 'key-object', accountId: 'account-1', sequence: 2, driveFileId: 'drive-key',
-    objectKind: 'key_package', sha256: await sha256Hex(keyPackageBytes), sizeBytes: keyPackageBytes.byteLength,
-    createdByDeviceId: 'primary', createdAt: '2026-07-06T00:00:00.000Z', keyEpoch: 1,
+    id: 'key-object',
+    accountId: 'account-1',
+    sequence: 2,
+    driveFileId: 'drive-key',
+    objectKind: 'key_package',
+    sha256: await sha256Hex(keyPackageBytes),
+    sizeBytes: keyPackageBytes.byteLength,
+    createdByDeviceId: 'primary',
+    createdAt: '2026-07-06T00:00:00.000Z',
+    keyEpoch: 1,
   };
   const approvedSession: PairingSession = {
     id: 'pair-manifest-fail',
@@ -329,17 +417,31 @@ test('companion restore does not fall back to full snapshot when a manifest rest
     getPairingSession: async () => ({
       session: approvedSession,
       device: {
-        id: 'web-2', accountId: 'account-1', role: 'web_companion', publicKey: companion.publicKey,
-        displayName: 'Browser', platform: 'web', createdAt: '', lastSeenAt: '',
-        revokedAt: null, replacedByDeviceId: null,
+        id: 'web-2',
+        accountId: 'account-1',
+        role: 'web_companion',
+        publicKey: companion.publicKey,
+        displayName: 'Browser',
+        platform: 'web',
+        createdAt: '',
+        lastSeenAt: '',
+        revokedAt: null,
+        replacedByDeviceId: null,
       },
       keyObject,
     }),
     getLatestRestoreManifest: async () => ({
       manifestObject: {
-        id: 'manifest-object', accountId: 'account-1', sequence: 5, driveFileId: 'drive-bad-manifest',
-        objectKind: 'manifest', sha256: 'not-the-bad-bytes-sha', sizeBytes: 3,
-        createdByDeviceId: 'primary', createdAt: '2026-07-06T00:00:01.000Z', keyEpoch: 1,
+        id: 'manifest-object',
+        accountId: 'account-1',
+        sequence: 5,
+        driveFileId: 'drive-bad-manifest',
+        objectKind: 'manifest',
+        sha256: 'not-the-bad-bytes-sha',
+        sizeBytes: 3,
+        createdByDeviceId: 'primary',
+        createdAt: '2026-07-06T00:00:01.000Z',
+        keyEpoch: 1,
       },
       coreSnapshotObject: null,
       currentSyncSequence: 5,
@@ -357,20 +459,30 @@ test('companion restore does not fall back to full snapshot when a manifest rest
   ]);
 
   await assert.rejects(
-    () => completeCompanionPairing({
-      pending: {
-        session: approvedSession,
-        pairingCode: '12345678',
-        devicePublicKey: companion.publicKey,
-        devicePrivateKey: companion.privateKeyJwk,
-      },
-      repository,
-      controlPlane,
-      googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token' },
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
-      saveSecrets: async () => undefined,
-      download: async (_session, fileId) => files.get(fileId)!,
-    }),
+    () =>
+      completeCompanionPairing({
+        pending: {
+          session: approvedSession,
+          pairingCode: '12345678',
+          devicePublicKey: companion.publicKey,
+          devicePrivateKey: companion.privateKeyJwk,
+        },
+        repository,
+        controlPlane,
+        googleSession: {
+          userId: 'google-1',
+          email: 'writer@example.com',
+          displayName: null,
+          accessToken: 'drive-token',
+        },
+        supabaseSession: {
+          accessToken: 'supabase-token',
+          refreshToken: 'refresh',
+          expiresAt: 2_000_000_000,
+        },
+        saveSecrets: async () => undefined,
+        download: async (_session, fileId) => files.get(fileId)!,
+      }),
     /integrity check failed|checksum|manifest|decrypt|invalid/i,
   );
   assert.equal(legacyListCalls, 0);

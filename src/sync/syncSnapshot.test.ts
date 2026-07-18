@@ -26,9 +26,16 @@ const metadata = (
 });
 
 test('round-trips record versions in snapshot format v2', () => {
-  const bytes = encodeRepositorySnapshotPayload({
-    diaries: [], entries: [], notes: [], syncRecordVersions: { 'note:note-1': 4 },
-  }, 'account-1', 12);
+  const bytes = encodeRepositorySnapshotPayload(
+    {
+      diaries: [],
+      entries: [],
+      notes: [],
+      syncRecordVersions: { 'note:note-1': 4 },
+    },
+    'account-1',
+    12,
+  );
   const parsed = parseRepositorySnapshotPayload(bytes, 'account-1');
   assert.equal(parsed.formatVersion, 2);
   assert.equal(parsed.baseSequence, 12);
@@ -37,9 +44,20 @@ test('round-trips record versions in snapshot format v2', () => {
 
 test('falls back to the newest older snapshot that passes integrity and decryption', async () => {
   const rootKey = crypto.getRandomValues(new Uint8Array(32));
-  const valid = await encryptSyncPayload(rootKey, 'snapshot', encodeRepositorySnapshotPayload({
-    diaries: [], entries: [], notes: [], syncRecordVersions: {},
-  }, 'account-1', 4));
+  const valid = await encryptSyncPayload(
+    rootKey,
+    'snapshot',
+    encodeRepositorySnapshotPayload(
+      {
+        diaries: [],
+        entries: [],
+        notes: [],
+        syncRecordVersions: {},
+      },
+      'account-1',
+      4,
+    ),
+  );
   const corrupt = new Uint8Array(valid.bytes);
   corrupt[corrupt.length - 1] ^= 1;
   const objects = [
@@ -52,7 +70,7 @@ test('falls back to the newest older snapshot that passes integrity and decrypti
     accountId: 'account-1',
     accountRootKey: rootKey,
     googleSession: { userId: 'google-1', email: null, displayName: null, accessToken: 'token' },
-    download: async (_session, fileId) => fileId === 'corrupt-latest' ? corrupt : valid.bytes,
+    download: async (_session, fileId) => (fileId === 'corrupt-latest' ? corrupt : valid.bytes),
   });
 
   assert.equal(restored.object.sequence, 5);
@@ -65,12 +83,26 @@ test('restores snapshots using encrypted header epoch when metadata is missing k
   const snapshot = await encryptSyncPayload(
     epochTwoRootKey,
     'snapshot',
-    encodeRepositorySnapshotPayload({
-      diaries: [{ id: 'diary-epoch', name: 'Epoch Diary', emoji: 'D', color: '#000', isLocked: false, entryCount: 0, lastUpdated: '' }],
-      entries: [],
-      notes: [],
-      syncRecordVersions: {},
-    }, 'account-1', 4),
+    encodeRepositorySnapshotPayload(
+      {
+        diaries: [
+          {
+            id: 'diary-epoch',
+            name: 'Epoch Diary',
+            emoji: 'D',
+            color: '#000',
+            isLocked: false,
+            entryCount: 0,
+            lastUpdated: '',
+          },
+        ],
+        entries: [],
+        notes: [],
+        syncRecordVersions: {},
+      },
+      'account-1',
+      4,
+    ),
     { keyEpoch: 2 },
   );
 

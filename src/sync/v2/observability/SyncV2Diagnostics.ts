@@ -18,8 +18,12 @@ export const exportSyncV2Diagnostics = (input: SyncV2DiagnosticsInput) => ({
   platform: input.platform,
   protocolVersion: input.protocolVersion,
   databaseSchemaVersion: input.databaseSchemaVersion,
-  outboxCounts: Object.fromEntries([...new Set(input.operations.map(operation => operation.state))]
-    .map(state => [state, input.operations.filter(operation => operation.state === state).length])),
+  outboxCounts: Object.fromEntries(
+    [...new Set(input.operations.map((operation) => operation.state))].map((state) => [
+      state,
+      input.operations.filter((operation) => operation.state === state).length,
+    ]),
+  ),
   syncHealth: {
     lastPushAttemptAt: input.health.lastPushAttemptAt,
     lastSuccessfulPushAt: input.health.lastSuccessfulPushAt,
@@ -28,8 +32,14 @@ export const exportSyncV2Diagnostics = (input: SyncV2DiagnosticsInput) => ({
     sequenceLag: input.health.sequenceLag,
     integrityState: input.health.integrityState,
   },
-  errorCodeCounts: Object.fromEntries([...new Set(input.operations.map(operation => operation.lastErrorCode).filter(Boolean))]
-    .map(code => [code!, input.operations.filter(operation => operation.lastErrorCode === code).length])),
+  errorCodeCounts: Object.fromEntries(
+    [...new Set(input.operations.map((operation) => operation.lastErrorCode).filter(Boolean))].map(
+      (code) => [
+        code!,
+        input.operations.filter((operation) => operation.lastErrorCode === code).length,
+      ],
+    ),
+  ),
   featureFlags: input.featureFlags,
   performanceBuckets: input.performanceBuckets || {},
 });

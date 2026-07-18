@@ -12,7 +12,7 @@ test('retries retryable responses and preserves a correlation identifier', async
       attempts += 1;
       return new Response('', { status: attempts === 1 ? 503 : 200 });
     },
-    mapError: error => mapDriveError(error, 'download'),
+    mapError: (error) => mapDriveError(error, 'download'),
     retryPolicy: { maxAttempts: 2 },
     random: () => 0,
     sleep: async () => undefined,
@@ -24,15 +24,19 @@ test('retries retryable responses and preserves a correlation identifier', async
 
 test('does not retry non-retryable authorization failures', async () => {
   let attempts = 0;
-  await assert.rejects(executeRequest({
-    request: async () => {
-      attempts += 1;
-      return new Response('', { status: 401 });
-    },
-    mapError: error => mapDriveError(error),
-    sleep: async () => undefined,
-  }), (error: unknown) => (
-    typeof error === 'object' && error !== null && (error as { code?: string }).code === 'AUTH_EXPIRED'
-  ));
+  await assert.rejects(
+    executeRequest({
+      request: async () => {
+        attempts += 1;
+        return new Response('', { status: 401 });
+      },
+      mapError: (error) => mapDriveError(error),
+      sleep: async () => undefined,
+    }),
+    (error: unknown) =>
+      typeof error === 'object' &&
+      error !== null &&
+      (error as { code?: string }).code === 'AUTH_EXPIRED',
+  );
   assert.equal(attempts, 1);
 });

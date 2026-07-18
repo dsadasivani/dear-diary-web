@@ -59,31 +59,23 @@ const SUPPORTED_SOURCE_MIME_TYPES = new Set([
   'image/bmp',
 ]);
 
-const MIME_TYPES_WITHOUT_ALPHA = new Set([
-  'image/jpeg',
-  'image/jpg',
-  'image/bmp',
-]);
+const MIME_TYPES_WITHOUT_ALPHA = new Set(['image/jpeg', 'image/jpg', 'image/bmp']);
 
 let webpSupportPromise: Promise<boolean> | null = null;
 
-const now = (): number => (
+const now = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
-    : Date.now()
-);
+    : Date.now();
 
-const normalizeMimeType = (mimeType?: string): string => (
-  (mimeType || '').split(';')[0].trim().toLowerCase()
-);
+const normalizeMimeType = (mimeType?: string): string =>
+  (mimeType || '').split(';')[0].trim().toLowerCase();
 
-export const getImageOptimizationPolicy = (kind: ImageStorageKind): ImageOptimizationPolicy => (
-  IMAGE_OPTIMIZATION_POLICIES[kind]
-);
+export const getImageOptimizationPolicy = (kind: ImageStorageKind): ImageOptimizationPolicy =>
+  IMAGE_OPTIMIZATION_POLICIES[kind];
 
-export const isSupportedImageMimeType = (mimeType: string): boolean => (
-  SUPPORTED_SOURCE_MIME_TYPES.has(normalizeMimeType(mimeType))
-);
+export const isSupportedImageMimeType = (mimeType: string): boolean =>
+  SUPPORTED_SOURCE_MIME_TYPES.has(normalizeMimeType(mimeType));
 
 export const getImageOptimizationSkipReason = (
   mimeType: string,
@@ -136,13 +128,18 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
-  return typeof btoa === 'function' ? btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
+  return typeof btoa === 'function'
+    ? btoa(binary)
+    : Buffer.from(binary, 'binary').toString('base64');
 };
 
 const base64ToBytes = (base64: string): Uint8Array => {
   const normalized = base64.replace(/\s/g, '');
-  const binary = typeof atob === 'function' ? atob(normalized) : Buffer.from(normalized, 'base64').toString('binary');
-  return Uint8Array.from(binary, character => character.charCodeAt(0));
+  const binary =
+    typeof atob === 'function'
+      ? atob(normalized)
+      : Buffer.from(normalized, 'base64').toString('binary');
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 };
 
 const blobToDataUri = async (blob: Blob, fallbackMimeType: string): Promise<string> => {
@@ -150,7 +147,10 @@ const blobToDataUri = async (blob: Blob, fallbackMimeType: string): Promise<stri
   return `data:${blob.type || fallbackMimeType};base64,${bytesToBase64(bytes)}`;
 };
 
-const parseDataUri = (dataUri: string, fallbackMimeType?: string): { bytes: Uint8Array; mimeType: string } => {
+const parseDataUri = (
+  dataUri: string,
+  fallbackMimeType?: string,
+): { bytes: Uint8Array; mimeType: string } => {
   const commaIndex = dataUri.indexOf(',');
   if (!dataUri.startsWith('data:') || commaIndex < 0) {
     throw new Error('Image data URI is invalid.');
@@ -159,13 +159,13 @@ const parseDataUri = (dataUri: string, fallbackMimeType?: string): { bytes: Uint
   const metadata = dataUri.slice('data:'.length, commaIndex);
   const data = dataUri.slice(commaIndex + 1);
   const metadataParts = metadata.split(';').filter(Boolean);
-  const isBase64 = metadataParts.some(part => part.toLowerCase() === 'base64');
+  const isBase64 = metadataParts.some((part) => part.toLowerCase() === 'base64');
   const mimeType = normalizeMimeType(
-    metadataParts.find(part => part.includes('/')) || fallbackMimeType || 'application/octet-stream',
+    metadataParts.find((part) => part.includes('/')) ||
+      fallbackMimeType ||
+      'application/octet-stream',
   );
-  const bytes = isBase64
-    ? base64ToBytes(data)
-    : new TextEncoder().encode(decodeURIComponent(data));
+  const bytes = isBase64 ? base64ToBytes(data) : new TextEncoder().encode(decodeURIComponent(data));
   return { bytes, mimeType };
 };
 
@@ -201,19 +201,14 @@ const sourceFromInput = async (input: ImageOptimizationInput): Promise<ImageSour
   };
 };
 
-const hasCanvasEncodingApis = (): boolean => (
-  typeof document !== 'undefined'
-  && typeof Blob !== 'undefined'
-  && typeof URL !== 'undefined'
-);
+const hasCanvasEncodingApis = (): boolean =>
+  typeof document !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined';
 
 const canvasToBlob = (
   canvas: HTMLCanvasElement,
   mimeType: string,
   quality?: number,
-): Promise<Blob | null> => (
-  new Promise(resolve => canvas.toBlob(resolve, mimeType, quality))
-);
+): Promise<Blob | null> => new Promise((resolve) => canvas.toBlob(resolve, mimeType, quality));
 
 const detectWebpSupport = async (): Promise<boolean> => {
   if (webpSupportPromise) return webpSupportPromise;
@@ -229,7 +224,9 @@ const detectWebpSupport = async (): Promise<boolean> => {
   return webpSupportPromise;
 };
 
-const decodeImage = async (blob: Blob): Promise<{
+const decodeImage = async (
+  blob: Blob,
+): Promise<{
   width: number;
   height: number;
   draw: (context: CanvasRenderingContext2D, width: number, height: number) => void;
@@ -237,7 +234,9 @@ const decodeImage = async (blob: Blob): Promise<{
 }> => {
   if (typeof createImageBitmap === 'function') {
     try {
-      const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' } as ImageBitmapOptions);
+      const bitmap = await createImageBitmap(blob, {
+        imageOrientation: 'from-image',
+      } as ImageBitmapOptions);
       return {
         width: bitmap.width,
         height: bitmap.height,
@@ -271,10 +270,7 @@ const decodeImage = async (blob: Blob): Promise<{
   }
 };
 
-const skipResult = (
-  source: ImageSource,
-  reason: string,
-): ImageOptimizationResult => ({
+const skipResult = (source: ImageSource, reason: string): ImageOptimizationResult => ({
   dataUri: source.dataUri,
   mimeType: source.mimeType,
   optimized: false,
@@ -283,11 +279,8 @@ const skipResult = (
   skippedReason: reason,
 });
 
-export const canUseImageOptimizationWorker = (): boolean => (
-  typeof Worker !== 'undefined'
-  && typeof URL !== 'undefined'
-  && typeof Blob !== 'undefined'
-);
+export const canUseImageOptimizationWorker = (): boolean =>
+  typeof Worker !== 'undefined' && typeof URL !== 'undefined' && typeof Blob !== 'undefined';
 
 const optimizeImageSourceInWorker = (
   source: ImageSource,
@@ -295,9 +288,12 @@ const optimizeImageSourceInWorker = (
 ): Promise<ImageOptimizationResult | null> => {
   if (!canUseImageOptimizationWorker()) return Promise.resolve(null);
 
-  return new Promise(resolve => {
-    const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const worker = new Worker(new URL('./imageOptimization.worker.ts', import.meta.url), { type: 'module' });
+  return new Promise((resolve) => {
+    const id =
+      globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const worker = new Worker(new URL('./imageOptimization.worker.ts', import.meta.url), {
+      type: 'module',
+    });
     let settled = false;
     const timeout = setTimeout(() => {
       if (settled) return;
@@ -356,7 +352,8 @@ const optimizeImageSource = async (
     canvas.width = target.width;
     canvas.height = target.height;
     const context = canvas.getContext('2d');
-    if (!context || typeof canvas.toBlob !== 'function') return skipResult(source, 'canvas_unavailable');
+    if (!context || typeof canvas.toBlob !== 'function')
+      return skipResult(source, 'canvas_unavailable');
 
     decoded.draw(context, target.width, target.height);
 
@@ -399,16 +396,22 @@ export const optimizeImageForStorage = async (
     const earlySkipReason = getImageOptimizationSkipReason(source.mimeType, source.size, kind);
     result = earlySkipReason
       ? skipResult(source, earlySkipReason)
-      : await optimizeImageSourceInWorker(source, kind) || await optimizeImageSource(source, kind);
+      : (await optimizeImageSourceInWorker(source, kind)) ||
+        (await optimizeImageSource(source, kind));
     return result;
   } finally {
-    recordPerformanceMeasurement('image.optimize.storage', now() - startedAt, {
-      kind,
-      result: result?.optimized ? 'optimized' : result?.skippedReason || 'failed',
-      originalSize: result?.originalSize ?? originalSize,
-      finalSize: result?.finalSize ?? originalSize,
-      sourceMime,
-      outputMime: result?.mimeType || 'unknown',
-    }, startedAt);
+    recordPerformanceMeasurement(
+      'image.optimize.storage',
+      now() - startedAt,
+      {
+        kind,
+        result: result?.optimized ? 'optimized' : result?.skippedReason || 'failed',
+        originalSize: result?.originalSize ?? originalSize,
+        finalSize: result?.finalSize ?? originalSize,
+        sourceMime,
+        outputMime: result?.mimeType || 'unknown',
+      },
+      startedAt,
+    );
   }
 };

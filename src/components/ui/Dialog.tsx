@@ -14,7 +14,17 @@ export interface AppDialogProps {
   initialFocusRef?: RefObject<HTMLElement | null>;
 }
 
-export function AppDialog({ open, title, description, onClose, children, footer, label, className = '', initialFocusRef }: AppDialogProps) {
+export function AppDialog({
+  open,
+  title,
+  description,
+  onClose,
+  children,
+  footer,
+  label,
+  className = '',
+  initialFocusRef,
+}: AppDialogProps) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
@@ -23,7 +33,10 @@ export function AppDialog({ open, title, description, onClose, children, footer,
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
-    const focusTimer = window.setTimeout(() => (initialFocusRef?.current || closeRef.current)?.focus(), 0);
+    const focusTimer = window.setTimeout(
+      () => (initialFocusRef?.current || closeRef.current)?.focus(),
+      0,
+    );
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -32,7 +45,11 @@ export function AppDialog({ open, title, description, onClose, children, footer,
       }
       if (event.key !== 'Tab') return;
       const focusable: HTMLElement[] = dialogRef.current
-        ? Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])'))
+        ? Array.from(
+            dialogRef.current.querySelectorAll<HTMLElement>(
+              'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+            ),
+          )
         : [];
       if (!focusable.length) return;
       const first = focusable[0];
@@ -56,7 +73,10 @@ export function AppDialog({ open, title, description, onClose, children, footer,
   if (!open) return null;
   return (
     <OverlayPortal>
-      <div className="fixed inset-0 z-[120] flex items-end justify-center bg-[var(--scrim)] p-3 md:items-center" onMouseDown={event => event.target === event.currentTarget && onClose()}>
+      <div
+        className="fixed inset-0 z-[120] flex items-end justify-center bg-[var(--scrim)] p-3 md:items-center"
+        onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      >
         <section
           ref={dialogRef}
           role="dialog"
@@ -68,13 +88,32 @@ export function AppDialog({ open, title, description, onClose, children, footer,
         >
           <header className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] pb-4">
             <div>
-              <h2 id={label ? undefined : titleId} className="type-section-title">{title}</h2>
-              {description && <p id={descriptionId} className="type-supporting mt-1">{description}</p>}
+              <h2 id={label ? undefined : titleId} className="type-section-title">
+                {title}
+              </h2>
+              {description && (
+                <p id={descriptionId} className="type-supporting mt-1">
+                  {description}
+                </p>
+              )}
             </div>
-            <button ref={closeRef} type="button" aria-label="Close dialog" title="Close dialog" onClick={onClose} className="icon-button shrink-0"><X className="h-5 w-5" /></button>
+            <button
+              ref={closeRef}
+              type="button"
+              aria-label="Close dialog"
+              title="Close dialog"
+              onClick={onClose}
+              className="icon-button shrink-0"
+            >
+              <X className="h-5 w-5" />
+            </button>
           </header>
           <div className="py-5">{children}</div>
-          {footer && <footer className="flex flex-wrap justify-end gap-2 border-t border-[var(--border-subtle)] pt-4">{footer}</footer>}
+          {footer && (
+            <footer className="flex flex-wrap justify-end gap-2 border-t border-[var(--border-subtle)] pt-4">
+              {footer}
+            </footer>
+          )}
         </section>
       </div>
     </OverlayPortal>

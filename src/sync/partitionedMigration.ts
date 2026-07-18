@@ -1,5 +1,10 @@
 import type { DiaryRepository } from '../repositories';
-import type { GoogleAccountSession, LocalSyncAccountState, SyncObjectMetadata, SyncPartitionManifestEntry } from '../types';
+import type {
+  GoogleAccountSession,
+  LocalSyncAccountState,
+  SyncObjectMetadata,
+  SyncPartitionManifestEntry,
+} from '../types';
 import { encryptSyncPayload } from './encryptedSyncObject';
 import type { UploadDriveSyncObjectInput } from './driveSyncObjects';
 import { uploadDriveSyncObject } from './driveSyncObjects';
@@ -44,7 +49,8 @@ export const migrateLocalAccountToPartitionedSync = async ({
 
   const snapshot = await repository.exportSnapshot();
   const keyEpoch = localState.keyEpoch || 1;
-  const operationPrefix = operationIdPrefix || `partition-migration:${localState.accountId}:${keyEpoch}`;
+  const operationPrefix =
+    operationIdPrefix || `partition-migration:${localState.accountId}:${keyEpoch}`;
   const partitionObjects: SyncObjectMetadata[] = [];
   const snapshotMetadata: Partial<Record<string, Partial<SyncPartitionManifestEntry>>> = {};
 
@@ -56,10 +62,13 @@ export const migrateLocalAccountToPartitionedSync = async ({
       partitionKey,
       localState.currentSyncSequence,
     );
-    const encrypted = await encryptSyncPayload(accountRootKey, 'partition_snapshot', payload, { keyEpoch });
-    const drivePath = partitionKey === 'core'
-      ? `/partitions/core/core-v${localState.currentSyncSequence + 1}.ddpart`
-      : `/partitions/${partitionKey.slice('month:'.length).replace('-', '/')}-v${localState.currentSyncSequence + 1}.ddpart`;
+    const encrypted = await encryptSyncPayload(accountRootKey, 'partition_snapshot', payload, {
+      keyEpoch,
+    });
+    const drivePath =
+      partitionKey === 'core'
+        ? `/partitions/core/core-v${localState.currentSyncSequence + 1}.ddpart`
+        : `/partitions/${partitionKey.slice('month:'.length).replace('-', '/')}-v${localState.currentSyncSequence + 1}.ddpart`;
     const file = await upload({
       session: googleSession,
       name: drivePath,
@@ -101,7 +110,9 @@ export const migrateLocalAccountToPartitionedSync = async ({
     now,
   });
   const manifestBytes = encodePartitionManifestPayload(manifest);
-  const encryptedManifest = await encryptSyncPayload(accountRootKey, 'manifest', manifestBytes, { keyEpoch });
+  const encryptedManifest = await encryptSyncPayload(accountRootKey, 'manifest', manifestBytes, {
+    keyEpoch,
+  });
   const manifestFile = await upload({
     session: googleSession,
     name: `/manifests/account-manifest-v${partitionObjects.length + 1}.ddmanifest`,
@@ -120,7 +131,7 @@ export const migrateLocalAccountToPartitionedSync = async ({
     sha256: encryptedManifest.sha256,
     sizeBytes: encryptedManifest.bytes.byteLength,
     partitionKey: 'core',
-    affectedPartitionKeys: manifest.partitions.map(partition => partition.partitionKey),
+    affectedPartitionKeys: manifest.partitions.map((partition) => partition.partitionKey),
     operationId: `${operationPrefix}:manifest`,
     keyEpoch,
   });

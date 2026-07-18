@@ -68,53 +68,68 @@ test('web local data store reads repository collections from encrypted record st
     deardiary_sync_record_versions: JSON.stringify({ 'entry:entry-structured-1': 4 }),
   });
 
-  const entryRecord = await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.entries).getItem('entry-structured-1');
-  const versionRecord = await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.versions).getItem('entry:entry-structured-1');
+  const entryRecord = await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.entries).getItem(
+    'entry-structured-1',
+  );
+  const versionRecord = await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.versions).getItem(
+    'entry:entry-structured-1',
+  );
   assert.deepEqual(JSON.parse(entryRecord!), entries[0]);
   assert.equal(JSON.parse(versionRecord!), 4);
 
   await new WebEncryptedKeyValueStore(REPOSITORY_STORE).removeItem('deardiary_entries');
 
-  assert.deepEqual(await store.getStructuredRecord('deardiary_entries', 'entry-structured-1'), entries[0]);
+  assert.deepEqual(
+    await store.getStructuredRecord('deardiary_entries', 'entry-structured-1'),
+    entries[0],
+  );
   assert.deepEqual(await store.getStructuredCollection('deardiary_entries'), entries);
   assert.deepEqual(
-    (await store.queryEntries({ diaryId: 'diary-default', limit: 1 }))?.items.map(entry => entry.id),
+    (await store.queryEntries({ diaryId: 'diary-default', limit: 1 }))?.items.map(
+      (entry) => entry.id,
+    ),
     ['entry-structured-1'],
   );
-  const projection = (await store.queryEntryProjections({ diaryId: 'diary-default', limit: 1 }))?.items[0];
+  const projection = (await store.queryEntryProjections({ diaryId: 'diary-default', limit: 1 }))
+    ?.items[0];
   assert.equal(projection?.title, 'Structured');
   assert.equal('body' in (projection || {}), false);
-  const persistedProjection = await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.entryProjections)
-    .getItem('entry-structured-1');
+  const persistedProjection = await new WebEncryptedKeyValueStore(
+    WEB_RECORD_STORES.entryProjections,
+  ).getItem('entry-structured-1');
   assert.equal('body' in JSON.parse(persistedProjection!), false);
   assert.deepEqual(JSON.parse((await store.getItem('deardiary_entries'))!), entries);
-  assert.deepEqual(
-    JSON.parse((await store.getItem('deardiary_sync_record_versions'))!),
-    { 'entry:entry-structured-1': 4 },
-  );
+  assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_record_versions'))!), {
+    'entry:entry-structured-1': 4,
+  });
 });
 
 test('empty encrypted record collections override stale compatibility arrays', async () => {
   const store = new WebLocalDataStore();
   await store.clear();
-  const staleEntries = [{
-    id: 'entry-stale',
-    diaryId: 'diary-default',
-    date: '2026-07-10',
-    title: 'Stale',
-    body: '',
-    moodName: 'Calm',
-    moodEmoji: '',
-    tags: [],
-    photoUris: [],
-    photoCount: 0,
-    wordCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }];
+  const staleEntries = [
+    {
+      id: 'entry-stale',
+      diaryId: 'diary-default',
+      date: '2026-07-10',
+      title: 'Stale',
+      body: '',
+      moodName: 'Calm',
+      moodEmoji: '',
+      tags: [],
+      photoUris: [],
+      photoCount: 0,
+      wordCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ];
 
   await store.setItem('deardiary_entries', JSON.stringify([]));
-  await new WebEncryptedKeyValueStore(REPOSITORY_STORE).setItem('deardiary_entries', JSON.stringify(staleEntries));
+  await new WebEncryptedKeyValueStore(REPOSITORY_STORE).setItem(
+    'deardiary_entries',
+    JSON.stringify(staleEntries),
+  );
 
   assert.deepEqual(JSON.parse((await store.getItem('deardiary_entries'))!), []);
 });
@@ -122,21 +137,23 @@ test('empty encrypted record collections override stale compatibility arrays', a
 test('structured repository writes roll back record stores and compatibility rows together', async () => {
   const store = new WebLocalDataStore();
   await store.clear();
-  const oldEntries = [{
-    id: 'entry-atomic-old',
-    diaryId: 'diary-default',
-    date: '2026-07-10',
-    title: 'Old',
-    body: '',
-    moodName: 'Calm',
-    moodEmoji: '',
-    tags: [],
-    photoUris: [],
-    photoCount: 0,
-    wordCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }];
+  const oldEntries = [
+    {
+      id: 'entry-atomic-old',
+      diaryId: 'diary-default',
+      date: '2026-07-10',
+      title: 'Old',
+      body: '',
+      moodName: 'Calm',
+      moodEmoji: '',
+      tags: [],
+      photoUris: [],
+      photoCount: 0,
+      wordCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ];
   const nextEntries = [
     { ...oldEntries[0], title: 'New' },
     { ...oldEntries[0], id: 'entry-atomic-b', title: 'Abort me' },
@@ -166,7 +183,9 @@ test('structured repository writes roll back record stores and compatibility row
   }
 
   assert.deepEqual(JSON.parse((await store.getItem('deardiary_entries'))!), oldEntries);
-  const compatibility = await new WebEncryptedKeyValueStore(REPOSITORY_STORE).getItem('deardiary_entries');
+  const compatibility = await new WebEncryptedKeyValueStore(REPOSITORY_STORE).getItem(
+    'deardiary_entries',
+  );
   assert.deepEqual(JSON.parse(compatibility!), oldEntries);
   assert.equal((await store.queryEntryProjections({ limit: 1 }))?.items[0]?.title, 'Old');
 });
@@ -192,9 +211,18 @@ test('web structured record mutations update one encrypted record without rewrit
 
   await store.putStructuredRecord('deardiary_entries', entry.id, entry);
   assert.deepEqual(await store.getStructuredRecord('deardiary_entries', entry.id), entry);
-  assert.deepEqual((await store.queryEntries({ limit: 1 }))?.items.map(item => item.id), [entry.id]);
-  assert.deepEqual((await store.queryEntryProjections({ limit: 1 }))?.items.map(item => item.id), [entry.id]);
-  assert.equal(await new WebEncryptedKeyValueStore(REPOSITORY_STORE).getItem('deardiary_entries'), null);
+  assert.deepEqual(
+    (await store.queryEntries({ limit: 1 }))?.items.map((item) => item.id),
+    [entry.id],
+  );
+  assert.deepEqual(
+    (await store.queryEntryProjections({ limit: 1 }))?.items.map((item) => item.id),
+    [entry.id],
+  );
+  assert.equal(
+    await new WebEncryptedKeyValueStore(REPOSITORY_STORE).getItem('deardiary_entries'),
+    null,
+  );
 
   await store.deleteStructuredRecord('deardiary_entries', entry.id);
   assert.equal(await store.getStructuredRecord('deardiary_entries', entry.id), null);
@@ -223,16 +251,31 @@ test('projection rebuild removes stale rows and restores missing body-free summa
   await store.setItem('deardiary_entries', JSON.stringify([entry]));
   const projectionStore = new WebEncryptedKeyValueStore(WEB_RECORD_STORES.entryProjections);
   await projectionStore.removeItem(entry.id);
-  await projectionStore.setItem('entry-stale-projection', JSON.stringify({
-    id: 'entry-stale-projection', diaryId: 'diary-default', date: '2026-01-01', title: 'Stale',
-    moodName: '', moodEmoji: '', tags: [], photoUris: [], photoCount: 0, wordCount: 0,
-    createdAt: 1, updatedAt: 1,
-  }));
+  await projectionStore.setItem(
+    'entry-stale-projection',
+    JSON.stringify({
+      id: 'entry-stale-projection',
+      diaryId: 'diary-default',
+      date: '2026-01-01',
+      title: 'Stale',
+      moodName: '',
+      moodEmoji: '',
+      tags: [],
+      photoUris: [],
+      photoCount: 0,
+      wordCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+  );
 
   await new LocalDiaryRepository(store).rebuildDerivedProjections();
 
   const rebuilt = await store.queryEntryProjections({ limit: 10 });
-  assert.deepEqual(rebuilt?.items.map(item => item.id), [entry.id]);
+  assert.deepEqual(
+    rebuilt?.items.map((item) => item.id),
+    [entry.id],
+  );
   assert.equal(rebuilt?.items[0]?.title, entry.title);
   assert.equal('body' in (rebuilt?.items[0] || {}), false);
 });
@@ -270,7 +313,13 @@ test('web entry queries use IndexedDB metadata indexes instead of full collectio
   await store.putStructuredRecord('deardiary_entries', firstEntry.id, firstEntry);
   await store.putStructuredRecord('deardiary_entries', secondEntry.id, secondEntry);
   assert.deepEqual(
-    (await getPlainIndexRecords<{ id: string }>(WEB_QUERY_INDEX_STORES.entries, 'diaryId', 'diary-indexed')).map(record => record.id),
+    (
+      await getPlainIndexRecords<{ id: string }>(
+        WEB_QUERY_INDEX_STORES.entries,
+        'diaryId',
+        'diary-indexed',
+      )
+    ).map((record) => record.id),
     [firstEntry.id],
   );
 
@@ -286,13 +335,15 @@ test('web entry queries use IndexedDB metadata indexes instead of full collectio
 
   try {
     assert.deepEqual(
-      (await store.queryEntries({
-        diaryId: 'diary-indexed',
-        tags: ['market'],
-        query: 'cherries',
-        hasPhotos: true,
-        limit: 5,
-      }))?.items.map(entry => entry.id),
+      (
+        await store.queryEntries({
+          diaryId: 'diary-indexed',
+          tags: ['market'],
+          query: 'cherries',
+          hasPhotos: true,
+          limit: 5,
+        })
+      )?.items.map((entry) => entry.id),
       [firstEntry.id],
     );
   } finally {
@@ -301,7 +352,11 @@ test('web entry queries use IndexedDB metadata indexes instead of full collectio
 
   await store.deleteStructuredRecord('deardiary_entries', firstEntry.id);
   assert.deepEqual(
-    await getPlainIndexRecords<{ id: string }>(WEB_QUERY_INDEX_STORES.entries, 'diaryId', 'diary-indexed'),
+    await getPlainIndexRecords<{ id: string }>(
+      WEB_QUERY_INDEX_STORES.entries,
+      'diaryId',
+      'diary-indexed',
+    ),
     [],
   );
 });
@@ -368,11 +423,12 @@ test('web structured local mutation and outbox commit rolls back atomically', as
 
   try {
     await assert.rejects(
-      () => store.commitLocalMutationAndOutbox({
-        records: [{ key: 'deardiary_entries', id: entry.id, value: entry }],
-        outboxOperation,
-        outboxV2Operation,
-      }),
+      () =>
+        store.commitLocalMutationAndOutbox({
+          records: [{ key: 'deardiary_entries', id: entry.id, value: entry }],
+          outboxOperation,
+          outboxV2Operation,
+        }),
       /simulated outbox write failure|transaction aborted/i,
     );
   } finally {
@@ -380,7 +436,12 @@ test('web structured local mutation and outbox commit rolls back atomically', as
   }
 
   assert.deepEqual(await store.getStructuredCollection('deardiary_entries'), undefined);
-  assert.equal(await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.outbox).getItem(outboxOperation.operationId), null);
+  assert.equal(
+    await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.outbox).getItem(
+      outboxOperation.operationId,
+    ),
+    null,
+  );
   assert.equal(await store.getItem('deardiary_sync_outbox_v2'), null);
 
   await store.commitLocalMutationAndOutbox({
@@ -389,12 +450,10 @@ test('web structured local mutation and outbox commit rolls back atomically', as
     outboxV2Operation,
   });
   assert.deepEqual(await store.getStructuredRecord('deardiary_entries', entry.id), entry);
-  assert.deepEqual(
-    JSON.parse((await store.getItem('deardiary_sync_outbox'))!),
-    { [outboxOperation.operationId]: outboxOperation },
-  );
-  assert.deepEqual(
-    JSON.parse((await store.getItem('deardiary_sync_outbox_v2'))!),
-    { [outboxOperation.operationId]: outboxV2Operation },
-  );
+  assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_outbox'))!), {
+    [outboxOperation.operationId]: outboxOperation,
+  });
+  assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_outbox_v2'))!), {
+    [outboxOperation.operationId]: outboxV2Operation,
+  });
 });

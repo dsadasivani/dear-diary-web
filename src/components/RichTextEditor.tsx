@@ -11,7 +11,15 @@ interface RichTextEditorProps {
   autoFocus?: boolean;
 }
 
-export default function RichTextEditor({ html, onChange, onFocus, placeholder, className, testId, autoFocus = false }: RichTextEditorProps) {
+export default function RichTextEditor({
+  html,
+  onChange,
+  onFocus,
+  placeholder,
+  className,
+  testId,
+  autoFocus = false,
+}: RichTextEditorProps) {
   const contentEditableRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

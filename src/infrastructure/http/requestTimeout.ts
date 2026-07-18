@@ -16,10 +16,13 @@ export const createRequestDeadline = (
   const abortFromParent = () => controller.abort(parentSignal?.reason);
   if (parentSignal?.aborted) abortFromParent();
   else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new SyncError({ code: 'REQUEST_TIMEOUT', retryable: true }));
-  }, Math.max(1, timeoutMs));
+  const timeout = setTimeout(
+    () => {
+      timedOut = true;
+      controller.abort(new SyncError({ code: 'REQUEST_TIMEOUT', retryable: true }));
+    },
+    Math.max(1, timeoutMs),
+  );
   return {
     signal: controller.signal,
     dispose: () => {
@@ -29,4 +32,3 @@ export const createRequestDeadline = (
     },
   };
 };
-

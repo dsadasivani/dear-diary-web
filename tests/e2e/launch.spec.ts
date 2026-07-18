@@ -9,12 +9,14 @@ test('fresh web launch opens the companion onboarding screen', async ({ page }) 
   await expect(page.getByRole('button', { name: /continue with google/i })).toBeVisible();
 });
 
-test('@accessibility companion onboarding has no serious or critical axe violations', async ({ page }) => {
+test('@accessibility companion onboarding has no serious or critical axe violations', async ({
+  page,
+}) => {
   await page.goto('/');
 
   const results = await new AxeBuilder({ page }).analyze();
-  const blockingViolations = results.violations.filter(violation => (
-    violation.impact === 'serious' || violation.impact === 'critical'
-  ));
+  const blockingViolations = results.violations.filter(
+    (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+  );
   expect(blockingViolations).toEqual([]);
 });

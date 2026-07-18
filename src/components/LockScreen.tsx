@@ -1,8 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  AlertCircle, ArrowLeft, BookOpen, CalendarDays, Check, Delete,
-  Cloud, Eye, EyeOff, LoaderCircle, Lock, Moon, ShieldCheck, Sparkles, Sun, X
+  AlertCircle,
+  ArrowLeft,
+  BookOpen,
+  CalendarDays,
+  Check,
+  Delete,
+  Cloud,
+  Eye,
+  EyeOff,
+  LoaderCircle,
+  Lock,
+  Moon,
+  ShieldCheck,
+  Sparkles,
+  Sun,
+  X,
 } from 'lucide-react';
 import { AppSettings, GoogleAccountSession, SecurityConfig, SupabaseAuthSession } from '../types';
 import {
@@ -22,11 +36,12 @@ import {
 import type { PinLength } from '../domain/security';
 import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
 import { diaryRepository, syncV2Application } from '../repositories';
-import { applyThemePreference, getLocalThemePreference, setLocalThemePreference } from '../utils/themePreference';
 import {
-  getConfiguredSupabaseAnonKey,
-  getConfiguredSupabaseUrl,
-} from '../sync/config';
+  applyThemePreference,
+  getLocalThemePreference,
+  setLocalThemePreference,
+} from '../utils/themePreference';
+import { getConfiguredSupabaseAnonKey, getConfiguredSupabaseUrl } from '../sync/config';
 import { exchangeGoogleIdTokenForSupabaseSession } from '../sync/supabaseAuth';
 import {
   isValidNewRecoveryPassphrase,
@@ -50,7 +65,7 @@ const SANCTUARY_QUOTES = [
   'In the garden of your mind, let peace grow.',
   'Write what is in your heart; it is always true.',
   'Savor the simple, beautiful, quiet moments.',
-  'Every page is a fresh start. Every word is a step home.'
+  'Every page is a fresh start. Every word is a step home.',
 ];
 
 const CUSTOM_QUESTION_SELECT_VALUE = 'custom';
@@ -91,7 +106,10 @@ const SYNC_SETUP_PROGRESS_STEPS: Array<{ key: SyncSetupProgressKey; label: strin
 
 const syncSetupProgressKeyForMessage = (message: string): SyncSetupProgressKey => {
   const normalized = message.toLowerCase();
-  if (normalized.includes('finding your recovery key') || normalized.includes('unlocking your encrypted account')) {
+  if (
+    normalized.includes('finding your recovery key') ||
+    normalized.includes('unlocking your encrypted account')
+  ) {
     return 'verify';
   }
   if (
@@ -135,7 +153,9 @@ export default function LockScreen({
   const [pin, setPin] = useState('');
   const [selectedPinLength, setSelectedPinLength] = useState<PinLength>(security.pinLength || 4);
   const [pendingSetupPin, setPendingSetupPin] = useState('');
-  const [setupStep, setSetupStep] = useState<SetupStep>(initialSecurity.isPinCreated ? 'pin' : 'welcome');
+  const [setupStep, setSetupStep] = useState<SetupStep>(
+    initialSecurity.isPinCreated ? 'pin' : 'welcome',
+  );
   const [questionId, setQuestionId] = useState(SECURITY_RECOVERY_QUESTIONS[0]?.id || '');
   const [customRecoveryQuestion, setCustomRecoveryQuestion] = useState('');
   const [recoveryAnswer, setRecoveryAnswer] = useState('');
@@ -151,13 +171,15 @@ export default function LockScreen({
   const [resetNewPin, setResetNewPin] = useState('');
   const [resetConfirmPin, setResetConfirmPin] = useState('');
   const [recoveryVerifiedBy, setRecoveryVerifiedBy] = useState<'question' | 'google' | null>(null);
-  const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() => (
-    initialSecurity.isPinCreated ? 'ambient' : 'keypad'
-  ));
+  const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() =>
+    initialSecurity.isPinCreated ? 'ambient' : 'keypad',
+  );
   const [time, setTime] = useState('');
   const [date, setDate] = useState('');
   const [quoteIndex, setQuoteIndex] = useState(0);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => getLocalThemePreference(initialSettings.theme || 'light'));
+  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
+    getLocalThemePreference(initialSettings.theme || 'light'),
+  );
   const [showBackupChoice, setShowBackupChoice] = useState(false);
   const [isLinkingBackup, setIsLinkingBackup] = useState(false);
   const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
@@ -169,7 +191,9 @@ export default function LockScreen({
     const updateTime = () => {
       const now = new Date();
       setTime(`${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`);
-      setDate(now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }));
+      setDate(
+        now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }),
+      );
     };
     updateTime();
     const interval = setInterval(updateTime, 1000);
@@ -178,7 +202,7 @@ export default function LockScreen({
 
   useEffect(() => {
     const quoteInterval = setInterval(() => {
-      setQuoteIndex(prev => (prev + 1) % SANCTUARY_QUOTES.length);
+      setQuoteIndex((prev) => (prev + 1) % SANCTUARY_QUOTES.length);
     }, 12000);
     return () => clearInterval(quoteInterval);
   }, []);
@@ -237,16 +261,16 @@ export default function LockScreen({
 
   const handleKeyPress = (num: string) => {
     triggerHaptic(10);
-    const maxLength = security.isPinCreated ? (security.pinLength || 8) : selectedPinLength;
+    const maxLength = security.isPinCreated ? security.pinLength || 8 : selectedPinLength;
     if (pin.length < maxLength) {
       setError('');
-      setPin(prev => prev + num);
+      setPin((prev) => prev + num);
     }
   };
 
   const handleBackspace = () => {
     triggerHaptic(12);
-    setPin(prev => prev.slice(0, -1));
+    setPin((prev) => prev.slice(0, -1));
   };
 
   const handleClear = () => {
@@ -284,9 +308,10 @@ export default function LockScreen({
         setSecurity(configuredSecurity);
         onSecurityChange(configuredSecurity);
         setPin('');
-        const isSeededE2eSetup = import.meta.env.VITE_DEAR_DIARY_E2E === '1'
-          && typeof window !== 'undefined'
-          && new URLSearchParams(window.location.search).has('e2eApp');
+        const isSeededE2eSetup =
+          import.meta.env.VITE_DEAR_DIARY_E2E === '1' &&
+          typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).has('e2eApp');
         if (isSeededE2eSetup) {
           await completeUnlock(configuredSecurity, pendingSetupPin);
         } else {
@@ -313,7 +338,7 @@ export default function LockScreen({
     if (questionId === CUSTOM_QUESTION_SELECT_VALUE) {
       return {
         id: createCustomRecoveryQuestionId(),
-        text: customRecoveryQuestion.trim()
+        text: customRecoveryQuestion.trim(),
       };
     }
 
@@ -348,7 +373,9 @@ export default function LockScreen({
         setSuccessMsg('Your private writing space is ready.');
         return;
       }
-      setSuccessMsg('Local PIN recovery is ready. Connect Google to create or restore your encrypted account.');
+      setSuccessMsg(
+        'Local PIN recovery is ready. Connect Google to create or restore your encrypted account.',
+      );
       setSyncSetupSelection(null);
       setRecoveryPassphrase('');
       setConfirmRecoveryPassphrase('');
@@ -373,7 +400,8 @@ export default function LockScreen({
     setSuccessMsg('Opening Google account...');
     try {
       const session = await startGoogleAuth('sync');
-      if (!session.idToken) throw new Error('Google did not return an ID token for Supabase sign-in.');
+      if (!session.idToken)
+        throw new Error('Google did not return an ID token for Supabase sign-in.');
       setSuccessMsg('Signing in to sync service...');
       const supabaseSession = await exchangeGoogleIdTokenForSupabaseSession({
         supabaseUrl: getConfiguredSupabaseUrl(),
@@ -390,9 +418,11 @@ export default function LockScreen({
       setRecoveryPassphrase('');
       setConfirmRecoveryPassphrase('');
       setShowRecoveryPassphrase(false);
-      setSuccessMsg(hasExistingAccount
-        ? 'Encrypted account found. Enter your existing recovery passphrase.'
-        : 'Google connected. Create an 8-digit recovery passphrase for your encrypted diary.');
+      setSuccessMsg(
+        hasExistingAccount
+          ? 'Encrypted account found. Enter your existing recovery passphrase.'
+          : 'Google connected. Create an 8-digit recovery passphrase for your encrypted diary.',
+      );
     } catch (err: any) {
       const message = err?.message || '';
       if (
@@ -429,7 +459,9 @@ export default function LockScreen({
         }
       }
 
-      setSuccessMsg(isRecovery ? 'Preparing account recovery...' : 'Preparing encrypted account...');
+      setSuccessMsg(
+        isRecovery ? 'Preparing account recovery...' : 'Preparing encrypted account...',
+      );
       const question = getRecoveryQuestionPayload();
       const completeAccountSetup = isRecovery
         ? syncV2Application.recoverPrimaryAccount.bind(syncV2Application)
@@ -565,88 +597,109 @@ export default function LockScreen({
   const isCreatingSyncAccount = syncSetupSelection?.mode === 'create';
   const isRecoveringSyncAccount = syncSetupSelection?.mode === 'recover';
   const isCustomRecoveryQuestion = questionId === CUSTOM_QUESTION_SELECT_VALUE;
-  const canSaveRecoveryQuestion = !!recoveryAnswer.trim() && (!isCustomRecoveryQuestion || !!customRecoveryQuestion.trim());
-  const needsSyncRecoveryQuestion = syncSetupSelection?.mode === 'create' && !hasRecoveryQuestion(security);
+  const canSaveRecoveryQuestion =
+    !!recoveryAnswer.trim() && (!isCustomRecoveryQuestion || !!customRecoveryQuestion.trim());
+  const needsSyncRecoveryQuestion =
+    syncSetupSelection?.mode === 'create' && !hasRecoveryQuestion(security);
   const canSubmitSyncSetup = syncSetupSelection
     ? (isRecoveringSyncAccount
-      ? Boolean(recoveryPassphrase.trim())
-      : isValidNewRecoveryPassphrase(recoveryPassphrase) && recoveryPassphrase === confirmRecoveryPassphrase) &&
+        ? Boolean(recoveryPassphrase.trim())
+        : isValidNewRecoveryPassphrase(recoveryPassphrase) &&
+          recoveryPassphrase === confirmRecoveryPassphrase) &&
       (!needsSyncRecoveryQuestion || canSaveRecoveryQuestion)
     : true;
 
-  const setupTitle = setupStep === 'complete'
-    ? 'Your Diary Is Ready'
-    : showBackupChoice
-    ? !syncSetupSelection
-      ? 'Connect Google Account'
-      : isRecoveringSyncAccount ? 'Restore Encrypted Account' : 'Create Recovery Passphrase'
-    : requiresRecoverySetup
-    ? 'Add Recovery Question'
-    : setupStep === 'recovery'
-      ? 'Add Recovery Question'
-        : setupStep === 'confirm'
-        ? 'Confirm Security PIN'
-        : setupStep === 'welcome'
-          ? 'Welcome to Dear Diary'
-        : security.isPinCreated
-          ? 'Enter Security PIN'
-          : 'Setup Security PIN';
-
-  const setupCopy = setupStep === 'complete'
-    ? 'Your PIN, offline recovery, and encrypted account are configured.'
-    : showBackupChoice
-    ? !syncSetupSelection
-      ? 'Connect Google to create your private encrypted account.'
-      : isRecoveringSyncAccount
-        ? `Enter the recovery passphrase previously created for ${syncSetupSelection.googleSession.email || 'this Google account'}.`
-        : `Create an ${RECOVERY_PASSPHRASE_DIGIT_LENGTH}-digit recovery passphrase for ${syncSetupSelection.googleSession.email || 'this Google account'}.`
-    : requiresRecoverySetup
-    ? 'Your PIN is verified. Add a security question before continuing.'
-    : setupStep === 'recovery'
-      ? 'This lets you reset your PIN while staying completely offline.'
-        : setupStep === 'confirm'
-        ? `Enter the same ${selectedPinLength}-digit PIN again.`
-        : setupStep === 'welcome'
-          ? 'Set up private access in a few short steps. Your PIN never leaves this device.'
-        : security.isPinCreated
-          ? `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock your diary.`
-          : 'Choose a 4-digit or 8-digit PIN.';
-  const setupProgressLabel = security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
-    ? ''
-    : setupStep === 'complete'
-      ? 'Step 7 of 7'
+  const setupTitle =
+    setupStep === 'complete'
+      ? 'Your Diary Is Ready'
       : showBackupChoice
-      ? syncSetupSelection ? 'Step 6 of 7' : 'Step 5 of 7'
-      : requiresRecoverySetup || setupStep === 'recovery'
-        ? 'Step 4 of 7'
-        : setupStep === 'confirm'
-          ? 'Step 3 of 7'
-          : setupStep === 'welcome'
-            ? 'Step 1 of 7'
-            : 'Step 2 of 7';
-  const setupProgressStep = setupProgressLabel ? Number(setupProgressLabel.match(/\d+/)?.[0] || 0) : 0;
+        ? !syncSetupSelection
+          ? 'Connect Google Account'
+          : isRecoveringSyncAccount
+            ? 'Restore Encrypted Account'
+            : 'Create Recovery Passphrase'
+        : requiresRecoverySetup
+          ? 'Add Recovery Question'
+          : setupStep === 'recovery'
+            ? 'Add Recovery Question'
+            : setupStep === 'confirm'
+              ? 'Confirm Security PIN'
+              : setupStep === 'welcome'
+                ? 'Welcome to Dear Diary'
+                : security.isPinCreated
+                  ? 'Enter Security PIN'
+                  : 'Setup Security PIN';
 
-  const activeBgClass = theme === 'dark'
-    ? 'bg-gradient-to-tr from-[#100F10] via-[#21191C] to-[#151214]'
-    : 'bg-gradient-to-tr from-[#FAF7F2] via-[#FFF8F4] to-[#F4EFE7]';
+  const setupCopy =
+    setupStep === 'complete'
+      ? 'Your PIN, offline recovery, and encrypted account are configured.'
+      : showBackupChoice
+        ? !syncSetupSelection
+          ? 'Connect Google to create your private encrypted account.'
+          : isRecoveringSyncAccount
+            ? `Enter the recovery passphrase previously created for ${syncSetupSelection.googleSession.email || 'this Google account'}.`
+            : `Create an ${RECOVERY_PASSPHRASE_DIGIT_LENGTH}-digit recovery passphrase for ${syncSetupSelection.googleSession.email || 'this Google account'}.`
+        : requiresRecoverySetup
+          ? 'Your PIN is verified. Add a security question before continuing.'
+          : setupStep === 'recovery'
+            ? 'This lets you reset your PIN while staying completely offline.'
+            : setupStep === 'confirm'
+              ? `Enter the same ${selectedPinLength}-digit PIN again.`
+              : setupStep === 'welcome'
+                ? 'Set up private access in a few short steps. Your PIN never leaves this device.'
+                : security.isPinCreated
+                  ? `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock your diary.`
+                  : 'Choose a 4-digit or 8-digit PIN.';
+  const setupProgressLabel =
+    security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
+      ? ''
+      : setupStep === 'complete'
+        ? 'Step 7 of 7'
+        : showBackupChoice
+          ? syncSetupSelection
+            ? 'Step 6 of 7'
+            : 'Step 5 of 7'
+          : requiresRecoverySetup || setupStep === 'recovery'
+            ? 'Step 4 of 7'
+            : setupStep === 'confirm'
+              ? 'Step 3 of 7'
+              : setupStep === 'welcome'
+                ? 'Step 1 of 7'
+                : 'Step 2 of 7';
+  const setupProgressStep = setupProgressLabel
+    ? Number(setupProgressLabel.match(/\d+/)?.[0] || 0)
+    : 0;
 
-  const showRecoveryForm = !showBackupChoice && setupStep !== 'complete' && (requiresRecoverySetup || setupStep === 'recovery');
+  const activeBgClass =
+    theme === 'dark'
+      ? 'bg-gradient-to-tr from-[#100F10] via-[#21191C] to-[#151214]'
+      : 'bg-gradient-to-tr from-[#FAF7F2] via-[#FFF8F4] to-[#F4EFE7]';
+
+  const showRecoveryForm =
+    !showBackupChoice &&
+    setupStep !== 'complete' &&
+    (requiresRecoverySetup || setupStep === 'recovery');
   const hasSecurityQuestionRecovery = hasRecoveryQuestion(security);
   const hasGoogleRecovery = Boolean(security.linkedGoogleUserId || security.linkedGoogleUid);
   const hasAvailablePinRecovery = hasSecurityQuestionRecovery || hasGoogleRecovery;
-  const visiblePinLength = security.isPinCreated ? (security.pinLength || (pin.length > 4 ? 8 : 4)) : selectedPinLength;
+  const visiblePinLength = security.isPinCreated
+    ? security.pinLength || (pin.length > 4 ? 8 : 4)
+    : selectedPinLength;
   const accountSetupProgressMessage = successMsg || 'Opening Google account...';
   const accountSetupProgressKey = syncSetupProgressKeyForMessage(accountSetupProgressMessage);
   const accountSetupProgressIndex = Math.max(
     0,
-    SYNC_SETUP_PROGRESS_STEPS.findIndex(step => step.key === accountSetupProgressKey),
+    SYNC_SETUP_PROGRESS_STEPS.findIndex((step) => step.key === accountSetupProgressKey),
   );
-  const accountSetupProgressDetail = accountSetupProgressKey === 'restore'
-    ? 'Large diaries can take a little while to decrypt and import.'
-    : 'Keep this screen open while setup finishes.';
+  const accountSetupProgressDetail =
+    accountSetupProgressKey === 'restore'
+      ? 'Large diaries can take a little while to decrypt and import.'
+      : 'Keep this screen open while setup finishes.';
 
   return (
-    <div className={`min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-all duration-700 lg:justify-center lg:px-8 lg:py-8`}>
+    <div
+      className={`min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-all duration-700 lg:justify-center lg:px-8 lg:py-8`}
+    >
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.58),transparent_42%)] dark:bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.08),transparent_40%)]" />
         <div className="absolute top-[-22%] left-[-16%] h-[42rem] w-[42rem] rounded-full bg-brand-pink/10 blur-[140px] dark:bg-brand-pink/16" />
@@ -663,7 +716,9 @@ export default function LockScreen({
           className="w-full max-w-[460px] text-center"
         >
           <div className="select-none">
-            <p className="font-serif-diary text-[5.75rem] font-semibold leading-none tracking-tight text-brand-plum/95 dark:text-[#ECE6E1] xl:text-[6.75rem] 2xl:text-[7.15rem]">{time}</p>
+            <p className="font-serif-diary text-[5.75rem] font-semibold leading-none tracking-tight text-brand-plum/95 dark:text-[#ECE6E1] xl:text-[6.75rem] 2xl:text-[7.15rem]">
+              {time}
+            </p>
             <p className="mt-5 flex items-center justify-center gap-2 text-sm font-semibold uppercase tracking-[0.18em] text-brand-text-muted dark:text-[#EADCD1]/68">
               <CalendarDays className="h-3.5 w-3.5 text-brand-pink/80" />
               {date}
@@ -674,8 +729,17 @@ export default function LockScreen({
             <p className="font-serif-diary text-2xl italic leading-snug text-brand-plum/90 dark:text-[#ECE6E1]/90">
               "{SANCTUARY_QUOTES[quoteIndex]}"
             </p>
-            <p className="mt-3 text-lg font-medium text-brand-text-muted dark:text-[#EADCD1]/62">- Sanctuary Note</p>
-            <button onClick={(e) => { e.stopPropagation(); setQuoteIndex(prev => (prev + 1) % SANCTUARY_QUOTES.length); }} className="pointer-events-auto mt-5 inline-flex items-center gap-2 rounded-full border border-brand-border/50 bg-white/38 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-brand-text-muted transition-all hover:border-brand-pink/35 hover:text-brand-pink dark:border-white/10 dark:bg-white/5" title="Cycle note">
+            <p className="mt-3 text-lg font-medium text-brand-text-muted dark:text-[#EADCD1]/62">
+              - Sanctuary Note
+            </p>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setQuoteIndex((prev) => (prev + 1) % SANCTUARY_QUOTES.length);
+              }}
+              className="pointer-events-auto mt-5 inline-flex items-center gap-2 rounded-full border border-brand-border/50 bg-white/38 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-brand-text-muted transition-all hover:border-brand-pink/35 hover:text-brand-pink dark:border-white/10 dark:bg-white/5"
+              title="Cycle note"
+            >
               <Sparkles className="h-3 w-3" />
               Another note
             </button>
@@ -690,19 +754,40 @@ export default function LockScreen({
       <header className="w-full max-w-sm lg:absolute lg:left-8 lg:right-auto lg:top-8 lg:max-w-none xl:left-10 flex justify-between items-center z-10">
         <div className="flex items-center gap-2 bg-white/55 dark:bg-white/[0.06] backdrop-blur-xl px-3.5 py-1.5 rounded-full border border-brand-border/50 dark:border-white/10 shadow-sm">
           <BookOpen className="w-3.5 h-3.5 text-brand-pink" />
-          <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#3E2429] dark:text-[#EADCD1]">Dear Diary</span>
+          <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#3E2429] dark:text-[#EADCD1]">
+            Dear Diary
+          </span>
         </div>
-        <motion.button onClick={toggleTheme} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} className="w-9 h-9 rounded-full bg-white/55 dark:bg-white/[0.06] border border-brand-border/50 dark:border-white/10 backdrop-blur-xl flex items-center justify-center text-brand-plum hover:text-brand-pink transition-colors shadow-sm cursor-pointer lg:fixed lg:right-8 lg:top-8" title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}>
-          {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-200" />}
+        <motion.button
+          onClick={toggleTheme}
+          whileHover={{ scale: 1.03 }}
+          whileTap={{ scale: 0.97 }}
+          className="w-9 h-9 rounded-full bg-white/55 dark:bg-white/[0.06] border border-brand-border/50 dark:border-white/10 backdrop-blur-xl flex items-center justify-center text-brand-plum hover:text-brand-pink transition-colors shadow-sm cursor-pointer lg:fixed lg:right-8 lg:top-8"
+          title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
+        >
+          {theme === 'light' ? (
+            <Moon className="w-4 h-4" />
+          ) : (
+            <Sun className="w-4 h-4 text-amber-200" />
+          )}
         </motion.button>
       </header>
 
       <main className="w-full max-w-sm lg:absolute lg:inset-y-0 lg:left-1/2 lg:ml-0 lg:mr-0 lg:w-1/2 lg:max-w-none lg:flex-grow-0 lg:px-10 xl:px-16 flex-grow flex flex-col justify-center items-center z-10 relative">
         <AnimatePresence mode="wait">
           {screenMode === 'ambient' ? (
-            <motion.div key="ambient" initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, y: -32, scale: 0.98 }} transition={{ duration: 0.4 }} className="w-full flex flex-col items-center text-center justify-between h-[65vh] sm:h-[70vh] py-4 lg:h-auto lg:max-w-[420px] lg:justify-center lg:gap-7 lg:p-0">
+            <motion.div
+              key="ambient"
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, y: -32, scale: 0.98 }}
+              transition={{ duration: 0.4 }}
+              className="w-full flex flex-col items-center text-center justify-between h-[65vh] sm:h-[70vh] py-4 lg:h-auto lg:max-w-[420px] lg:justify-center lg:gap-7 lg:p-0"
+            >
               <div className="w-full max-w-[310px] mt-3 select-none px-5 py-5 lg:hidden">
-                <h2 className="font-serif-diary text-[4.75rem] font-bold text-brand-plum dark:text-[#ECE6E1] leading-none">{time}</h2>
+                <h2 className="font-serif-diary text-[4.75rem] font-bold text-brand-plum dark:text-[#ECE6E1] leading-none">
+                  {time}
+                </h2>
                 <div className="mt-3 inline-flex items-center justify-center gap-2 text-[12px] font-bold text-brand-text-muted dark:text-[#EADCD1]/80">
                   <CalendarDays className="w-3.5 h-3.5 text-brand-pink" />
                   <span>{date}</span>
@@ -713,33 +798,79 @@ export default function LockScreen({
                 <span className="flex h-[3.25rem] w-[3.25rem] items-center justify-center rounded-2xl border border-brand-border/55 bg-white/50 text-brand-pink shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
                   <BookOpen className="h-5 w-5" />
                 </span>
-                <h1 className="font-serif-diary text-3xl font-semibold text-brand-plum dark:text-[#ECE6E1]">Locked</h1>
-                <p className="max-w-[250px] text-xs font-medium leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/65">Unlock when you are ready to return to your private writing space.</p>
+                <h1 className="font-serif-diary text-3xl font-semibold text-brand-plum dark:text-[#ECE6E1]">
+                  Locked
+                </h1>
+                <p className="max-w-[250px] text-xs font-medium leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/65">
+                  Unlock when you are ready to return to your private writing space.
+                </p>
               </div>
 
               <div className="flex flex-col items-center gap-4">
-                <motion.button onTouchEnd={() => setScreenMode('keypad')} onPointerUp={() => setScreenMode('keypad')} onClick={() => { triggerHaptic(15); setScreenMode('keypad'); }} whileHover={{ scale: 1.025 }} whileTap={{ scale: 0.97 }} className="flex flex-col items-center gap-2.5 group">
+                <motion.button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic(15);
+                    setScreenMode('keypad');
+                  }}
+                  whileHover={{ scale: 1.025 }}
+                  whileTap={{ scale: 0.97 }}
+                  className="flex flex-col items-center gap-2.5 group"
+                >
                   <div className="w-16 h-16 rounded-full bg-white/70 dark:bg-white/[0.06] border border-brand-border/65 dark:border-white/10 backdrop-blur-md flex items-center justify-center shadow-[0_16px_45px_rgba(62,36,41,0.1)] relative">
                     <Lock className="w-6 h-6 text-brand-plum/85 dark:text-brand-text/80 group-hover:text-brand-pink transition-colors stroke-[1.5]" />
                   </div>
-                  <span className="text-xs font-bold tracking-[0.2em] text-brand-text-muted uppercase">Tap to Unlock</span>
+                  <span className="text-xs font-bold tracking-[0.2em] text-brand-text-muted uppercase">
+                    Tap to Unlock
+                  </span>
                 </motion.button>
               </div>
 
               <div className="w-full max-w-xs border-y border-brand-border/70 px-4 py-4 text-center flex flex-col gap-2 lg:hidden">
-                <p className="text-xs font-bold tracking-[0.2em] text-brand-pink uppercase">Sanctuary Note</p>
-                <p className="font-serif-diary text-base text-brand-plum dark:text-brand-text leading-snug">{SANCTUARY_QUOTES[quoteIndex]}</p>
-                <button onClick={(e) => { e.stopPropagation(); setQuoteIndex(prev => (prev + 1) % SANCTUARY_QUOTES.length); }} className="self-center p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 text-brand-text-muted hover:text-brand-pink transition-all" title="Cycle Inspiration">
+                <p className="text-xs font-bold tracking-[0.2em] text-brand-pink uppercase">
+                  Sanctuary Note
+                </p>
+                <p className="font-serif-diary text-base text-brand-plum dark:text-brand-text leading-snug">
+                  {SANCTUARY_QUOTES[quoteIndex]}
+                </p>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setQuoteIndex((prev) => (prev + 1) % SANCTUARY_QUOTES.length);
+                  }}
+                  className="self-center p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 text-brand-text-muted hover:text-brand-pink transition-all"
+                  title="Cycle Inspiration"
+                >
                   <Sparkles className="w-3.5 h-3.5" />
                 </button>
               </div>
             </motion.div>
           ) : (
-            <motion.div key="keypad" initial={{ opacity: 0, y: 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 80 }} transition={{ type: 'spring', damping: 25, stiffness: 180 }} className="w-full lg:max-w-[440px]">
-              <motion.div animate={shakeTrigger ? { x: [-10, 10, -8, 8, -5, 5, 0] } : {}} transition={{ duration: 0.4 }} className="w-full p-4 sm:p-5 lg:p-0 flex flex-col gap-3.5 lg:gap-6 relative overflow-visible">
+            <motion.div
+              key="keypad"
+              initial={{ opacity: 0, y: 80 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 80 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 180 }}
+              className="w-full lg:max-w-[440px]"
+            >
+              <motion.div
+                animate={shakeTrigger ? { x: [-10, 10, -8, 8, -5, 5, 0] } : {}}
+                transition={{ duration: 0.4 }}
+                className="w-full p-4 sm:p-5 lg:p-0 flex flex-col gap-3.5 lg:gap-6 relative overflow-visible"
+              >
                 <div className="pointer-events-none absolute inset-x-10 top-0 hidden h-px bg-gradient-to-r from-transparent via-white/80 to-transparent dark:via-white/20" />
                 {security.isPinCreated && !requiresRecoverySetup && (
-                  <button onClick={() => { triggerHaptic(10); setScreenMode('ambient'); setPin(''); setError(''); }} className="absolute top-2 left-2 p-2 rounded-full hover:bg-white/40 dark:hover:bg-white/10 text-brand-text-muted hover:text-brand-plum transition-colors lg:hidden" title="Back to Clock">
+                  <button
+                    onClick={() => {
+                      triggerHaptic(10);
+                      setScreenMode('ambient');
+                      setPin('');
+                      setError('');
+                    }}
+                    className="absolute top-2 left-2 p-2 rounded-full hover:bg-white/40 dark:hover:bg-white/10 text-brand-text-muted hover:text-brand-plum transition-colors lg:hidden"
+                    title="Back to Clock"
+                  >
                     <ArrowLeft className="w-4 h-4 stroke-[2.5]" />
                   </button>
                 )}
@@ -754,15 +885,26 @@ export default function LockScreen({
                   <div className="space-y-0.5">
                     <h1 className="font-serif-diary text-xl sm:text-2xl lg:text-3xl text-[#2C1D21] dark:text-[#ECE6E1] font-bold tracking-tight">
                       <span className="lg:hidden">Dear Diary</span>
-                      <span className="hidden lg:inline">{security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete' ? 'Welcome Back' : setupTitle}</span>
+                      <span className="hidden lg:inline">
+                        {security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
+                          ? 'Welcome Back'
+                          : setupTitle}
+                      </span>
                     </h1>
                     <p className="text-xs sm:text-xs lg:text-base lg:font-normal lg:normal-case lg:tracking-normal font-bold tracking-[0.25em] text-brand-pink/85 dark:text-brand-pink-dark uppercase">
                       <span className="lg:hidden">Private Access</span>
-                      <span className="hidden lg:inline text-brand-text-muted dark:text-[#EADCD1]/70">{security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete' ? 'Your sanctuary is currently locked.' : setupCopy}</span>
+                      <span className="hidden lg:inline text-brand-text-muted dark:text-[#EADCD1]/70">
+                        {security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
+                          ? 'Your sanctuary is currently locked.'
+                          : setupCopy}
+                      </span>
                     </p>
                   </div>
                   {setupProgressStep > 0 && (
-                    <div className="mt-2 w-full max-w-[280px]" aria-label={`Setup progress: ${setupProgressLabel}`}>
+                    <div
+                      className="mt-2 w-full max-w-[280px]"
+                      aria-label={`Setup progress: ${setupProgressLabel}`}
+                    >
                       <div className="grid grid-cols-7 gap-1" aria-hidden="true">
                         {Array.from({ length: 7 }).map((_, index) => (
                           <span
@@ -771,7 +913,9 @@ export default function LockScreen({
                           />
                         ))}
                       </div>
-                      <p className="mt-1.5 text-xs font-bold text-brand-sage">{setupProgressLabel}</p>
+                      <p className="mt-1.5 text-xs font-bold text-brand-sage">
+                        {setupProgressLabel}
+                      </p>
                     </div>
                   )}
                 </div>
@@ -780,8 +924,12 @@ export default function LockScreen({
                   <span className="inline-flex p-1.5 bg-brand-pink/10 text-brand-pink rounded-xl mb-1">
                     <ShieldCheck className="w-4 h-4" />
                   </span>
-                  <h2 className="text-xs sm:text-sm font-bold text-[#2C1D21] dark:text-[#ECE6E1]">{setupTitle}</h2>
-                  <p className="text-xs sm:text-xs text-brand-text-muted mt-1 leading-relaxed max-w-[260px] mx-auto">{setupCopy}</p>
+                  <h2 className="text-xs sm:text-sm font-bold text-[#2C1D21] dark:text-[#ECE6E1]">
+                    {setupTitle}
+                  </h2>
+                  <p className="text-xs sm:text-xs text-brand-text-muted mt-1 leading-relaxed max-w-[260px] mx-auto">
+                    {setupCopy}
+                  </p>
                 </div>
 
                 {setupStep === 'complete' ? (
@@ -790,10 +938,19 @@ export default function LockScreen({
                       <Check className="h-7 w-7" />
                     </span>
                     <div>
-                      <p className="font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">Ready for your first entry</p>
-                      <p className="mt-1 text-xs leading-relaxed text-brand-text-muted">Your local PIN and recovery method are ready. Synced writing is encrypted before it leaves this device.</p>
+                      <p className="font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">
+                        Ready for your first entry
+                      </p>
+                      <p className="mt-1 text-xs leading-relaxed text-brand-text-muted">
+                        Your local PIN and recovery method are ready. Synced writing is encrypted
+                        before it leaves this device.
+                      </p>
                     </div>
-                    <button type="button" onClick={() => void onUnlock()} className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-bold uppercase tracking-widest text-white shadow-md hover:bg-brand-pink dark:bg-[#EADCD1] dark:text-[#21191C]">
+                    <button
+                      type="button"
+                      onClick={() => void onUnlock()}
+                      className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-bold uppercase tracking-widest text-white shadow-md hover:bg-brand-pink dark:bg-[#EADCD1] dark:text-[#21191C]"
+                    >
                       Enter Dear Diary
                     </button>
                   </div>
@@ -805,12 +962,25 @@ export default function LockScreen({
                           <ShieldCheck className="h-5 w-5" />
                         </span>
                         <div>
-                          <p className="text-sm font-bold text-brand-plum dark:text-brand-text">Private from the first page</p>
-                          <p className="mt-1 text-xs leading-relaxed text-brand-text-muted">You will create a device PIN, an offline recovery question, and an encrypted account recovery key.</p>
+                          <p className="text-sm font-bold text-brand-plum dark:text-brand-text">
+                            Private from the first page
+                          </p>
+                          <p className="mt-1 text-xs leading-relaxed text-brand-text-muted">
+                            You will create a device PIN, an offline recovery question, and an
+                            encrypted account recovery key.
+                          </p>
                         </div>
                       </div>
                     </div>
-                    <button type="button" onClick={() => { setSetupStep('pin'); setError(''); setSuccessMsg(''); }} className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-bold uppercase tracking-widest text-white shadow-md hover:bg-brand-pink dark:bg-[#EADCD1] dark:text-[#21191C]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSetupStep('pin');
+                        setError('');
+                        setSuccessMsg('');
+                      }}
+                      className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-bold uppercase tracking-widest text-white shadow-md hover:bg-brand-pink dark:bg-[#EADCD1] dark:text-[#21191C]"
+                    >
                       Start Private Setup
                     </button>
                   </div>
@@ -818,7 +988,8 @@ export default function LockScreen({
                   <div className="flex flex-col gap-3">
                     {!syncSetupSelection ? (
                       <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage/8 p-3 text-left text-xs leading-relaxed text-brand-text-muted">
-                        Dear Diary uses Google only to identify your account. Your diary remains encrypted before it is synchronized.
+                        Dear Diary uses Google only to identify your account. Your diary remains
+                        encrypted before it is synchronized.
                       </div>
                     ) : (
                       <>
@@ -842,29 +1013,45 @@ export default function LockScreen({
                         {needsSyncRecoveryQuestion && (
                           <div className="flex flex-col gap-2 rounded-2xl border border-brand-pink/20 bg-brand-pink/5 p-3">
                             <p className="text-left text-xs leading-relaxed text-brand-text-muted">
-                              Finish the offline recovery question for this device before {isRecoveringSyncAccount ? 'restoring' : 'creating'} the encrypted account.
+                              Finish the offline recovery question for this device before{' '}
+                              {isRecoveringSyncAccount ? 'restoring' : 'creating'} the encrypted
+                              account.
                             </p>
                             <label className="flex flex-col gap-1 text-left">
-                              <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">Security Question</span>
+                              <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">
+                                Security Question
+                              </span>
                               <select
                                 value={questionId}
-                                onChange={(event) => { setQuestionId(event.target.value); setError(''); }}
+                                onChange={(event) => {
+                                  setQuestionId(event.target.value);
+                                  setError('');
+                                }}
                                 disabled={isLinkingBackup}
                                 className="rounded-xl border border-brand-border bg-white p-2.5 text-xs text-brand-plum focus:border-brand-pink focus:outline-none disabled:opacity-60 dark:bg-[#1A1517]/40 dark:text-brand-text"
                               >
-                                {SECURITY_RECOVERY_QUESTIONS.map(question => (
-                                  <option key={question.id} value={question.id}>{question.question}</option>
+                                {SECURITY_RECOVERY_QUESTIONS.map((question) => (
+                                  <option key={question.id} value={question.id}>
+                                    {question.question}
+                                  </option>
                                 ))}
-                                <option value={CUSTOM_QUESTION_SELECT_VALUE}>Write my own question</option>
+                                <option value={CUSTOM_QUESTION_SELECT_VALUE}>
+                                  Write my own question
+                                </option>
                               </select>
                             </label>
                             {isCustomRecoveryQuestion && (
                               <label className="flex flex-col gap-1 text-left">
-                                <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">Custom Question</span>
+                                <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">
+                                  Custom Question
+                                </span>
                                 <input
                                   type="text"
                                   value={customRecoveryQuestion}
-                                  onChange={(event) => { setCustomRecoveryQuestion(event.target.value); setError(''); }}
+                                  onChange={(event) => {
+                                    setCustomRecoveryQuestion(event.target.value);
+                                    setError('');
+                                  }}
                                   disabled={isLinkingBackup}
                                   className="rounded-xl border border-brand-border bg-white p-2.5 text-xs text-brand-plum focus:border-brand-pink focus:outline-none disabled:opacity-60 dark:bg-[#1A1517]/40 dark:text-brand-text"
                                   placeholder="Type your security question"
@@ -872,18 +1059,33 @@ export default function LockScreen({
                               </label>
                             )}
                             <label className="flex flex-col gap-1 text-left">
-                              <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">Security Answer</span>
+                              <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">
+                                Security Answer
+                              </span>
                               <div className="relative">
                                 <input
                                   type={showRecoveryAnswer ? 'text' : 'password'}
                                   value={recoveryAnswer}
-                                  onChange={(event) => { setRecoveryAnswer(event.target.value); setError(''); }}
+                                  onChange={(event) => {
+                                    setRecoveryAnswer(event.target.value);
+                                    setError('');
+                                  }}
                                   disabled={isLinkingBackup}
                                   className="w-full rounded-xl border border-brand-border bg-white p-2.5 pr-10 text-xs text-brand-plum focus:border-brand-pink focus:outline-none disabled:opacity-60 dark:bg-[#1A1517]/40 dark:text-brand-text"
                                   placeholder="Enter a memorable answer"
                                 />
-                                <button type="button" onClick={() => setShowRecoveryAnswer(previous => !previous)} disabled={isLinkingBackup} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink disabled:opacity-50" title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}>
-                                  {showRecoveryAnswer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                <button
+                                  type="button"
+                                  onClick={() => setShowRecoveryAnswer((previous) => !previous)}
+                                  disabled={isLinkingBackup}
+                                  className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink disabled:opacity-50"
+                                  title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}
+                                >
+                                  {showRecoveryAnswer ? (
+                                    <EyeOff className="h-4 w-4" />
+                                  ) : (
+                                    <Eye className="h-4 w-4" />
+                                  )}
                                 </button>
                               </div>
                             </label>
@@ -891,33 +1093,59 @@ export default function LockScreen({
                         )}
                         <label className="flex flex-col gap-1 text-left">
                           <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                            {isRecoveringSyncAccount ? 'Existing Recovery Passphrase' : 'New 8-Digit Recovery Passphrase'}
+                            {isRecoveringSyncAccount
+                              ? 'Existing Recovery Passphrase'
+                              : 'New 8-Digit Recovery Passphrase'}
                           </span>
                           <div className="relative">
                             <input
                               type={showRecoveryPassphrase ? 'text' : 'password'}
                               inputMode={isCreatingSyncAccount ? 'numeric' : undefined}
-                              autoComplete={isRecoveringSyncAccount ? 'current-password' : 'new-password'}
-                              maxLength={isCreatingSyncAccount ? RECOVERY_PASSPHRASE_DIGIT_LENGTH : undefined}
+                              autoComplete={
+                                isRecoveringSyncAccount ? 'current-password' : 'new-password'
+                              }
+                              maxLength={
+                                isCreatingSyncAccount ? RECOVERY_PASSPHRASE_DIGIT_LENGTH : undefined
+                              }
                               value={recoveryPassphrase}
                               onChange={(event) => {
-                                setRecoveryPassphrase(isCreatingSyncAccount
-                                  ? event.target.value.replace(/\D/g, '').slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH)
-                                  : event.target.value);
+                                setRecoveryPassphrase(
+                                  isCreatingSyncAccount
+                                    ? event.target.value
+                                        .replace(/\D/g, '')
+                                        .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH)
+                                    : event.target.value,
+                                );
                                 setError('');
                               }}
                               disabled={isLinkingBackup}
                               className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink disabled:opacity-60"
-                              placeholder={isRecoveringSyncAccount ? 'Passphrase from earlier setup' : `${RECOVERY_PASSPHRASE_DIGIT_LENGTH} digits`}
+                              placeholder={
+                                isRecoveringSyncAccount
+                                  ? 'Passphrase from earlier setup'
+                                  : `${RECOVERY_PASSPHRASE_DIGIT_LENGTH} digits`
+                              }
                             />
-                            <button type="button" onClick={() => setShowRecoveryPassphrase(prev => !prev)} disabled={isLinkingBackup} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink disabled:opacity-50" title={showRecoveryPassphrase ? 'Hide passphrase' : 'Show passphrase'}>
-                              {showRecoveryPassphrase ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            <button
+                              type="button"
+                              onClick={() => setShowRecoveryPassphrase((prev) => !prev)}
+                              disabled={isLinkingBackup}
+                              className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink disabled:opacity-50"
+                              title={showRecoveryPassphrase ? 'Hide passphrase' : 'Show passphrase'}
+                            >
+                              {showRecoveryPassphrase ? (
+                                <EyeOff className="w-4 h-4" />
+                              ) : (
+                                <Eye className="w-4 h-4" />
+                              )}
                             </button>
                           </div>
                         </label>
                         {isCreatingSyncAccount && (
                           <label className="flex flex-col gap-1 text-left">
-                            <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Confirm 8-Digit Passphrase</span>
+                            <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
+                              Confirm 8-Digit Passphrase
+                            </span>
                             <input
                               type={showRecoveryPassphrase ? 'text' : 'password'}
                               inputMode="numeric"
@@ -925,7 +1153,11 @@ export default function LockScreen({
                               maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
                               value={confirmRecoveryPassphrase}
                               onChange={(event) => {
-                                setConfirmRecoveryPassphrase(event.target.value.replace(/\D/g, '').slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH));
+                                setConfirmRecoveryPassphrase(
+                                  event.target.value
+                                    .replace(/\D/g, '')
+                                    .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH),
+                                );
                                 setError('');
                               }}
                               disabled={isLinkingBackup}
@@ -954,8 +1186,12 @@ export default function LockScreen({
                               <LoaderCircle className="h-4 w-4 animate-spin" />
                             </span>
                             <div className="min-w-0">
-                              <p className="text-xs font-extrabold text-brand-plum dark:text-brand-text">{accountSetupProgressMessage}</p>
-                              <p className="mt-0.5 text-xs font-semibold leading-relaxed text-brand-text-muted">{accountSetupProgressDetail}</p>
+                              <p className="text-xs font-extrabold text-brand-plum dark:text-brand-text">
+                                {accountSetupProgressMessage}
+                              </p>
+                              <p className="mt-0.5 text-xs font-semibold leading-relaxed text-brand-text-muted">
+                                {accountSetupProgressDetail}
+                              </p>
                             </div>
                           </div>
                           <div className="mt-3 grid grid-cols-5 gap-1.5">
@@ -964,18 +1200,32 @@ export default function LockScreen({
                               const isActive = index === accountSetupProgressIndex;
                               return (
                                 <div key={step.key} className="min-w-0">
-                                  <div className={`mx-auto flex h-6 w-6 items-center justify-center rounded-full border text-xs font-black transition-colors ${
-                                    isComplete
-                                      ? 'border-brand-sage bg-brand-sage text-white'
-                                      : isActive
-                                        ? 'border-brand-pink bg-brand-pink/10 text-brand-pink'
-                                        : 'border-brand-border bg-white/45 text-brand-text-muted dark:bg-white/[0.03]'
-                                  }`}>
-                                    {isComplete ? <Check className="h-3 w-3" /> : isActive ? <LoaderCircle className="h-3 w-3 animate-spin" /> : index + 1}
+                                  <div
+                                    className={`mx-auto flex h-6 w-6 items-center justify-center rounded-full border text-xs font-black transition-colors ${
+                                      isComplete
+                                        ? 'border-brand-sage bg-brand-sage text-white'
+                                        : isActive
+                                          ? 'border-brand-pink bg-brand-pink/10 text-brand-pink'
+                                          : 'border-brand-border bg-white/45 text-brand-text-muted dark:bg-white/[0.03]'
+                                    }`}
+                                  >
+                                    {isComplete ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : isActive ? (
+                                      <LoaderCircle className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      index + 1
+                                    )}
                                   </div>
-                                  <p className={`mt-1 truncate text-center text-xs font-black uppercase tracking-[0.08em] ${
-                                    isComplete || isActive ? 'text-brand-sage' : 'text-brand-text-muted/70'
-                                  }`}>{step.label}</p>
+                                  <p
+                                    className={`mt-1 truncate text-center text-xs font-black uppercase tracking-[0.08em] ${
+                                      isComplete || isActive
+                                        ? 'text-brand-sage'
+                                        : 'text-brand-text-muted/70'
+                                    }`}
+                                  >
+                                    {step.label}
+                                  </p>
                                 </div>
                               );
                             })}
@@ -984,15 +1234,27 @@ export default function LockScreen({
                       )}
                     </AnimatePresence>
                     <button
-                      onClick={syncSetupSelection ? handleCompleteGoogleSetup : handleConnectGoogleAccount}
+                      onClick={
+                        syncSetupSelection ? handleCompleteGoogleSetup : handleConnectGoogleAccount
+                      }
                       disabled={isLinkingBackup || !canSubmitSyncSetup}
                       aria-busy={isLinkingBackup}
                       className="w-full py-3.5 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
                     >
-                      {isLinkingBackup ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
+                      {isLinkingBackup ? (
+                        <LoaderCircle className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Cloud className="w-4 h-4" />
+                      )}
                       {isLinkingBackup
-                        ? syncSetupSelection ? 'Setting Up...' : 'Connecting...'
-                        : !syncSetupSelection ? 'Connect Google Account' : isRecoveringSyncAccount ? 'Restore Encrypted Account' : 'Create Encrypted Account'}
+                        ? syncSetupSelection
+                          ? 'Setting Up...'
+                          : 'Connecting...'
+                        : !syncSetupSelection
+                          ? 'Connect Google Account'
+                          : isRecoveringSyncAccount
+                            ? 'Restore Encrypted Account'
+                            : 'Create Encrypted Account'}
                     </button>
                     {error && (
                       <p className="text-xs font-bold text-brand-rose flex justify-center items-center gap-1">
@@ -1010,30 +1272,74 @@ export default function LockScreen({
                 ) : showRecoveryForm ? (
                   <div className="flex flex-col gap-3">
                     <label className="flex flex-col gap-1 text-left">
-                      <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Security Question</span>
-                      <select value={questionId} onChange={(e) => { setQuestionId(e.target.value); setError(''); }} className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink">
-                        {SECURITY_RECOVERY_QUESTIONS.map(q => (
-                          <option key={q.id} value={q.id}>{q.question}</option>
+                      <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
+                        Security Question
+                      </span>
+                      <select
+                        value={questionId}
+                        onChange={(e) => {
+                          setQuestionId(e.target.value);
+                          setError('');
+                        }}
+                        className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
+                      >
+                        {SECURITY_RECOVERY_QUESTIONS.map((q) => (
+                          <option key={q.id} value={q.id}>
+                            {q.question}
+                          </option>
                         ))}
                         <option value={CUSTOM_QUESTION_SELECT_VALUE}>Write my own question</option>
                       </select>
                     </label>
                     {isCustomRecoveryQuestion && (
                       <label className="flex flex-col gap-1 text-left">
-                        <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Custom Question</span>
-                        <input type="text" value={customRecoveryQuestion} onChange={(e) => setCustomRecoveryQuestion(e.target.value)} className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" placeholder="Type your security question" />
+                        <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
+                          Custom Question
+                        </span>
+                        <input
+                          type="text"
+                          value={customRecoveryQuestion}
+                          onChange={(e) => setCustomRecoveryQuestion(e.target.value)}
+                          className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
+                          placeholder="Type your security question"
+                        />
                       </label>
                     )}
                     <label className="flex flex-col gap-1 text-left">
-                      <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">Answer</span>
+                      <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
+                        Answer
+                      </span>
                       <div className="relative">
-                        <input type={showRecoveryAnswer ? 'text' : 'password'} value={recoveryAnswer} onChange={(e) => setRecoveryAnswer(e.target.value)} className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink" placeholder="Enter a memorable answer" />
-                        <button type="button" onClick={() => setShowRecoveryAnswer(prev => !prev)} className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink" title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}>
-                          {showRecoveryAnswer ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        <input
+                          type={showRecoveryAnswer ? 'text' : 'password'}
+                          value={recoveryAnswer}
+                          onChange={(e) => setRecoveryAnswer(e.target.value)}
+                          className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
+                          placeholder="Enter a memorable answer"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowRecoveryAnswer((prev) => !prev)}
+                          className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink"
+                          title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}
+                        >
+                          {showRecoveryAnswer ? (
+                            <EyeOff className="w-4 h-4" />
+                          ) : (
+                            <Eye className="w-4 h-4" />
+                          )}
                         </button>
                       </div>
                     </label>
-                    <button onClick={requiresRecoverySetup ? handleSaveMigrationRecovery : handleSaveInitialRecovery} disabled={!canSaveRecoveryQuestion} className="w-full py-3 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-40 disabled:cursor-not-allowed">
+                    <button
+                      onClick={
+                        requiresRecoverySetup
+                          ? handleSaveMigrationRecovery
+                          : handleSaveInitialRecovery
+                      }
+                      disabled={!canSaveRecoveryQuestion}
+                      className="w-full py-3 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
                       Save Recovery Question
                     </button>
                   </div>
@@ -1041,7 +1347,7 @@ export default function LockScreen({
                   <>
                     {!security.isPinCreated && setupStep === 'pin' && (
                       <div className="grid grid-cols-2 gap-2 bg-white/50 dark:bg-black/10 border border-brand-border/50 rounded-2xl p-1">
-                        {([4, 8] as PinLength[]).map(length => (
+                        {([4, 8] as PinLength[]).map((length) => (
                           <button
                             key={length}
                             type="button"
@@ -1068,8 +1374,14 @@ export default function LockScreen({
                           const hasDigit = i < pin.length;
                           return (
                             <div key={i} className="relative flex items-center justify-center">
-                              <div className={`w-3 h-3 rounded-full border-2 transition-all lg:h-3.5 lg:w-3.5 ${hasDigit ? 'bg-brand-pink border-brand-pink shadow-md' : 'border-brand-text-muted/25 bg-transparent lg:border-brand-plum/45 dark:lg:border-[#EADCD1]/55'}`} />
-                              {hasDigit && showPin && <span className="absolute text-xs font-black text-white leading-none">{pin[i]}</span>}
+                              <div
+                                className={`w-3 h-3 rounded-full border-2 transition-all lg:h-3.5 lg:w-3.5 ${hasDigit ? 'bg-brand-pink border-brand-pink shadow-md' : 'border-brand-text-muted/25 bg-transparent lg:border-brand-plum/45 dark:lg:border-[#EADCD1]/55'}`}
+                              />
+                              {hasDigit && showPin && (
+                                <span className="absolute text-xs font-black text-white leading-none">
+                                  {pin[i]}
+                                </span>
+                              )}
                             </div>
                           );
                         })}
@@ -1077,13 +1389,23 @@ export default function LockScreen({
                       <div className="min-h-[16px] text-center flex flex-col items-center mt-1">
                         <AnimatePresence mode="wait">
                           {error && (
-                            <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-xs font-bold text-brand-rose flex items-center gap-1">
+                            <motion.p
+                              initial={{ opacity: 0, y: -4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                              className="text-xs font-bold text-brand-rose flex items-center gap-1"
+                            >
                               <AlertCircle className="w-3 h-3 flex-shrink-0" />
                               <span>{error}</span>
                             </motion.p>
                           )}
                           {successMsg && !error && (
-                            <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-xs font-bold text-brand-sage flex items-center gap-1">
+                            <motion.p
+                              initial={{ opacity: 0, y: -4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                              className="text-xs font-bold text-brand-sage flex items-center gap-1"
+                            >
                               <Check className="w-3.5 h-3.5 text-brand-sage" />
                               <span>{successMsg}</span>
                             </motion.p>
@@ -1093,33 +1415,88 @@ export default function LockScreen({
                     </div>
 
                     <div className="grid grid-cols-3 gap-y-2 gap-x-4 mt-0.5 justify-items-center lg:mx-auto lg:mt-9 lg:w-[300px] lg:gap-x-8 lg:gap-y-8">
-                      {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
-                        <motion.button key={num} type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress(num)} className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5">
-                          <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">{num}</span>
+                      {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
+                        <motion.button
+                          key={num}
+                          type="button"
+                          whileTap={{ scale: 0.9 }}
+                          onClick={() => handleKeyPress(num)}
+                          className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
+                        >
+                          <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">
+                            {num}
+                          </span>
                         </motion.button>
                       ))}
                       <motion.button
                         type="button"
-                        aria-label={pin.length > 0 ? 'Clear PIN' : showPin ? 'Hide PIN digits' : 'Reveal PIN digits'}
-                        title={pin.length > 0 ? 'Clear PIN' : showPin ? 'Hide PIN digits' : 'Reveal PIN digits'}
+                        aria-label={
+                          pin.length > 0
+                            ? 'Clear PIN'
+                            : showPin
+                              ? 'Hide PIN digits'
+                              : 'Reveal PIN digits'
+                        }
+                        title={
+                          pin.length > 0
+                            ? 'Clear PIN'
+                            : showPin
+                              ? 'Hide PIN digits'
+                              : 'Reveal PIN digits'
+                        }
                         whileTap={{ scale: 0.9 }}
-                        onClick={() => { pin.length > 0 ? handleClear() : setShowPin(!showPin); }}
+                        onClick={() => {
+                          pin.length > 0 ? handleClear() : setShowPin(!showPin);
+                        }}
                         className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5"
                       >
-                        {pin.length > 0 ? <X className="h-5 w-5 text-brand-pink" /> : showPin ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                        {pin.length > 0 ? (
+                          <X className="h-5 w-5 text-brand-pink" />
+                        ) : showPin ? (
+                          <EyeOff className="h-5 w-5" />
+                        ) : (
+                          <Eye className="h-5 w-5" />
+                        )}
                       </motion.button>
-                      <motion.button type="button" whileTap={{ scale: 0.9 }} onClick={() => handleKeyPress('0')} className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5">
-                        <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">0</span>
+                      <motion.button
+                        type="button"
+                        whileTap={{ scale: 0.9 }}
+                        onClick={() => handleKeyPress('0')}
+                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
+                      >
+                        <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">
+                          0
+                        </span>
                       </motion.button>
-                      <motion.button type="button" aria-label="Erase last PIN digit" title="Erase last PIN digit" whileTap={{ scale: 0.9 }} onClick={handleBackspace} disabled={pin.length === 0} className={`w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5 ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}>
+                      <motion.button
+                        type="button"
+                        aria-label="Erase last PIN digit"
+                        title="Erase last PIN digit"
+                        whileTap={{ scale: 0.9 }}
+                        onClick={handleBackspace}
+                        disabled={pin.length === 0}
+                        className={`w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5 ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                      >
                         <Delete className="h-5 w-5" />
                       </motion.button>
                     </div>
 
-                    <button onClick={handleSubmit} disabled={!isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength)} className={`w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}>
-                      {security.isPinCreated ? 'Unlock Diary' : setupStep === 'confirm' ? 'Confirm PIN' : 'Continue'}
+                    <button
+                      onClick={handleSubmit}
+                      disabled={
+                        !isValidPin(
+                          pin,
+                          security.isPinCreated ? security.pinLength : selectedPinLength,
+                        )
+                      }
+                      className={`w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}
+                    >
+                      {security.isPinCreated
+                        ? 'Unlock Diary'
+                        : setupStep === 'confirm'
+                          ? 'Confirm PIN'
+                          : 'Continue'}
                     </button>
-
                   </>
                 )}
 
@@ -1136,36 +1513,78 @@ export default function LockScreen({
                   </p>
                 )}
 
-                {security.isPinCreated && !requiresRecoverySetup && !isResetting && hasAvailablePinRecovery && (
-                  <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
-                    <button onClick={() => { triggerHaptic(15); setRecoveryMode('choosing'); }} className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors">
-                      Forgot security passcode PIN?
-                    </button>
-                  </div>
-                )}
+                {security.isPinCreated &&
+                  !requiresRecoverySetup &&
+                  !isResetting &&
+                  hasAvailablePinRecovery && (
+                    <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
+                      <button
+                        onClick={() => {
+                          triggerHaptic(15);
+                          setRecoveryMode('choosing');
+                        }}
+                        className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors"
+                      >
+                        Forgot security passcode PIN?
+                      </button>
+                    </div>
+                  )}
 
                 <AnimatePresence>
                   {recoveryMode && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-y-0 left-0 right-0 z-40 flex items-center justify-center overflow-y-auto bg-brand-bg/96 px-6 py-8 backdrop-blur-md dark:bg-[#151214]/96 lg:left-1/2 lg:bg-transparent lg:px-10 lg:py-10 lg:backdrop-blur-0 xl:px-16">
-                      <motion.div initial={{ scale: 0.96, opacity: 0, y: 14 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0, y: 14 }} transition={{ type: 'spring', damping: 24, stiffness: 190 }} className="flex w-full max-w-[390px] flex-col items-center text-center">
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="fixed inset-y-0 left-0 right-0 z-40 flex items-center justify-center overflow-y-auto bg-brand-bg/96 px-6 py-8 backdrop-blur-md dark:bg-[#151214]/96 lg:left-1/2 lg:bg-transparent lg:px-10 lg:py-10 lg:backdrop-blur-0 xl:px-16"
+                    >
+                      <motion.div
+                        initial={{ scale: 0.96, opacity: 0, y: 14 }}
+                        animate={{ scale: 1, opacity: 1, y: 0 }}
+                        exit={{ scale: 0.96, opacity: 0, y: 14 }}
+                        transition={{ type: 'spring', damping: 24, stiffness: 190 }}
+                        className="flex w-full max-w-[390px] flex-col items-center text-center"
+                      >
                         <div className="flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-full border border-brand-border/60 bg-white/50 text-brand-pink shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.05] lg:h-20 lg:w-20">
                           <ShieldCheck className="h-7 w-7 stroke-[1.7]" />
                         </div>
-                        <h3 className="mt-4 font-serif-diary text-2xl font-bold text-brand-plum dark:text-[#ECE6E1] lg:text-3xl">Reset Passcode PIN</h3>
+                        <h3 className="mt-4 font-serif-diary text-2xl font-bold text-brand-plum dark:text-[#ECE6E1] lg:text-3xl">
+                          Reset Passcode PIN
+                        </h3>
 
                         {recoveryMode === 'choosing' && (
                           <div className="mt-3 flex w-full flex-col gap-3">
-                            <p className="mx-auto mb-3 max-w-[260px] text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">Choose a verified recovery method to create a new passcode.</p>
+                            <p className="mx-auto mb-3 max-w-[260px] text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">
+                              Choose a verified recovery method to create a new passcode.
+                            </p>
                             {hasSecurityQuestionRecovery && (
-                              <button onClick={() => { setRecoveryMode('question'); setRecoveryAnswer(''); }} className="group w-full rounded-2xl border border-brand-border/65 bg-white/45 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-pink/40 hover:bg-brand-pink/8 dark:border-white/10 dark:bg-white/[0.04] dark:hover:bg-white/[0.07]">
-                                <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-pink">Recovery Method</span>
-                                <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">Answer Security Question</span>
+                              <button
+                                onClick={() => {
+                                  setRecoveryMode('question');
+                                  setRecoveryAnswer('');
+                                }}
+                                className="group w-full rounded-2xl border border-brand-border/65 bg-white/45 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-pink/40 hover:bg-brand-pink/8 dark:border-white/10 dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
+                              >
+                                <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-pink">
+                                  Recovery Method
+                                </span>
+                                <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">
+                                  Answer Security Question
+                                </span>
                               </button>
                             )}
                             {hasGoogleRecovery && (
-                              <button onClick={handleVerifyGoogleReset} disabled={isResetting} className="group w-full rounded-2xl border border-brand-sage/30 bg-brand-sage/12 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-sage/55 hover:bg-brand-sage/18 disabled:opacity-50 dark:border-brand-sage/35 dark:bg-brand-sage/10">
-                                <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-sage dark:text-brand-sage-light">Linked Account</span>
-                                <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">Verify Google Account</span>
+                              <button
+                                onClick={handleVerifyGoogleReset}
+                                disabled={isResetting}
+                                className="group w-full rounded-2xl border border-brand-sage/30 bg-brand-sage/12 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-sage/55 hover:bg-brand-sage/18 disabled:opacity-50 dark:border-brand-sage/35 dark:bg-brand-sage/10"
+                              >
+                                <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-sage dark:text-brand-sage-light">
+                                  Linked Account
+                                </span>
+                                <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">
+                                  Verify Google Account
+                                </span>
                               </button>
                             )}
                           </div>
@@ -1173,22 +1592,49 @@ export default function LockScreen({
 
                         {recoveryMode === 'question' && (
                           <div className="mt-6 flex w-full flex-col gap-3">
-                            <p className="rounded-2xl border border-brand-border/55 bg-white/35 px-4 py-3 text-sm font-semibold leading-relaxed text-brand-sage backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:text-brand-sage-light">{getRecoveryQuestionText(security)}</p>
+                            <p className="rounded-2xl border border-brand-border/55 bg-white/35 px-4 py-3 text-sm font-semibold leading-relaxed text-brand-sage backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:text-brand-sage-light">
+                              {getRecoveryQuestionText(security)}
+                            </p>
                             <div className="relative">
-                              <input type={showRecoveryAnswer ? 'text' : 'password'} value={recoveryAnswer} onChange={(e) => setRecoveryAnswer(e.target.value)} placeholder="Your answer" className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 pr-11 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]" />
-                              <button type="button" onClick={() => setShowRecoveryAnswer(prev => !prev)} className="absolute inset-y-0 right-3 flex items-center text-brand-sage transition-colors hover:text-brand-pink" title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}>
-                                {showRecoveryAnswer ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              <input
+                                type={showRecoveryAnswer ? 'text' : 'password'}
+                                value={recoveryAnswer}
+                                onChange={(e) => setRecoveryAnswer(e.target.value)}
+                                placeholder="Your answer"
+                                className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 pr-11 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowRecoveryAnswer((prev) => !prev)}
+                                className="absolute inset-y-0 right-3 flex items-center text-brand-sage transition-colors hover:text-brand-pink"
+                                title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}
+                              >
+                                {showRecoveryAnswer ? (
+                                  <EyeOff className="w-4 h-4" />
+                                ) : (
+                                  <Eye className="w-4 h-4" />
+                                )}
                               </button>
                             </div>
-                            <button onClick={handleVerifySecurityAnswer} disabled={!recoveryAnswer.trim()} className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-md shadow-brand-plum/10 transition-all hover:bg-brand-pink disabled:cursor-not-allowed disabled:opacity-40 dark:bg-[#EADCD1] dark:text-[#21191C]">Verify Answer</button>
+                            <button
+                              onClick={handleVerifySecurityAnswer}
+                              disabled={!recoveryAnswer.trim()}
+                              className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-md shadow-brand-plum/10 transition-all hover:bg-brand-pink disabled:cursor-not-allowed disabled:opacity-40 dark:bg-[#EADCD1] dark:text-[#21191C]"
+                            >
+                              Verify Answer
+                            </button>
                           </div>
                         )}
 
                         {recoveryMode === 'newPin' && (
                           <div className="mt-6 flex w-full flex-col gap-3">
-                            <p className="text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">Recovery verified by {recoveryVerifiedBy === 'google' ? 'Google' : 'security question'}. Choose a new 4-digit or 8-digit PIN.</p>
+                            <p className="text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">
+                              Recovery verified by{' '}
+                              {recoveryVerifiedBy === 'google' ? 'Google' : 'security question'}.
+                              Choose a new 4-digit or 8-digit PIN.
+                            </p>
                             <div className="grid grid-cols-2 gap-2 rounded-2xl border border-brand-border/50 bg-white/35 p-1 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-                              {([4, 8] as PinLength[]).map(length => (
+                              {([4, 8] as PinLength[]).map((length) => (
                                 <button
                                   key={length}
                                   type="button"
@@ -1198,23 +1644,71 @@ export default function LockScreen({
                                     setResetConfirmPin('');
                                   }}
                                   className={`py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all ${
-                                    resetPinLength === length ? 'bg-brand-pink text-white shadow-sm' : 'text-brand-sage hover:text-brand-plum dark:text-[#EADCD1]/70'
+                                    resetPinLength === length
+                                      ? 'bg-brand-pink text-white shadow-sm'
+                                      : 'text-brand-sage hover:text-brand-plum dark:text-[#EADCD1]/70'
                                   }`}
                                 >
                                   {length} Digit
                                 </button>
                               ))}
                             </div>
-                            <input type="password" inputMode="numeric" maxLength={resetPinLength} value={resetNewPin} onChange={(e) => setResetNewPin(e.target.value.replace(/\D/g, '').slice(0, resetPinLength))} placeholder={`${resetPinLength}-digit new PIN`} className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]" />
-                            <input type="password" inputMode="numeric" maxLength={resetPinLength} value={resetConfirmPin} onChange={(e) => setResetConfirmPin(e.target.value.replace(/\D/g, '').slice(0, resetPinLength))} placeholder={`Confirm ${resetPinLength}-digit PIN`} className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]" />
-                            <button onClick={handleResetPin} disabled={!isValidPin(resetNewPin, resetPinLength) || resetNewPin !== resetConfirmPin} className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-md shadow-brand-plum/10 transition-all hover:bg-brand-pink disabled:cursor-not-allowed disabled:opacity-40 dark:bg-[#EADCD1] dark:text-[#21191C]">Reset PIN</button>
+                            <input
+                              type="password"
+                              inputMode="numeric"
+                              maxLength={resetPinLength}
+                              value={resetNewPin}
+                              onChange={(e) =>
+                                setResetNewPin(
+                                  e.target.value.replace(/\D/g, '').slice(0, resetPinLength),
+                                )
+                              }
+                              placeholder={`${resetPinLength}-digit new PIN`}
+                              className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]"
+                            />
+                            <input
+                              type="password"
+                              inputMode="numeric"
+                              maxLength={resetPinLength}
+                              value={resetConfirmPin}
+                              onChange={(e) =>
+                                setResetConfirmPin(
+                                  e.target.value.replace(/\D/g, '').slice(0, resetPinLength),
+                                )
+                              }
+                              placeholder={`Confirm ${resetPinLength}-digit PIN`}
+                              className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]"
+                            />
+                            <button
+                              onClick={handleResetPin}
+                              disabled={
+                                !isValidPin(resetNewPin, resetPinLength) ||
+                                resetNewPin !== resetConfirmPin
+                              }
+                              className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-md shadow-brand-plum/10 transition-all hover:bg-brand-pink disabled:cursor-not-allowed disabled:opacity-40 dark:bg-[#EADCD1] dark:text-[#21191C]"
+                            >
+                              Reset PIN
+                            </button>
                           </div>
                         )}
 
                         {(error || successMsg) && (
-                          <p className={`mt-4 text-xs font-bold ${error ? 'text-brand-rose' : 'text-brand-sage'}`}>{error || successMsg}</p>
+                          <p
+                            className={`mt-4 text-xs font-bold ${error ? 'text-brand-rose' : 'text-brand-sage'}`}
+                          >
+                            {error || successMsg}
+                          </p>
                         )}
-                        <button onClick={() => { triggerHaptic(10); setRecoveryMode(null); setRecoveryVerifiedBy(null); setError(''); setSuccessMsg(''); }} className="mt-7 w-full py-2 text-xs font-black uppercase tracking-[0.18em] text-brand-text-muted transition-colors hover:text-brand-plum dark:hover:text-[#ECE6E1]">
+                        <button
+                          onClick={() => {
+                            triggerHaptic(10);
+                            setRecoveryMode(null);
+                            setRecoveryVerifiedBy(null);
+                            setError('');
+                            setSuccessMsg('');
+                          }}
+                          className="mt-7 w-full py-2 text-xs font-black uppercase tracking-[0.18em] text-brand-text-muted transition-colors hover:text-brand-plum dark:hover:text-[#ECE6E1]"
+                        >
                           Cancel
                         </button>
                       </motion.div>

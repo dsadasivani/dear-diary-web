@@ -9,7 +9,11 @@ import {
 } from './retryPolicy';
 
 export interface ExecuteRequestOptions {
-  request: (context: { signal: AbortSignal; correlationId: string; attempt: number }) => Promise<Response>;
+  request: (context: {
+    signal: AbortSignal;
+    correlationId: string;
+    attempt: number;
+  }) => Promise<Response>;
   mapError: (error: unknown) => SyncError;
   timeoutMs?: number;
   retryPolicy?: Partial<RetryPolicy>;
@@ -20,19 +24,25 @@ export interface ExecuteRequestOptions {
   isSuccessfulResponse?: (response: Response) => boolean;
 }
 
-const randomCorrelationId = (): string => globalThis.crypto?.randomUUID?.() || `req-${Date.now().toString(36)}`;
+const randomCorrelationId = (): string =>
+  globalThis.crypto?.randomUUID?.() || `req-${Date.now().toString(36)}`;
 
-const wait = (delayMs: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
-  if (signal?.aborted) {
-    reject(signal.reason);
-    return;
-  }
-  const timer = setTimeout(resolve, delayMs);
-  signal?.addEventListener('abort', () => {
-    clearTimeout(timer);
-    reject(signal.reason);
-  }, { once: true });
-});
+const wait = (delayMs: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(resolve, delayMs);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      },
+      { once: true },
+    );
+  });
 
 const responseError = (response: Response): Error & { status: number } => {
   const error = new Error('External request failed.') as Error & { status: number };
@@ -44,7 +54,8 @@ export const executeRequest = async (options: ExecuteRequestOptions): Promise<Re
   const policy: RetryPolicy = {
     ...DEFAULT_RETRY_POLICY,
     ...options.retryPolicy,
-    retryableStatuses: options.retryPolicy?.retryableStatuses || DEFAULT_RETRY_POLICY.retryableStatuses,
+    retryableStatuses:
+      options.retryPolicy?.retryableStatuses || DEFAULT_RETRY_POLICY.retryableStatuses,
   };
   const correlationId = options.correlationId || randomCorrelationId();
   const sleep = options.sleep || wait;
@@ -54,10 +65,14 @@ export const executeRequest = async (options: ExecuteRequestOptions): Promise<Re
     if (options.signal?.aborted) {
       throw new SyncError({ code: 'UNKNOWN', cause: options.signal.reason });
     }
-    const deadline = createRequestDeadline(options.timeoutMs || DEFAULT_REQUEST_TIMEOUT_MS, options.signal);
+    const deadline = createRequestDeadline(
+      options.timeoutMs || DEFAULT_REQUEST_TIMEOUT_MS,
+      options.signal,
+    );
     try {
       const response = await options.request({ signal: deadline.signal, correlationId, attempt });
-      if ((options.isSuccessfulResponse || (candidate => candidate.ok))(response)) return response;
+      if ((options.isSuccessfulResponse || ((candidate) => candidate.ok))(response))
+        return response;
       const mapped = options.mapError(responseError(response));
       const retryable = policy.retryableStatuses.has(response.status) && mapped.retryable;
       if (!retryable || attempt >= policy.maxAttempts) throw mapped;
@@ -65,13 +80,17 @@ export const executeRequest = async (options: ExecuteRequestOptions): Promise<Re
       const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
       await sleep(retryAfterMs ?? fullJitterDelay(attempt, policy, options.random), options.signal);
     } catch (error) {
-      const cause = deadline.signal.aborted && !options.signal?.aborted
-        ? new SyncError({ code: 'REQUEST_TIMEOUT', retryable: true, cause: error })
-        : error;
+      const cause =
+        deadline.signal.aborted && !options.signal?.aborted
+          ? new SyncError({ code: 'REQUEST_TIMEOUT', retryable: true, cause: error })
+          : error;
       const mapped = isSyncError(cause) ? cause : options.mapError(cause);
       lastError = mapped;
       if (!mapped.retryable || attempt >= policy.maxAttempts) throw mapped;
-      await sleep(mapped.retryAfterMs ?? fullJitterDelay(attempt, policy, options.random), options.signal);
+      await sleep(
+        mapped.retryAfterMs ?? fullJitterDelay(attempt, policy, options.random),
+        options.signal,
+      );
     } finally {
       deadline.dispose();
     }

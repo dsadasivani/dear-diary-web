@@ -16,15 +16,24 @@ export interface CanonicalEventPreparationDependencies {
 }
 
 const defaultObjectKey = async (accountId: string): Promise<string> => {
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(accountId)));
-  const namespace = Array.from(digest.slice(0, 16), byte => byte.toString(16).padStart(2, '0')).join('');
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(accountId)),
+  );
+  const namespace = Array.from(digest.slice(0, 16), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
   return `accounts/${namespace}/objects/${crypto.randomUUID()}`;
 };
 
-const sanitizedPayload = (operation: SyncOutboxOperationV2, payload: unknown | null): unknown | null => {
+const sanitizedPayload = (
+  operation: SyncOutboxOperationV2,
+  payload: unknown | null,
+): unknown | null => {
   if (!payload) return payload;
-  if (operation.recordType === 'ENTRY') return sanitizeEntry(payload as Parameters<typeof sanitizeEntry>[0]);
-  if (operation.recordType === 'NOTE') return sanitizeNote(payload as Parameters<typeof sanitizeNote>[0]);
+  if (operation.recordType === 'ENTRY')
+    return sanitizeEntry(payload as Parameters<typeof sanitizeEntry>[0]);
+  if (operation.recordType === 'NOTE')
+    return sanitizeNote(payload as Parameters<typeof sanitizeNote>[0]);
   return payload;
 };
 
@@ -37,9 +46,10 @@ export class CanonicalSyncV2OperationPreparer implements SyncV2OperationPreparer
 
   async prepare(operation: SyncOutboxOperationV2): Promise<PreparedSyncV2Operation> {
     const loadSpan = this.telemetry.startSpan('record.load', { record_type: operation.recordType });
-    const authoritative = operation.operationType === 'DELETE'
-      ? null
-      : await this.dependencies.loadAuthoritativeRecord(operation);
+    const authoritative =
+      operation.operationType === 'DELETE'
+        ? null
+        : await this.dependencies.loadAuthoritativeRecord(operation);
     loadSpan.end();
     if (operation.operationType === 'UPSERT' && authoritative === null) {
       throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
@@ -65,7 +75,9 @@ export class CanonicalSyncV2OperationPreparer implements SyncV2OperationPreparer
       payload,
     };
     await this.dependencies.validateEvent(event);
-    const encryptionSpan = this.telemetry.startSpan('event.encrypt', { record_type: operation.recordType });
+    const encryptionSpan = this.telemetry.startSpan('event.encrypt', {
+      record_type: operation.recordType,
+    });
     await this.faults.hit('BEFORE_EVENT_ENCRYPTION');
     const encrypted = await this.dependencies.encryptEvent(event, keyEpoch);
     await this.faults.hit('AFTER_EVENT_ENCRYPTION');

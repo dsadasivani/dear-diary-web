@@ -3,23 +3,41 @@ import test from 'node:test';
 import { zipSync } from 'fflate';
 import type { BackupManifest } from '../types';
 import { diaryRepository } from '../repositories';
-import { createBackupBundle, restoreBackupBundle, validateBackupBundleBytes } from './backupSnapshot';
+import {
+  createBackupBundle,
+  restoreBackupBundle,
+  validateBackupBundleBytes,
+} from './backupSnapshot';
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
-  get length(): number { return this.values.size; }
-  clear(): void { this.values.clear(); }
-  getItem(key: string): string | null { return this.values.get(key) ?? null; }
-  key(index: number): string | null { return [...this.values.keys()][index] ?? null; }
-  removeItem(key: string): void { this.values.delete(key); }
-  setItem(key: string, value: string): void { this.values.set(key, value); }
+  get length(): number {
+    return this.values.size;
+  }
+  clear(): void {
+    this.values.clear();
+  }
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+  key(index: number): string | null {
+    return [...this.values.keys()][index] ?? null;
+  }
+  removeItem(key: string): void {
+    this.values.delete(key);
+  }
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
 }
 
 const encoder = new TextEncoder();
 
 const checksum = async (value: string): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(value));
-  return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
 };
 
 const payload = {
@@ -85,7 +103,9 @@ test('rejects backup data with a checksum mismatch', async () => {
 test('continues to validate legacy schema v1 backups', async () => {
   const dataJson = JSON.stringify(payload);
   const bytes = zipSync({
-    'manifest.json': encoder.encode(JSON.stringify(manifest({ checksum: await checksum(dataJson) }))),
+    'manifest.json': encoder.encode(
+      JSON.stringify(manifest({ checksum: await checksum(dataJson) })),
+    ),
     'data.json': encoder.encode(dataJson),
   });
   const validated = await validateBackupBundleBytes(bytes);
@@ -109,12 +129,16 @@ test('validates portable schema v2 without device security metadata', async () =
   };
   const dataJson = JSON.stringify(portablePayload);
   const bytes = zipSync({
-    'manifest.json': encoder.encode(JSON.stringify(manifest({
-      schemaVersion: 2,
-      checksum: await checksum(dataJson),
-      deviceId: 'device-a',
-      contentRevision: 7,
-    }))),
+    'manifest.json': encoder.encode(
+      JSON.stringify(
+        manifest({
+          schemaVersion: 2,
+          checksum: await checksum(dataJson),
+          deviceId: 'device-a',
+          contentRevision: 7,
+        }),
+      ),
+    ),
     'data.json': encoder.encode(dataJson),
   });
   const validated = await validateBackupBundleBytes(bytes);
@@ -123,7 +147,10 @@ test('validates portable schema v2 without device security metadata', async () =
 });
 
 test('round-trips a cached profile avatar through the Drive backup bundle', async () => {
-  Object.defineProperty(globalThis, 'localStorage', { value: new MemoryStorage(), configurable: true });
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: new MemoryStorage(),
+    configurable: true,
+  });
   await diaryRepository.initialize();
   const sourceProfile = {
     ...(await diaryRepository.getUserProfile()),

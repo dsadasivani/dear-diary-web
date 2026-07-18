@@ -59,4 +59,3 @@ export class SyncError extends Error {
 }
 
 export const isSyncError = (value: unknown): value is SyncError => value instanceof SyncError;
-

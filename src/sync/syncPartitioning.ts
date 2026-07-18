@@ -24,9 +24,8 @@ export interface ParsedPartitionSnapshot {
 
 const monthPattern = /^\d{4}-\d{2}$/;
 
-export const isMonthPartitionKey = (partitionKey: string): partitionKey is `month:${string}` => (
-  /^month:\d{4}-\d{2}$/.test(partitionKey)
-);
+export const isMonthPartitionKey = (partitionKey: string): partitionKey is `month:${string}` =>
+  /^month:\d{4}-\d{2}$/.test(partitionKey);
 
 export const normalizeMonth = (value: string): string => {
   if (!monthPattern.test(value)) throw new Error('Month must use YYYY-MM format.');
@@ -35,9 +34,8 @@ export const normalizeMonth = (value: string): string => {
   return value;
 };
 
-export const monthPartitionKey = (month: string): SyncPartitionKey => (
-  `month:${normalizeMonth(month)}` as SyncPartitionKey
-);
+export const monthPartitionKey = (month: string): SyncPartitionKey =>
+  `month:${normalizeMonth(month)}` as SyncPartitionKey;
 
 export const monthFromDateString = (date: string): string => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Entry date must use YYYY-MM-DD format.');
@@ -58,12 +56,15 @@ export const previousMonth = (month: string): string => {
 
 export const recentPartitionKeys = (now: Date = new Date()): SyncPartitionKey[] => {
   const current = now.toISOString().slice(0, 7);
-  return [CORE_PARTITION_KEY, monthPartitionKey(current), monthPartitionKey(previousMonth(current))];
+  return [
+    CORE_PARTITION_KEY,
+    monthPartitionKey(current),
+    monthPartitionKey(previousMonth(current)),
+  ];
 };
 
-export const partitionKeyForEntry = (entry: Pick<Entry, 'date'>): SyncPartitionKey => (
-  monthPartitionKey(monthFromDateString(entry.date))
-);
+export const partitionKeyForEntry = (entry: Pick<Entry, 'date'>): SyncPartitionKey =>
+  monthPartitionKey(monthFromDateString(entry.date));
 
 export const partitionKeyForNote = (note: Pick<Note, 'createdAt'>): SyncPartitionKey => {
   try {
@@ -105,17 +106,19 @@ export const filterSnapshotForPartition = (
   const month = partitionKey.slice('month:'.length);
   return {
     diaries: [],
-    entries: snapshot.entries.filter(entry => entry.date.startsWith(month)),
-    notes: snapshot.notes.filter(note => {
+    entries: snapshot.entries.filter((entry) => entry.date.startsWith(month)),
+    notes: snapshot.notes.filter((note) => {
       try {
         return monthFromTimestamp(note.createdAt) === month;
       } catch {
         return false;
       }
     }),
-    syncRecordVersions: Object.fromEntries(Object.entries(snapshot.syncRecordVersions || {}).filter(([key]) => (
-      key.startsWith('entry:') || key.startsWith('note:')
-    ))),
+    syncRecordVersions: Object.fromEntries(
+      Object.entries(snapshot.syncRecordVersions || {}).filter(
+        ([key]) => key.startsWith('entry:') || key.startsWith('note:'),
+      ),
+    ),
     syncMediaPointers: snapshot.syncMediaPointers,
   };
 };
@@ -123,17 +126,20 @@ export const filterSnapshotForPartition = (
 const stripLocalMediaUris = (snapshot: RepositorySnapshot): RepositorySnapshot => ({
   ...snapshot,
   syncMediaPointers: Object.fromEntries(
-    Object.entries(snapshot.syncMediaPointers || {}).map(([sequence, pointer]) => [sequence, {
-      ...pointer,
-      localUri: undefined,
-    }]),
+    Object.entries(snapshot.syncMediaPointers || {}).map(([sequence, pointer]) => [
+      sequence,
+      {
+        ...pointer,
+        localUri: undefined,
+      },
+    ]),
   ),
 });
 
 export const listPartitionKeysInSnapshot = (snapshot: RepositorySnapshot): SyncPartitionKey[] => {
   const keys = new Set<SyncPartitionKey>([CORE_PARTITION_KEY]);
-  snapshot.entries.forEach(entry => keys.add(partitionKeyForEntry(entry)));
-  snapshot.notes.forEach(note => keys.add(partitionKeyForNote(note)));
+  snapshot.entries.forEach((entry) => keys.add(partitionKeyForEntry(entry)));
+  snapshot.notes.forEach((note) => keys.add(partitionKeyForNote(note)));
   return [...keys].sort((left, right) => {
     if (left === CORE_PARTITION_KEY) return -1;
     if (right === CORE_PARTITION_KEY) return 1;
@@ -150,15 +156,17 @@ export const encodePartitionSnapshotPayload = (
   if (!Number.isInteger(baseSequence) || baseSequence < 0) {
     throw new Error('Partition snapshot base sequence must be a non-negative integer.');
   }
-  return encoder.encode(JSON.stringify({
-    version: 1,
-    kind: 'partition_snapshot',
-    accountId,
-    partitionKey,
-    baseSequence,
-    exportedAt: new Date().toISOString(),
-    snapshot: stripLocalMediaUris(filterSnapshotForPartition(snapshot, partitionKey)),
-  }));
+  return encoder.encode(
+    JSON.stringify({
+      version: 1,
+      kind: 'partition_snapshot',
+      accountId,
+      partitionKey,
+      baseSequence,
+      exportedAt: new Date().toISOString(),
+      snapshot: stripLocalMediaUris(filterSnapshotForPartition(snapshot, partitionKey)),
+    }),
+  );
 };
 
 export const parsePartitionSnapshotPayload = (
@@ -194,9 +202,8 @@ export const parsePartitionSnapshotPayload = (
   };
 };
 
-export const encodePartitionManifestPayload = (manifest: SyncPartitionManifest): Uint8Array => (
-  encoder.encode(JSON.stringify(manifest))
-);
+export const encodePartitionManifestPayload = (manifest: SyncPartitionManifest): Uint8Array =>
+  encoder.encode(JSON.stringify(manifest));
 
 export const parsePartitionManifestPayload = (
   bytes: Uint8Array,
@@ -225,7 +232,7 @@ export const buildPartitionManifest = (input: {
   const now = input.now || new Date();
   const currentMonth = now.toISOString().slice(0, 7);
   const previous = previousMonth(currentMonth);
-  const partitions = listPartitionKeysInSnapshot(input.snapshot).map(partitionKey => {
+  const partitions = listPartitionKeysInSnapshot(input.snapshot).map((partitionKey) => {
     const partition = filterSnapshotForPartition(input.snapshot, partitionKey);
     const metadata = input.snapshotMetadata?.[partitionKey] || {};
     const month = isMonthPartitionKey(partitionKey) ? partitionKey.slice('month:'.length) : null;
@@ -236,9 +243,14 @@ export const buildPartitionManifest = (input: {
       rangeEnd: month ? `${month}-31` : null,
       entryCount: partition.entries.length,
       noteCount: partition.notes.length,
-      mediaCount: partition.entries.reduce((total, entry) => (
-        total + entry.photoUris.length + (entry.audioUri ? 1 : 0) + (entry.blocks || []).filter(block => block.audioUri).length
-      ), 0),
+      mediaCount: partition.entries.reduce(
+        (total, entry) =>
+          total +
+          entry.photoUris.length +
+          (entry.audioUri ? 1 : 0) +
+          (entry.blocks || []).filter((block) => block.audioUri).length,
+        0,
+      ),
       approximateBytes: encoder.encode(JSON.stringify(partition)).byteLength,
       latestSnapshotSequence: 0,
       latestSnapshotDriveFileId: null,

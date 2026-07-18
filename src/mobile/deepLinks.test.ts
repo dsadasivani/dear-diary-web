@@ -6,7 +6,10 @@ import { parseDearDiaryDeepLink } from './deepLinks';
 test('parses Dear Diary custom-scheme navigation links', () => {
   assert.deepEqual(parseDearDiaryDeepLink('deardiary://home'), { kind: 'home' });
   assert.deepEqual(parseDearDiaryDeepLink('deardiary://diaries'), { kind: 'diaries' });
-  assert.deepEqual(parseDearDiaryDeepLink('deardiary://diaries/diary-1'), { kind: 'diary', diaryId: 'diary-1' });
+  assert.deepEqual(parseDearDiaryDeepLink('deardiary://diaries/diary-1'), {
+    kind: 'diary',
+    diaryId: 'diary-1',
+  });
   assert.deepEqual(parseDearDiaryDeepLink('deardiary://diaries/diary-1/entries/entry-2'), {
     kind: 'diary',
     diaryId: 'diary-1',
@@ -17,8 +20,14 @@ test('parses Dear Diary custom-scheme navigation links', () => {
     entryId: 'entry-2',
     diaryId: 'diary-1',
   });
-  assert.deepEqual(parseDearDiaryDeepLink('deardiary://notes/note-1'), { kind: 'notes', noteId: 'note-1' });
-  assert.deepEqual(parseDearDiaryDeepLink('deardiary://search?q=gratitude'), { kind: 'search', query: 'gratitude' });
+  assert.deepEqual(parseDearDiaryDeepLink('deardiary://notes/note-1'), {
+    kind: 'notes',
+    noteId: 'note-1',
+  });
+  assert.deepEqual(parseDearDiaryDeepLink('deardiary://search?q=gratitude'), {
+    kind: 'search',
+    query: 'gratitude',
+  });
   assert.deepEqual(parseDearDiaryDeepLink('deardiary://settings'), { kind: 'settings' });
 });
 

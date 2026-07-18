@@ -39,21 +39,22 @@ export const createDefaultBackupSchedule = (): BackupSchedulePreference => ({
 
 export const createDefaultDriveBackupSettings = (): DriveBackupSettings => ({
   schedule: createDefaultBackupSchedule(),
-  deviceId: globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  deviceId:
+    globalThis.crypto?.randomUUID?.() ||
+    `device-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   contentRevision: 0,
   stagedContentRevision: 0,
   uploadedContentRevision: 0,
   cloudWriteBlocked: false,
 });
 
-const nameFromEmail = (email?: string | null): string => (
+const nameFromEmail = (email?: string | null): string =>
   (email || '')
     .split('@')[0]
     .split(/[._-]/)
     .filter(Boolean)
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ')
-);
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
 
 export const createDefaultUserProfile = (email?: string | null): UserProfile => ({
   name: nameFromEmail(email) || 'Writer',

@@ -6,11 +6,7 @@ import type { SyncV2ConflictRecorder } from '../operation/SyncV2OperationProcess
 const STORAGE_KEY = 'deardiary_sync_v2_conflicts';
 
 export type SyncConflictState =
-  | 'UNRESOLVED'
-  | 'KEEP_LOCAL_PENDING'
-  | 'KEEP_REMOTE'
-  | 'KEEP_BOTH_PENDING'
-  | 'RESOLVED';
+  'UNRESOLVED' | 'KEEP_LOCAL_PENDING' | 'KEEP_REMOTE' | 'KEEP_BOTH_PENDING' | 'RESOLVED';
 
 export interface SyncConflict {
   conflictId: string;
@@ -28,7 +24,10 @@ export interface SyncConflict {
 export class PersistentSyncConflictStore implements SyncV2ConflictRecorder {
   private tail: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly store: LocalDataStore, private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly store: LocalDataStore,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   record(operation: SyncOutboxOperationV2, remoteVersion: number): Promise<void> {
     return this.exclusive(async () => {
@@ -59,7 +58,12 @@ export class PersistentSyncConflictStore implements SyncV2ConflictRecorder {
       const conflicts = await this.read();
       const current = conflicts[conflictId];
       if (!current) throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
-      const updated = { ...current, ...patch, conflictId: current.conflictId, operationId: current.operationId };
+      const updated = {
+        ...current,
+        ...patch,
+        conflictId: current.conflictId,
+        operationId: current.operationId,
+      };
       conflicts[conflictId] = updated;
       await this.write(conflicts);
       return updated;
@@ -68,7 +72,7 @@ export class PersistentSyncConflictStore implements SyncV2ConflictRecorder {
 
   private async read(): Promise<Record<string, SyncConflict>> {
     const raw = await this.store.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) as Record<string, SyncConflict> : {};
+    return raw ? (JSON.parse(raw) as Record<string, SyncConflict>) : {};
   }
 
   private write(conflicts: Record<string, SyncConflict>): Promise<void> {
@@ -77,7 +81,10 @@ export class PersistentSyncConflictStore implements SyncV2ConflictRecorder {
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(work, work);
-    this.tail = result.then(() => undefined, () => undefined);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 }
@@ -85,7 +92,10 @@ export class PersistentSyncConflictStore implements SyncV2ConflictRecorder {
 export type ConflictResolution = 'KEEP_LOCAL' | 'KEEP_REMOTE' | 'KEEP_BOTH' | 'MARK_RESOLVED';
 
 export interface ConflictResolutionOperationFactory {
-  create(conflict: SyncConflict, resolution: 'KEEP_LOCAL' | 'KEEP_BOTH'): Promise<SyncOutboxOperationV2>;
+  create(
+    conflict: SyncConflict,
+    resolution: 'KEEP_LOCAL' | 'KEEP_BOTH',
+  ): Promise<SyncOutboxOperationV2>;
 }
 
 export class SyncConflictResolutionService {
@@ -97,7 +107,9 @@ export class SyncConflictResolutionService {
   ) {}
 
   async resolve(conflictId: string, resolution: ConflictResolution): Promise<SyncConflict> {
-    const conflict = (await this.conflicts.list()).find(candidate => candidate.conflictId === conflictId);
+    const conflict = (await this.conflicts.list()).find(
+      (candidate) => candidate.conflictId === conflictId,
+    );
     if (!conflict) throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
     if (resolution === 'KEEP_LOCAL' || resolution === 'KEEP_BOTH') {
       const operation = await this.operations.create(conflict, resolution);

@@ -35,10 +35,25 @@ export interface PageResult<T> {
 }
 
 export type DiarySummary = Diary;
-export type EntrySummary = Pick<Entry,
-  'id' | 'diaryId' | 'date' | 'time' | 'title' | 'moodName' | 'moodEmoji' | 'tags' | 'photoCount' | 'wordCount' | 'createdAt' | 'updatedAt'
+export type EntrySummary = Pick<
+  Entry,
+  | 'id'
+  | 'diaryId'
+  | 'date'
+  | 'time'
+  | 'title'
+  | 'moodName'
+  | 'moodEmoji'
+  | 'tags'
+  | 'photoCount'
+  | 'wordCount'
+  | 'createdAt'
+  | 'updatedAt'
 >;
-export type NoteSummary = Pick<Note, 'id' | 'title' | 'isPinned' | 'tags' | 'createdAt' | 'updatedAt'>;
+export type NoteSummary = Pick<
+  Note,
+  'id' | 'title' | 'isPinned' | 'tags' | 'createdAt' | 'updatedAt'
+>;
 
 export interface EntryListOptions extends PageOptions {
   sort?: 'date-desc' | 'date-asc' | 'updated-desc' | 'created-desc';
@@ -126,8 +141,7 @@ export interface HomeSummary {
 }
 
 export type RepositorySearchResult =
-  | { type: 'entry'; entry: Entry; diary?: Diary }
-  | { type: 'note'; note: Note };
+  { type: 'entry'; entry: Entry; diary?: Diary } | { type: 'note'; note: Note };
 
 export interface SyncStatusSummary {
   lastSuccessfulSyncAt?: number;
@@ -159,8 +173,17 @@ export type RepositoryChange =
   | { type: 'note-deleted'; noteId: string; contentRevision: number }
   | { type: 'settings-updated'; settings: AppSettings; contentRevision: number }
   | { type: 'profile-updated'; profile: UserProfile; contentRevision: number }
-  | { type: 'sync-status-updated'; operationId?: string; status: SyncStatusSummary; contentRevision: number }
-  | { type: 'remote-batch-applied'; affectedRecords: Array<{ recordType: SyncRecordType; recordId: string }>; contentRevision: number };
+  | {
+      type: 'sync-status-updated';
+      operationId?: string;
+      status: SyncStatusSummary;
+      contentRevision: number;
+    }
+  | {
+      type: 'remote-batch-applied';
+      affectedRecords: Array<{ recordType: SyncRecordType; recordId: string }>;
+      contentRevision: number;
+    };
 
 export interface ApplyLocalMutationWithOutboxInput {
   operationId: string;
@@ -207,9 +230,19 @@ export interface DiaryRepository {
   deleteDiary(id: string): Promise<boolean>;
 
   listEntries(): Promise<Entry[]>;
-  listRecentEntries(limit?: number, options?: Pick<EntryListOptions, 'allowedDiaryIds' | 'excludeDiaryIds'>): Promise<EntrySummary[]>;
-  listEntriesByDiary(diaryId: string, options?: EntryListOptions): Promise<PageResult<Entry | EntrySummary>>;
-  listEntriesByMonth(diaryId: string, yearMonth: string, options?: EntryListOptions): Promise<PageResult<Entry | EntrySummary>>;
+  listRecentEntries(
+    limit?: number,
+    options?: Pick<EntryListOptions, 'allowedDiaryIds' | 'excludeDiaryIds'>,
+  ): Promise<EntrySummary[]>;
+  listEntriesByDiary(
+    diaryId: string,
+    options?: EntryListOptions,
+  ): Promise<PageResult<Entry | EntrySummary>>;
+  listEntriesByMonth(
+    diaryId: string,
+    yearMonth: string,
+    options?: EntryListOptions,
+  ): Promise<PageResult<Entry | EntrySummary>>;
   getEntry(id: string): Promise<Entry | null>;
   createEntry(input: NewEntry): Promise<Entry>;
   updateEntry(entry: Entry): Promise<Entry | null>;
@@ -225,7 +258,9 @@ export interface DiaryRepository {
   searchEntries(filters: SearchFilters & { includeBody: false }): Promise<PageResult<EntrySummary>>;
   searchEntries(filters: SearchFilters): Promise<PageResult<Entry>>;
   searchNotes(filters: SearchFilters): Promise<PageResult<Note>>;
-  getHomeSummary(options?: Pick<EntryListOptions, 'allowedDiaryIds' | 'excludeDiaryIds'>): Promise<HomeSummary>;
+  getHomeSummary(
+    options?: Pick<EntryListOptions, 'allowedDiaryIds' | 'excludeDiaryIds'>,
+  ): Promise<HomeSummary>;
   getDiaryStatistics(diaryId: string): Promise<DiaryStatistics>;
   getGlobalStatistics(filters?: StatisticsFilters): Promise<GlobalStatistics>;
   rebuildDerivedProjections(): Promise<void>;
@@ -245,20 +280,32 @@ export interface DiaryRepository {
   saveLocalSyncAccountState(state: LocalSyncAccountState): Promise<void>;
   clearLocalSyncAccountState(): Promise<void>;
   getSyncRecordVersion(recordType: SyncRecordType, recordId: string): Promise<number>;
-  applySyncEvent(event: SyncDomainEvent, sequence: number, options?: { allowHistorical?: boolean }): Promise<void>;
+  applySyncEvent(
+    event: SyncDomainEvent,
+    sequence: number,
+    options?: { allowHistorical?: boolean },
+  ): Promise<void>;
   getSyncMediaPointer(sequence: number): Promise<SyncMediaPointer | null>;
   getSyncMediaPointerByMediaId(mediaId: string): Promise<SyncMediaPointer | null>;
   getSyncMediaPointerByDriveFileId(driveFileId: string): Promise<SyncMediaPointer | null>;
   saveSyncMediaPointer(pointer: SyncMediaPointer): Promise<void>;
   replaceSyncMediaPointers(pointers: SyncMediaPointer[]): Promise<void>;
   exportPartitionSnapshot(partitionKey: SyncPartitionKey | string): Promise<RepositorySnapshot>;
-  importPartitionSnapshot(partitionKey: SyncPartitionKey | string, snapshot: RepositorySnapshot): Promise<void>;
-  getPartitionHydrationState(partitionKey: SyncPartitionKey | string): Promise<PartitionHydrationState>;
+  importPartitionSnapshot(
+    partitionKey: SyncPartitionKey | string,
+    snapshot: RepositorySnapshot,
+  ): Promise<void>;
+  getPartitionHydrationState(
+    partitionKey: SyncPartitionKey | string,
+  ): Promise<PartitionHydrationState>;
   listAvailableArchiveMonths(): Promise<PartitionHydrationState[]>;
   markPartitionAvailable(partitionKey: SyncPartitionKey | string, sequence: number): Promise<void>;
   markPartitionHydrating(partitionKey: SyncPartitionKey | string): Promise<void>;
   markPartitionHydrated(partitionKey: SyncPartitionKey | string, sequence: number): Promise<void>;
-  markPartitionHydrationFailed(partitionKey: SyncPartitionKey | string, error: string): Promise<void>;
+  markPartitionHydrationFailed(
+    partitionKey: SyncPartitionKey | string,
+    error: string,
+  ): Promise<void>;
   saveSyncOutboxOperation(operation: SyncOutboxOperation): Promise<void>;
   listSyncOutboxOperations(states?: SyncOutboxOperation['state'][]): Promise<SyncOutboxOperation[]>;
   removeSyncOutboxOperation(operationId: string): Promise<void>;
@@ -269,14 +316,25 @@ export interface DiaryRepository {
   markSyncConflictResolved(operationId: string): Promise<void>;
   deleteSyncConflictRecoveredCopy(operationId: string): Promise<boolean>;
   retryPreservedSyncConflict(operationId: string): Promise<void>;
-  resolvePreservedSyncConflict(operationId: string, resolution: PreservedConflictResolution): Promise<void>;
-  applyLocalMutationWithOutbox(input: ApplyLocalMutationWithOutboxInput): Promise<Diary | Entry | Note | AppSettings | UserProfile | null>;
+  resolvePreservedSyncConflict(
+    operationId: string,
+    resolution: PreservedConflictResolution,
+  ): Promise<void>;
+  applyLocalMutationWithOutbox(
+    input: ApplyLocalMutationWithOutboxInput,
+  ): Promise<Diary | Entry | Note | AppSettings | UserProfile | null>;
   acknowledgeLocalMutation(input: AcknowledgeLocalMutationInput): Promise<void>;
 
   resetContent(): Promise<void>;
 
   exportSnapshot(): Promise<RepositorySnapshot>;
   importSnapshot(snapshot: RepositorySnapshot, mode: RepositoryImportMode): Promise<void>;
-  previewPortableMerge(snapshot: RepositorySnapshot, mediaCount?: number): Promise<BackupMergePreview>;
-  mergePortableSnapshot(snapshot: RepositorySnapshot, mediaCount?: number): Promise<BackupMergeResult>;
+  previewPortableMerge(
+    snapshot: RepositorySnapshot,
+    mediaCount?: number,
+  ): Promise<BackupMergePreview>;
+  mergePortableSnapshot(
+    snapshot: RepositorySnapshot,
+    mediaCount?: number,
+  ): Promise<BackupMergeResult>;
 }

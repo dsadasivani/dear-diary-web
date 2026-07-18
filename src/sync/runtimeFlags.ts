@@ -28,12 +28,15 @@ export const SAFE_SYNC_RUNTIME_FLAGS: Readonly<SyncRuntimeFlags> = Object.freeze
 
 let runtimeOverrides: Partial<SyncRuntimeFlags> = {};
 
-export const getSyncRuntimeFlags = (): Readonly<SyncRuntimeFlags> => Object.freeze({
-  ...SAFE_SYNC_RUNTIME_FLAGS,
-  ...runtimeOverrides,
-});
+export const getSyncRuntimeFlags = (): Readonly<SyncRuntimeFlags> =>
+  Object.freeze({
+    ...SAFE_SYNC_RUNTIME_FLAGS,
+    ...runtimeOverrides,
+  });
 
-export const configureSyncRuntimeFlags = (overrides: Partial<SyncRuntimeFlags>): Readonly<SyncRuntimeFlags> => {
+export const configureSyncRuntimeFlags = (
+  overrides: Partial<SyncRuntimeFlags>,
+): Readonly<SyncRuntimeFlags> => {
   runtimeOverrides = { ...runtimeOverrides, ...overrides };
   return getSyncRuntimeFlags();
 };
@@ -41,4 +44,3 @@ export const configureSyncRuntimeFlags = (overrides: Partial<SyncRuntimeFlags>):
 export const resetSyncRuntimeFlags = (): void => {
   runtimeOverrides = {};
 };
-

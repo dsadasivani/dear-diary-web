@@ -1,12 +1,23 @@
 import type { SyncErrorCode } from '../errors';
 
 export const OUTBOX_V2_STATES = [
-  'PENDING', 'PREPARING', 'UPLOADING', 'READY_TO_COMMIT', 'COMMITTING',
-  'COMMITTED', 'ACKNOWLEDGED', 'RETRY_WAIT', 'CONFLICT', 'BLOCKED_AUTH',
-  'BLOCKED_DEVICE', 'BLOCKED_UPGRADE', 'SAFETY_STOP', 'SUPERSEDED',
+  'PENDING',
+  'PREPARING',
+  'UPLOADING',
+  'READY_TO_COMMIT',
+  'COMMITTING',
+  'COMMITTED',
+  'ACKNOWLEDGED',
+  'RETRY_WAIT',
+  'CONFLICT',
+  'BLOCKED_AUTH',
+  'BLOCKED_DEVICE',
+  'BLOCKED_UPGRADE',
+  'SAFETY_STOP',
+  'SUPERSEDED',
 ] as const;
 
-export type SyncOutboxStateV2 = typeof OUTBOX_V2_STATES[number];
+export type SyncOutboxStateV2 = (typeof OUTBOX_V2_STATES)[number];
 
 export interface SyncOutboxOperationV2 {
   operationId: string;
@@ -38,5 +49,6 @@ export interface SyncOutboxOperationV2 {
 }
 
 export const TERMINAL_OUTBOX_V2_STATES: ReadonlySet<SyncOutboxStateV2> = new Set([
-  'ACKNOWLEDGED', 'SUPERSEDED',
+  'ACKNOWLEDGED',
+  'SUPERSEDED',
 ]);

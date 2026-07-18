@@ -1,5 +1,9 @@
 import type { SecureAuthService } from './SecureAuthService';
-import { authenticateLocalPasskey, isWebAuthnSupported, registerLocalPasskey } from '../../utils/webauthn';
+import {
+  authenticateLocalPasskey,
+  isWebAuthnSupported,
+  registerLocalPasskey,
+} from '../../utils/webauthn';
 
 export class WebAuthnSecureAuthService implements SecureAuthService {
   async isAvailable(): Promise<boolean> {

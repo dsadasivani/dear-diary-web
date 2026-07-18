@@ -1,7 +1,19 @@
-import { CapacitorSQLite, SQLiteConnection, type SQLiteDBConnection } from '@capacitor-community/sqlite';
+import {
+  CapacitorSQLite,
+  SQLiteConnection,
+  type SQLiteDBConnection,
+} from '@capacitor-community/sqlite';
 import { SecureStorage } from '@aparajita/capacitor-secure-storage';
 import { Preferences } from '@capacitor/preferences';
-import type { Diary, Entry, LocalSyncAccountState, Note, PartitionHydrationState, SyncMediaPointer, SyncOutboxOperation } from '../../types';
+import type {
+  Diary,
+  Entry,
+  LocalSyncAccountState,
+  Note,
+  PartitionHydrationState,
+  SyncMediaPointer,
+  SyncOutboxOperation,
+} from '../../types';
 import type {
   LocalDataStore,
   LocalEntryProjection,
@@ -63,10 +75,10 @@ const now = (): number => Date.now();
 const generateSecret = (): string => {
   const bytes = new Uint8Array(32);
   globalThis.crypto.getRandomValues(bytes);
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
-const boolToInt = (value: unknown): number => value ? 1 : 0;
+const boolToInt = (value: unknown): number => (value ? 1 : 0);
 
 const utcStartOfDay = (date: string | undefined): number | undefined => {
   if (!date) return undefined;
@@ -91,7 +103,7 @@ const safeJsonParse = <T>(value: string): T | null => {
 const ftsQueryForText = (query?: string): string | null => {
   const tokens = (query || '').toLowerCase().match(/[a-z0-9]+/g) || [];
   if (tokens.length === 0) return null;
-  return tokens.map(token => `${token.replace(/"/g, '""')}*`).join(' ');
+  return tokens.map((token) => `${token.replace(/"/g, '""')}*`).join(' ');
 };
 
 const jsonTagLikePattern = (tag: string): string => `%${JSON.stringify(tag.toLowerCase())}%`;
@@ -103,13 +115,20 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   private writeTail: Promise<void> = Promise.resolve();
 
   async getItem(key: string): Promise<string | null> {
-    return measureAsync('sqlite.bridge.getItem', async () => {
-      const db = await this.ensureInitialized();
+    return measureAsync(
+      'sqlite.bridge.getItem',
+      async () => {
+        const db = await this.ensureInitialized();
 
-      const compatibilityResult = await db.query('SELECT value FROM kv_store WHERE key = ? LIMIT 1;', [key]);
-      const compatibilityValue = compatibilityResult.values?.[0]?.value ?? null;
-      return this.readStructuredValue(db, key, compatibilityValue);
-    }, { key });
+        const compatibilityResult = await db.query(
+          'SELECT value FROM kv_store WHERE key = ? LIMIT 1;',
+          [key],
+        );
+        const compatibilityValue = compatibilityResult.values?.[0]?.value ?? null;
+        return this.readStructuredValue(db, key, compatibilityValue);
+      },
+      { key },
+    );
   }
 
   async setItem(key: string, value: string): Promise<void> {
@@ -117,20 +136,25 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   }
 
   async setItems(items: Record<string, string>): Promise<void> {
-    await measureAsync('sqlite.bridge.setItems', () => this.enqueueWrite(async () => {
-      const db = await this.ensureInitialized();
+    await measureAsync(
+      'sqlite.bridge.setItems',
+      () =>
+        this.enqueueWrite(async () => {
+          const db = await this.ensureInitialized();
 
-      await measureAsync('sqlite.transaction.setItems', async () => {
-      await db.beginTransaction();
-      try {
-        await this.writeSerializedItemsInTransaction(db, items, false);
-        await db.commitTransaction();
-      } catch (error) {
-        await db.rollbackTransaction().catch(() => undefined);
-        throw error;
-      }
-      });
-    }), { keyCount: Object.keys(items).length });
+          await measureAsync('sqlite.transaction.setItems', async () => {
+            await db.beginTransaction();
+            try {
+              await this.writeSerializedItemsInTransaction(db, items, false);
+              await db.commitTransaction();
+            } catch (error) {
+              await db.rollbackTransaction().catch(() => undefined);
+              throw error;
+            }
+          });
+        }),
+      { keyCount: Object.keys(items).length },
+    );
   }
 
   async removeItem(key: string): Promise<void> {
@@ -173,87 +197,122 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   }
 
   async getStructuredCollection<T>(key: string): Promise<T[] | undefined> {
-    return measureAsync('sqlite.structured.collection', async () => {
-      const db = await this.ensureInitialized();
-      switch (key) {
-        case 'deardiary_diaries':
-          return this.readStructuredRows<T>(db, key, 'SELECT raw_json FROM diaries ORDER BY rowid;');
-        case 'deardiary_entries':
-          return this.readStructuredRows<T>(db, key, 'SELECT raw_json FROM entries ORDER BY rowid;');
-        case 'deardiary_notes':
-          return this.readStructuredRows<T>(db, key, 'SELECT raw_json FROM notes ORDER BY rowid;');
-        default:
-          return undefined;
-      }
-    }, { key });
+    return measureAsync(
+      'sqlite.structured.collection',
+      async () => {
+        const db = await this.ensureInitialized();
+        switch (key) {
+          case 'deardiary_diaries':
+            return this.readStructuredRows<T>(
+              db,
+              key,
+              'SELECT raw_json FROM diaries ORDER BY rowid;',
+            );
+          case 'deardiary_entries':
+            return this.readStructuredRows<T>(
+              db,
+              key,
+              'SELECT raw_json FROM entries ORDER BY rowid;',
+            );
+          case 'deardiary_notes':
+            return this.readStructuredRows<T>(
+              db,
+              key,
+              'SELECT raw_json FROM notes ORDER BY rowid;',
+            );
+          default:
+            return undefined;
+        }
+      },
+      { key },
+    );
   }
 
   async getStructuredRecord<T>(key: string, id: string): Promise<T | null | undefined> {
-    return measureAsync('sqlite.structured.record', async () => {
-      const db = await this.ensureInitialized();
-      switch (key) {
-        case 'deardiary_diaries':
-          return this.readStructuredRecord<T>(db, key, 'diaries', id);
-        case 'deardiary_entries':
-          return this.readStructuredRecord<T>(db, key, 'entries', id);
-        case 'deardiary_notes':
-          return this.readStructuredRecord<T>(db, key, 'notes', id);
-        default:
-          return undefined;
-      }
-    }, { key });
+    return measureAsync(
+      'sqlite.structured.record',
+      async () => {
+        const db = await this.ensureInitialized();
+        switch (key) {
+          case 'deardiary_diaries':
+            return this.readStructuredRecord<T>(db, key, 'diaries', id);
+          case 'deardiary_entries':
+            return this.readStructuredRecord<T>(db, key, 'entries', id);
+          case 'deardiary_notes':
+            return this.readStructuredRecord<T>(db, key, 'notes', id);
+          default:
+            return undefined;
+        }
+      },
+      { key },
+    );
   }
 
   async putStructuredRecord<T>(key: string, id: string, value: T): Promise<void> {
-    await measureAsync('sqlite.structured.record.put', () => this.enqueueWrite(async () => {
-      const db = await this.ensureInitialized();
-      await db.beginTransaction();
-      try {
-        await this.upsertStructuredRecord(db, key, id, value, false);
-        await db.commitTransaction();
-      } catch (error) {
-        await db.rollbackTransaction().catch(() => undefined);
-        throw error;
-      }
-    }), { key });
+    await measureAsync(
+      'sqlite.structured.record.put',
+      () =>
+        this.enqueueWrite(async () => {
+          const db = await this.ensureInitialized();
+          await db.beginTransaction();
+          try {
+            await this.upsertStructuredRecord(db, key, id, value, false);
+            await db.commitTransaction();
+          } catch (error) {
+            await db.rollbackTransaction().catch(() => undefined);
+            throw error;
+          }
+        }),
+      { key },
+    );
   }
 
   async deleteStructuredRecord(key: string, id: string): Promise<void> {
-    await measureAsync('sqlite.structured.record.delete', () => this.enqueueWrite(async () => {
-      const db = await this.ensureInitialized();
-      await db.beginTransaction();
-      try {
-        await this.deleteStructuredRecordRow(db, key, id, false);
-        await db.commitTransaction();
-      } catch (error) {
-        await db.rollbackTransaction().catch(() => undefined);
-        throw error;
-      }
-    }), { key });
+    await measureAsync(
+      'sqlite.structured.record.delete',
+      () =>
+        this.enqueueWrite(async () => {
+          const db = await this.ensureInitialized();
+          await db.beginTransaction();
+          try {
+            await this.deleteStructuredRecordRow(db, key, id, false);
+            await db.commitTransaction();
+          } catch (error) {
+            await db.rollbackTransaction().catch(() => undefined);
+            throw error;
+          }
+        }),
+      { key },
+    );
   }
 
   async commitStructuredRecords(input: {
     records: LocalStructuredRecordMutation[];
     items?: Record<string, string>;
   }): Promise<void> {
-    await measureAsync('sqlite.structured.records.commit', () => this.enqueueWrite(async () => {
-      const db = await this.ensureInitialized();
-      await db.beginTransaction();
-      try {
-        for (const record of input.records) {
-          if (record.value === null) {
-            await this.deleteStructuredRecordRow(db, record.key, record.id, false);
-          } else {
-            await this.upsertStructuredRecord(db, record.key, record.id, record.value, false);
+    await measureAsync(
+      'sqlite.structured.records.commit',
+      () =>
+        this.enqueueWrite(async () => {
+          const db = await this.ensureInitialized();
+          await db.beginTransaction();
+          try {
+            for (const record of input.records) {
+              if (record.value === null) {
+                await this.deleteStructuredRecordRow(db, record.key, record.id, false);
+              } else {
+                await this.upsertStructuredRecord(db, record.key, record.id, record.value, false);
+              }
+            }
+            if (input.items) await this.writeSerializedItemsInTransaction(db, input.items, false);
+            await db.commitTransaction();
+          } catch (error) {
+            await db.rollbackTransaction().catch(() => undefined);
+            throw error;
           }
-        }
-        if (input.items) await this.writeSerializedItemsInTransaction(db, input.items, false);
-        await db.commitTransaction();
-      } catch (error) {
-        await db.rollbackTransaction().catch(() => undefined);
-        throw error;
-      }
-    }), { recordCount: input.records.length, itemCount: Object.keys(input.items || {}).length });
+        }),
+      { recordCount: input.records.length, itemCount: Object.keys(input.items || {}).length },
+    );
   }
 
   async commitLocalMutationAndOutbox(input: {
@@ -262,79 +321,106 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     outboxOperation: SyncOutboxOperation;
     outboxV2Operation: SyncOutboxOperationV2;
   }): Promise<void> {
-    await measureAsync('sqlite.structured.localMutationAndOutbox', () => this.enqueueWrite(async () => {
-      const db = await this.ensureInitialized();
-      await db.beginTransaction();
-      try {
-        for (const record of input.records) {
-          if (record.value === null) {
-            await this.deleteStructuredRecordRow(db, record.key, record.id, false);
-          } else {
-            await this.upsertStructuredRecord(db, record.key, record.id, record.value, false);
+    await measureAsync(
+      'sqlite.structured.localMutationAndOutbox',
+      () =>
+        this.enqueueWrite(async () => {
+          const db = await this.ensureInitialized();
+          await db.beginTransaction();
+          try {
+            for (const record of input.records) {
+              if (record.value === null) {
+                await this.deleteStructuredRecordRow(db, record.key, record.id, false);
+              } else {
+                await this.upsertStructuredRecord(db, record.key, record.id, record.value, false);
+              }
+            }
+            if (input.items) await this.writeSerializedItemsInTransaction(db, input.items, false);
+            await this.upsertOutboxOperation(db, input.outboxOperation, false);
+            await this.upsertOutboxV2Operation(db, input.outboxV2Operation, false);
+            await db.commitTransaction();
+          } catch (error) {
+            await db.rollbackTransaction().catch(() => undefined);
+            throw error;
           }
-        }
-        if (input.items) await this.writeSerializedItemsInTransaction(db, input.items, false);
-        await this.upsertOutboxOperation(db, input.outboxOperation, false);
-        await this.upsertOutboxV2Operation(db, input.outboxV2Operation, false);
-        await db.commitTransaction();
-      } catch (error) {
-        await db.rollbackTransaction().catch(() => undefined);
-        throw error;
-      }
-    }), { recordCount: input.records.length });
+        }),
+      { recordCount: input.records.length },
+    );
   }
 
-  async queryEntries(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<Entry> | undefined> {
-    return measureAsync('sqlite.query.entries', async () => {
-      const db = await this.ensureInitialized();
-      if (!await this.isStructuredCollectionReady(db, 'deardiary_entries', 'entries')) return undefined;
+  async queryEntries(
+    options: LocalEntryQueryOptions,
+  ): Promise<LocalQueryPageResult<Entry> | undefined> {
+    return measureAsync(
+      'sqlite.query.entries',
+      async () => {
+        const db = await this.ensureInitialized();
+        if (!(await this.isStructuredCollectionReady(db, 'deardiary_entries', 'entries')))
+          return undefined;
 
-      const sort = options.sort || 'date-desc';
-      const { whereClause, params } = this.buildEntryQuery(options);
-      const cursor = decodePageCursor(options.cursor, 'entry', sort);
-      const keyset = cursor.kind === 'keyset' ? this.entryKeysetClause(sort, cursor.values) : null;
-      const queryWhereClause = keyset ? this.combineWhereClauses(whereClause, keyset.clause) : whereClause;
-      const queryParams = keyset ? [...params, ...keyset.params] : params;
-      const limit = normalizePageLimit(options.limit);
-      const offset = cursor.kind === 'offset' ? (cursor.offset || options.offset || 0) : 0;
-      const total = await this.countRows(db, 'entries', whereClause, params);
-      const result = await db.query(
-        `SELECT raw_json FROM entries${queryWhereClause} ORDER BY ${this.entryOrderBy(sort)} LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
-        cursor.kind === 'offset'
-          ? [...queryParams, limit + 1, offset]
-          : [...queryParams, limit + 1],
-      );
-      return this.entryPageFromRows(result.values || [], total, limit, sort);
-    }, { filters: this.redactedQueryMetadata(options) });
+        const sort = options.sort || 'date-desc';
+        const { whereClause, params } = this.buildEntryQuery(options);
+        const cursor = decodePageCursor(options.cursor, 'entry', sort);
+        const keyset =
+          cursor.kind === 'keyset' ? this.entryKeysetClause(sort, cursor.values) : null;
+        const queryWhereClause = keyset
+          ? this.combineWhereClauses(whereClause, keyset.clause)
+          : whereClause;
+        const queryParams = keyset ? [...params, ...keyset.params] : params;
+        const limit = normalizePageLimit(options.limit);
+        const offset = cursor.kind === 'offset' ? cursor.offset || options.offset || 0 : 0;
+        const total = await this.countRows(db, 'entries', whereClause, params);
+        const result = await db.query(
+          `SELECT raw_json FROM entries${queryWhereClause} ORDER BY ${this.entryOrderBy(sort)} LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
+          cursor.kind === 'offset'
+            ? [...queryParams, limit + 1, offset]
+            : [...queryParams, limit + 1],
+        );
+        return this.entryPageFromRows(result.values || [], total, limit, sort);
+      },
+      { filters: this.redactedQueryMetadata(options) },
+    );
   }
 
-  async queryNotes(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<Note> | undefined> {
-    return measureAsync('sqlite.query.notes', async () => {
-      const db = await this.ensureInitialized();
-      if (!await this.isStructuredCollectionReady(db, 'deardiary_notes', 'notes')) return undefined;
+  async queryNotes(
+    options: LocalNoteQueryOptions,
+  ): Promise<LocalQueryPageResult<Note> | undefined> {
+    return measureAsync(
+      'sqlite.query.notes',
+      async () => {
+        const db = await this.ensureInitialized();
+        if (!(await this.isStructuredCollectionReady(db, 'deardiary_notes', 'notes')))
+          return undefined;
 
-      const sort = options.sort || 'pinned-updated-desc';
-      const { whereClause, params } = this.buildNoteQuery(options);
-      const cursor = decodePageCursor(options.cursor, 'note', sort);
-      const keyset = cursor.kind === 'keyset' ? this.noteKeysetClause(sort, cursor.values) : null;
-      const queryWhereClause = keyset ? this.combineWhereClauses(whereClause, keyset.clause) : whereClause;
-      const queryParams = keyset ? [...params, ...keyset.params] : params;
-      const limit = normalizePageLimit(options.limit);
-      const offset = cursor.kind === 'offset' ? (cursor.offset || options.offset || 0) : 0;
-      const total = await this.countRows(db, 'notes', whereClause, params);
-      const result = await db.query(
-        `SELECT raw_json FROM notes${queryWhereClause} ORDER BY ${this.noteOrderBy(sort)} LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
-        cursor.kind === 'offset'
-          ? [...queryParams, limit + 1, offset]
-          : [...queryParams, limit + 1],
-      );
-      return this.notePageFromRows(result.values || [], total, limit, sort);
-    }, { filters: this.redactedQueryMetadata(options) });
+        const sort = options.sort || 'pinned-updated-desc';
+        const { whereClause, params } = this.buildNoteQuery(options);
+        const cursor = decodePageCursor(options.cursor, 'note', sort);
+        const keyset = cursor.kind === 'keyset' ? this.noteKeysetClause(sort, cursor.values) : null;
+        const queryWhereClause = keyset
+          ? this.combineWhereClauses(whereClause, keyset.clause)
+          : whereClause;
+        const queryParams = keyset ? [...params, ...keyset.params] : params;
+        const limit = normalizePageLimit(options.limit);
+        const offset = cursor.kind === 'offset' ? cursor.offset || options.offset || 0 : 0;
+        const total = await this.countRows(db, 'notes', whereClause, params);
+        const result = await db.query(
+          `SELECT raw_json FROM notes${queryWhereClause} ORDER BY ${this.noteOrderBy(sort)} LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
+          cursor.kind === 'offset'
+            ? [...queryParams, limit + 1, offset]
+            : [...queryParams, limit + 1],
+        );
+        return this.notePageFromRows(result.values || [], total, limit, sort);
+      },
+      { filters: this.redactedQueryMetadata(options) },
+    );
   }
 
   private enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.writeTail.then(operation, operation);
-    this.writeTail = result.then(() => undefined, () => undefined);
+    this.writeTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 
@@ -354,17 +440,25 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     // while SQLiteConnection's JavaScript registry is recreated. Reconcile the
     // two before checking for a connection so a retry can safely recover from
     // a stale native handle instead of failing with "already exists".
-    await this.sqlite.checkConnectionsConsistency().catch(error => {
+    await this.sqlite.checkConnectionsConsistency().catch((error) => {
       console.warn('SQLite connection consistency check could not complete:', error);
     });
 
-    const hasConnection = await this.sqlite.isConnection(DATABASE_NAME, false).catch(() => ({ result: false }));
+    const hasConnection = await this.sqlite
+      .isConnection(DATABASE_NAME, false)
+      .catch(() => ({ result: false }));
     let db: SQLiteDBConnection;
     if (hasConnection.result) {
       db = await this.sqlite.retrieveConnection(DATABASE_NAME, false);
     } else {
       try {
-        db = await this.sqlite.createConnection(DATABASE_NAME, true, 'secret', DATABASE_VERSION, false);
+        db = await this.sqlite.createConnection(
+          DATABASE_NAME,
+          true,
+          'secret',
+          DATABASE_VERSION,
+          false,
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!message.toLowerCase().includes('already exists')) throw error;
@@ -373,7 +467,13 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         // creation during lifecycle churn. Close only that stale handle, then
         // recreate the connection without touching the database file.
         await this.sqlite.closeConnection(DATABASE_NAME, false).catch(() => undefined);
-        db = await this.sqlite.createConnection(DATABASE_NAME, true, 'secret', DATABASE_VERSION, false);
+        db = await this.sqlite.createConnection(
+          DATABASE_NAME,
+          true,
+          'secret',
+          DATABASE_VERSION,
+          false,
+        );
       }
     }
 
@@ -650,7 +750,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     referencedTable: string,
   ): Promise<boolean> {
     const result = await db.query(`PRAGMA foreign_key_list(${tableName});`);
-    return (result.values || []).some(row => String(row.table) === referencedTable);
+    return (result.values || []).some((row) => String(row.table) === referencedTable);
   }
 
   private async migrateRelationalIntegritySchema(db: SQLiteDBConnection): Promise<void> {
@@ -661,21 +761,29 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     await db.execute('PRAGMA foreign_keys = OFF;');
     await db.beginTransaction();
     try {
-      await db.execute(`
+      await db.execute(
+        `
         DROP TABLE IF EXISTS entries_fts;
         DROP TABLE IF EXISTS notes_fts;
         DROP TABLE IF EXISTS entry_blocks_fk_migration_old;
         DROP TABLE IF EXISTS entries_fk_migration_old;
-      `, false);
+      `,
+        false,
+      );
 
       if (await this.tableExists(db, 'entry_blocks')) {
-        await db.run('ALTER TABLE entry_blocks RENAME TO entry_blocks_fk_migration_old;', [], false);
+        await db.run(
+          'ALTER TABLE entry_blocks RENAME TO entry_blocks_fk_migration_old;',
+          [],
+          false,
+        );
       }
       if (await this.tableExists(db, 'entries')) {
         await db.run('ALTER TABLE entries RENAME TO entries_fk_migration_old;', [], false);
       }
 
-      await db.execute(`
+      await db.execute(
+        `
         CREATE TABLE entries (
           id TEXT PRIMARY KEY NOT NULL,
           diary_id TEXT NOT NULL,
@@ -733,10 +841,13 @@ export class NativeSQLiteDataStore implements LocalDataStore {
           body,
           tags
         );
-      `, false);
+      `,
+        false,
+      );
 
       if (await this.tableExists(db, 'entries_fk_migration_old')) {
-        await db.run(`
+        await db.run(
+          `
           INSERT INTO entries (
             id, diary_id, date, time, title, body, mood_name, mood_emoji, tags_json,
             photo_uris_json, photo_count, word_count, audio_uri, created_at, updated_at,
@@ -748,23 +859,33 @@ export class NativeSQLiteDataStore implements LocalDataStore {
             is_timeline_bifurcated, raw_json
           FROM entries_fk_migration_old old_entries
           WHERE EXISTS (SELECT 1 FROM diaries WHERE diaries.id = old_entries.diary_id);
-        `, [], false);
+        `,
+          [],
+          false,
+        );
       }
 
       if (await this.tableExists(db, 'entry_blocks_fk_migration_old')) {
-        await db.run(`
+        await db.run(
+          `
           INSERT OR REPLACE INTO entry_blocks (id, entry_id, position, time, body, audio_uri, raw_json)
           SELECT id, entry_id, position, time, body, audio_uri, raw_json
           FROM entry_blocks_fk_migration_old old_blocks
           WHERE EXISTS (SELECT 1 FROM entries WHERE entries.id = old_blocks.entry_id);
-        `, [], false);
+        `,
+          [],
+          false,
+        );
       }
 
-      await db.execute(`
+      await db.execute(
+        `
         DROP TABLE IF EXISTS entry_blocks_fk_migration_old;
         DROP TABLE IF EXISTS entries_fk_migration_old;
         DELETE FROM storage_meta WHERE key = '${SEARCH_INDEX_META_KEY}';
-      `, false);
+      `,
+        false,
+      );
       await db.commitTransaction();
     } catch (error) {
       await db.rollbackTransaction().catch(() => undefined);
@@ -873,21 +994,24 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   private async verifyForeignKeys(db: SQLiteDBConnection): Promise<void> {
     const result = await db.query('PRAGMA foreign_key_check;');
     if ((result.values || []).length > 0) {
-      throw new Error(`SQLite foreign key verification failed for ${result.values?.length || 0} row(s).`);
+      throw new Error(
+        `SQLite foreign key verification failed for ${result.values?.length || 0} row(s).`,
+      );
     }
   }
 
   private async migrateEntryBlocksPrimaryKey(db: SQLiteDBConnection): Promise<void> {
     const tableInfo = await db.query('PRAGMA table_info(entry_blocks);');
     const primaryKeyColumns = (tableInfo.values || [])
-      .filter(column => Number(column.pk) > 0)
+      .filter((column) => Number(column.pk) > 0)
       .sort((left, right) => Number(left.pk) - Number(right.pk))
-      .map(column => String(column.name));
+      .map((column) => String(column.name));
     if (primaryKeyColumns.join(',') === 'entry_id,position') return;
 
     await db.beginTransaction();
     try {
-      await db.execute(`
+      await db.execute(
+        `
         DROP TABLE IF EXISTS entry_blocks;
         CREATE TABLE entry_blocks (
           id TEXT NOT NULL,
@@ -901,7 +1025,9 @@ export class NativeSQLiteDataStore implements LocalDataStore {
           FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE ON UPDATE CASCADE
         );
         CREATE INDEX idx_entry_blocks_entry ON entry_blocks(entry_id, position);
-      `, false);
+      `,
+        false,
+      );
       await db.commitTransaction();
     } catch (error) {
       await db.rollbackTransaction().catch(() => undefined);
@@ -910,12 +1036,12 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   }
 
   private async backfillStructuredTablesFromKv(db: SQLiteDBConnection): Promise<void> {
-    const schemaVersion = Number(await this.getMeta(db, 'storage_schema_version') || 0);
+    const schemaVersion = Number((await this.getMeta(db, 'storage_schema_version')) || 0);
     if (schemaVersion >= STORAGE_SCHEMA_VERSION) return;
 
     const result = await db.query('SELECT key, value FROM kv_store;');
     const compatibilityValues = new Map<string, string>(
-      (result.values || []).map(row => [String(row.key), String(row.value)]),
+      (result.values || []).map((row) => [String(row.key), String(row.value)]),
     );
     if (compatibilityValues.size === 0) return;
 
@@ -1005,7 +1131,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   }
 
   private async ensureSearchIndexes(db: SQLiteDBConnection): Promise<void> {
-    if (await this.getMeta(db, SEARCH_INDEX_META_KEY) === '1') return;
+    if ((await this.getMeta(db, SEARCH_INDEX_META_KEY)) === '1') return;
 
     await db.beginTransaction();
     try {
@@ -1039,37 +1165,73 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   ): Promise<string | null> {
     switch (key) {
       case 'deardiary_diaries':
-        return this.readJsonRows(db, 'SELECT raw_json FROM diaries ORDER BY rowid;', compatibilityValue);
+        return this.readJsonRows(
+          db,
+          'SELECT raw_json FROM diaries ORDER BY rowid;',
+          compatibilityValue,
+        );
       case 'deardiary_entries':
-        return this.readJsonRows(db, 'SELECT raw_json FROM entries ORDER BY rowid;', compatibilityValue);
+        return this.readJsonRows(
+          db,
+          'SELECT raw_json FROM entries ORDER BY rowid;',
+          compatibilityValue,
+        );
       case 'deardiary_notes':
-        return this.readJsonRows(db, 'SELECT raw_json FROM notes ORDER BY rowid;', compatibilityValue);
+        return this.readJsonRows(
+          db,
+          'SELECT raw_json FROM notes ORDER BY rowid;',
+          compatibilityValue,
+        );
       case 'deardiary_settings': {
-        const result = await db.query("SELECT value FROM app_settings WHERE key = 'current' LIMIT 1;");
+        const result = await db.query(
+          "SELECT value FROM app_settings WHERE key = 'current' LIMIT 1;",
+        );
         return result.values?.[0]?.value ?? compatibilityValue;
       }
       case 'deardiary_userprofile': {
-        const result = await db.query("SELECT value FROM user_profile WHERE id = 'current' LIMIT 1;");
+        const result = await db.query(
+          "SELECT value FROM user_profile WHERE id = 'current' LIMIT 1;",
+        );
         return result.values?.[0]?.value ?? compatibilityValue;
       }
       case 'deardiary_sync_account': {
-        const result = await db.query("SELECT value FROM sync_account WHERE id = 'current' LIMIT 1;");
+        const result = await db.query(
+          "SELECT value FROM sync_account WHERE id = 'current' LIMIT 1;",
+        );
         return result.values?.[0]?.value ?? compatibilityValue;
       }
       case 'deardiary_sync_record_versions':
         return this.readSyncRecordVersions(db, compatibilityValue);
       case 'deardiary_sync_media_pointers':
-        return this.readJsonMapRows(db, 'SELECT pointer_key AS key, raw_json FROM sync_media_pointers ORDER BY rowid;', compatibilityValue);
+        return this.readJsonMapRows(
+          db,
+          'SELECT pointer_key AS key, raw_json FROM sync_media_pointers ORDER BY rowid;',
+          compatibilityValue,
+        );
       case 'deardiary_sync_partition_hydration':
-        return this.readJsonMapRows(db, 'SELECT partition_key AS key, raw_json FROM sync_partition_hydration ORDER BY rowid;', compatibilityValue);
+        return this.readJsonMapRows(
+          db,
+          'SELECT partition_key AS key, raw_json FROM sync_partition_hydration ORDER BY rowid;',
+          compatibilityValue,
+        );
       case 'deardiary_sync_outbox':
-        return this.readJsonMapRows(db, 'SELECT operation_id AS key, raw_json FROM sync_outbox ORDER BY created_at, rowid;', compatibilityValue);
+        return this.readJsonMapRows(
+          db,
+          'SELECT operation_id AS key, raw_json FROM sync_outbox ORDER BY created_at, rowid;',
+          compatibilityValue,
+        );
       case 'deardiary_sync_outbox_v2':
-        return this.readJsonMapRows(db, 'SELECT operation_id AS key, raw_json FROM sync_outbox_v2 ORDER BY created_at, rowid;', compatibilityValue);
+        return this.readJsonMapRows(
+          db,
+          'SELECT operation_id AS key, raw_json FROM sync_outbox_v2 ORDER BY created_at, rowid;',
+          compatibilityValue,
+        );
       case 'deardiary_security':
       case 'deardiary_drive_backup':
       case 'deardiary_diary_viewmode': {
-        const result = await db.query('SELECT value FROM storage_meta WHERE key = ? LIMIT 1;', [key]);
+        const result = await db.query('SELECT value FROM storage_meta WHERE key = ? LIMIT 1;', [
+          key,
+        ]);
         return result.values?.[0]?.value ?? compatibilityValue;
       }
       default:
@@ -1088,8 +1250,8 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       return compatibilityValue === null ? null : '[]';
     }
 
-    const records = rows.map(row => safeJsonParse<unknown>(row.raw_json));
-    if (records.some(record => record === null)) {
+    const records = rows.map((row) => safeJsonParse<unknown>(row.raw_json));
+    if (records.some((record) => record === null)) {
       return compatibilityValue;
     }
     return JSON.stringify(records);
@@ -1103,11 +1265,11 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     const result = await db.query(query);
     const rows = result.values || [];
     if (rows.length === 0) {
-      return await this.isEmptyStructuredCollectionReady(db, key) ? [] : undefined;
+      return (await this.isEmptyStructuredCollectionReady(db, key)) ? [] : undefined;
     }
 
-    const records = rows.map(row => safeJsonParse<T>(String(row.raw_json)));
-    if (records.some(record => record === null)) return undefined;
+    const records = rows.map((row) => safeJsonParse<T>(String(row.raw_json)));
+    if (records.some((record) => record === null)) return undefined;
     return records as T[];
   }
 
@@ -1123,7 +1285,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       const record = safeJsonParse<T>(String(row.raw_json));
       return record === null ? undefined : record;
     }
-    return await this.isStructuredCollectionReady(db, key, table) ? null : undefined;
+    return (await this.isStructuredCollectionReady(db, key, table)) ? null : undefined;
   }
 
   private async isStructuredCollectionReady(
@@ -1136,15 +1298,24 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     return this.isEmptyStructuredCollectionReady(db, key);
   }
 
-  private async isEmptyStructuredCollectionReady(db: SQLiteDBConnection, key: string): Promise<boolean> {
-    const compatibilityResult = await db.query('SELECT value FROM kv_store WHERE key = ? LIMIT 1;', [key]);
+  private async isEmptyStructuredCollectionReady(
+    db: SQLiteDBConnection,
+    key: string,
+  ): Promise<boolean> {
+    const compatibilityResult = await db.query(
+      'SELECT value FROM kv_store WHERE key = ? LIMIT 1;',
+      [key],
+    );
     const compatibilityValue = compatibilityResult.values?.[0]?.value;
     if (typeof compatibilityValue !== 'string') return false;
     const compatibilityRecords = safeJsonParse<unknown[]>(compatibilityValue);
     return Array.isArray(compatibilityRecords) && compatibilityRecords.length === 0;
   }
 
-  private buildEntryQuery(options: LocalEntryQueryOptions): { whereClause: string; params: Array<string | number> } {
+  private buildEntryQuery(options: LocalEntryQueryOptions): {
+    whereClause: string;
+    params: Array<string | number>;
+  } {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
 
@@ -1189,7 +1360,10 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     return { whereClause: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', params };
   }
 
-  private buildNoteQuery(options: LocalNoteQueryOptions): { whereClause: string; params: Array<string | number> } {
+  private buildNoteQuery(options: LocalNoteQueryOptions): {
+    whereClause: string;
+    params: Array<string | number>;
+  } {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
 
@@ -1267,8 +1441,16 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     if (sort === 'date-asc') {
       const [date, createdAt, id] = values;
       return {
-        clause: '(date > ? OR (date = ? AND created_at > ?) OR (date = ? AND created_at = ? AND id > ?))',
-        params: [String(date || ''), String(date || ''), Number(createdAt || 0), String(date || ''), Number(createdAt || 0), String(id || '')],
+        clause:
+          '(date > ? OR (date = ? AND created_at > ?) OR (date = ? AND created_at = ? AND id > ?))',
+        params: [
+          String(date || ''),
+          String(date || ''),
+          Number(createdAt || 0),
+          String(date || ''),
+          Number(createdAt || 0),
+          String(id || ''),
+        ],
       };
     }
     if (sort === 'updated-desc') {
@@ -1287,8 +1469,16 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }
     const [date, updatedAt, id] = values;
     return {
-      clause: '(date < ? OR (date = ? AND updated_at < ?) OR (date = ? AND updated_at = ? AND id > ?))',
-      params: [String(date || ''), String(date || ''), Number(updatedAt || 0), String(date || ''), Number(updatedAt || 0), String(id || '')],
+      clause:
+        '(date < ? OR (date = ? AND updated_at < ?) OR (date = ? AND updated_at = ? AND id > ?))',
+      params: [
+        String(date || ''),
+        String(date || ''),
+        Number(updatedAt || 0),
+        String(date || ''),
+        Number(updatedAt || 0),
+        String(id || ''),
+      ],
     };
   }
 
@@ -1305,8 +1495,16 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }
     const [isPinned, updatedAt, id] = values;
     return {
-      clause: '(is_pinned < ? OR (is_pinned = ? AND updated_at < ?) OR (is_pinned = ? AND updated_at = ? AND id > ?))',
-      params: [Number(isPinned || 0), Number(isPinned || 0), Number(updatedAt || 0), Number(isPinned || 0), Number(updatedAt || 0), String(id || '')],
+      clause:
+        '(is_pinned < ? OR (is_pinned = ? AND updated_at < ?) OR (is_pinned = ? AND updated_at = ? AND id > ?))',
+      params: [
+        Number(isPinned || 0),
+        Number(isPinned || 0),
+        Number(updatedAt || 0),
+        Number(isPinned || 0),
+        Number(updatedAt || 0),
+        String(id || ''),
+      ],
     };
   }
 
@@ -1326,15 +1524,20 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     limit: number,
     sort: LocalEntryQueryOptions['sort'] = 'date-desc',
   ): LocalQueryPageResult<Entry> | undefined {
-    const parsedItems = rows.map(row => safeJsonParse<Entry>(String(row.raw_json)));
-    if (parsedItems.some(item => item === null)) return undefined;
+    const parsedItems = rows.map((row) => safeJsonParse<Entry>(String(row.raw_json)));
+    if (parsedItems.some((item) => item === null)) return undefined;
     const items = parsedItems as Entry[];
     const pageItems = items.slice(0, limit);
     return {
       items: pageItems,
-      nextCursor: items.length > limit && pageItems.length > 0
-        ? encodeKeysetCursor('entry', sort, entryCursorValues(pageItems[pageItems.length - 1], sort))
-        : undefined,
+      nextCursor:
+        items.length > limit && pageItems.length > 0
+          ? encodeKeysetCursor(
+              'entry',
+              sort,
+              entryCursorValues(pageItems[pageItems.length - 1], sort),
+            )
+          : undefined,
       total,
     };
   }
@@ -1345,14 +1548,19 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     limit: number,
     sort: LocalNoteQueryOptions['sort'] = 'pinned-updated-desc',
   ): LocalQueryPageResult<Note> | undefined {
-    const items = rows.map(row => safeJsonParse<Note>(String(row.raw_json)));
-    if (items.some(item => item === null)) return undefined;
+    const items = rows.map((row) => safeJsonParse<Note>(String(row.raw_json)));
+    if (items.some((item) => item === null)) return undefined;
     const pageItems = (items as Note[]).slice(0, limit);
     return {
       items: pageItems,
-      nextCursor: items.length > limit && pageItems.length > 0
-        ? encodeKeysetCursor('note', sort, noteCursorValues(pageItems[pageItems.length - 1], sort))
-        : undefined,
+      nextCursor:
+        items.length > limit && pageItems.length > 0
+          ? encodeKeysetCursor(
+              'note',
+              sort,
+              noteCursorValues(pageItems[pageItems.length - 1], sort),
+            )
+          : undefined,
       total,
     };
   }
@@ -1365,7 +1573,9 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       cursor: options.cursor ? 'set' : undefined,
       offset: options.offset,
       hasDateRange: Boolean('fromDate' in options && (options.fromDate || options.toDate)),
-      hasAccessFilter: Boolean('allowedDiaryIds' in options && (options.allowedDiaryIds || options.excludeDiaryIds)),
+      hasAccessFilter: Boolean(
+        'allowedDiaryIds' in options && (options.allowedDiaryIds || options.excludeDiaryIds),
+      ),
       sort: 'sort' in options ? options.sort : undefined,
     };
   }
@@ -1374,12 +1584,14 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     db: SQLiteDBConnection,
     compatibilityValue: string | null,
   ): Promise<string | null> {
-    const result = await db.query('SELECT record_key, version FROM sync_record_versions ORDER BY rowid;');
+    const result = await db.query(
+      'SELECT record_key, version FROM sync_record_versions ORDER BY rowid;',
+    );
     const rows = result.values || [];
     if (rows.length === 0) return compatibilityValue === null ? null : '{}';
-    return JSON.stringify(Object.fromEntries(
-      rows.map(row => [String(row.record_key), Number(row.version || 0)]),
-    ));
+    return JSON.stringify(
+      Object.fromEntries(rows.map((row) => [String(row.record_key), Number(row.version || 0)])),
+    );
   }
 
   private async readJsonMapRows(
@@ -1390,7 +1602,9 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     const result = await db.query(query);
     const rows = result.values || [];
     if (rows.length === 0) return compatibilityValue === null ? null : '{}';
-    const entries = rows.map(row => [String(row.key), safeJsonParse<unknown>(row.raw_json)] as const);
+    const entries = rows.map(
+      (row) => [String(row.key), safeJsonParse<unknown>(row.raw_json)] as const,
+    );
     if (entries.some(([, value]) => value === null)) return compatibilityValue;
     return JSON.stringify(Object.fromEntries(entries));
   }
@@ -1418,7 +1632,9 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   private async clearStructuredTablesForKey(db: SQLiteDBConnection, key: string): Promise<void> {
     switch (key) {
       case 'deardiary_diaries':
-        await db.execute("DELETE FROM diaries; DELETE FROM media_assets WHERE owner_type = 'diary';");
+        await db.execute(
+          "DELETE FROM diaries; DELETE FROM media_assets WHERE owner_type = 'diary';",
+        );
         break;
       case 'deardiary_entries':
         await db.run('DELETE FROM entries;');
@@ -1543,7 +1759,11 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }
   }
 
-  private async syncAccountState(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+  private async syncAccountState(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
     const state = safeJsonParse<LocalSyncAccountState>(value);
     if (!state) return;
     await db.run(
@@ -1556,27 +1776,33 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         current_sync_sequence = excluded.current_sync_sequence,
         value = excluded.value,
         updated_at = excluded.updated_at;`,
-      [
-        state.accountId,
-        state.deviceId,
-        state.currentSyncSequence || 0,
-        value,
-        now(),
-      ],
+      [state.accountId, state.deviceId, state.currentSyncSequence || 0, value, now()],
       transaction,
     );
   }
 
-  private async syncRecordVersions(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+  private async syncRecordVersions(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
     const versions = safeJsonParse<Record<string, number>>(value);
     if (!versions || typeof versions !== 'object') return;
 
     const incomingKeys = new Set(Object.keys(versions));
-    const existingRows = (await db.query('SELECT record_key, version FROM sync_record_versions;')).values || [];
-    const existingByKey = new Map(existingRows.map(row => [String(row.record_key), Number(row.version || 0)]));
+    const existingRows =
+      (await db.query('SELECT record_key, version FROM sync_record_versions;')).values || [];
+    const existingByKey = new Map(
+      existingRows.map((row) => [String(row.record_key), Number(row.version || 0)]),
+    );
     for (const row of existingRows) {
       const recordKey = String(row.record_key);
-      if (!incomingKeys.has(recordKey)) await db.run('DELETE FROM sync_record_versions WHERE record_key = ?;', [recordKey], transaction);
+      if (!incomingKeys.has(recordKey))
+        await db.run(
+          'DELETE FROM sync_record_versions WHERE record_key = ?;',
+          [recordKey],
+          transaction,
+        );
     }
     for (const [recordKey, version] of Object.entries(versions)) {
       const numericVersion = Number(version || 0);
@@ -1598,16 +1824,28 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }
   }
 
-  private async syncMediaPointers(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+  private async syncMediaPointers(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
     const pointers = safeJsonParse<Record<string, SyncMediaPointer>>(value);
     if (!pointers || typeof pointers !== 'object') return;
 
     const incomingKeys = new Set(Object.keys(pointers));
-    const existingRows = (await db.query('SELECT pointer_key, raw_json FROM sync_media_pointers;')).values || [];
-    const existingByKey = new Map(existingRows.map(row => [String(row.pointer_key), String(row.raw_json)]));
+    const existingRows =
+      (await db.query('SELECT pointer_key, raw_json FROM sync_media_pointers;')).values || [];
+    const existingByKey = new Map(
+      existingRows.map((row) => [String(row.pointer_key), String(row.raw_json)]),
+    );
     for (const row of existingRows) {
       const pointerKey = String(row.pointer_key);
-      if (!incomingKeys.has(pointerKey)) await db.run('DELETE FROM sync_media_pointers WHERE pointer_key = ?;', [pointerKey], transaction);
+      if (!incomingKeys.has(pointerKey))
+        await db.run(
+          'DELETE FROM sync_media_pointers WHERE pointer_key = ?;',
+          [pointerKey],
+          transaction,
+        );
     }
     for (const [pointerKey, pointer] of Object.entries(pointers)) {
       if (!pointer?.mediaId || !pointer.driveFileId) continue;
@@ -1645,16 +1883,29 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }
   }
 
-  private async syncPartitionHydration(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+  private async syncPartitionHydration(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
     const states = safeJsonParse<Record<string, PartitionHydrationState>>(value);
     if (!states || typeof states !== 'object') return;
 
     const incomingKeys = new Set(Object.keys(states));
-    const existingRows = (await db.query('SELECT partition_key, raw_json FROM sync_partition_hydration;')).values || [];
-    const existingByKey = new Map(existingRows.map(row => [String(row.partition_key), String(row.raw_json)]));
+    const existingRows =
+      (await db.query('SELECT partition_key, raw_json FROM sync_partition_hydration;')).values ||
+      [];
+    const existingByKey = new Map(
+      existingRows.map((row) => [String(row.partition_key), String(row.raw_json)]),
+    );
     for (const row of existingRows) {
       const partitionKey = String(row.partition_key);
-      if (!incomingKeys.has(partitionKey)) await db.run('DELETE FROM sync_partition_hydration WHERE partition_key = ?;', [partitionKey], transaction);
+      if (!incomingKeys.has(partitionKey))
+        await db.run(
+          'DELETE FROM sync_partition_hydration WHERE partition_key = ?;',
+          [partitionKey],
+          transaction,
+        );
     }
     for (const [partitionKey, state] of Object.entries(states)) {
       if (!state?.partitionKey) continue;
@@ -1683,16 +1934,24 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }
   }
 
-  private async syncOutbox(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+  private async syncOutbox(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
     const operations = safeJsonParse<Record<string, SyncOutboxOperation>>(value);
     if (!operations || typeof operations !== 'object') return;
 
     const incomingKeys = new Set(Object.keys(operations));
-    const existingRows = (await db.query('SELECT operation_id, raw_json FROM sync_outbox;')).values || [];
-    const existingByKey = new Map(existingRows.map(row => [String(row.operation_id), String(row.raw_json)]));
+    const existingRows =
+      (await db.query('SELECT operation_id, raw_json FROM sync_outbox;')).values || [];
+    const existingByKey = new Map(
+      existingRows.map((row) => [String(row.operation_id), String(row.raw_json)]),
+    );
     for (const row of existingRows) {
       const operationId = String(row.operation_id);
-      if (!incomingKeys.has(operationId)) await db.run('DELETE FROM sync_outbox WHERE operation_id = ?;', [operationId], transaction);
+      if (!incomingKeys.has(operationId))
+        await db.run('DELETE FROM sync_outbox WHERE operation_id = ?;', [operationId], transaction);
     }
     for (const [operationId, operation] of Object.entries(operations)) {
       if (!operation?.operationId) continue;
@@ -1735,103 +1994,150 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   async queryEntryProjections(
     options: LocalEntryQueryOptions,
   ): Promise<LocalQueryPageResult<LocalEntryProjection> | undefined> {
-    return measureAsync('sqlite.query.entryProjections', async () => {
-      const db = await this.ensureInitialized();
-      if (!await this.isStructuredCollectionReady(db, 'deardiary_entries', 'entries')) return undefined;
-      const sort = options.sort || 'date-desc';
-      const { whereClause, params } = this.buildEntryQuery(options);
-      const cursor = decodePageCursor(options.cursor, 'entry', sort);
-      const keyset = cursor.kind === 'keyset' ? this.entryKeysetClause(sort, cursor.values) : null;
-      const queryWhereClause = keyset ? this.combineWhereClauses(whereClause, keyset.clause) : whereClause;
-      const queryParams = keyset ? [...params, ...keyset.params] : params;
-      const limit = Math.max(1, Math.min(options.limit || 50, 10_000));
-      const offset = cursor.kind === 'offset' ? (cursor.offset || options.offset || 0) : 0;
-      const total = await this.countRows(db, 'entries', whereClause, params);
-      const result = await db.query(
-        `SELECT id, diary_id AS diaryId, date, time, title, mood_name AS moodName,
+    return measureAsync(
+      'sqlite.query.entryProjections',
+      async () => {
+        const db = await this.ensureInitialized();
+        if (!(await this.isStructuredCollectionReady(db, 'deardiary_entries', 'entries')))
+          return undefined;
+        const sort = options.sort || 'date-desc';
+        const { whereClause, params } = this.buildEntryQuery(options);
+        const cursor = decodePageCursor(options.cursor, 'entry', sort);
+        const keyset =
+          cursor.kind === 'keyset' ? this.entryKeysetClause(sort, cursor.values) : null;
+        const queryWhereClause = keyset
+          ? this.combineWhereClauses(whereClause, keyset.clause)
+          : whereClause;
+        const queryParams = keyset ? [...params, ...keyset.params] : params;
+        const limit = Math.max(1, Math.min(options.limit || 50, 10_000));
+        const offset = cursor.kind === 'offset' ? cursor.offset || options.offset || 0 : 0;
+        const total = await this.countRows(db, 'entries', whereClause, params);
+        const result = await db.query(
+          `SELECT id, diary_id AS diaryId, date, time, title, mood_name AS moodName,
                 mood_emoji AS moodEmoji, tags_json AS tagsJson, photo_uris_json AS photoUrisJson,
                 photo_count AS photoCount, word_count AS wordCount, created_at AS createdAt,
                 updated_at AS updatedAt
          FROM entries${queryWhereClause} ORDER BY ${this.entryOrderBy(sort)}
          LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
-        cursor.kind === 'offset' ? [...queryParams, limit + 1, offset] : [...queryParams, limit + 1],
-      );
-      const items = (result.values || []).map(row => ({
-        id: String(row.id),
-        diaryId: String(row.diaryId),
-        date: String(row.date),
-        time: row.time === null || row.time === undefined ? undefined : String(row.time),
-        title: String(row.title || ''),
-        moodName: String(row.moodName || ''),
-        moodEmoji: String(row.moodEmoji || ''),
-        tags: safeJsonParse<string[]>(String(row.tagsJson || '[]')) || [],
-        photoUris: safeJsonParse<string[]>(String(row.photoUrisJson || '[]')) || [],
-        photoCount: Number(row.photoCount || 0),
-        wordCount: Number(row.wordCount || 0),
-        createdAt: Number(row.createdAt || 0),
-        updatedAt: Number(row.updatedAt || 0),
-      } satisfies LocalEntryProjection));
-      const pageItems = items.slice(0, limit);
-      return {
-        items: pageItems,
-        nextCursor: items.length > limit && pageItems.length > 0
-          ? encodeKeysetCursor('entry', sort, entryCursorValues(pageItems[pageItems.length - 1], sort))
-          : undefined,
-        total,
-      };
-    }, { filters: this.redactedQueryMetadata(options) });
+          cursor.kind === 'offset'
+            ? [...queryParams, limit + 1, offset]
+            : [...queryParams, limit + 1],
+        );
+        const items = (result.values || []).map(
+          (row) =>
+            ({
+              id: String(row.id),
+              diaryId: String(row.diaryId),
+              date: String(row.date),
+              time: row.time === null || row.time === undefined ? undefined : String(row.time),
+              title: String(row.title || ''),
+              moodName: String(row.moodName || ''),
+              moodEmoji: String(row.moodEmoji || ''),
+              tags: safeJsonParse<string[]>(String(row.tagsJson || '[]')) || [],
+              photoUris: safeJsonParse<string[]>(String(row.photoUrisJson || '[]')) || [],
+              photoCount: Number(row.photoCount || 0),
+              wordCount: Number(row.wordCount || 0),
+              createdAt: Number(row.createdAt || 0),
+              updatedAt: Number(row.updatedAt || 0),
+            }) satisfies LocalEntryProjection,
+        );
+        const pageItems = items.slice(0, limit);
+        return {
+          items: pageItems,
+          nextCursor:
+            items.length > limit && pageItems.length > 0
+              ? encodeKeysetCursor(
+                  'entry',
+                  sort,
+                  entryCursorValues(pageItems[pageItems.length - 1], sort),
+                )
+              : undefined,
+          total,
+        };
+      },
+      { filters: this.redactedQueryMetadata(options) },
+    );
   }
 
   async queryNoteProjections(
     options: LocalNoteQueryOptions,
   ): Promise<LocalQueryPageResult<LocalNoteProjection> | undefined> {
-    return measureAsync('sqlite.query.noteProjections', async () => {
-      const db = await this.ensureInitialized();
-      if (!await this.isStructuredCollectionReady(db, 'deardiary_notes', 'notes')) return undefined;
-      const sort = options.sort || 'pinned-updated-desc';
-      const { whereClause, params } = this.buildNoteQuery(options);
-      const cursor = decodePageCursor(options.cursor, 'note', sort);
-      const keyset = cursor.kind === 'keyset' ? this.noteKeysetClause(sort, cursor.values) : null;
-      const queryWhereClause = keyset ? this.combineWhereClauses(whereClause, keyset.clause) : whereClause;
-      const queryParams = keyset ? [...params, ...keyset.params] : params;
-      const limit = Math.max(1, Math.min(options.limit || 50, 10_000));
-      const offset = cursor.kind === 'offset' ? (cursor.offset || options.offset || 0) : 0;
-      const total = await this.countRows(db, 'notes', whereClause, params);
-      const result = await db.query(
-        `SELECT id, title, is_pinned AS isPinned, tags_json AS tagsJson,
+    return measureAsync(
+      'sqlite.query.noteProjections',
+      async () => {
+        const db = await this.ensureInitialized();
+        if (!(await this.isStructuredCollectionReady(db, 'deardiary_notes', 'notes')))
+          return undefined;
+        const sort = options.sort || 'pinned-updated-desc';
+        const { whereClause, params } = this.buildNoteQuery(options);
+        const cursor = decodePageCursor(options.cursor, 'note', sort);
+        const keyset = cursor.kind === 'keyset' ? this.noteKeysetClause(sort, cursor.values) : null;
+        const queryWhereClause = keyset
+          ? this.combineWhereClauses(whereClause, keyset.clause)
+          : whereClause;
+        const queryParams = keyset ? [...params, ...keyset.params] : params;
+        const limit = Math.max(1, Math.min(options.limit || 50, 10_000));
+        const offset = cursor.kind === 'offset' ? cursor.offset || options.offset || 0 : 0;
+        const total = await this.countRows(db, 'notes', whereClause, params);
+        const result = await db.query(
+          `SELECT id, title, is_pinned AS isPinned, tags_json AS tagsJson,
                 created_at AS createdAt, updated_at AS updatedAt
          FROM notes${queryWhereClause} ORDER BY ${this.noteOrderBy(sort)}
          LIMIT ?${cursor.kind === 'offset' ? ' OFFSET ?' : ''};`,
-        cursor.kind === 'offset' ? [...queryParams, limit + 1, offset] : [...queryParams, limit + 1],
-      );
-      const items = (result.values || []).map(row => ({
-        id: String(row.id),
-        title: String(row.title || ''),
-        isPinned: Number(row.isPinned || 0) === 1,
-        tags: safeJsonParse<string[]>(String(row.tagsJson || '[]')) || [],
-        createdAt: Number(row.createdAt || 0),
-        updatedAt: Number(row.updatedAt || 0),
-      } satisfies LocalNoteProjection));
-      const pageItems = items.slice(0, limit);
-      return {
-        items: pageItems,
-        nextCursor: items.length > limit && pageItems.length > 0
-          ? encodeKeysetCursor('note', sort, noteCursorValues(pageItems[pageItems.length - 1], sort))
-          : undefined,
-        total,
-      };
-    }, { filters: this.redactedQueryMetadata(options) });
+          cursor.kind === 'offset'
+            ? [...queryParams, limit + 1, offset]
+            : [...queryParams, limit + 1],
+        );
+        const items = (result.values || []).map(
+          (row) =>
+            ({
+              id: String(row.id),
+              title: String(row.title || ''),
+              isPinned: Number(row.isPinned || 0) === 1,
+              tags: safeJsonParse<string[]>(String(row.tagsJson || '[]')) || [],
+              createdAt: Number(row.createdAt || 0),
+              updatedAt: Number(row.updatedAt || 0),
+            }) satisfies LocalNoteProjection,
+        );
+        const pageItems = items.slice(0, limit);
+        return {
+          items: pageItems,
+          nextCursor:
+            items.length > limit && pageItems.length > 0
+              ? encodeKeysetCursor(
+                  'note',
+                  sort,
+                  noteCursorValues(pageItems[pageItems.length - 1], sort),
+                )
+              : undefined,
+          total,
+        };
+      },
+      { filters: this.redactedQueryMetadata(options) },
+    );
   }
 
-  private async syncOutboxV2(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+  private async syncOutboxV2(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
     const operations = safeJsonParse<Record<string, SyncOutboxOperationV2>>(value);
     if (!operations || typeof operations !== 'object') return;
     const incomingKeys = new Set(Object.keys(operations));
-    const existingRows = (await db.query('SELECT operation_id, raw_json FROM sync_outbox_v2;')).values || [];
-    const existingByKey = new Map(existingRows.map(row => [String(row.operation_id), String(row.raw_json)]));
+    const existingRows =
+      (await db.query('SELECT operation_id, raw_json FROM sync_outbox_v2;')).values || [];
+    const existingByKey = new Map(
+      existingRows.map((row) => [String(row.operation_id), String(row.raw_json)]),
+    );
     for (const row of existingRows) {
       const operationId = String(row.operation_id);
-      if (!incomingKeys.has(operationId)) await db.run('DELETE FROM sync_outbox_v2 WHERE operation_id = ?;', [operationId], transaction);
+      if (!incomingKeys.has(operationId))
+        await db.run(
+          'DELETE FROM sync_outbox_v2 WHERE operation_id = ?;',
+          [operationId],
+          transaction,
+        );
     }
     for (const [operationId, operation] of Object.entries(operations)) {
       if (!operation?.operationId) continue;
@@ -1861,27 +2167,48 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         lease_expires_at = excluded.lease_expires_at,
         dependency_operation_id = excluded.dependency_operation_id,
         updated_at = excluded.updated_at, raw_json = excluded.raw_json;`,
-      [operation.operationId, operation.accountId, operation.deviceId, operation.recordType, operation.recordId,
-        operation.operationType, operation.baseRecordVersion, operation.state, operation.retryCount,
-        operation.nextAttemptAt, operation.leaseOwner || null, operation.leaseExpiresAt || null,
-        operation.dependencyOperationId || null, operation.createdAt, operation.updatedAt,
-        JSON.stringify(operation)],
+      [
+        operation.operationId,
+        operation.accountId,
+        operation.deviceId,
+        operation.recordType,
+        operation.recordId,
+        operation.operationType,
+        operation.baseRecordVersion,
+        operation.state,
+        operation.retryCount,
+        operation.nextAttemptAt,
+        operation.leaseOwner || null,
+        operation.leaseExpiresAt || null,
+        operation.dependencyOperationId || null,
+        operation.createdAt,
+        operation.updatedAt,
+        JSON.stringify(operation),
+      ],
       transaction,
     );
   }
 
-  private async syncDiaries(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+  private async syncDiaries(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
     const diaries = safeJsonParse<Diary[]>(value);
     if (!Array.isArray(diaries)) return;
 
-    const incomingIds = new Set(diaries.map(diary => diary.id));
+    const incomingIds = new Set(diaries.map((diary) => diary.id));
     const existingRows = (await db.query('SELECT id, raw_json FROM diaries;')).values || [];
-    const existingById = new Map(existingRows.map(row => [String(row.id), String(row.raw_json)]));
+    const existingById = new Map(existingRows.map((row) => [String(row.id), String(row.raw_json)]));
     for (const row of existingRows) {
       const id = String(row.id);
       if (incomingIds.has(id)) continue;
       await db.run('DELETE FROM diaries WHERE id = ?;', [id], transaction);
-      await db.run("DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;", [id], transaction);
+      await db.run(
+        "DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;",
+        [id],
+        transaction,
+      );
     }
     for (const diary of diaries) {
       const rawJson = JSON.stringify(diary);
@@ -1918,27 +2245,47 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         transaction,
       );
 
-      await db.run("DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;", [diary.id], transaction);
+      await db.run(
+        "DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;",
+        [diary.id],
+        transaction,
+      );
       if (diary.coverImage) {
-        await this.insertMediaAsset(db, 'diary', diary.id, 'coverImage', 0, diary.coverImage, transaction);
+        await this.insertMediaAsset(
+          db,
+          'diary',
+          diary.id,
+          'coverImage',
+          0,
+          diary.coverImage,
+          transaction,
+        );
       }
     }
   }
 
-  private async syncEntries(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+  private async syncEntries(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
     const entries = safeJsonParse<Entry[]>(value);
     if (!Array.isArray(entries)) return;
 
-    const incomingIds = new Set(entries.map(entry => entry.id));
+    const incomingIds = new Set(entries.map((entry) => entry.id));
     const existingRows = (await db.query('SELECT id, raw_json FROM entries;')).values || [];
-    const existingById = new Map(existingRows.map(row => [String(row.id), String(row.raw_json)]));
+    const existingById = new Map(existingRows.map((row) => [String(row.id), String(row.raw_json)]));
     for (const row of existingRows) {
       const id = String(row.id);
       if (incomingIds.has(id)) continue;
       await db.run('DELETE FROM entries WHERE id = ?;', [id], transaction);
       await this.deleteEntrySearchRow(db, id, transaction);
       await db.run('DELETE FROM entry_blocks WHERE entry_id = ?;', [id], transaction);
-      await db.run("DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;", [id], transaction);
+      await db.run(
+        "DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;",
+        [id],
+        transaction,
+      );
     }
     for (const entry of entries) {
       const rawJson = JSON.stringify(entry);
@@ -1989,12 +2336,24 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       );
 
       await db.run('DELETE FROM entry_blocks WHERE entry_id = ?;', [entry.id], transaction);
-      await db.run("DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;", [entry.id], transaction);
+      await db.run(
+        "DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;",
+        [entry.id],
+        transaction,
+      );
       for (const [index, uri] of (entry.photoUris || []).entries()) {
         await this.insertMediaAsset(db, 'entry', entry.id, 'photoUris', index, uri, transaction);
       }
       if (entry.audioUri) {
-        await this.insertMediaAsset(db, 'entry', entry.id, 'audioUri', 0, entry.audioUri, transaction);
+        await this.insertMediaAsset(
+          db,
+          'entry',
+          entry.id,
+          'audioUri',
+          0,
+          entry.audioUri,
+          transaction,
+        );
       }
       await this.upsertEntrySearchRow(db, entry, transaction);
 
@@ -2034,13 +2393,17 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }
   }
 
-  private async syncNotes(db: SQLiteDBConnection, value: string, transaction = true): Promise<void> {
+  private async syncNotes(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
     const notes = safeJsonParse<Note[]>(value);
     if (!Array.isArray(notes)) return;
 
-    const incomingIds = new Set(notes.map(note => note.id));
+    const incomingIds = new Set(notes.map((note) => note.id));
     const existingRows = (await db.query('SELECT id, raw_json FROM notes;')).values || [];
-    const existingById = new Map(existingRows.map(row => [String(row.id), String(row.raw_json)]));
+    const existingById = new Map(existingRows.map((row) => [String(row.id), String(row.raw_json)]));
     for (const row of existingRows) {
       const id = String(row.id);
       if (!incomingIds.has(id)) {
@@ -2111,14 +2474,22 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     switch (key) {
       case 'deardiary_diaries':
         await db.run('DELETE FROM diaries WHERE id = ?;', [id], transaction);
-        await db.run("DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;", [id], transaction);
+        await db.run(
+          "DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;",
+          [id],
+          transaction,
+        );
         await this.markStructuredCollectionReadyIfEmpty(db, key, 'diaries', transaction);
         break;
       case 'deardiary_entries':
         await db.run('DELETE FROM entries WHERE id = ?;', [id], transaction);
         await this.deleteEntrySearchRow(db, id, transaction);
         await db.run('DELETE FROM entry_blocks WHERE entry_id = ?;', [id], transaction);
-        await db.run("DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;", [id], transaction);
+        await db.run(
+          "DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;",
+          [id],
+          transaction,
+        );
         await this.markStructuredCollectionReadyIfEmpty(db, key, 'entries', transaction);
         break;
       case 'deardiary_notes':
@@ -2148,7 +2519,11 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     );
   }
 
-  private async upsertDiaryRow(db: SQLiteDBConnection, diary: Diary, transaction = true): Promise<void> {
+  private async upsertDiaryRow(
+    db: SQLiteDBConnection,
+    diary: Diary,
+    transaction = true,
+  ): Promise<void> {
     const rawJson = JSON.stringify(diary);
     await db.run(
       `INSERT INTO diaries (
@@ -2181,11 +2556,28 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       ],
       transaction,
     );
-    await db.run("DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;", [diary.id], transaction);
-    if (diary.coverImage) await this.insertMediaAsset(db, 'diary', diary.id, 'coverImage', 0, diary.coverImage, transaction);
+    await db.run(
+      "DELETE FROM media_assets WHERE owner_type = 'diary' AND owner_id = ?;",
+      [diary.id],
+      transaction,
+    );
+    if (diary.coverImage)
+      await this.insertMediaAsset(
+        db,
+        'diary',
+        diary.id,
+        'coverImage',
+        0,
+        diary.coverImage,
+        transaction,
+      );
   }
 
-  private async upsertEntryRow(db: SQLiteDBConnection, entry: Entry, transaction = true): Promise<void> {
+  private async upsertEntryRow(
+    db: SQLiteDBConnection,
+    entry: Entry,
+    transaction = true,
+  ): Promise<void> {
     const rawJson = JSON.stringify(entry);
     await db.run(
       `INSERT INTO entries (
@@ -2233,11 +2625,24 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     );
 
     await db.run('DELETE FROM entry_blocks WHERE entry_id = ?;', [entry.id], transaction);
-    await db.run("DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;", [entry.id], transaction);
+    await db.run(
+      "DELETE FROM media_assets WHERE owner_type = 'entry' AND owner_id = ?;",
+      [entry.id],
+      transaction,
+    );
     for (const [index, uri] of (entry.photoUris || []).entries()) {
       await this.insertMediaAsset(db, 'entry', entry.id, 'photoUris', index, uri, transaction);
     }
-    if (entry.audioUri) await this.insertMediaAsset(db, 'entry', entry.id, 'audioUri', 0, entry.audioUri, transaction);
+    if (entry.audioUri)
+      await this.insertMediaAsset(
+        db,
+        'entry',
+        entry.id,
+        'audioUri',
+        0,
+        entry.audioUri,
+        transaction,
+      );
     for (const [index, block] of (entry.blocks || []).entries()) {
       await db.run(
         `INSERT INTO entry_blocks (id, entry_id, position, time, body, audio_uri, raw_json)
@@ -2260,13 +2665,25 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         transaction,
       );
       if (block.audioUri) {
-        await this.insertMediaAsset(db, 'entry', entry.id, `blocks.${block.id}.audioUri`, index, block.audioUri, transaction);
+        await this.insertMediaAsset(
+          db,
+          'entry',
+          entry.id,
+          `blocks.${block.id}.audioUri`,
+          index,
+          block.audioUri,
+          transaction,
+        );
       }
     }
     await this.upsertEntrySearchRow(db, entry, transaction);
   }
 
-  private async upsertNoteRow(db: SQLiteDBConnection, note: Note, transaction = true): Promise<void> {
+  private async upsertNoteRow(
+    db: SQLiteDBConnection,
+    note: Note,
+    transaction = true,
+  ): Promise<void> {
     await db.run(
       `INSERT INTO notes (id, title, body, is_pinned, tags_json, created_at, updated_at, raw_json)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -2293,7 +2710,11 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     await this.upsertNoteSearchRow(db, note, transaction);
   }
 
-  private async upsertEntrySearchRow(db: SQLiteDBConnection, entry: Entry, transaction = true): Promise<void> {
+  private async upsertEntrySearchRow(
+    db: SQLiteDBConnection,
+    entry: Entry,
+    transaction = true,
+  ): Promise<void> {
     await this.deleteEntrySearchRow(db, entry.id, transaction);
     await db.run(
       'INSERT INTO entries_fts (id, title, body, tags, mood) VALUES (?, ?, ?, ?, ?);',
@@ -2308,25 +2729,32 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     );
   }
 
-  private async deleteEntrySearchRow(db: SQLiteDBConnection, id: string, transaction = true): Promise<void> {
+  private async deleteEntrySearchRow(
+    db: SQLiteDBConnection,
+    id: string,
+    transaction = true,
+  ): Promise<void> {
     await db.run('DELETE FROM entries_fts WHERE id = ?;', [id], transaction);
   }
 
-  private async upsertNoteSearchRow(db: SQLiteDBConnection, note: Note, transaction = true): Promise<void> {
+  private async upsertNoteSearchRow(
+    db: SQLiteDBConnection,
+    note: Note,
+    transaction = true,
+  ): Promise<void> {
     await this.deleteNoteSearchRow(db, note.id, transaction);
     await db.run(
       'INSERT INTO notes_fts (id, title, body, tags) VALUES (?, ?, ?, ?);',
-      [
-        note.id,
-        note.title || '',
-        note.body || '',
-        (note.tags || []).join(' '),
-      ],
+      [note.id, note.title || '', note.body || '', (note.tags || []).join(' ')],
       transaction,
     );
   }
 
-  private async deleteNoteSearchRow(db: SQLiteDBConnection, id: string, transaction = true): Promise<void> {
+  private async deleteNoteSearchRow(
+    db: SQLiteDBConnection,
+    id: string,
+    transaction = true,
+  ): Promise<void> {
     await db.run('DELETE FROM notes_fts WHERE id = ?;', [id], transaction);
   }
 

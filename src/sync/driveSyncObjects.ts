@@ -54,11 +54,12 @@ const driveRequest = (
   url: string,
   init: RequestInit = {},
   isSuccessfulResponse?: (response: Response) => boolean,
-): Promise<Response> => executeRequest({
-  request: ({ signal }) => fetch(url, { ...init, signal }),
-  mapError: error => mapDriveError(error, operation),
-  isSuccessfulResponse,
-});
+): Promise<Response> =>
+  executeRequest({
+    request: ({ signal }) => fetch(url, { ...init, signal }),
+    mapError: (error) => mapDriveError(error, operation),
+    isSuccessfulResponse,
+  });
 
 const toAppProperties = (
   objectKind: SyncObjectKind,
@@ -91,50 +92,58 @@ export const uploadDriveSyncObject = async ({
   bytes,
   appProperties,
 }: UploadDriveSyncObjectInput): Promise<DriveSyncObjectSummary> => {
-  return measureAsync('sync.drive.upload', async () => {
-    const metadata = {
-      name,
-      mimeType: SYNC_MIME_TYPES[objectKind],
-      parents: ['appDataFolder'],
-      appProperties: toAppProperties(objectKind, appProperties),
-    };
-    if (bytes.byteLength > RESUMABLE_UPLOAD_THRESHOLD_BYTES) {
-      return uploadDriveSyncObjectResumable(session, metadata, objectKind, bytes);
-    }
-    const delimiter = `dear-diary-${crypto.randomUUID()}`;
-    const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
-    const prefix = new TextEncoder().encode(
-      `--${delimiter}\r\n` +
-      'Content-Type: application/json; charset=UTF-8\r\n\r\n',
-    );
-    const middle = new TextEncoder().encode(
-      `\r\n--${delimiter}\r\n` +
-      `Content-Type: ${SYNC_MIME_TYPES[objectKind]}\r\n\r\n`,
-    );
-    const suffix = new TextEncoder().encode(`\r\n--${delimiter}--`);
-    const body = new Uint8Array(prefix.length + metadataBytes.length + middle.length + bytes.length + suffix.length);
-    let offset = 0;
-    [prefix, metadataBytes, middle, bytes, suffix].forEach(part => {
-      body.set(part, offset);
-      offset += part.length;
-    });
+  return measureAsync(
+    'sync.drive.upload',
+    async () => {
+      const metadata = {
+        name,
+        mimeType: SYNC_MIME_TYPES[objectKind],
+        parents: ['appDataFolder'],
+        appProperties: toAppProperties(objectKind, appProperties),
+      };
+      if (bytes.byteLength > RESUMABLE_UPLOAD_THRESHOLD_BYTES) {
+        return uploadDriveSyncObjectResumable(session, metadata, objectKind, bytes);
+      }
+      const delimiter = `dear-diary-${crypto.randomUUID()}`;
+      const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
+      const prefix = new TextEncoder().encode(
+        `--${delimiter}\r\n` + 'Content-Type: application/json; charset=UTF-8\r\n\r\n',
+      );
+      const middle = new TextEncoder().encode(
+        `\r\n--${delimiter}\r\n` + `Content-Type: ${SYNC_MIME_TYPES[objectKind]}\r\n\r\n`,
+      );
+      const suffix = new TextEncoder().encode(`\r\n--${delimiter}--`);
+      const body = new Uint8Array(
+        prefix.length + metadataBytes.length + middle.length + bytes.length + suffix.length,
+      );
+      let offset = 0;
+      [prefix, metadataBytes, middle, bytes, suffix].forEach((part) => {
+        body.set(part, offset);
+        offset += part.length;
+      });
 
-    const fields = encodeURIComponent('id,name,createdTime,modifiedTime,size,appProperties');
-    const response = await driveRequest('upload', `${DRIVE_UPLOAD_ENDPOINT}?uploadType=multipart&fields=${fields}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${requireDriveAccessToken(session)}`,
-        'Content-Type': `multipart/related; boundary=${delimiter}`,
-      },
-      body,
-    });
+      const fields = encodeURIComponent('id,name,createdTime,modifiedTime,size,appProperties');
+      const response = await driveRequest(
+        'upload',
+        `${DRIVE_UPLOAD_ENDPOINT}?uploadType=multipart&fields=${fields}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${requireDriveAccessToken(session)}`,
+            'Content-Type': `multipart/related; boundary=${delimiter}`,
+          },
+          body,
+        },
+      );
 
-    return toSummary(await response.json());
-  }, {
-    objectKind,
-    sizeBytes: bytes.byteLength,
-    resumable: bytes.byteLength > RESUMABLE_UPLOAD_THRESHOLD_BYTES,
-  });
+      return toSummary(await response.json());
+    },
+    {
+      objectKind,
+      sizeBytes: bytes.byteLength,
+      resumable: bytes.byteLength > RESUMABLE_UPLOAD_THRESHOLD_BYTES,
+    },
+  );
 };
 
 const uploadDriveSyncObjectResumable = async (
@@ -148,56 +157,81 @@ const uploadDriveSyncObjectResumable = async (
   objectKind: SyncObjectKind,
   bytes: Uint8Array,
 ): Promise<DriveSyncObjectSummary> => {
-  return measureAsync('sync.drive.upload.resumable', async () => {
-    const fields = encodeURIComponent('id,name,createdTime,modifiedTime,size,appProperties');
-    const start = await driveRequest('upload', `${DRIVE_UPLOAD_ENDPOINT}?uploadType=resumable&fields=${fields}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${requireDriveAccessToken(session)}`,
-        'Content-Type': 'application/json; charset=UTF-8',
-        'X-Upload-Content-Type': SYNC_MIME_TYPES[objectKind],
-        'X-Upload-Content-Length': String(bytes.byteLength),
-      },
-      body: JSON.stringify(metadata),
-    });
-    const location = start.headers.get('Location');
-    if (!location) throw mapDriveError({ code: 'missing_resumable_location' }, 'upload');
+  return measureAsync(
+    'sync.drive.upload.resumable',
+    async () => {
+      const fields = encodeURIComponent('id,name,createdTime,modifiedTime,size,appProperties');
+      const start = await driveRequest(
+        'upload',
+        `${DRIVE_UPLOAD_ENDPOINT}?uploadType=resumable&fields=${fields}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${requireDriveAccessToken(session)}`,
+            'Content-Type': 'application/json; charset=UTF-8',
+            'X-Upload-Content-Type': SYNC_MIME_TYPES[objectKind],
+            'X-Upload-Content-Length': String(bytes.byteLength),
+          },
+          body: JSON.stringify(metadata),
+        },
+      );
+      const location = start.headers.get('Location');
+      if (!location) throw mapDriveError({ code: 'missing_resumable_location' }, 'upload');
 
-    const response = await driveRequest('upload', location, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${requireDriveAccessToken(session)}`,
-        'Content-Type': SYNC_MIME_TYPES[objectKind],
-        'Content-Length': String(bytes.byteLength),
-      },
-      body: bytes,
-    });
-    return toSummary(await response.json());
-  }, { objectKind, sizeBytes: bytes.byteLength });
+      const response = await driveRequest('upload', location, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${requireDriveAccessToken(session)}`,
+          'Content-Type': SYNC_MIME_TYPES[objectKind],
+          'Content-Length': String(bytes.byteLength),
+        },
+        body: bytes,
+      });
+      return toSummary(await response.json());
+    },
+    { objectKind, sizeBytes: bytes.byteLength },
+  );
 };
 
 export const downloadDriveSyncObject = async (
   session: GoogleAccountSession,
   fileId: string,
 ): Promise<Uint8Array> => {
-  return measureAsync('sync.drive.download', async () => {
-    const response = await driveRequest('download', `${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}?alt=media`, {
-      headers: { Authorization: `Bearer ${requireDriveAccessToken(session)}` },
-    });
-    return new Uint8Array(await response.arrayBuffer());
-  }, { hasFileId: Boolean(fileId) });
+  return measureAsync(
+    'sync.drive.download',
+    async () => {
+      const response = await driveRequest(
+        'download',
+        `${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}?alt=media`,
+        {
+          headers: { Authorization: `Bearer ${requireDriveAccessToken(session)}` },
+        },
+      );
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    { hasFileId: Boolean(fileId) },
+  );
 };
 
 export const deleteDriveSyncObject = async (
   session: GoogleAccountSession,
   fileId: string,
 ): Promise<void> => {
-  await measureAsync('sync.drive.delete', async () => {
-    await driveRequest('delete', `${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${requireDriveAccessToken(session)}` },
-    }, response => response.ok || response.status === 404);
-  }, { hasFileId: Boolean(fileId) });
+  await measureAsync(
+    'sync.drive.delete',
+    async () => {
+      await driveRequest(
+        'delete',
+        `${DRIVE_FILES_ENDPOINT}/${encodeURIComponent(fileId)}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${requireDriveAccessToken(session)}` },
+        },
+        (response) => response.ok || response.status === 404,
+      );
+    },
+    { hasFileId: Boolean(fileId) },
+  );
 };
 
 export const listDriveSyncObjects = async (

@@ -10,17 +10,32 @@ import {
 test('maps persistent health to deterministic user-facing states in safety order', () => {
   const healthy = createDefaultSyncHealth(1);
   assert.equal(getSyncHealthStatusMessage(healthy), 'All changes saved locally and synchronized');
-  assert.equal(getSyncHealthStatusMessage({ ...healthy, pendingOperationCount: 1 }), 'Synchronization delayed; automatic retry scheduled');
-  assert.equal(getSyncHealthStatusMessage({ ...healthy, connectivityState: 'OFFLINE' }), 'Changes saved locally; waiting for internet');
-  assert.equal(getSyncHealthStatusMessage({ ...healthy, authState: 'EXPIRED' }), 'Changes saved locally; sign-in required to synchronize');
-  assert.equal(getSyncHealthStatusMessage({ ...healthy, conflictOperationCount: 1 }), 'Conflict requires review');
-  assert.equal(getSyncHealthStatusMessage({
-    ...healthy,
-    integrityState: 'SAFETY_STOP',
-    conflictOperationCount: 1,
-    authState: 'EXPIRED',
-    connectivityState: 'OFFLINE',
-  }), 'Synchronization paused for data safety');
+  assert.equal(
+    getSyncHealthStatusMessage({ ...healthy, pendingOperationCount: 1 }),
+    'Synchronization delayed; automatic retry scheduled',
+  );
+  assert.equal(
+    getSyncHealthStatusMessage({ ...healthy, connectivityState: 'OFFLINE' }),
+    'Changes saved locally; waiting for internet',
+  );
+  assert.equal(
+    getSyncHealthStatusMessage({ ...healthy, authState: 'EXPIRED' }),
+    'Changes saved locally; sign-in required to synchronize',
+  );
+  assert.equal(
+    getSyncHealthStatusMessage({ ...healthy, conflictOperationCount: 1 }),
+    'Conflict requires review',
+  );
+  assert.equal(
+    getSyncHealthStatusMessage({
+      ...healthy,
+      integrityState: 'SAFETY_STOP',
+      conflictOperationCount: 1,
+      authState: 'EXPIRED',
+      connectivityState: 'OFFLINE',
+    }),
+    'Synchronization paused for data safety',
+  );
 });
 
 test('formats oldest pending operation as an age without exposing an identifier', () => {

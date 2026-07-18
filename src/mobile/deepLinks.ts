@@ -58,9 +58,10 @@ export const parseDearDiaryDeepLink = (rawUrl: string): DearDiaryDeepLinkTarget 
     case 'diaries':
     case 'diary': {
       if (!firstId) return { kind: 'diaries' };
-      const entryId = subArea?.toLowerCase() === 'entries' || subArea?.toLowerCase() === 'entry'
-        ? cleanSegment(secondId)
-        : optionalParam(url, 'entryId', 'entry');
+      const entryId =
+        subArea?.toLowerCase() === 'entries' || subArea?.toLowerCase() === 'entry'
+          ? cleanSegment(secondId)
+          : optionalParam(url, 'entryId', 'entry');
       return entryId
         ? { kind: 'diary', diaryId: firstId, entryId }
         : { kind: 'diary', diaryId: firstId };
@@ -69,7 +70,9 @@ export const parseDearDiaryDeepLink = (rawUrl: string): DearDiaryDeepLinkTarget 
     case 'entry': {
       if (!firstId) return null;
       const diaryId = optionalParam(url, 'diaryId', 'diary');
-      return diaryId ? { kind: 'entry', entryId: firstId, diaryId } : { kind: 'entry', entryId: firstId };
+      return diaryId
+        ? { kind: 'entry', entryId: firstId, diaryId }
+        : { kind: 'entry', entryId: firstId };
     }
     case 'notes':
     case 'note':

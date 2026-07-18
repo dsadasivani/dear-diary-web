@@ -37,13 +37,15 @@ export class PersistentOperationAcknowledgmentStore implements OperationAcknowle
         this.store.getItem(HEALTH_KEY),
         this.store.getItem(HISTORY_KEY),
       ]);
-      const outbox = outboxRaw ? JSON.parse(outboxRaw) as Record<string, SyncOutboxOperationV2> : {};
+      const outbox = outboxRaw
+        ? (JSON.parse(outboxRaw) as Record<string, SyncOutboxOperationV2>)
+        : {};
       const current = outbox[operation.operationId];
       if (!current || current.state !== 'COMMITTED') {
         if (current?.state === 'ACKNOWLEDGED') return;
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       }
-      const runtime = runtimeRaw ? JSON.parse(runtimeRaw) as SyncV2LocalRuntime : null;
+      const runtime = runtimeRaw ? (JSON.parse(runtimeRaw) as SyncV2LocalRuntime) : null;
       if (!runtime || runtime.accountId !== operation.accountId) {
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       }
@@ -56,12 +58,17 @@ export class PersistentOperationAcknowledgmentStore implements OperationAcknowle
         remoteRecordVersion: result.recordVersion,
         updatedAt: now,
       };
-      const history = historyRaw ? JSON.parse(historyRaw) as AcknowledgmentHistoryEntry[] : [];
+      const history = historyRaw ? (JSON.parse(historyRaw) as AcknowledgmentHistoryEntry[]) : [];
       const nextHistory = [
-        ...history.filter(entry => entry.operationId !== operation.operationId),
-        { operationId: operation.operationId, sequence: result.sequence, recordVersion: result.recordVersion, acknowledgedAt: now },
+        ...history.filter((entry) => entry.operationId !== operation.operationId),
+        {
+          operationId: operation.operationId,
+          sequence: result.sequence,
+          recordVersion: result.recordVersion,
+          acknowledgedAt: now,
+        },
       ].slice(-this.historyLimit);
-      const health = healthRaw ? JSON.parse(healthRaw) as Record<string, unknown> : {};
+      const health = healthRaw ? (JSON.parse(healthRaw) as Record<string, unknown>) : {};
       await this.store.setItems({
         [OUTBOX_KEY]: JSON.stringify(outbox),
         [RUNTIME_KEY]: JSON.stringify({
@@ -77,7 +84,10 @@ export class PersistentOperationAcknowledgmentStore implements OperationAcknowle
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(work, work);
-    this.tail = result.then(() => undefined, () => undefined);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 }

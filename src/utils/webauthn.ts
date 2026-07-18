@@ -20,10 +20,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
   for (let i = 0; i < len; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
-  return window.btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
+  return window.btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
 /**
@@ -32,7 +29,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
 export async function isWebAuthnSupported(): Promise<boolean> {
   const hasApi = !!(window.PublicKeyCredential && navigator.credentials);
   if (!hasApi) return false;
-  
+
   try {
     // Check if platform authenticator (TouchID/FaceID) is available
     return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
@@ -54,9 +51,13 @@ export function isContextRestricted(): boolean {
 /**
  * Enroll a new WebAuthn Passkey (Touch ID, Face ID, Windows Hello)
  */
-export async function registerLocalPasskey(username: string = 'dear.diary.user'): Promise<{ credentialId: string; isSimulated: boolean }> {
+export async function registerLocalPasskey(
+  username: string = 'dear.diary.user',
+): Promise<{ credentialId: string; isSimulated: boolean }> {
   if (!window.PublicKeyCredential || !navigator.credentials) {
-    throw new Error('WebAuthn is not supported in this browser environment. Ensure you are using HTTPS.');
+    throw new Error(
+      'WebAuthn is not supported in this browser environment. Ensure you are using HTTPS.',
+    );
   }
 
   const challenge = new Uint8Array(32);
@@ -78,7 +79,7 @@ export async function registerLocalPasskey(username: string = 'dear.diary.user')
       displayName: 'Dear Diary User',
     },
     pubKeyCredParams: [
-      { type: 'public-key', alg: -7 },  // ES256
+      { type: 'public-key', alg: -7 }, // ES256
       { type: 'public-key', alg: -257 }, // RS256
     ],
     authenticatorSelection: {
@@ -90,9 +91,9 @@ export async function registerLocalPasskey(username: string = 'dear.diary.user')
   };
 
   try {
-    const credential = await navigator.credentials.create({
+    const credential = (await navigator.credentials.create({
       publicKey: creationOptions,
-    }) as PublicKeyCredential;
+    })) as PublicKeyCredential;
 
     if (!credential) {
       throw new Error('Verification failed: No credential returned.');
@@ -103,16 +104,20 @@ export async function registerLocalPasskey(username: string = 'dear.diary.user')
 
     return {
       credentialId: credentialIdB64,
-      isSimulated: false
+      isSimulated: false,
     };
   } catch (error: any) {
-    console.warn('Real WebAuthn enrollment failed or was cancelled. Error name:', error?.name, error?.message);
-    
+    console.warn(
+      'Real WebAuthn enrollment failed or was cancelled. Error name:',
+      error?.name,
+      error?.message,
+    );
+
     // If it is a real permission issue (like inside iframe) or user cancelled, let the caller know
     if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
       throw error;
     }
-    
+
     throw new Error(error?.message || 'Biometric authenticator registration failed.');
   }
 }

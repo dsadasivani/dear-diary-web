@@ -2,10 +2,7 @@ import type { LocalDataStore } from '../../platform/storage';
 import { SyncError } from '../errors';
 import { assertAllowedOutboxTransition } from './OutboxStateMachine';
 import type { OutboxRepository } from './OutboxRepository';
-import {
-  TERMINAL_OUTBOX_V2_STATES,
-  type SyncOutboxOperationV2,
-} from './SyncOutboxOperationV2';
+import { TERMINAL_OUTBOX_V2_STATES, type SyncOutboxOperationV2 } from './SyncOutboxOperationV2';
 
 export const SYNC_V2_OUTBOX_STORAGE_KEY = 'deardiary_sync_outbox_v2';
 const STORAGE_KEY = SYNC_V2_OUTBOX_STORAGE_KEY;
@@ -31,17 +28,40 @@ export class PersistentOutboxRepository implements OutboxRepository {
     });
   }
 
-  claimNextRunnable(input: { accountId: string; workerId: string; now: number; leaseDurationMs: number }): Promise<SyncOutboxOperationV2 | null> {
+  claimNextRunnable(input: {
+    accountId: string;
+    workerId: string;
+    now: number;
+    leaseDurationMs: number;
+  }): Promise<SyncOutboxOperationV2 | null> {
     return this.exclusive(async () => {
       const operations = await this.read();
       const candidate = Object.values(operations)
-        .filter(operation => operation.accountId === input.accountId)
-        .filter(operation => !TERMINAL_OUTBOX_V2_STATES.has(operation.state))
-        .filter(operation => !['CONFLICT', 'BLOCKED_AUTH', 'BLOCKED_DEVICE', 'BLOCKED_UPGRADE', 'SAFETY_STOP'].includes(operation.state))
-        .filter(operation => operation.nextAttemptAt <= input.now)
-        .filter(operation => !operation.leaseOwner || (operation.leaseExpiresAt || 0) <= input.now)
-        .filter(operation => !operation.dependencyOperationId || operations[operation.dependencyOperationId]?.state === 'ACKNOWLEDGED')
-        .sort((left, right) => left.nextAttemptAt - right.nextAttemptAt || left.createdAt - right.createdAt)[0];
+        .filter((operation) => operation.accountId === input.accountId)
+        .filter((operation) => !TERMINAL_OUTBOX_V2_STATES.has(operation.state))
+        .filter(
+          (operation) =>
+            ![
+              'CONFLICT',
+              'BLOCKED_AUTH',
+              'BLOCKED_DEVICE',
+              'BLOCKED_UPGRADE',
+              'SAFETY_STOP',
+            ].includes(operation.state),
+        )
+        .filter((operation) => operation.nextAttemptAt <= input.now)
+        .filter(
+          (operation) => !operation.leaseOwner || (operation.leaseExpiresAt || 0) <= input.now,
+        )
+        .filter(
+          (operation) =>
+            !operation.dependencyOperationId ||
+            operations[operation.dependencyOperationId]?.state === 'ACKNOWLEDGED',
+        )
+        .sort(
+          (left, right) =>
+            left.nextAttemptAt - right.nextAttemptAt || left.createdAt - right.createdAt,
+        )[0];
       if (!candidate) return null;
       const claimed = {
         ...candidate,
@@ -59,7 +79,12 @@ export class PersistentOutboxRepository implements OutboxRepository {
     return this.exclusive(async () => {
       const operations = await this.read();
       const operation = operations[operationId];
-      if (!operation || operation.leaseOwner !== workerId || TERMINAL_OUTBOX_V2_STATES.has(operation.state)) return false;
+      if (
+        !operation ||
+        operation.leaseOwner !== workerId ||
+        TERMINAL_OUTBOX_V2_STATES.has(operation.state)
+      )
+        return false;
       operations[operationId] = { ...operation, leaseExpiresAt, updatedAt: Date.now() };
       await this.write(operations);
       return true;
@@ -118,7 +143,13 @@ export class PersistentOutboxRepository implements OutboxRepository {
       if (patch.operationId && patch.operationId !== operationId) {
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       }
-      const transitioned = { ...operation, ...patch, operationId, state: nextState, updatedAt: Date.now() };
+      const transitioned = {
+        ...operation,
+        ...patch,
+        operationId,
+        state: nextState,
+        updatedAt: Date.now(),
+      };
       operations[operationId] = transitioned;
       await this.write(operations);
       return clone(transitioned);
@@ -133,7 +164,7 @@ export class PersistentOutboxRepository implements OutboxRepository {
   async listByAccount(accountId: string): Promise<SyncOutboxOperationV2[]> {
     await this.operationTail;
     return Object.values(await this.read())
-      .filter(operation => operation.accountId === accountId)
+      .filter((operation) => operation.accountId === accountId)
       .sort((left, right) => left.createdAt - right.createdAt)
       .map(clone);
   }
@@ -154,7 +185,10 @@ export class PersistentOutboxRepository implements OutboxRepository {
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.operationTail.then(work, work);
-    this.operationTail = result.then(() => undefined, () => undefined);
+    this.operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 }

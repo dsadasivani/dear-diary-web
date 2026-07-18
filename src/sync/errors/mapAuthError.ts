@@ -8,4 +8,3 @@ export const mapAuthError = (error: unknown): SyncError => {
   }
   return mapHttpError(error, 'AUTH_INVALID');
 };
-

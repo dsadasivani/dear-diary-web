@@ -44,7 +44,7 @@ const initializePairing = (): Promise<PendingWebCompanion | null> => {
         };
       }
       return { pairing: await requestSyncV2CompanionPairing(auth), auth };
-    })().catch(error => {
+    })().catch((error) => {
       pairingInitializationPromise = null;
       throw error;
     });
@@ -67,15 +67,24 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       try {
         const initialized = await initializePairing();
         if (!initialized) {
-          if (active) setStatus('Sign in with the Google account already linked on your primary mobile.');
+          if (active)
+            setStatus('Sign in with the Google account already linked on your primary mobile.');
           return;
         }
-        if (active) { setContext(initialized); setStatus('Waiting for approval from your primary mobile.'); }
+        if (active) {
+          setContext(initialized);
+          setStatus('Waiting for approval from your primary mobile.');
+        }
       } catch (linkError: any) {
-        if (active) { setError(linkError?.message || 'Could not start companion pairing.'); setStatus(''); }
+        if (active) {
+          setError(linkError?.message || 'Could not start companion pairing.');
+          setStatus('');
+        }
       }
     })();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -94,7 +103,11 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           return;
         }
         const details = await getPendingSyncV2CompanionPairing(context.auth);
-        if (!details || details.pairing.status === 'EXPIRED' || details.pairing.status === 'REJECTED') {
+        if (
+          !details ||
+          details.pairing.status === 'EXPIRED' ||
+          details.pairing.status === 'REJECTED'
+        ) {
           throw new Error('Pairing request expired.');
         }
         if (details.pairing.status === 'REQUESTED') {
@@ -105,8 +118,9 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           setStatus('Companion approved. Restoring your encrypted diary...');
         }
         if (!pairingCompletionPromise) {
-          pairingCompletionPromise = completeSyncV2CompanionPairing(context.auth)
-            .finally(() => { pairingCompletionPromise = null; });
+          pairingCompletionPromise = completeSyncV2CompanionPairing(context.auth).finally(() => {
+            pairingCompletionPromise = null;
+          });
         }
         const linked = await pairingCompletionPromise;
         if (linked && active) {
@@ -118,7 +132,11 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       } catch (approvalError: any) {
         if (approvalError?.message?.includes('expired')) {
           pairingInitializationPromise = null;
-          if (active) { setContext(null); setIsRestoring(false); setStatus('Pairing expired. Sign in to start a new request.'); }
+          if (active) {
+            setContext(null);
+            setIsRestoring(false);
+            setStatus('Pairing expired. Sign in to start a new request.');
+          }
         } else if (active) {
           const linkedState = await diaryRepository.getLocalSyncAccountState().catch(() => null);
           if (linkedState) {
@@ -137,21 +155,31 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
     };
     void checkApproval();
     const timer = setInterval(() => void checkApproval(), APPROVAL_POLL_INTERVAL_MS);
-    return () => { active = false; clearInterval(timer); };
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
   }, [context, onLinked]);
 
-  const pairingPayload = useMemo(() => context ? JSON.stringify({
-    version: 2,
-    protocolVersion: 2,
-    sessionId: context.pairing.pairingId,
-    pairingCode: context.pairing.pairingCode,
-  }) : '', [context]);
+  const pairingPayload = useMemo(
+    () =>
+      context
+        ? JSON.stringify({
+            version: 2,
+            protocolVersion: 2,
+            sessionId: context.pairing.pairingId,
+            pairingCode: context.pairing.pairingCode,
+          })
+        : '',
+    [context],
+  );
 
   const beginSignIn = async () => {
     setIsStarting(true);
     setError('');
-    try { await startWebGoogleSyncSignIn(); }
-    catch (signInError: any) {
+    try {
+      await startWebGoogleSyncSignIn();
+    } catch (signInError: any) {
       setError(signInError?.message || 'Google sign-in could not start.');
       setIsStarting(false);
     }
@@ -172,7 +200,9 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           </div>
           <div>
             <h1 className="font-serif-diary text-3xl font-bold text-brand-plum">Dear Diary</h1>
-            <p className="mt-1 text-xs text-brand-text-muted">Link this browser as a trusted companion.</p>
+            <p className="mt-1 text-xs text-brand-text-muted">
+              Link this browser as a trusted companion.
+            </p>
           </div>
         </header>
 
@@ -184,7 +214,11 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
               disabled={isStarting}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-sage px-4 py-3 text-xs font-bold text-white disabled:opacity-50"
             >
-              {isStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
+              {isStarting ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <Cloud className="h-4 w-4" />
+              )}
               <span>{isStarting ? 'Opening Google...' : 'Continue with Google'}</span>
             </button>
           ) : isRestoring ? (
@@ -196,7 +230,9 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
             <div className="flex flex-col items-center gap-5 text-center">
               <div>
                 <p className="text-xs font-bold uppercase text-brand-sage">Pairing Code</p>
-                <p className="mt-2 font-mono text-4xl font-bold text-brand-plum">{context.pairing.pairingCode}</p>
+                <p className="mt-2 font-mono text-4xl font-bold text-brand-plum">
+                  {context.pairing.pairingCode}
+                </p>
               </div>
               <button
                 type="button"
@@ -212,13 +248,17 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
               </div>
             </div>
           )}
-          {!context && status && <p className="mt-3 text-center text-xs text-brand-text-muted">{status}</p>}
+          {!context && status && (
+            <p className="mt-3 text-center text-xs text-brand-text-muted">{status}</p>
+          )}
           {error && <p className="mt-3 text-center text-xs font-semibold text-red-600">{error}</p>}
         </section>
 
         <div className="flex items-start gap-2 text-xs leading-relaxed text-brand-text-muted">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand-sage" />
-          <p>Your primary mobile must approve this code before encrypted diary keys are released.</p>
+          <p>
+            Your primary mobile must approve this code before encrypted diary keys are released.
+          </p>
         </div>
       </div>
     </main>

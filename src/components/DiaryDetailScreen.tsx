@@ -1,10 +1,22 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { 
-  ArrowLeft, Edit, Download, Settings, ChevronLeft, ChevronRight, 
-  Plus, Calendar, X, Maximize2,
-  Search, List, Clock, HelpCircle,
-  MoreVertical, RefreshCw
+import {
+  ArrowLeft,
+  Edit,
+  Download,
+  Settings,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Calendar,
+  X,
+  Maximize2,
+  Search,
+  List,
+  Clock,
+  HelpCircle,
+  MoreVertical,
+  RefreshCw,
 } from 'lucide-react';
 import { Diary, Entry, PartitionHydrationState, ResponsiveLayout } from '../types';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
@@ -31,11 +43,13 @@ interface DiaryDetailScreenProps {
 }
 
 const sortDiaryEntries = (entries: Entry[]) =>
-  [...entries].sort((a, b) => `${b.date} ${b.time || ''}`.localeCompare(`${a.date} ${a.time || ''}`));
+  [...entries].sort((a, b) =>
+    `${b.date} ${b.time || ''}`.localeCompare(`${a.date} ${a.time || ''}`),
+  );
 
 const mergeDiaryEntries = (entries: Entry[]) => {
   const byId = new Map<string, Entry>();
-  entries.forEach(entry => byId.set(entry.id, entry));
+  entries.forEach((entry) => byId.set(entry.id, entry));
   return sortDiaryEntries([...byId.values()]);
 };
 
@@ -92,7 +106,7 @@ export default function DiaryDetailScreen({
       sort: 'date-desc',
     });
     let nextEntries = page.items as Entry[];
-    if (entryId && !nextEntries.some(entry => entry.id === entryId)) {
+    if (entryId && !nextEntries.some((entry) => entry.id === entryId)) {
       const deepLinkedEntry = await diaryRepository.getEntry(entryId);
       if (deepLinkedEntry?.diaryId === diary.id) {
         nextEntries = [deepLinkedEntry, ...nextEntries];
@@ -109,7 +123,7 @@ export default function DiaryDetailScreen({
       limit: 80,
       sort: 'date-asc',
     });
-    setCalendarEntryDates(new Set(page.items.map(entry => entry.date)));
+    setCalendarEntryDates(new Set(page.items.map((entry) => entry.date)));
   }, [diary.id, visibleYearMonth]);
 
   React.useEffect(() => {
@@ -118,7 +132,8 @@ export default function DiaryDetailScreen({
       if (
         !change ||
         change.type === 'remote-batch-applied' ||
-        (change.type.startsWith('entry-') && ('diaryId' in change ? change.diaryId === diary.id : true))
+        (change.type.startsWith('entry-') &&
+          ('diaryId' in change ? change.diaryId === diary.id : true))
       ) {
         void loadDiaryEntries();
       }
@@ -131,7 +146,8 @@ export default function DiaryDetailScreen({
       if (
         !change ||
         change.type === 'remote-batch-applied' ||
-        (change.type.startsWith('entry-') && ('diaryId' in change ? change.diaryId === diary.id : true))
+        (change.type.startsWith('entry-') &&
+          ('diaryId' in change ? change.diaryId === diary.id : true))
       ) {
         void loadVisibleCalendarMonth();
       }
@@ -144,11 +160,12 @@ export default function DiaryDetailScreen({
   const filteredEntries = useMemo(() => {
     if (!searchQuery.trim()) return diaryEntries;
     const query = searchQuery.toLowerCase();
-    return diaryEntries.filter(entry => 
-      entry.title.toLowerCase().includes(query) ||
-      richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
-      entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
-      entry.moodName.toLowerCase().includes(query)
+    return diaryEntries.filter(
+      (entry) =>
+        entry.title.toLowerCase().includes(query) ||
+        richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
+        entry.tags.some((tag) => tag.toLowerCase().includes(query)) ||
+        entry.moodName.toLowerCase().includes(query),
     );
   }, [diaryEntries, searchQuery]);
 
@@ -156,7 +173,7 @@ export default function DiaryDetailScreen({
   const activeEntry = useMemo(() => {
     if (filteredEntries.length === 0) return null;
     const currentRawEntry = diaryEntries[currentIndex];
-    if (currentRawEntry && filteredEntries.some(e => e.id === currentRawEntry.id)) {
+    if (currentRawEntry && filteredEntries.some((e) => e.id === currentRawEntry.id)) {
       return currentRawEntry;
     }
     return filteredEntries[0];
@@ -164,7 +181,7 @@ export default function DiaryDetailScreen({
 
   const activeEntryIndex = useMemo(() => {
     if (!activeEntry || filteredEntries.length === 0) return -1;
-    return filteredEntries.findIndex(e => e.id === activeEntry.id);
+    return filteredEntries.findIndex((e) => e.id === activeEntry.id);
   }, [filteredEntries, activeEntry]);
 
   React.useEffect(() => {
@@ -176,7 +193,7 @@ export default function DiaryDetailScreen({
     if (activeEntryIndex < filteredEntries.length - 1) {
       setSlideDirection('left');
       const nextEntry = filteredEntries[activeEntryIndex + 1];
-      const realIndex = diaryEntries.findIndex(e => e.id === nextEntry.id);
+      const realIndex = diaryEntries.findIndex((e) => e.id === nextEntry.id);
       setCurrentIndex(realIndex);
     }
   };
@@ -185,7 +202,7 @@ export default function DiaryDetailScreen({
     if (activeEntryIndex > 0) {
       setSlideDirection('right');
       const prevEntry = filteredEntries[activeEntryIndex - 1];
-      const realIndex = diaryEntries.findIndex(e => e.id === prevEntry.id);
+      const realIndex = diaryEntries.findIndex((e) => e.id === prevEntry.id);
       setCurrentIndex(realIndex);
     }
   };
@@ -207,16 +224,16 @@ export default function DiaryDetailScreen({
     const seenUris = new Set<string>();
 
     if (activeEntry.audioUri) {
-      uris.push({ uri: activeEntry.audioUri, title: "Primary Reflection" });
+      uris.push({ uri: activeEntry.audioUri, title: 'Primary Reflection' });
       seenUris.add(activeEntry.audioUri);
     }
-    
+
     if (activeEntry.blocks) {
       activeEntry.blocks.forEach((block, idx) => {
         if (block.audioUri && !seenUris.has(block.audioUri)) {
-          uris.push({ 
-            uri: block.audioUri, 
-            title: block.time ? `Moment from ${formatTime12(block.time)}` : `Moment ${idx + 1}`
+          uris.push({
+            uri: block.audioUri,
+            title: block.time ? `Moment from ${formatTime12(block.time)}` : `Moment ${idx + 1}`,
           });
           seenUris.add(block.audioUri);
         }
@@ -226,17 +243,29 @@ export default function DiaryDetailScreen({
   }, [activeEntry]);
 
   const MONTH_NAMES = [
-    "January", "February", "March", "April", "May", "June", 
-    "July", "August", "September", "October", "November", "December"
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
   ];
 
   const partitionKeyForDate = (dateStr: string) => `month:${dateStr.slice(0, 7)}`;
   const visibleCalendarPartitionKey = `month:${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
-  const visibleArchiveState = archiveMonths.find(month => month.partitionKey === visibleCalendarPartitionKey);
+  const visibleArchiveState = archiveMonths.find(
+    (month) => month.partitionKey === visibleCalendarPartitionKey,
+  );
   const visibleArchiveNeedsHydration = Boolean(
-    visibleArchiveState
-    && visibleArchiveState.status !== 'hydrated'
-    && visibleArchiveState.status !== 'not_available'
+    visibleArchiveState &&
+    visibleArchiveState.status !== 'hydrated' &&
+    visibleArchiveState.status !== 'not_available',
   );
   const visibleArchiveRetryStatus = formatArchiveRetryStatus(visibleArchiveState);
 
@@ -245,9 +274,9 @@ export default function DiaryDetailScreen({
     const firstDayOfMonth = new Date(calendarYear, calendarMonth, 1);
     const startDayOfWeek = firstDayOfMonth.getDay(); // 0 = Sunday, 1 = Monday, etc.
     const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
-    
+
     const days = [];
-    
+
     // Previous month's padding days
     const prevMonthYear = calendarMonth === 0 ? calendarYear - 1 : calendarYear;
     const prevMonth = calendarMonth === 0 ? 11 : calendarMonth - 1;
@@ -257,13 +286,13 @@ export default function DiaryDetailScreen({
       const dateStr = `${prevMonthYear}-${String(prevMonth + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
       days.push({ day: dayNum, dateStr, isCurrentMonth: false });
     }
-    
+
     // Current month days
     for (let i = 1; i <= daysInMonth; i++) {
       const dateStr = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
       days.push({ day: i, dateStr, isCurrentMonth: true });
     }
-    
+
     // Next month's padding days to complete grid
     const totalCells = Math.ceil(days.length / 7) * 7;
     const nextMonthYear = calendarMonth === 11 ? calendarYear + 1 : calendarYear;
@@ -273,18 +302,20 @@ export default function DiaryDetailScreen({
       const dateStr = `${nextMonthYear}-${String(nextMonth + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
       days.push({ day: i, dateStr, isCurrentMonth: false });
     }
-    
+
     return days;
   }, [calendarYear, calendarMonth]);
 
   const handleCalendarDayClick = async (dateStr: string) => {
     const clickedPartitionKey = partitionKeyForDate(dateStr);
-    const clickedArchiveState = archiveMonths.find(month => month.partitionKey === clickedPartitionKey);
+    const clickedArchiveState = archiveMonths.find(
+      (month) => month.partitionKey === clickedPartitionKey,
+    );
     if (
-      clickedArchiveState
-      && clickedArchiveState.status !== 'hydrated'
-      && clickedArchiveState.status !== 'not_available'
-      && onHydrateArchiveMonth
+      clickedArchiveState &&
+      clickedArchiveState.status !== 'hydrated' &&
+      clickedArchiveState.status !== 'not_available' &&
+      onHydrateArchiveMonth
     ) {
       setHydratingArchiveKey(clickedPartitionKey);
       setArchiveHydrationError('');
@@ -299,7 +330,7 @@ export default function DiaryDetailScreen({
     }
 
     // Check if there are entries on this date in this diary
-    let entryForDate = diaryEntries.find(e => e.date === dateStr);
+    let entryForDate = diaryEntries.find((e) => e.date === dateStr);
     let mergedEntriesForDate: Entry[] | null = null;
     if (!entryForDate && calendarEntryDates.has(dateStr)) {
       const monthEntries = await diaryRepository.listEntriesByMonth(diary.id, dateStr.slice(0, 7), {
@@ -308,7 +339,7 @@ export default function DiaryDetailScreen({
         sort: 'date-desc',
       });
       const loadedMonthEntries = monthEntries.items as Entry[];
-      entryForDate = loadedMonthEntries.find(e => e.date === dateStr);
+      entryForDate = loadedMonthEntries.find((e) => e.date === dateStr);
       if (entryForDate) {
         mergedEntriesForDate = mergeDiaryEntries([...diaryEntries, ...loadedMonthEntries]);
         setDiaryEntries(mergedEntriesForDate);
@@ -317,7 +348,7 @@ export default function DiaryDetailScreen({
     if (entryForDate) {
       // Navigate to it
       const sourceEntries = mergedEntriesForDate || diaryEntries;
-      const realIndex = sourceEntries.findIndex(e => e.id === entryForDate.id);
+      const realIndex = sourceEntries.findIndex((e) => e.id === entryForDate.id);
       setCurrentIndex(realIndex >= 0 ? realIndex : 0);
       setSearchQuery(''); // clear query to show it
       setShowCalendar(false);
@@ -329,40 +360,42 @@ export default function DiaryDetailScreen({
   };
 
   // 3D paper fold and curling variants (Point 4)
-  const entryTransitionVariants = prefersReducedMotion ? {
-    initial: { opacity: 0 },
-    animate: { opacity: 1, transition: { duration: 0.01 } },
-    exit: { opacity: 0, transition: { duration: 0.01 } },
-  } : {
-    initial: (dir: 'left' | 'right') => ({
-      rotateY: dir === 'left' ? 95 : -95,
-      skewY: dir === 'left' ? -7 : 7,
-      opacity: 0,
-      scale: 0.94,
-      transformOrigin: dir === 'left' ? 'right center' : 'left center',
-    }),
-    animate: {
-      rotateY: 0,
-      skewY: 0,
-      opacity: 1,
-      scale: 1,
-      transition: {
-        duration: 0.28,
-        ease: [0.2, 0, 0, 1]
+  const entryTransitionVariants = prefersReducedMotion
+    ? {
+        initial: { opacity: 0 },
+        animate: { opacity: 1, transition: { duration: 0.01 } },
+        exit: { opacity: 0, transition: { duration: 0.01 } },
       }
-    },
-    exit: (dir: 'left' | 'right') => ({
-      rotateY: dir === 'left' ? -95 : 95,
-      skewY: dir === 'left' ? 7 : -7,
-      opacity: 0,
-      scale: 0.94,
-      transformOrigin: dir === 'left' ? 'left center' : 'right center',
-      transition: {
-        duration: 0.24,
-        ease: [0.2, 0, 0, 1]
-      }
-    })
-  };
+    : {
+        initial: (dir: 'left' | 'right') => ({
+          rotateY: dir === 'left' ? 95 : -95,
+          skewY: dir === 'left' ? -7 : 7,
+          opacity: 0,
+          scale: 0.94,
+          transformOrigin: dir === 'left' ? 'right center' : 'left center',
+        }),
+        animate: {
+          rotateY: 0,
+          skewY: 0,
+          opacity: 1,
+          scale: 1,
+          transition: {
+            duration: 0.28,
+            ease: [0.2, 0, 0, 1],
+          },
+        },
+        exit: (dir: 'left' | 'right') => ({
+          rotateY: dir === 'left' ? -95 : 95,
+          skewY: dir === 'left' ? 7 : -7,
+          opacity: 0,
+          scale: 0.94,
+          transformOrigin: dir === 'left' ? 'left center' : 'right center',
+          transition: {
+            duration: 0.24,
+            ease: [0.2, 0, 0, 1],
+          },
+        }),
+      };
 
   if (layout === 'desktop') {
     return (
@@ -380,8 +413,12 @@ export default function DiaryDetailScreen({
             <div className="flex items-center gap-3">
               <JournalCover diary={diary} variant="thumbnail" showTitle={false} />
               <div className="min-w-0">
-                <h1 className="truncate font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{diary.name}</h1>
-                <p className="text-xs font-semibold text-brand-text-muted">{diaryEntries.length} entries</p>
+                <h1 className="truncate font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">
+                  {diary.name}
+                </h1>
+                <p className="text-xs font-semibold text-brand-text-muted">
+                  {diaryEntries.length} entries
+                </p>
               </div>
             </div>
             <div className="relative mt-5">
@@ -404,7 +441,9 @@ export default function DiaryDetailScreen({
                   key={entry.id}
                   type="button"
                   onClick={() => {
-                    const realIndex = diaryEntries.findIndex(candidate => candidate.id === entry.id);
+                    const realIndex = diaryEntries.findIndex(
+                      (candidate) => candidate.id === entry.id,
+                    );
                     setCurrentIndex(realIndex);
                   }}
                   className={`block w-full border-l-4 px-6 py-5 text-left transition-all ${
@@ -413,12 +452,25 @@ export default function DiaryDetailScreen({
                       : 'border-transparent hover:bg-brand-blush-light/45'
                   }`}
                 >
-                  <p className="text-sm font-bold text-brand-sage">{new Date(entry.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
-                  <h2 className="mt-2 font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">{entry.title || 'Untitled reflection'}</h2>
-                  <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">{richTextHtmlToPlainText(entry.body)}</p>
+                  <p className="text-sm font-bold text-brand-sage">
+                    {new Date(entry.date).toLocaleDateString('en-US', {
+                      month: 'long',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </p>
+                  <h2 className="mt-2 font-serif-diary text-xl font-bold text-brand-plum dark:text-brand-text">
+                    {entry.title || 'Untitled reflection'}
+                  </h2>
+                  <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-brand-text-muted">
+                    {richTextHtmlToPlainText(entry.body)}
+                  </p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
-                    {entry.tags.slice(0, 3).map(tag => (
-                      <span key={tag} className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-bold text-brand-sage-dark">
+                    {entry.tags.slice(0, 3).map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-bold text-brand-sage-dark"
+                      >
                         #{tag}
                       </span>
                     ))}
@@ -445,8 +497,12 @@ export default function DiaryDetailScreen({
           {diaryEntries.length === 0 ? (
             <section className="flex min-h-[560px] flex-col items-center justify-center rounded-2xl border border-brand-border bg-white/70 p-12 text-center shadow-sm dark:bg-brand-card-bg/70">
               <Calendar className="h-12 w-12 text-brand-sage" />
-              <h2 className="mt-6 font-serif-diary text-4xl font-bold text-brand-plum dark:text-brand-text">A Clean Canvas Awaits</h2>
-              <p className="mt-3 max-w-md text-sm leading-relaxed text-brand-text-muted">Every intimate story begins with a single silent word.</p>
+              <h2 className="mt-6 font-serif-diary text-4xl font-bold text-brand-plum dark:text-brand-text">
+                A Clean Canvas Awaits
+              </h2>
+              <p className="mt-3 max-w-md text-sm leading-relaxed text-brand-text-muted">
+                Every intimate story begins with a single silent word.
+              </p>
               <button
                 type="button"
                 data-testid="diary-new-entry-button"
@@ -460,8 +516,14 @@ export default function DiaryDetailScreen({
           ) : !activeEntry || filteredEntries.length === 0 ? (
             <section className="rounded-2xl border border-dashed border-brand-border bg-white/55 p-12 text-center">
               <Search className="mx-auto h-10 w-10 text-brand-sage" />
-              <h2 className="mt-4 font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">No pages found</h2>
-              <button type="button" onClick={() => setSearchQuery('')} className="mt-4 text-sm font-bold text-brand-pink">
+              <h2 className="mt-4 font-serif-diary text-3xl font-bold text-brand-plum dark:text-brand-text">
+                No pages found
+              </h2>
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="mt-4 text-sm font-bold text-brand-pink"
+              >
                 Clear search
               </button>
             </section>
@@ -471,11 +533,18 @@ export default function DiaryDetailScreen({
                 <div>
                   <p className="flex items-center gap-2 text-xs font-bold tracking-[0.08em] text-accent">
                     {diary.isLocked && <Lock className="h-4 w-4" />}
-                    {new Date(activeEntry.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                    {new Date(activeEntry.date).toLocaleDateString('en-US', {
+                      weekday: 'long',
+                      month: 'long',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
                     {activeEntry.time && ` - ${formatTime12(activeEntry.time)}`}
                   </p>
                   <h1 className="mt-4 font-serif-diary text-4xl font-semibold tracking-[-0.025em] text-ink xl:text-5xl">
-                    {activeEntry.title === 'Untitled entry' ? 'Untitled Reflection' : activeEntry.title}
+                    {activeEntry.title === 'Untitled entry'
+                      ? 'Untitled Reflection'
+                      : activeEntry.title}
                   </h1>
                 </div>
                 <button
@@ -490,15 +559,21 @@ export default function DiaryDetailScreen({
               </div>
 
               <div className="mt-10 max-w-3xl font-serif-diary text-xl leading-[1.85] text-ink xl:text-2xl">
-                {activeEntry.isTimelineBifurcated && activeEntry.blocks && activeEntry.blocks.length > 0 ? (
+                {activeEntry.isTimelineBifurcated &&
+                activeEntry.blocks &&
+                activeEntry.blocks.length > 0 ? (
                   <div className="space-y-8">
-                    {activeEntry.blocks.map(block => (
+                    {activeEntry.blocks.map((block) => (
                       <section key={block.id} className="border-l-2 border-brand-sage/25 pl-6">
                         <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-brand-sage-light px-3 py-1 text-xs font-bold uppercase tracking-widest text-brand-sage-dark">
                           <Clock className="h-3 w-3" />
                           {formatTime12(block.time)}
                         </p>
-                        <SanitizedRichText className="rich-text-editor-content" html={block.body} fallback={block.audioUri ? '' : 'No content written yet.'} />
+                        <SanitizedRichText
+                          className="rich-text-editor-content"
+                          html={block.body}
+                          fallback={block.audioUri ? '' : 'No content written yet.'}
+                        />
                         {block.audioUri && (
                           <div className="mt-4 max-w-md">
                             <AudioWaveformPlayer src={block.audioUri} title="Voice Moment" />
@@ -508,7 +583,11 @@ export default function DiaryDetailScreen({
                     ))}
                   </div>
                 ) : (
-                  <SanitizedRichText className="rich-text-editor-content" html={activeEntry.body} fallback={!allAudioUris.length ? 'No content written yet.' : ''} />
+                  <SanitizedRichText
+                    className="rich-text-editor-content"
+                    html={activeEntry.body}
+                    fallback={!allAudioUris.length ? 'No content written yet.' : ''}
+                  />
                 )}
               </div>
 
@@ -543,24 +622,37 @@ export default function DiaryDetailScreen({
           {activeEntry && (
             <>
               <section className="border-t border-[var(--border-subtle)] pt-5">
-                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Mood</h2>
+                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">
+                  Mood
+                </h2>
                 <div className="mt-4 flex items-center gap-3">
-                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-sage-light text-2xl">{activeEntry.moodEmoji}</span>
+                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-sage-light text-2xl">
+                    {activeEntry.moodEmoji}
+                  </span>
                   <div>
-                    <p className="font-bold text-brand-plum dark:text-brand-text">{activeEntry.moodName}</p>
+                    <p className="font-bold text-brand-plum dark:text-brand-text">
+                      {activeEntry.moodName}
+                    </p>
                     <p className="text-xs text-brand-text-muted">{activeEntry.wordCount} words</p>
                   </div>
                 </div>
               </section>
 
               <section className="border-t border-[var(--border-subtle)] pt-5">
-                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Tags</h2>
+                <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">
+                  Tags
+                </h2>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  {activeEntry.tags.length > 0 ? activeEntry.tags.map(tag => (
-                    <span key={tag} className="rounded-full bg-brand-sage-light px-3 py-1.5 text-sm font-bold text-brand-sage-dark">
-                      #{tag}
-                    </span>
-                  )) : (
+                  {activeEntry.tags.length > 0 ? (
+                    activeEntry.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-full bg-brand-sage-light px-3 py-1.5 text-sm font-bold text-brand-sage-dark"
+                      >
+                        #{tag}
+                      </span>
+                    ))
+                  ) : (
                     <p className="text-sm text-brand-text-muted">No tags yet.</p>
                   )}
                 </div>
@@ -568,11 +660,17 @@ export default function DiaryDetailScreen({
 
               {allAudioUris.length > 0 && (
                 <section className="border-t border-[var(--border-subtle)] pt-5">
-                  <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Voice Notes</h2>
+                  <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">
+                    Voice Notes
+                  </h2>
                   <div className="mt-4 space-y-3">
                     {allAudioUris.map((audio, index) => (
                       <div key={`${audio.uri}-${index}`}>
-                        <AudioWaveformPlayer src={audio.uri} title={audio.title} variant="minimal" />
+                        <AudioWaveformPlayer
+                          src={audio.uri}
+                          title={audio.title}
+                          variant="minimal"
+                        />
                       </div>
                     ))}
                   </div>
@@ -581,27 +679,35 @@ export default function DiaryDetailScreen({
 
               <section className="border-t border-[var(--border-subtle)] pt-5">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">Scrapbook</h2>
-                  <span className="text-xs font-bold text-brand-text-muted">{activeEntry.photoUris?.length || 0}</span>
+                  <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">
+                    Scrapbook
+                  </h2>
+                  <span className="text-xs font-bold text-brand-text-muted">
+                    {activeEntry.photoUris?.length || 0}
+                  </span>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3">
-                  {activeEntry.photoUris && activeEntry.photoUris.length > 0 ? activeEntry.photoUris.slice(0, 6).map((src, index) => (
-                    <button
-                      key={`${src}-${index}`}
-                      type="button"
-                      onClick={() => setLightboxImg(src)}
-                      className="aspect-square overflow-hidden rounded-xl border border-brand-border bg-brand-bg"
-                    >
-                      <SyncedImage
-                        src={src}
-                        alt={`Memory ${index + 1}`}
-                        className="h-full w-full object-cover transition-transform duration-500 hover:scale-105"
-                        fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
-                        label="entry photo"
-                      />
-                    </button>
-                  )) : (
-                    <p className="col-span-2 rounded-xl border border-dashed border-brand-border p-5 text-center text-sm text-brand-text-muted">No photos attached.</p>
+                  {activeEntry.photoUris && activeEntry.photoUris.length > 0 ? (
+                    activeEntry.photoUris.slice(0, 6).map((src, index) => (
+                      <button
+                        key={`${src}-${index}`}
+                        type="button"
+                        onClick={() => setLightboxImg(src)}
+                        className="aspect-square overflow-hidden rounded-xl border border-brand-border bg-brand-bg"
+                      >
+                        <SyncedImage
+                          src={src}
+                          alt={`Memory ${index + 1}`}
+                          className="h-full w-full object-cover transition-transform duration-500 hover:scale-105"
+                          fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                          label="entry photo"
+                        />
+                      </button>
+                    ))
+                  ) : (
+                    <p className="col-span-2 rounded-xl border border-dashed border-brand-border p-5 text-center text-sm text-brand-text-muted">
+                      No photos attached.
+                    </p>
                   )}
                 </div>
               </section>
@@ -652,22 +758,23 @@ export default function DiaryDetailScreen({
 
   return (
     <div className="relative flex flex-col gap-6 font-sans select-none">
-      
       {/* Top Bar Navigation */}
       <header className="surface-glass-strong sticky top-0 z-30 -mx-1 flex items-center justify-between rounded-[var(--radius-modal)] px-1.5 py-2 select-none">
         <div className="flex items-center gap-2">
-          <button 
+          <button
             onClick={onBack}
             aria-label="Back to journals"
             className="p-2 text-brand-plum hover:bg-brand-blush-light rounded-full transition-all active:scale-95"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="max-w-[170px] truncate font-serif-diary text-lg font-semibold text-ink">{diary.name}</h1>
+          <h1 className="max-w-[170px] truncate font-serif-diary text-lg font-semibold text-ink">
+            {diary.name}
+          </h1>
         </div>
-        
+
         <div className="flex items-center gap-1.5 relative">
-          <button 
+          <button
             type="button"
             data-testid="diary-new-entry-button"
             onClick={() => onNewEntry(diary.id)}
@@ -692,7 +799,20 @@ export default function DiaryDetailScreen({
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowMoreMenu(false)} />
               <div className="surface-glass-strong absolute right-0 top-12 z-50 mt-2 flex w-56 flex-col gap-1 rounded-[var(--radius-modal)] p-2.5">
-                {activeEntry && <button type="button" data-testid="entry-edit-button" onClick={() => { setShowMoreMenu(false); onEditEntry(activeEntry.id); }} className="flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-left text-xs font-bold text-ink hover:bg-surface-subtle"><Edit className="h-4 w-4 text-[var(--accent-secondary)]" />Edit this entry</button>}
+                {activeEntry && (
+                  <button
+                    type="button"
+                    data-testid="entry-edit-button"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      onEditEntry(activeEntry.id);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-left text-xs font-bold text-ink hover:bg-surface-subtle"
+                  >
+                    <Edit className="h-4 w-4 text-[var(--accent-secondary)]" />
+                    Edit this entry
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -723,7 +843,7 @@ export default function DiaryDetailScreen({
               className="w-full bg-transparent pl-9 pr-4 py-2 text-sm text-brand-plum placeholder-brand-sage/60 focus:outline-none focus:border-brand-pink"
             />
             {searchQuery && (
-              <button 
+              <button
                 onClick={() => setSearchQuery('')}
                 className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 hover:bg-brand-blush-light rounded-full"
               >
@@ -731,13 +851,13 @@ export default function DiaryDetailScreen({
               </button>
             )}
           </div>
-          
+
           {/* Calendar Picker Button */}
           <button
             onClick={() => setShowCalendar(!showCalendar)}
             className={`p-2.5 rounded-xl transition-all border ${
-              showCalendar 
-                ? 'bg-brand-pink/10 border-brand-pink text-brand-pink shadow-md' 
+              showCalendar
+                ? 'bg-brand-pink/10 border-brand-pink text-brand-pink shadow-md'
                 : 'bg-white border-brand-border text-brand-sage hover:bg-brand-blush-light'
             }`}
             title="Calendar Day Picker"
@@ -749,8 +869,8 @@ export default function DiaryDetailScreen({
             <button
               onClick={() => setShowTOC(!showTOC)}
               className={`p-2.5 rounded-xl transition-all border ${
-                showTOC 
-                  ? 'bg-brand-pink/10 border-brand-pink text-brand-pink shadow-md' 
+                showTOC
+                  ? 'bg-brand-pink/10 border-brand-pink text-brand-pink shadow-md'
                   : 'bg-white border-brand-border text-brand-sage hover:bg-brand-blush-light'
               }`}
               title="Table of Contents Drawer"
@@ -775,27 +895,27 @@ export default function DiaryDetailScreen({
                   onClick={() => {
                     if (calendarMonth === 0) {
                       setCalendarMonth(11);
-                      setCalendarYear(prev => prev - 1);
+                      setCalendarYear((prev) => prev - 1);
                     } else {
-                      setCalendarMonth(prev => prev - 1);
+                      setCalendarMonth((prev) => prev - 1);
                     }
                   }}
                   className="p-1.5 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-lg text-brand-pink transition-all"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
-                
+
                 <span className="font-serif-diary font-bold text-brand-plum text-sm">
                   {MONTH_NAMES[calendarMonth]} {calendarYear}
                 </span>
-                
+
                 <button
                   onClick={() => {
                     if (calendarMonth === 11) {
                       setCalendarMonth(0);
-                      setCalendarYear(prev => prev + 1);
+                      setCalendarYear((prev) => prev + 1);
                     } else {
-                      setCalendarMonth(prev => prev + 1);
+                      setCalendarMonth((prev) => prev + 1);
                     }
                   }}
                   className="p-1.5 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-lg text-brand-pink transition-all"
@@ -816,7 +936,8 @@ export default function DiaryDetailScreen({
                       </p>
                       <p className="mt-1 text-xs font-medium leading-relaxed text-brand-text-muted">
                         {visibleArchiveState?.status === 'failed'
-                          ? (visibleArchiveState.error || 'This encrypted archive month could not be restored last time.')
+                          ? visibleArchiveState.error ||
+                            'This encrypted archive month could not be restored last time.'
                           : 'This month exists in your encrypted archive. Restore it before opening or creating entries here.'}
                       </p>
                       {visibleArchiveRetryStatus && (
@@ -825,7 +946,9 @@ export default function DiaryDetailScreen({
                         </p>
                       )}
                       {archiveHydrationError && (
-                        <p className="mt-1 text-xs font-bold text-red-500">{archiveHydrationError}</p>
+                        <p className="mt-1 text-xs font-bold text-red-500">
+                          {archiveHydrationError}
+                        </p>
                       )}
                     </div>
                   </div>
@@ -839,7 +962,9 @@ export default function DiaryDetailScreen({
                       try {
                         await onHydrateArchiveMonth(visibleCalendarPartitionKey);
                       } catch (error: any) {
-                        setArchiveHydrationError(error?.message || 'Could not restore this archive month.');
+                        setArchiveHydrationError(
+                          error?.message || 'Could not restore this archive month.',
+                        );
                       } finally {
                         setHydratingArchiveKey(null);
                       }
@@ -853,11 +978,13 @@ export default function DiaryDetailScreen({
                     )}
                     {hydratingArchiveKey === visibleCalendarPartitionKey
                       ? 'Restoring'
-                      : visibleArchiveState?.status === 'failed' ? 'Retry restore' : 'Restore month'}
+                      : visibleArchiveState?.status === 'failed'
+                        ? 'Retry restore'
+                        : 'Restore month'}
                   </button>
                 </div>
               )}
-              
+
               {/* Weekdays */}
               <div className="grid grid-cols-7 text-center text-xs font-bold text-brand-sage uppercase tracking-wider">
                 <span>Su</span>
@@ -868,19 +995,21 @@ export default function DiaryDetailScreen({
                 <span>Fr</span>
                 <span>Sa</span>
               </div>
-              
+
               {/* Days Grid */}
               <div className="grid grid-cols-7 gap-1.5">
                 {calendarDays.map((cell, idx) => {
-                  const hasEntry = calendarEntryDates.has(cell.dateStr) || diaryEntries.some(e => e.date === cell.dateStr);
+                  const hasEntry =
+                    calendarEntryDates.has(cell.dateStr) ||
+                    diaryEntries.some((e) => e.date === cell.dateStr);
                   const isActive = activeEntry && activeEntry.date === cell.dateStr;
-                  
+
                   return (
                     <button
                       key={idx}
                       onClick={() => handleCalendarDayClick(cell.dateStr)}
                       className={`relative h-11 rounded-xl flex flex-col items-center justify-center text-xs font-bold transition-all ${
-                        cell.isCurrentMonth 
+                        cell.isCurrentMonth
                           ? isActive
                             ? 'bg-brand-pink text-white scale-105 shadow-md shadow-brand-pink/15'
                             : 'text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
@@ -889,7 +1018,9 @@ export default function DiaryDetailScreen({
                     >
                       <span>{cell.day}</span>
                       {hasEntry && (
-                        <span className={`absolute bottom-1 w-1.5 h-1.5 rounded-full ${isActive ? 'bg-white' : 'bg-brand-pink'}`} />
+                        <span
+                          className={`absolute bottom-1 w-1.5 h-1.5 rounded-full ${isActive ? 'bg-white' : 'bg-brand-pink'}`}
+                        />
                       )}
                     </button>
                   );
@@ -908,9 +1039,12 @@ export default function DiaryDetailScreen({
             <Calendar className="w-8 h-8" />
           </div>
           <div className="space-y-2">
-            <h3 className="font-serif-diary text-2xl font-bold text-brand-plum italic">A Clean Canvas Awaits</h3>
+            <h3 className="font-serif-diary text-2xl font-bold text-brand-plum italic">
+              A Clean Canvas Awaits
+            </h3>
             <p className="text-xs text-brand-text-muted mt-1.5 max-w-xs leading-relaxed font-medium">
-              Every intimate story begins with a single silent word. Spill your secrets, lock your dreams, or document your travel reflections in absolute privacy.
+              Every intimate story begins with a single silent word. Spill your secrets, lock your
+              dreams, or document your travel reflections in absolute privacy.
             </p>
           </div>
           <motion.button
@@ -930,7 +1064,8 @@ export default function DiaryDetailScreen({
           <HelpCircle className="w-10 h-10 text-brand-sage animate-bounce" />
           <h3 className="font-serif-diary text-lg font-bold text-brand-plum">No pages found</h3>
           <p className="text-xs text-brand-text-muted max-w-xs">
-            We couldn't find any entries matching "{searchQuery}" in this journal. Re-verify spelling or clear filters.
+            We couldn't find any entries matching "{searchQuery}" in this journal. Re-verify
+            spelling or clear filters.
           </p>
           <button
             onClick={() => setSearchQuery('')}
@@ -942,45 +1077,45 @@ export default function DiaryDetailScreen({
       ) : (
         /* LOADED ENTRIES PAGE VIEW */
         <div className="flex flex-col gap-6 pb-16">
-          
           {/* Header Pagination & Nav Buttons */}
           <div className="flex flex-col items-center gap-2 border-y border-[var(--border-subtle)] py-3">
             <span className="text-xs font-bold text-[var(--accent-secondary)] tracking-[0.12em]">
-              Page {activeEntryIndex + 1} of {filteredEntries.length} {searchQuery ? '(Filtered)' : ''}
+              Page {activeEntryIndex + 1} of {filteredEntries.length}{' '}
+              {searchQuery ? '(Filtered)' : ''}
             </span>
-            
+
             <div className="flex items-center justify-between w-full max-w-[280px]">
-              <button 
+              <button
                 onClick={handlePrev}
                 aria-label="Older Entry"
                 disabled={activeEntryIndex === filteredEntries.length - 1}
                 className={`p-2 rounded-xl transition-all ${
-                  activeEntryIndex === filteredEntries.length - 1 
-                    ? 'text-brand-plum/15 cursor-not-allowed' 
+                  activeEntryIndex === filteredEntries.length - 1
+                    ? 'text-brand-plum/15 cursor-not-allowed'
                     : 'text-brand-pink hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
                 }`}
               >
                 <ChevronLeft className="w-5 h-5" />
               </button>
-              
+
               <h2 className="font-serif-diary text-xl font-bold text-brand-plum text-center truncate px-2 italic">
                 {activeEntry.date}
               </h2>
-              
-              <button 
+
+              <button
                 onClick={handleNext}
                 aria-label="Newer Entry"
                 disabled={activeEntryIndex === 0}
                 className={`p-2 rounded-xl transition-all ${
-                  activeEntryIndex === 0 
-                    ? 'text-brand-plum/15 cursor-not-allowed' 
+                  activeEntryIndex === 0
+                    ? 'text-brand-plum/15 cursor-not-allowed'
                     : 'text-brand-pink hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
                 }`}
               >
                 <ChevronRight className="w-5 h-5" />
               </button>
             </div>
-            
+
             {/* A bounded position indicator avoids one tiny control for every entry. */}
             <div className="hidden">
               {filteredEntries.map((_, idx) => (
@@ -988,12 +1123,14 @@ export default function DiaryDetailScreen({
                   key={idx}
                   onClick={() => {
                     setSlideDirection(idx > activeEntryIndex ? 'left' : 'right');
-                    const realIndex = diaryEntries.findIndex(e => e.id === filteredEntries[idx].id);
+                    const realIndex = diaryEntries.findIndex(
+                      (e) => e.id === filteredEntries[idx].id,
+                    );
                     setCurrentIndex(realIndex);
                   }}
                   className={`h-1.5 rounded-full transition-all ${
-                    idx === activeEntryIndex 
-                      ? 'w-5 bg-brand-pink' 
+                    idx === activeEntryIndex
+                      ? 'w-5 bg-brand-pink'
                       : 'w-1.5 bg-brand-pink/20 hover:bg-brand-pink/40'
                   }`}
                 />
@@ -1011,23 +1148,25 @@ export default function DiaryDetailScreen({
               </span>
 
               {/* Tag Badges */}
-              {activeEntry.tags && activeEntry.tags.map(tag => (
-                <span 
-                  key={tag}
-                  className="inline-flex items-center rounded-full bg-accent-soft px-3 py-1.5 text-xs font-bold text-accent-strong"
-                >
-                  #{tag}
-                </span>
-              ))}
+              {activeEntry.tags &&
+                activeEntry.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center rounded-full bg-accent-soft px-3 py-1.5 text-xs font-bold text-accent-strong"
+                  >
+                    #{tag}
+                  </span>
+                ))}
             </div>
 
             <p className="text-xs font-bold text-brand-text-muted">
-              {activeEntry.isTimelineBifurcated ? 'Timeline entry' : 'Journal entry'} · Change structure in Edit Entry
+              {activeEntry.isTimelineBifurcated ? 'Timeline entry' : 'Journal entry'} · Change
+              structure in Edit Entry
             </p>
           </div>
 
           {/* Page body with swipe gestures and realistic 3D folding curves */}
-          <div 
+          <div
             className="surface-paper relative min-h-[360px] overflow-hidden p-5 sm:p-8"
             style={{ perspective: '2000px' }}
           >
@@ -1035,7 +1174,7 @@ export default function DiaryDetailScreen({
             <div className="absolute inset-y-0 left-0 w-full pointer-events-none journal-crease z-10" />
 
             <AnimatePresence custom={slideDirection} mode="wait">
-              <motion.article 
+              <motion.article
                 key={activeEntry.id}
                 custom={slideDirection}
                 variants={entryTransitionVariants}
@@ -1044,7 +1183,9 @@ export default function DiaryDetailScreen({
                 exit="exit"
                 style={{ transformStyle: 'preserve-3d', backfaceVisibility: 'hidden' }}
                 className={`relative font-serif-diary text-lg md:text-xl text-ink leading-[1.8] border-l border-[var(--border-subtle)] pl-5 py-1 select-text rich-text-editor ${
-                  activeEntry.isTimelineBifurcated ? '' : 'first-letter:text-5xl first-letter:font-serif first-letter:text-brand-pink first-letter:float-left first-letter:mr-3 first-letter:leading-none first-letter:font-bold first-letter:mt-1'
+                  activeEntry.isTimelineBifurcated
+                    ? ''
+                    : 'first-letter:text-5xl first-letter:font-serif first-letter:text-brand-pink first-letter:float-left first-letter:mr-3 first-letter:leading-none first-letter:font-bold first-letter:mt-1'
                 }`}
               >
                 {/* Visual paper edge guide line inside the margin */}
@@ -1054,20 +1195,25 @@ export default function DiaryDetailScreen({
                   {activeEntry.title === 'Untitled entry' ? '' : activeEntry.title}
                 </h3>
 
-                {activeEntry.isTimelineBifurcated && activeEntry.blocks && activeEntry.blocks.length > 0 ? (
+                {activeEntry.isTimelineBifurcated &&
+                activeEntry.blocks &&
+                activeEntry.blocks.length > 0 ? (
                   <div className="flex flex-col gap-4 mt-2 select-text">
                     {activeEntry.blocks.map((block) => (
-                      <div key={block.id} className="relative pl-5 border-l border-brand-pink/20 flex flex-col gap-1 text-left">
+                      <div
+                        key={block.id}
+                        className="relative pl-5 border-l border-brand-pink/20 flex flex-col gap-1 text-left"
+                      >
                         {/* Aesthetic Local Badge for Time */}
                         <div className="absolute -left-[4.5px] top-2.5 w-2 h-2 rounded-full bg-brand-pink" />
-                        
+
                         <div className="flex items-center gap-1.5 select-none">
                           <span className="font-mono text-xs font-extrabold text-brand-pink uppercase tracking-widest bg-brand-pink/5 px-2.5 py-0.5 rounded-full border border-brand-pink/10 shadow-sm flex items-center gap-1">
                             <Clock className="w-2.5 h-2.5" />
                             {formatTime12(block.time)}
                           </span>
                         </div>
-                        
+
                         <SanitizedRichText
                           className="rich-text-editor-content text-base md:text-lg text-brand-plum/90 font-serif-diary select-text"
                           html={block.body}
@@ -1089,7 +1235,7 @@ export default function DiaryDetailScreen({
                       html={activeEntry.body}
                       fallback={!allAudioUris.length ? 'No content written yet.' : ''}
                     />
-                    
+
                     {allAudioUris.length > 0 && (
                       <div className="mt-6 pt-6 border-t border-brand-border/10 flex flex-col gap-4">
                         <div className="flex items-center gap-2">
@@ -1122,10 +1268,10 @@ export default function DiaryDetailScreen({
                   Scrapbook Memories ({activeEntry.photoUris.length})
                 </h3>
               </div>
-              
+
               <div className="flex overflow-x-auto gap-4.5 no-scrollbar -mx-4 px-4 pb-3 select-none">
                 {activeEntry.photoUris.map((imgSrc, idx) => (
-                  <motion.div 
+                  <motion.div
                     key={idx}
                     whileHover={{ scale: 1.02, y: -2 }}
                     className="w-44 h-56 flex-none rounded-2xl overflow-hidden shadow-md border border-brand-border/60 bg-brand-blush-light/10 relative group cursor-zoom-in"
@@ -1162,10 +1308,34 @@ export default function DiaryDetailScreen({
             </motion.button>
           </div>
 
-          <nav aria-label="Entry navigation" className="surface-glass-strong sticky bottom-3 z-30 mx-auto grid w-full max-w-sm grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-[var(--radius-modal)] p-2">
-            <button type="button" onClick={handlePrev} disabled={activeEntryIndex === filteredEntries.length - 1} className="min-h-11 rounded-xl text-sm font-bold text-brand-sage disabled:opacity-35">Older</button>
-            <button type="button" onClick={() => setShowTOC(true)} className="min-h-11 rounded-xl border border-brand-border px-3 text-sm font-bold text-brand-plum dark:text-brand-text" aria-label={`Open entry navigator, entry ${activeEntryIndex + 1} of ${filteredEntries.length}`}>{activeEntryIndex + 1} of {filteredEntries.length}</button>
-            <button type="button" onClick={handleNext} disabled={activeEntryIndex === 0} className="min-h-11 rounded-xl text-sm font-bold text-brand-sage disabled:opacity-35">Newer</button>
+          <nav
+            aria-label="Entry navigation"
+            className="surface-glass-strong sticky bottom-3 z-30 mx-auto grid w-full max-w-sm grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-[var(--radius-modal)] p-2"
+          >
+            <button
+              type="button"
+              onClick={handlePrev}
+              disabled={activeEntryIndex === filteredEntries.length - 1}
+              className="min-h-11 rounded-xl text-sm font-bold text-brand-sage disabled:opacity-35"
+            >
+              Older
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowTOC(true)}
+              className="min-h-11 rounded-xl border border-brand-border px-3 text-sm font-bold text-brand-plum dark:text-brand-text"
+              aria-label={`Open entry navigator, entry ${activeEntryIndex + 1} of ${filteredEntries.length}`}
+            >
+              {activeEntryIndex + 1} of {filteredEntries.length}
+            </button>
+            <button
+              type="button"
+              onClick={handleNext}
+              disabled={activeEntryIndex === 0}
+              className="min-h-11 rounded-xl text-sm font-bold text-brand-sage disabled:opacity-35"
+            >
+              Newer
+            </button>
           </nav>
         </div>
       )}
@@ -1174,73 +1344,81 @@ export default function DiaryDetailScreen({
       <AnimatePresence>
         {showTOC && (
           <OverlayPortal>
-            <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-3 backdrop-blur-sm md:justify-end md:p-0" onClick={() => setShowTOC(false)}>
-            <motion.div 
-              initial={{ y: 48, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 48, opacity: 0 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="mobile-overlay-safe flex h-[85dvh] w-full max-w-xl flex-col gap-4 overflow-y-auto rounded-t-3xl bg-brand-bg p-6 shadow-2xl dark:bg-brand-card-bg md:h-full md:max-w-sm md:rounded-none"
-              onClick={(e) => e.stopPropagation()}
+            <div
+              className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-3 backdrop-blur-sm md:justify-end md:p-0"
+              onClick={() => setShowTOC(false)}
             >
-              <div className="flex justify-between items-center border-b border-brand-border pb-3">
-                <div className="flex items-center gap-2">
-                  <List className="w-5 h-5 text-brand-pink" />
-                  <h3 className="font-serif-diary text-lg font-bold text-brand-plum">Entry navigator</h3>
+              <motion.div
+                initial={{ y: 48, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 48, opacity: 0 }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className="mobile-overlay-safe flex h-[85dvh] w-full max-w-xl flex-col gap-4 overflow-y-auto rounded-t-3xl bg-brand-bg p-6 shadow-2xl dark:bg-brand-card-bg md:h-full md:max-w-sm md:rounded-none"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex justify-between items-center border-b border-brand-border pb-3">
+                  <div className="flex items-center gap-2">
+                    <List className="w-5 h-5 text-brand-pink" />
+                    <h3 className="font-serif-diary text-lg font-bold text-brand-plum">
+                      Entry navigator
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => setShowTOC(false)}
+                    className="p-1.5 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-full text-brand-sage"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
                 </div>
-                <button 
-                  onClick={() => setShowTOC(false)}
-                  className="p-1.5 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-full text-brand-sage"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
 
-              {/* Drawer Outline Search field */}
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-brand-sage" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search entries..."
-                  className="w-full bg-white dark:bg-brand-bg/50 border border-brand-border/60 pl-8 pr-4 py-2 rounded-xl text-xs text-brand-plum"
-                />
-              </div>
+                {/* Drawer Outline Search field */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-brand-sage" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search entries..."
+                    className="w-full bg-white dark:bg-brand-bg/50 border border-brand-border/60 pl-8 pr-4 py-2 rounded-xl text-xs text-brand-plum"
+                  />
+                </div>
 
-              {/* Table of Contents List */}
-              <div className="flex flex-col gap-2.5 flex-1 overflow-y-auto pr-1">
-                {filteredEntries.map((entry, idx) => {
-                  const isSelected = idx === activeEntryIndex;
-                  return (
-                    <button
-                      key={entry.id}
-                      onClick={() => {
-                        const realIndex = diaryEntries.findIndex(e => e.id === entry.id);
-                        setCurrentIndex(realIndex);
-                        setShowTOC(false);
-                      }}
-                      className={`w-full text-left p-3.5 rounded-2xl border transition-all flex flex-col gap-1.5 ${
-                        isSelected
-                          ? 'bg-brand-pink/10 border-brand-pink/40 text-brand-plum'
-                          : 'bg-white dark:bg-brand-card-bg border-brand-border hover:bg-brand-blush-light/20'
-                      }`}
-                    >
-                      <div className="flex justify-between items-center w-full">
-                        <span className="text-xs font-extrabold text-brand-pink uppercase tracking-widest">{entry.date}</span>
-                        <span className="text-xs">{entry.moodEmoji}</span>
-                      </div>
-                      <h4 className="font-serif-diary font-bold text-sm text-brand-plum line-clamp-1 leading-snug">
-                        {entry.title || 'Untitled reflection'}
-                      </h4>
-                      <p className="text-xs text-brand-sage truncate leading-none">
-                        {entry.tags.map(t => `#${t}`).join(' ') || 'No tags'} • {entry.wordCount} words
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            </motion.div>
+                {/* Table of Contents List */}
+                <div className="flex flex-col gap-2.5 flex-1 overflow-y-auto pr-1">
+                  {filteredEntries.map((entry, idx) => {
+                    const isSelected = idx === activeEntryIndex;
+                    return (
+                      <button
+                        key={entry.id}
+                        onClick={() => {
+                          const realIndex = diaryEntries.findIndex((e) => e.id === entry.id);
+                          setCurrentIndex(realIndex);
+                          setShowTOC(false);
+                        }}
+                        className={`w-full text-left p-3.5 rounded-2xl border transition-all flex flex-col gap-1.5 ${
+                          isSelected
+                            ? 'bg-brand-pink/10 border-brand-pink/40 text-brand-plum'
+                            : 'bg-white dark:bg-brand-card-bg border-brand-border hover:bg-brand-blush-light/20'
+                        }`}
+                      >
+                        <div className="flex justify-between items-center w-full">
+                          <span className="text-xs font-extrabold text-brand-pink uppercase tracking-widest">
+                            {entry.date}
+                          </span>
+                          <span className="text-xs">{entry.moodEmoji}</span>
+                        </div>
+                        <h4 className="font-serif-diary font-bold text-sm text-brand-plum line-clamp-1 leading-snug">
+                          {entry.title || 'Untitled reflection'}
+                        </h4>
+                        <p className="text-xs text-brand-sage truncate leading-none">
+                          {entry.tags.map((t) => `#${t}`).join(' ') || 'No tags'} •{' '}
+                          {entry.wordCount} words
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </motion.div>
             </div>
           </OverlayPortal>
         )}
@@ -1250,37 +1428,37 @@ export default function DiaryDetailScreen({
       <AnimatePresence>
         {lightboxImg && (
           <OverlayPortal>
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setLightboxImg(null)}
               className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/95 backdrop-blur-lg"
             >
-            {/* Close Button */}
-            <button 
-              onClick={() => setLightboxImg(null)}
-              className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all"
-            >
-              <X className="w-6 h-6" />
-            </button>
+              {/* Close Button */}
+              <button
+                onClick={() => setLightboxImg(null)}
+                className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all"
+              >
+                <X className="w-6 h-6" />
+              </button>
 
-            <motion.div 
-              initial={{ scale: 0.95 }}
-              animate={{ scale: 1 }}
-              exit={{ scale: 0.95 }}
-              className="max-w-3xl max-h-[85vh] rounded-2xl overflow-hidden shadow-2xl relative"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <SyncedImage
-                src={lightboxImg} 
-                alt="Enlarged memory" 
-                className="max-w-full max-h-[80vh] object-contain rounded-2xl"
-                referrerPolicy="no-referrer"
-                fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=1200"
-                label="entry photo"
-              />
-            </motion.div>
+              <motion.div
+                initial={{ scale: 0.95 }}
+                animate={{ scale: 1 }}
+                exit={{ scale: 0.95 }}
+                className="max-w-3xl max-h-[85vh] rounded-2xl overflow-hidden shadow-2xl relative"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <SyncedImage
+                  src={lightboxImg}
+                  alt="Enlarged memory"
+                  className="max-w-full max-h-[80vh] object-contain rounded-2xl"
+                  referrerPolicy="no-referrer"
+                  fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=1200"
+                  label="entry photo"
+                />
+              </motion.div>
             </motion.div>
           </OverlayPortal>
         )}

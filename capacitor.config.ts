@@ -1,6 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
-const webViewDebug = process.env.CAPACITOR_WEBVIEW_DEBUG === 'true' || process.env.CAPACITOR_DEBUG === 'true';
+const webViewDebug =
+  process.env.CAPACITOR_WEBVIEW_DEBUG === 'true' || process.env.CAPACITOR_DEBUG === 'true';
 const bridgeLogging = process.env.CAPACITOR_BRIDGE_LOGGING === 'true';
 const isReleaseBuild = process.env.DEAR_DIARY_RELEASE_BUILD === 'true';
 

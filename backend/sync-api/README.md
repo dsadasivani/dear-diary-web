@@ -17,11 +17,23 @@ npm run backend:bootRun
 Runtime database configuration is supplied through `SYNC_DB_URL`, `SYNC_DB_USERNAME`, and `SYNC_DB_PASSWORD`.
 No production credentials are committed or required for unit tests.
 
+## Container
+
+Build the same Java 21 image used by the hosted service from this directory:
+
+```text
+docker build -t dear-diary-sync-api .
+```
+
+The container listens on `PORT` (default `8080`), runs as a non-root user, and exposes
+`/actuator/health` for startup and liveness checks. Supply database, JWT, object-store,
+and CORS settings at runtime; never add credentials to the image.
+
 The API exposes `/actuator/health` without authentication. All `/api/v2/**` routes fail closed unless
 `SYNC_JWT_ENABLED=true` and a valid Supabase issuer/JWKS configuration is supplied. Only tokens with a
 non-empty subject and the `authenticated` role are accepted; anonymous and service-role tokens are rejected.
 
-Flyway owns the PostgreSQL schema through 25 ordered migrations in `src/main/resources/db/migration`.
+Flyway owns the PostgreSQL schema through 26 ordered migrations in `src/main/resources/db/migration`.
 The migration integration test uses PostgreSQL 16 through Testcontainers and skips only when Docker is unavailable.
 
 The authenticated Sync V2 API provides device registration and protocol negotiation, operation initiation,

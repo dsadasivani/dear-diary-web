@@ -4,16 +4,27 @@ const dashboards = ['release-health', 'sync-health', 'integrity-health', 'depend
 for (const name of dashboards) {
   const path = `ops/grafana/dashboards/${name}.json`;
   const dashboard = JSON.parse(await readFile(path, 'utf8'));
-  if (!dashboard.uid || !dashboard.title || !Array.isArray(dashboard.panels) || dashboard.panels.length === 0) {
+  if (
+    !dashboard.uid ||
+    !dashboard.title ||
+    !Array.isArray(dashboard.panels) ||
+    dashboard.panels.length === 0
+  ) {
     throw new Error(`Invalid Grafana dashboard: ${path}`);
   }
 }
 
 const alerts = await readFile('ops/prometheus/alerts.yml', 'utf8');
 for (const alert of [
-  'SyncHashMismatch', 'SyncInvariantViolation', 'SyncSequenceRegression',
-  'SyncUnexpectedDecryptionFailure', 'SyncCommittedObjectMissing', 'SyncDatabaseCorruption',
-  'SyncCommitSuccessRateLow', 'SyncNotificationBacklog', 'SyncOutboxAgeHigh',
+  'SyncHashMismatch',
+  'SyncInvariantViolation',
+  'SyncSequenceRegression',
+  'SyncUnexpectedDecryptionFailure',
+  'SyncCommittedObjectMissing',
+  'SyncDatabaseCorruption',
+  'SyncCommitSuccessRateLow',
+  'SyncNotificationBacklog',
+  'SyncOutboxAgeHigh',
 ]) {
   if (!alerts.includes(`alert: ${alert}`)) throw new Error(`Missing Prometheus alert: ${alert}`);
 }

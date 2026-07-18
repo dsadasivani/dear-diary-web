@@ -35,15 +35,27 @@ const destructiveOff = (partial: Partial<SyncV2FeatureFlags> = {}): SyncV2Featur
 });
 
 export const EMERGENCY_RUNTIME_CONTROLS: CachedRuntimeControls = {
-  featureFlags: destructiveOff(), minimumSupportedAppVersion: '0.0.0',
-  minimumReadProtocolVersion: Number.MAX_SAFE_INTEGER, minimumWriteProtocolVersion: Number.MAX_SAFE_INTEGER,
-  currentProtocolVersion: 1, eventSchemaVersion: 1, snapshotSchemaVersion: 1,
-  maximumEventBytes: 0, maximumMediaBytes: 0, maximumSnapshotBytes: 0,
-  syncV2RolloutPercentage: 0, rolloutSaltVersion: 1, emergencyMode: true, fetchedAt: 0,
+  featureFlags: destructiveOff(),
+  minimumSupportedAppVersion: '0.0.0',
+  minimumReadProtocolVersion: Number.MAX_SAFE_INTEGER,
+  minimumWriteProtocolVersion: Number.MAX_SAFE_INTEGER,
+  currentProtocolVersion: 1,
+  eventSchemaVersion: 1,
+  snapshotSchemaVersion: 1,
+  maximumEventBytes: 0,
+  maximumMediaBytes: 0,
+  maximumSnapshotBytes: 0,
+  syncV2RolloutPercentage: 0,
+  rolloutSaltVersion: 1,
+  emergencyMode: true,
+  fetchedAt: 0,
 };
 
 export class RuntimeControlStore {
-  constructor(private readonly store: LocalDataStore, private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly store: LocalDataStore,
+    private readonly now: () => number = Date.now,
+  ) {}
   async save(protocol: SyncV2Protocol): Promise<CachedRuntimeControls> {
     const controls: CachedRuntimeControls = {
       featureFlags: protocol.emergencyMode
@@ -106,9 +118,15 @@ export const isVersionAtLeast = (current: string, minimum: string): boolean => {
   return true;
 };
 
-export const isCanaryEnabled = async (pseudonym: string, percentage: number, saltVersion: number): Promise<boolean> => {
+export const isCanaryEnabled = async (
+  pseudonym: string,
+  percentage: number,
+  saltVersion: number,
+): Promise<boolean> => {
   if (percentage <= 0) return false;
   if (percentage >= 100) return true;
-  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${saltVersion}:${pseudonym}`)));
-  return (((bytes[0] << 8) | bytes[1]) % 100) < percentage;
+  const bytes = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${saltVersion}:${pseudonym}`)),
+  );
+  return ((bytes[0] << 8) | bytes[1]) % 100 < percentage;
 };

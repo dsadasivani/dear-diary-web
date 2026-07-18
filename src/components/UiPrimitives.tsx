@@ -18,7 +18,12 @@ interface AppButtonProps extends CommonButtonProps {
   tone?: ButtonTone;
 }
 
-export function AppButton({ tone = 'secondary', className = '', type = 'button', ...props }: AppButtonProps) {
+export function AppButton({
+  tone = 'secondary',
+  className = '',
+  type = 'button',
+  ...props
+}: AppButtonProps) {
   const toneClass = {
     primary: 'border-accent bg-accent text-white hover:bg-accent-strong',
     secondary: 'border-[var(--border-subtle)] bg-surface text-ink hover:border-accent',
@@ -38,7 +43,10 @@ interface IconButtonProps extends CommonButtonProps {
   label: string;
 }
 
-export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton({ label, className = '', type = 'button', children, ...props }, ref) {
+export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
+  { label, className = '', type = 'button', children, ...props },
+  ref,
+) {
   return (
     <button
       {...props}
@@ -60,15 +68,30 @@ interface StatusNoticeProps {
   className?: string;
 }
 
-export function StatusNotice({ children, tone = 'neutral', role = 'status', className = '' }: StatusNoticeProps) {
+export function StatusNotice({
+  children,
+  tone = 'neutral',
+  role = 'status',
+  className = '',
+}: StatusNoticeProps) {
   const toneClass = {
     neutral: 'border-[var(--border-subtle)] bg-surface-subtle text-ink-secondary',
-    success: 'border-[color-mix(in_srgb,var(--success)_28%,transparent)] bg-[var(--success-soft)] text-[var(--success)]',
-    warning: 'border-[color-mix(in_srgb,var(--warning)_28%,transparent)] bg-[var(--warning-soft)] text-[var(--warning)]',
-    danger: 'border-[color-mix(in_srgb,var(--danger)_28%,transparent)] bg-[var(--danger-soft)] text-[var(--danger)]',
+    success:
+      'border-[color-mix(in_srgb,var(--success)_28%,transparent)] bg-[var(--success-soft)] text-[var(--success)]',
+    warning:
+      'border-[color-mix(in_srgb,var(--warning)_28%,transparent)] bg-[var(--warning-soft)] text-[var(--warning)]',
+    danger:
+      'border-[color-mix(in_srgb,var(--danger)_28%,transparent)] bg-[var(--danger-soft)] text-[var(--danger)]',
     info: 'border-[color-mix(in_srgb,var(--info)_28%,transparent)] bg-[var(--info-soft)] text-[var(--info)]',
   }[tone];
-  return <div role={role} className={`rounded-[var(--radius-control)] border px-4 py-3 text-sm leading-relaxed ${toneClass} ${className}`}>{children}</div>;
+  return (
+    <div
+      role={role}
+      className={`rounded-[var(--radius-control)] border px-4 py-3 text-sm leading-relaxed ${toneClass} ${className}`}
+    >
+      {children}
+    </div>
+  );
 }
 
 interface SettingsRowProps {
@@ -80,28 +103,66 @@ interface SettingsRowProps {
   children?: ReactNode;
 }
 
-export function SettingsRow({ icon, title, description, value, onClick, children }: SettingsRowProps) {
+export function SettingsRow({
+  icon,
+  title,
+  description,
+  value,
+  onClick,
+  children,
+}: SettingsRowProps) {
   const content = (
     <>
-      {icon && <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-accent-soft text-accent-strong">{icon}</span>}
+      {icon && (
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-accent-soft text-accent-strong">
+          {icon}
+        </span>
+      )}
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-bold text-ink">{title}</span>
-        {description && <span className="mt-1 block text-xs leading-relaxed text-ink-secondary">{description}</span>}
+        {description && (
+          <span className="mt-1 block text-xs leading-relaxed text-ink-secondary">
+            {description}
+          </span>
+        )}
       </span>
-      {value && <span className="max-w-[40%] truncate text-xs font-bold text-ink-secondary">{value}</span>}
+      {value && (
+        <span className="max-w-[40%] truncate text-xs font-bold text-ink-secondary">{value}</span>
+      )}
       {children}
-      {onClick && <ChevronRight aria-hidden="true" className="h-5 w-5 shrink-0 text-ink-tertiary" />}
+      {onClick && (
+        <ChevronRight aria-hidden="true" className="h-5 w-5 shrink-0 text-ink-tertiary" />
+      )}
     </>
   );
   if (onClick) {
-    return <button type="button" onClick={onClick} className="flex min-h-14 w-full items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-left transition-colors hover:bg-surface-subtle">{content}</button>;
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex min-h-14 w-full items-center gap-3 rounded-[var(--radius-control)] px-3 py-2 text-left transition-colors hover:bg-surface-subtle"
+      >
+        {content}
+      </button>
+    );
   }
-  return <div className="flex min-h-14 w-full items-center gap-3 rounded-[var(--radius-control)] px-3 py-2">{content}</div>;
+  return (
+    <div className="flex min-h-14 w-full items-center gap-3 rounded-[var(--radius-control)] px-3 py-2">
+      {content}
+    </div>
+  );
 }
 
 export { AppDialog } from './ui/Dialog';
 export { ActionSheet, BottomSheet, ConfirmationSheet } from './ui/BottomSheet';
-export { AutosaveIndicator, EmptyState, LoadingSkeleton, ProgressIndicator, SectionHeader, StatusChip } from './ui/Feedback';
+export {
+  AutosaveIndicator,
+  EmptyState,
+  LoadingSkeleton,
+  ProgressIndicator,
+  SectionHeader,
+  StatusChip,
+} from './ui/Feedback';
 export { FilterChip, SearchField, TagChip } from './ui/Fields';
 export { FocusedFlow, PageLayout } from './ui/Layout';
 export { GlassSurface, PaperSurface, Surface } from './ui/Surface';

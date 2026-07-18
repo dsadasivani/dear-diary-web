@@ -60,11 +60,31 @@ const STRUCTURED_COLLECTIONS: Record<string, StructuredStorageSpec> = {
   deardiary_diaries: { kind: 'array', storeName: WEB_RECORD_STORES.diaries },
   deardiary_entries: { kind: 'array', storeName: WEB_RECORD_STORES.entries },
   deardiary_notes: { kind: 'array', storeName: WEB_RECORD_STORES.notes },
-  deardiary_settings: { kind: 'single', storeName: WEB_RECORD_STORES.metadata, recordKey: 'settings' },
-  deardiary_userprofile: { kind: 'single', storeName: WEB_RECORD_STORES.metadata, recordKey: 'profile' },
-  deardiary_security: { kind: 'single', storeName: WEB_RECORD_STORES.metadata, recordKey: 'security' },
-  deardiary_drive_backup: { kind: 'single', storeName: WEB_RECORD_STORES.metadata, recordKey: 'drive_backup' },
-  deardiary_sync_account: { kind: 'single', storeName: WEB_RECORD_STORES.metadata, recordKey: 'sync_account' },
+  deardiary_settings: {
+    kind: 'single',
+    storeName: WEB_RECORD_STORES.metadata,
+    recordKey: 'settings',
+  },
+  deardiary_userprofile: {
+    kind: 'single',
+    storeName: WEB_RECORD_STORES.metadata,
+    recordKey: 'profile',
+  },
+  deardiary_security: {
+    kind: 'single',
+    storeName: WEB_RECORD_STORES.metadata,
+    recordKey: 'security',
+  },
+  deardiary_drive_backup: {
+    kind: 'single',
+    storeName: WEB_RECORD_STORES.metadata,
+    recordKey: 'drive_backup',
+  },
+  deardiary_sync_account: {
+    kind: 'single',
+    storeName: WEB_RECORD_STORES.metadata,
+    recordKey: 'sync_account',
+  },
   deardiary_sync_record_versions: { kind: 'map', storeName: WEB_RECORD_STORES.versions },
   deardiary_sync_media_pointers: { kind: 'map', storeName: WEB_RECORD_STORES.mediaPointers },
   deardiary_sync_partition_hydration: { kind: 'map', storeName: WEB_RECORD_STORES.partitions },
@@ -84,21 +104,19 @@ const requireRecordId = (key: string, value: unknown): string => {
   return id;
 };
 
-const getLegacyLocalStorageItem = (key: string): string | null => (
-  typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null
-);
+const getLegacyLocalStorageItem = (key: string): string | null =>
+  typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
 
 const removeLegacyLocalStorageItem = (key: string): void => {
   if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
 };
 
-const queryTokenParts = (value?: string): string[] => (
-  (value || '').toLowerCase().match(/[a-z0-9]+/g) || []
-);
+const queryTokenParts = (value?: string): string[] =>
+  (value || '').toLowerCase().match(/[a-z0-9]+/g) || [];
 
 const indexedSearchTokens = (value: string): string[] => {
   const tokens = new Set<string>();
-  queryTokenParts(value).forEach(token => {
+  queryTokenParts(value).forEach((token) => {
     tokens.add(token);
     for (let length = 2; length <= Math.min(token.length, 20); length += 1) {
       tokens.add(token.slice(0, length));
@@ -116,12 +134,16 @@ const entryQueryIndexRecord = async (entry: Entry): Promise<EntryQueryIndexRecor
   moodToken: await queryIndexToken(entry.moodName || ''),
   hasPhotos: entry.photoCount > 0 ? 1 : 0,
   tagTokens: await queryIndexTokens(entry.tags || []),
-  searchTokens: await queryIndexTokens(indexedSearchTokens([
-    entry.title,
-    richTextHtmlToPlainText(entry.body),
-    entry.moodName,
-    ...(entry.tags || []),
-  ].join(' '))),
+  searchTokens: await queryIndexTokens(
+    indexedSearchTokens(
+      [
+        entry.title,
+        richTextHtmlToPlainText(entry.body),
+        entry.moodName,
+        ...(entry.tags || []),
+      ].join(' '),
+    ),
+  ),
 });
 
 const noteQueryIndexRecord = async (note: Note): Promise<NoteQueryIndexRecord> => ({
@@ -131,11 +153,11 @@ const noteQueryIndexRecord = async (note: Note): Promise<NoteQueryIndexRecord> =
   createdAt: note.createdAt || 0,
   isPinned: note.isPinned ? 1 : 0,
   tagTokens: await queryIndexTokens(note.tags || []),
-  searchTokens: await queryIndexTokens(indexedSearchTokens([
-    note.title,
-    richTextHtmlToPlainText(note.body),
-    ...(note.tags || []),
-  ].join(' '))),
+  searchTokens: await queryIndexTokens(
+    indexedSearchTokens(
+      [note.title, richTextHtmlToPlainText(note.body), ...(note.tags || [])].join(' '),
+    ),
+  ),
 });
 
 const entryProjection = (entry: Entry): LocalEntryProjection => ({
@@ -220,7 +242,10 @@ export class WebLocalDataStore implements LocalDataStore {
 
   async setItem(key: string, value: string): Promise<void> {
     this.requireEncryptedBrowserStorage();
-    if (this.useTestFallback) { localStorage.setItem(key, value); return; }
+    if (this.useTestFallback) {
+      localStorage.setItem(key, value);
+      return;
+    }
     await commitEncryptedStoreBatch(await this.createStructuredBatch({ [key]: value }));
     removeLegacyLocalStorageItem(key);
   }
@@ -237,14 +262,20 @@ export class WebLocalDataStore implements LocalDataStore {
 
   async removeItem(key: string): Promise<void> {
     this.requireEncryptedBrowserStorage();
-    if (this.useTestFallback) { localStorage.removeItem(key); return; }
+    if (this.useTestFallback) {
+      localStorage.removeItem(key);
+      return;
+    }
     await commitEncryptedStoreBatch(this.createStructuredRemoveBatch(key));
     removeLegacyLocalStorageItem(key);
   }
 
   async clear(): Promise<void> {
     this.requireEncryptedBrowserStorage();
-    if (this.useTestFallback) { localStorage.clear(); return; }
+    if (this.useTestFallback) {
+      localStorage.clear();
+      return;
+    }
     await commitEncryptedStoreBatch({
       clears: [
         REPOSITORY_STORE,
@@ -275,18 +306,18 @@ export class WebLocalDataStore implements LocalDataStore {
   async putStructuredRecord<T>(key: string, id: string, value: T): Promise<void> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback) return;
-    await commitEncryptedStoreBatch(await this.createStructuredRecordMutationBatch([
-      { key, id, value },
-    ]));
+    await commitEncryptedStoreBatch(
+      await this.createStructuredRecordMutationBatch([{ key, id, value }]),
+    );
     removeLegacyLocalStorageItem(key);
   }
 
   async deleteStructuredRecord(key: string, id: string): Promise<void> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback) return;
-    await commitEncryptedStoreBatch(await this.createStructuredRecordMutationBatch([
-      { key, id, value: null },
-    ]));
+    await commitEncryptedStoreBatch(
+      await this.createStructuredRecordMutationBatch([{ key, id, value: null }]),
+    );
     removeLegacyLocalStorageItem(key);
   }
 
@@ -296,13 +327,14 @@ export class WebLocalDataStore implements LocalDataStore {
   }): Promise<void> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback) {
-      if (input.items) Object.entries(input.items).forEach(([key, value]) => localStorage.setItem(key, value));
+      if (input.items)
+        Object.entries(input.items).forEach(([key, value]) => localStorage.setItem(key, value));
       return;
     }
     const batch = await this.createStructuredRecordMutationBatch(input.records);
     if (input.items) this.mergeEncryptedBatch(batch, await this.createStructuredBatch(input.items));
     await commitEncryptedStoreBatch(batch);
-    input.records.forEach(record => removeLegacyLocalStorageItem(record.key));
+    input.records.forEach((record) => removeLegacyLocalStorageItem(record.key));
     Object.keys(input.items || {}).forEach(removeLegacyLocalStorageItem);
   }
 
@@ -314,7 +346,8 @@ export class WebLocalDataStore implements LocalDataStore {
   }): Promise<void> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback) {
-      if (input.items) Object.entries(input.items).forEach(([key, value]) => localStorage.setItem(key, value));
+      if (input.items)
+        Object.entries(input.items).forEach(([key, value]) => localStorage.setItem(key, value));
       return;
     }
     const batch = await this.createStructuredRecordMutationBatch(input.records);
@@ -332,13 +365,15 @@ export class WebLocalDataStore implements LocalDataStore {
       input.outboxV2Operation,
     );
     await commitEncryptedStoreBatch(batch);
-    input.records.forEach(record => removeLegacyLocalStorageItem(record.key));
+    input.records.forEach((record) => removeLegacyLocalStorageItem(record.key));
     Object.keys(input.items || {}).forEach(removeLegacyLocalStorageItem);
     removeLegacyLocalStorageItem('deardiary_sync_outbox');
     removeLegacyLocalStorageItem('deardiary_sync_outbox_v2');
   }
 
-  async queryEntries(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<Entry> | undefined> {
+  async queryEntries(
+    options: LocalEntryQueryOptions,
+  ): Promise<LocalQueryPageResult<Entry> | undefined> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback) return undefined;
     const indexedPage = await this.queryEntriesFromIndex(options);
@@ -350,26 +385,39 @@ export class WebLocalDataStore implements LocalDataStore {
     const allowed = options.allowedDiaryIds ? new Set(options.allowedDiaryIds) : null;
     const excluded = options.excludeDiaryIds ? new Set(options.excludeDiaryIds) : null;
     const query = options.query?.trim().toLowerCase();
-    const tags = options.tags?.map(tag => tag.toLowerCase()) || [];
+    const tags = options.tags?.map((tag) => tag.toLowerCase()) || [];
     const filtered = entries
-      .filter(entry => !options.diaryId || entry.diaryId === options.diaryId)
-      .filter(entry => !options.yearMonth || entry.date.startsWith(options.yearMonth))
-      .filter(entry => !options.fromDate || entry.date >= options.fromDate)
-      .filter(entry => !options.toDate || entry.date <= options.toDate)
-      .filter(entry => !options.mood || entry.moodName === options.mood)
-      .filter(entry => options.hasPhotos === undefined || (entry.photoCount > 0) === options.hasPhotos)
-      .filter(entry => tags.length === 0 || tags.every(tag => entry.tags.some(entryTag => entryTag.toLowerCase() === tag)))
-      .filter(entry => !query || (
-        entry.title.toLowerCase().includes(query) ||
-        richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
-        entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
-        entry.moodName.toLowerCase().includes(query)
-      ))
-      .filter(entry => (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)));
+      .filter((entry) => !options.diaryId || entry.diaryId === options.diaryId)
+      .filter((entry) => !options.yearMonth || entry.date.startsWith(options.yearMonth))
+      .filter((entry) => !options.fromDate || entry.date >= options.fromDate)
+      .filter((entry) => !options.toDate || entry.date <= options.toDate)
+      .filter((entry) => !options.mood || entry.moodName === options.mood)
+      .filter(
+        (entry) => options.hasPhotos === undefined || entry.photoCount > 0 === options.hasPhotos,
+      )
+      .filter(
+        (entry) =>
+          tags.length === 0 ||
+          tags.every((tag) => entry.tags.some((entryTag) => entryTag.toLowerCase() === tag)),
+      )
+      .filter(
+        (entry) =>
+          !query ||
+          entry.title.toLowerCase().includes(query) ||
+          richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
+          entry.tags.some((tag) => tag.toLowerCase().includes(query)) ||
+          entry.moodName.toLowerCase().includes(query),
+      )
+      .filter(
+        (entry) =>
+          (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)),
+      );
     return pageEntries(filtered, options, options.sort || 'date-desc');
   }
 
-  async queryNotes(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<Note> | undefined> {
+  async queryNotes(
+    options: LocalNoteQueryOptions,
+  ): Promise<LocalQueryPageResult<Note> | undefined> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback) return undefined;
     const indexedPage = await this.queryNotesFromIndex(options);
@@ -379,24 +427,33 @@ export class WebLocalDataStore implements LocalDataStore {
     if (notes === null) return undefined;
 
     const query = options.query?.trim().toLowerCase();
-    const tags = options.tags?.map(tag => tag.toLowerCase()) || [];
+    const tags = options.tags?.map((tag) => tag.toLowerCase()) || [];
     const filtered = notes
-      .filter(note => {
+      .filter((note) => {
         if (options.filter === 'pinned') return note.isPinned;
         if (options.filter === 'tagged') return note.tags.length > 0;
         if (options.filter === 'untagged') return note.tags.length === 0;
         return true;
       })
-      .filter(note => {
+      .filter((note) => {
         const date = new Date(note.updatedAt).toISOString().slice(0, 10);
-        return (!options.fromDate || date >= options.fromDate) && (!options.toDate || date <= options.toDate);
+        return (
+          (!options.fromDate || date >= options.fromDate) &&
+          (!options.toDate || date <= options.toDate)
+        );
       })
-      .filter(note => tags.length === 0 || tags.every(tag => note.tags.some(noteTag => noteTag.toLowerCase() === tag)))
-      .filter(note => !query || (
-        note.title.toLowerCase().includes(query) ||
-        richTextHtmlToPlainText(note.body).toLowerCase().includes(query) ||
-        note.tags.some(tag => tag.toLowerCase().includes(query))
-      ));
+      .filter(
+        (note) =>
+          tags.length === 0 ||
+          tags.every((tag) => note.tags.some((noteTag) => noteTag.toLowerCase() === tag)),
+      )
+      .filter(
+        (note) =>
+          !query ||
+          note.title.toLowerCase().includes(query) ||
+          richTextHtmlToPlainText(note.body).toLowerCase().includes(query) ||
+          note.tags.some((tag) => tag.toLowerCase().includes(query)),
+      );
     return pageNotes(filtered, options, options.sort || 'pinned-updated-desc');
   }
 
@@ -405,21 +462,32 @@ export class WebLocalDataStore implements LocalDataStore {
   ): Promise<LocalQueryPageResult<LocalEntryProjection> | undefined> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback || options.query) return undefined;
-    if (!await this.ensureProjectionStore('deardiary_entries')) return undefined;
-    const raw = await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.entryProjections).getAllItems();
+    if (!(await this.ensureProjectionStore('deardiary_entries'))) return undefined;
+    const raw = await new WebEncryptedKeyValueStore(
+      WEB_RECORD_STORES.entryProjections,
+    ).getAllItems();
     const allowed = options.allowedDiaryIds ? new Set(options.allowedDiaryIds) : null;
     const excluded = options.excludeDiaryIds ? new Set(options.excludeDiaryIds) : null;
-    const tags = (options.tags || []).map(tag => tag.toLowerCase());
+    const tags = (options.tags || []).map((tag) => tag.toLowerCase());
     const entries = Object.values(raw)
-      .map(value => parseJson<LocalEntryProjection>(value))
-      .filter(entry => !options.diaryId || entry.diaryId === options.diaryId)
-      .filter(entry => !options.yearMonth || entry.date.startsWith(options.yearMonth))
-      .filter(entry => !options.fromDate || entry.date >= options.fromDate)
-      .filter(entry => !options.toDate || entry.date <= options.toDate)
-      .filter(entry => !options.mood || entry.moodName === options.mood)
-      .filter(entry => options.hasPhotos === undefined || (entry.photoCount > 0) === options.hasPhotos)
-      .filter(entry => (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)))
-      .filter(entry => tags.length === 0 || tags.every(tag => entry.tags.some(entryTag => entryTag.toLowerCase() === tag)));
+      .map((value) => parseJson<LocalEntryProjection>(value))
+      .filter((entry) => !options.diaryId || entry.diaryId === options.diaryId)
+      .filter((entry) => !options.yearMonth || entry.date.startsWith(options.yearMonth))
+      .filter((entry) => !options.fromDate || entry.date >= options.fromDate)
+      .filter((entry) => !options.toDate || entry.date <= options.toDate)
+      .filter((entry) => !options.mood || entry.moodName === options.mood)
+      .filter(
+        (entry) => options.hasPhotos === undefined || entry.photoCount > 0 === options.hasPhotos,
+      )
+      .filter(
+        (entry) =>
+          (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)),
+      )
+      .filter(
+        (entry) =>
+          tags.length === 0 ||
+          tags.every((tag) => entry.tags.some((entryTag) => entryTag.toLowerCase() === tag)),
+      );
     return pageEntries(entries, options, options.sort || 'date-desc', 10_000);
   }
 
@@ -428,27 +496,38 @@ export class WebLocalDataStore implements LocalDataStore {
   ): Promise<LocalQueryPageResult<LocalNoteProjection> | undefined> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback || options.query) return undefined;
-    if (!await this.ensureProjectionStore('deardiary_notes')) return undefined;
-    const raw = await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.noteProjections).getAllItems();
-    const tags = (options.tags || []).map(tag => tag.toLowerCase());
+    if (!(await this.ensureProjectionStore('deardiary_notes'))) return undefined;
+    const raw = await new WebEncryptedKeyValueStore(
+      WEB_RECORD_STORES.noteProjections,
+    ).getAllItems();
+    const tags = (options.tags || []).map((tag) => tag.toLowerCase());
     const notes = Object.values(raw)
-      .map(value => parseJson<LocalNoteProjection>(value))
-      .filter(note => {
+      .map((value) => parseJson<LocalNoteProjection>(value))
+      .filter((note) => {
         if (options.filter === 'pinned') return note.isPinned;
         if (options.filter === 'tagged') return note.tags.length > 0;
         if (options.filter === 'untagged') return note.tags.length === 0;
         return true;
       })
-      .filter(note => {
+      .filter((note) => {
         const updatedDate = new Date(note.updatedAt).toISOString().slice(0, 10);
-        return (!options.fromDate || updatedDate >= options.fromDate) && (!options.toDate || updatedDate <= options.toDate);
+        return (
+          (!options.fromDate || updatedDate >= options.fromDate) &&
+          (!options.toDate || updatedDate <= options.toDate)
+        );
       })
-      .filter(note => tags.length === 0 || tags.every(tag => note.tags.some(noteTag => noteTag.toLowerCase() === tag)));
+      .filter(
+        (note) =>
+          tags.length === 0 ||
+          tags.every((tag) => note.tags.some((noteTag) => noteTag.toLowerCase() === tag)),
+      );
     return pageNotes(notes, options, options.sort || 'pinned-updated-desc', 10_000);
   }
 
-  private async queryEntriesFromIndex(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<Entry> | undefined> {
-    if (!await this.ensureEntryQueryIndex()) return undefined;
+  private async queryEntriesFromIndex(
+    options: LocalEntryQueryOptions,
+  ): Promise<LocalQueryPageResult<Entry> | undefined> {
+    if (!(await this.ensureEntryQueryIndex())) return undefined;
 
     const indexRecords = await this.getEntryIndexCandidates(options);
     const queryTokens = await queryIndexTokens(queryTokenParts(options.query));
@@ -457,83 +536,139 @@ export class WebLocalDataStore implements LocalDataStore {
     const allowed = options.allowedDiaryIds ? new Set(options.allowedDiaryIds) : null;
     const excluded = options.excludeDiaryIds ? new Set(options.excludeDiaryIds) : null;
     const filtered = indexRecords
-      .filter(entry => !options.diaryId || entry.diaryId === options.diaryId)
-      .filter(entry => !options.yearMonth || entry.date.startsWith(options.yearMonth))
-      .filter(entry => !options.fromDate || entry.date >= options.fromDate)
-      .filter(entry => !options.toDate || entry.date <= options.toDate)
-      .filter(entry => !moodToken || entry.moodToken === moodToken)
-      .filter(entry => options.hasPhotos === undefined || (entry.hasPhotos > 0) === options.hasPhotos)
-      .filter(entry => (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)))
-      .filter(entry => tagTokens.length === 0 || tagTokens.every(tag => entry.tagTokens.includes(tag)))
-      .filter(entry => queryTokens.length === 0 || queryTokens.every(token => entry.searchTokens.includes(token)));
+      .filter((entry) => !options.diaryId || entry.diaryId === options.diaryId)
+      .filter((entry) => !options.yearMonth || entry.date.startsWith(options.yearMonth))
+      .filter((entry) => !options.fromDate || entry.date >= options.fromDate)
+      .filter((entry) => !options.toDate || entry.date <= options.toDate)
+      .filter((entry) => !moodToken || entry.moodToken === moodToken)
+      .filter(
+        (entry) => options.hasPhotos === undefined || entry.hasPhotos > 0 === options.hasPhotos,
+      )
+      .filter(
+        (entry) =>
+          (!allowed || allowed.has(entry.diaryId)) && (!excluded || !excluded.has(entry.diaryId)),
+      )
+      .filter(
+        (entry) =>
+          tagTokens.length === 0 || tagTokens.every((tag) => entry.tagTokens.includes(tag)),
+      )
+      .filter(
+        (entry) =>
+          queryTokens.length === 0 ||
+          queryTokens.every((token) => entry.searchTokens.includes(token)),
+      );
 
     if (queryTokens.length > 0) {
-      const records = await this.readStructuredRecordsByIds<Entry>('deardiary_entries', filtered.map(entry => entry.id));
+      const records = await this.readStructuredRecordsByIds<Entry>(
+        'deardiary_entries',
+        filtered.map((entry) => entry.id),
+      );
       const query = options.query?.trim().toLowerCase() || '';
-      const exactMatches = records.filter(entry => (
-        entry.title.toLowerCase().includes(query) ||
-        richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
-        entry.tags.some(tag => tag.toLowerCase().includes(query)) ||
-        entry.moodName.toLowerCase().includes(query)
-      ));
+      const exactMatches = records.filter(
+        (entry) =>
+          entry.title.toLowerCase().includes(query) ||
+          richTextHtmlToPlainText(entry.body).toLowerCase().includes(query) ||
+          entry.tags.some((tag) => tag.toLowerCase().includes(query)) ||
+          entry.moodName.toLowerCase().includes(query),
+      );
       return pageEntries(exactMatches, options, options.sort || 'updated-desc');
     }
 
     const page = pageEntries(filtered.map(entryIndexAsEntry), options, options.sort || 'date-desc');
-    const pageRecords = await this.readStructuredRecordsByIds<Entry>('deardiary_entries', page.items.map(entry => entry.id));
-    const recordsById = new Map(pageRecords.map(entry => [entry.id, entry]));
+    const pageRecords = await this.readStructuredRecordsByIds<Entry>(
+      'deardiary_entries',
+      page.items.map((entry) => entry.id),
+    );
+    const recordsById = new Map(pageRecords.map((entry) => [entry.id, entry]));
     return {
-      items: page.items.map(entry => recordsById.get(entry.id)).filter((entry): entry is Entry => Boolean(entry)),
+      items: page.items
+        .map((entry) => recordsById.get(entry.id))
+        .filter((entry): entry is Entry => Boolean(entry)),
       nextCursor: page.nextCursor,
       total: filtered.length,
     };
   }
 
-  private async queryNotesFromIndex(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<Note> | undefined> {
-    if (!await this.ensureNoteQueryIndex()) return undefined;
+  private async queryNotesFromIndex(
+    options: LocalNoteQueryOptions,
+  ): Promise<LocalQueryPageResult<Note> | undefined> {
+    if (!(await this.ensureNoteQueryIndex())) return undefined;
 
     const indexRecords = await this.getNoteIndexCandidates(options);
     const queryTokens = await queryIndexTokens(queryTokenParts(options.query));
     const tagTokens = await queryIndexTokens(options.tags || []);
     const filtered = indexRecords
-      .filter(note => {
+      .filter((note) => {
         if (options.filter === 'pinned') return note.isPinned === 1;
         if (options.filter === 'tagged') return note.tagTokens.length > 0;
         if (options.filter === 'untagged') return note.tagTokens.length === 0;
         return true;
       })
-      .filter(note => (!options.fromDate || note.updatedDate >= options.fromDate) && (!options.toDate || note.updatedDate <= options.toDate))
-      .filter(note => tagTokens.length === 0 || tagTokens.every(tag => note.tagTokens.includes(tag)))
-      .filter(note => queryTokens.length === 0 || queryTokens.every(token => note.searchTokens.includes(token)));
+      .filter(
+        (note) =>
+          (!options.fromDate || note.updatedDate >= options.fromDate) &&
+          (!options.toDate || note.updatedDate <= options.toDate),
+      )
+      .filter(
+        (note) => tagTokens.length === 0 || tagTokens.every((tag) => note.tagTokens.includes(tag)),
+      )
+      .filter(
+        (note) =>
+          queryTokens.length === 0 ||
+          queryTokens.every((token) => note.searchTokens.includes(token)),
+      );
 
     if (queryTokens.length > 0) {
-      const records = await this.readStructuredRecordsByIds<Note>('deardiary_notes', filtered.map(note => note.id));
+      const records = await this.readStructuredRecordsByIds<Note>(
+        'deardiary_notes',
+        filtered.map((note) => note.id),
+      );
       const query = options.query?.trim().toLowerCase() || '';
-      const exactMatches = records.filter(note => (
-        note.title.toLowerCase().includes(query) ||
-        richTextHtmlToPlainText(note.body).toLowerCase().includes(query) ||
-        note.tags.some(tag => tag.toLowerCase().includes(query))
-      ));
+      const exactMatches = records.filter(
+        (note) =>
+          note.title.toLowerCase().includes(query) ||
+          richTextHtmlToPlainText(note.body).toLowerCase().includes(query) ||
+          note.tags.some((tag) => tag.toLowerCase().includes(query)),
+      );
       return pageNotes(exactMatches, options, options.sort || 'updated-desc');
     }
 
-    const page = pageNotes(filtered.map(noteIndexAsNote), options, options.sort || 'pinned-updated-desc');
-    const pageRecords = await this.readStructuredRecordsByIds<Note>('deardiary_notes', page.items.map(note => note.id));
-    const recordsById = new Map(pageRecords.map(note => [note.id, note]));
+    const page = pageNotes(
+      filtered.map(noteIndexAsNote),
+      options,
+      options.sort || 'pinned-updated-desc',
+    );
+    const pageRecords = await this.readStructuredRecordsByIds<Note>(
+      'deardiary_notes',
+      page.items.map((note) => note.id),
+    );
+    const recordsById = new Map(pageRecords.map((note) => [note.id, note]));
     return {
-      items: page.items.map(note => recordsById.get(note.id)).filter((note): note is Note => Boolean(note)),
+      items: page.items
+        .map((note) => recordsById.get(note.id))
+        .filter((note): note is Note => Boolean(note)),
       nextCursor: page.nextCursor,
       total: filtered.length,
     };
   }
 
-  private async getEntryIndexCandidates(options: LocalEntryQueryOptions): Promise<EntryQueryIndexRecord[]> {
+  private async getEntryIndexCandidates(
+    options: LocalEntryQueryOptions,
+  ): Promise<EntryQueryIndexRecord[]> {
     const queryTokens = await queryIndexTokens(queryTokenParts(options.query));
     if (queryTokens[0]) {
-      return getPlainIndexRecords<EntryQueryIndexRecord>(WEB_QUERY_INDEX_STORES.entries, 'searchTokens', queryTokens[0]);
+      return getPlainIndexRecords<EntryQueryIndexRecord>(
+        WEB_QUERY_INDEX_STORES.entries,
+        'searchTokens',
+        queryTokens[0],
+      );
     }
     if (options.diaryId) {
-      return getPlainIndexRecords<EntryQueryIndexRecord>(WEB_QUERY_INDEX_STORES.entries, 'diaryId', options.diaryId);
+      return getPlainIndexRecords<EntryQueryIndexRecord>(
+        WEB_QUERY_INDEX_STORES.entries,
+        'diaryId',
+        options.diaryId,
+      );
     }
     if (options.yearMonth && typeof IDBKeyRange !== 'undefined') {
       return getPlainIndexRecords<EntryQueryIndexRecord>(
@@ -550,10 +685,18 @@ export class WebLocalDataStore implements LocalDataStore {
       );
     }
     if (options.mood) {
-      return getPlainIndexRecords<EntryQueryIndexRecord>(WEB_QUERY_INDEX_STORES.entries, 'moodToken', await queryIndexToken(options.mood));
+      return getPlainIndexRecords<EntryQueryIndexRecord>(
+        WEB_QUERY_INDEX_STORES.entries,
+        'moodToken',
+        await queryIndexToken(options.mood),
+      );
     }
     if (options.hasPhotos !== undefined) {
-      return getPlainIndexRecords<EntryQueryIndexRecord>(WEB_QUERY_INDEX_STORES.entries, 'hasPhotos', options.hasPhotos ? 1 : 0);
+      return getPlainIndexRecords<EntryQueryIndexRecord>(
+        WEB_QUERY_INDEX_STORES.entries,
+        'hasPhotos',
+        options.hasPhotos ? 1 : 0,
+      );
     }
     if (options.tags?.[0]) {
       return getPlainIndexRecords<EntryQueryIndexRecord>(
@@ -565,13 +708,23 @@ export class WebLocalDataStore implements LocalDataStore {
     return getPlainIndexRecords<EntryQueryIndexRecord>(WEB_QUERY_INDEX_STORES.entries);
   }
 
-  private async getNoteIndexCandidates(options: LocalNoteQueryOptions): Promise<NoteQueryIndexRecord[]> {
+  private async getNoteIndexCandidates(
+    options: LocalNoteQueryOptions,
+  ): Promise<NoteQueryIndexRecord[]> {
     const queryTokens = await queryIndexTokens(queryTokenParts(options.query));
     if (queryTokens[0]) {
-      return getPlainIndexRecords<NoteQueryIndexRecord>(WEB_QUERY_INDEX_STORES.notes, 'searchTokens', queryTokens[0]);
+      return getPlainIndexRecords<NoteQueryIndexRecord>(
+        WEB_QUERY_INDEX_STORES.notes,
+        'searchTokens',
+        queryTokens[0],
+      );
     }
     if (options.filter === 'pinned') {
-      return getPlainIndexRecords<NoteQueryIndexRecord>(WEB_QUERY_INDEX_STORES.notes, 'isPinned', 1);
+      return getPlainIndexRecords<NoteQueryIndexRecord>(
+        WEB_QUERY_INDEX_STORES.notes,
+        'isPinned',
+        1,
+      );
     }
     if ((options.fromDate || options.toDate) && typeof IDBKeyRange !== 'undefined') {
       return getPlainIndexRecords<NoteQueryIndexRecord>(
@@ -592,42 +745,51 @@ export class WebLocalDataStore implements LocalDataStore {
 
   private async ensureEntryQueryIndex(): Promise<boolean> {
     const spec = STRUCTURED_COLLECTIONS.deardiary_entries;
-    if (!await this.getStructuredMetadata('deardiary_entries', spec)) return false;
-    const existing = await getPlainIndexRecords<EntryQueryIndexRecord>(WEB_QUERY_INDEX_STORES.entries);
+    if (!(await this.getStructuredMetadata('deardiary_entries', spec))) return false;
+    const existing = await getPlainIndexRecords<EntryQueryIndexRecord>(
+      WEB_QUERY_INDEX_STORES.entries,
+    );
     if (existing.length > 0) return true;
     const entries = await this.readStructuredCollection<Entry>('deardiary_entries');
     if (entries === null) return false;
     await commitEncryptedStoreBatch({
       plainClears: [WEB_QUERY_INDEX_STORES.entries],
-      plainPuts: await Promise.all(entries.map(async entry => ({
-        storeName: WEB_QUERY_INDEX_STORES.entries,
-        value: await entryQueryIndexRecord(entry),
-      }))),
+      plainPuts: await Promise.all(
+        entries.map(async (entry) => ({
+          storeName: WEB_QUERY_INDEX_STORES.entries,
+          value: await entryQueryIndexRecord(entry),
+        })),
+      ),
     });
     return true;
   }
 
   private async ensureNoteQueryIndex(): Promise<boolean> {
     const spec = STRUCTURED_COLLECTIONS.deardiary_notes;
-    if (!await this.getStructuredMetadata('deardiary_notes', spec)) return false;
+    if (!(await this.getStructuredMetadata('deardiary_notes', spec))) return false;
     const existing = await getPlainIndexRecords<NoteQueryIndexRecord>(WEB_QUERY_INDEX_STORES.notes);
     if (existing.length > 0) return true;
     const notes = await this.readStructuredCollection<Note>('deardiary_notes');
     if (notes === null) return false;
     await commitEncryptedStoreBatch({
       plainClears: [WEB_QUERY_INDEX_STORES.notes],
-      plainPuts: await Promise.all(notes.map(async note => ({
-        storeName: WEB_QUERY_INDEX_STORES.notes,
-        value: await noteQueryIndexRecord(note),
-      }))),
+      plainPuts: await Promise.all(
+        notes.map(async (note) => ({
+          storeName: WEB_QUERY_INDEX_STORES.notes,
+          value: await noteQueryIndexRecord(note),
+        })),
+      ),
     });
     return true;
   }
 
-  private async readStructuredRecordsByIds<T extends { id: string }>(key: string, ids: string[]): Promise<T[]> {
-    const records = await Promise.all(ids.map(id => this.getStructuredRecord<T>(key, id)));
+  private async readStructuredRecordsByIds<T extends { id: string }>(
+    key: string,
+    ids: string[],
+  ): Promise<T[]> {
+    const records = await Promise.all(ids.map((id) => this.getStructuredRecord<T>(key, id)));
     const found: T[] = [];
-    records.forEach(record => {
+    records.forEach((record) => {
       if (record) found.push(record as T);
     });
     return found;
@@ -646,9 +808,14 @@ export class WebLocalDataStore implements LocalDataStore {
 
     const rawRecords = await store.getAllItems();
     if (spec.kind === 'map') {
-      return JSON.stringify(Object.fromEntries(
-        Object.entries(rawRecords).map(([recordKey, value]) => [recordKey, parseJson<unknown>(value)]),
-      ));
+      return JSON.stringify(
+        Object.fromEntries(
+          Object.entries(rawRecords).map(([recordKey, value]) => [
+            recordKey,
+            parseJson<unknown>(value),
+          ]),
+        ),
+      );
     }
 
     return JSON.stringify(this.orderStructuredRecords<unknown>(rawRecords, metadata));
@@ -681,7 +848,7 @@ export class WebLocalDataStore implements LocalDataStore {
     const orderedKeys = metadata.order || [];
     const seen = new Set<string>();
     const ordered = orderedKeys
-      .map(recordKey => {
+      .map((recordKey) => {
         seen.add(recordKey);
         return rawRecords[recordKey] ? parseJson<T>(rawRecords[recordKey]) : null;
       })
@@ -695,7 +862,11 @@ export class WebLocalDataStore implements LocalDataStore {
 
   private async createStructuredBatch(items: Record<string, string>): Promise<EncryptedStoreBatch> {
     const batch: EncryptedStoreBatch = {
-      puts: Object.entries(items).map(([key, value]) => ({ storeName: REPOSITORY_STORE, key, value })),
+      puts: Object.entries(items).map(([key, value]) => ({
+        storeName: REPOSITORY_STORE,
+        key,
+        value,
+      })),
       clears: [],
     };
 
@@ -725,7 +896,11 @@ export class WebLocalDataStore implements LocalDataStore {
         const order: string[] = [];
         for (const record of records) {
           const recordKey = requireRecordId(key, record);
-          batch.puts!.push({ storeName: spec.storeName, key: recordKey, value: JSON.stringify(record) });
+          batch.puts!.push({
+            storeName: spec.storeName,
+            key: recordKey,
+            value: JSON.stringify(record),
+          });
           await this.appendQueryIndexPut(batch, key, record);
           this.appendProjectionPut(batch, key, record);
           order.push(recordKey);
@@ -735,17 +910,22 @@ export class WebLocalDataStore implements LocalDataStore {
           key: metadataKey,
           value: JSON.stringify({ ...metadataBase, order }),
         });
-        if (projectionStoreName) batch.puts!.push({
-          storeName: WEB_RECORD_STORES.metadata,
-          key: this.projectionMetadataKey(key),
-          value: JSON.stringify({ ready: true, updatedAt: Date.now() }),
-        });
+        if (projectionStoreName)
+          batch.puts!.push({
+            storeName: WEB_RECORD_STORES.metadata,
+            key: this.projectionMetadataKey(key),
+            value: JSON.stringify({ ready: true, updatedAt: Date.now() }),
+          });
         continue;
       }
 
       const records = parseJson<Record<string, unknown>>(value);
       Object.entries(records).forEach(([recordKey, record]) => {
-        batch.puts!.push({ storeName: spec.storeName, key: recordKey, value: JSON.stringify(record) });
+        batch.puts!.push({
+          storeName: spec.storeName,
+          key: recordKey,
+          value: JSON.stringify(record),
+        });
       });
       batch.puts!.push({
         storeName: WEB_RECORD_STORES.metadata,
@@ -776,7 +956,10 @@ export class WebLocalDataStore implements LocalDataStore {
       const projectionStoreName = this.projectionStoreNameForCollection(key);
       if (projectionStoreName) {
         batch.clears.push(projectionStoreName);
-        batch.deletes!.push({ storeName: WEB_RECORD_STORES.metadata, key: this.projectionMetadataKey(key) });
+        batch.deletes!.push({
+          storeName: WEB_RECORD_STORES.metadata,
+          key: this.projectionMetadataKey(key),
+        });
       }
     }
     return batch;
@@ -797,15 +980,17 @@ export class WebLocalDataStore implements LocalDataStore {
         const existingRawRecords = metadata?.order ? null : await store.getAllItems();
         ordersByKey.set(
           record.key,
-          metadata?.order || Object.keys(existingRawRecords || {}).sort((left, right) => left.localeCompare(right)),
+          metadata?.order ||
+            Object.keys(existingRawRecords || {}).sort((left, right) => left.localeCompare(right)),
         );
       }
       const currentOrder = ordersByKey.get(record.key)!;
-      const order = record.value === null
-        ? currentOrder.filter(recordKey => recordKey !== record.id)
-        : currentOrder.includes(record.id)
-          ? currentOrder
-          : [...currentOrder, record.id];
+      const order =
+        record.value === null
+          ? currentOrder.filter((recordKey) => recordKey !== record.id)
+          : currentOrder.includes(record.id)
+            ? currentOrder
+            : [...currentOrder, record.id];
       ordersByKey.set(record.key, order);
 
       batch.deletes!.push({ storeName: REPOSITORY_STORE, key: record.key });
@@ -814,7 +999,11 @@ export class WebLocalDataStore implements LocalDataStore {
         this.appendQueryIndexDelete(batch, record.key, record.id);
         this.appendProjectionDelete(batch, record.key, record.id);
       } else {
-        batch.puts!.push({ storeName: spec.storeName, key: record.id, value: JSON.stringify(record.value) });
+        batch.puts!.push({
+          storeName: spec.storeName,
+          key: record.id,
+          value: JSON.stringify(record.value),
+        });
         await this.appendQueryIndexPut(batch, record.key, record.value);
         this.appendProjectionPut(batch, record.key, record.value);
       }
@@ -846,9 +1035,8 @@ export class WebLocalDataStore implements LocalDataStore {
   private appendProjectionPut(batch: EncryptedStoreBatch, key: string, value: unknown): void {
     const storeName = this.projectionStoreNameForCollection(key);
     if (!storeName) return;
-    const projection = key === 'deardiary_entries'
-      ? entryProjection(value as Entry)
-      : noteProjection(value as Note);
+    const projection =
+      key === 'deardiary_entries' ? entryProjection(value as Entry) : noteProjection(value as Note);
     batch.puts ||= [];
     batch.puts.push({ storeName, key: projection.id, value: JSON.stringify(projection) });
     batch.puts.push({
@@ -869,25 +1057,31 @@ export class WebLocalDataStore implements LocalDataStore {
     const storeName = this.projectionStoreNameForCollection(key);
     if (!storeName) return false;
     if (await this.metadataStore.getItem(this.projectionMetadataKey(key))) return true;
-    const source = key === 'deardiary_entries'
-      ? await this.readStructuredCollection<Entry>(key)
-      : await this.readStructuredCollection<Note>(key);
+    const source =
+      key === 'deardiary_entries'
+        ? await this.readStructuredCollection<Entry>(key)
+        : await this.readStructuredCollection<Note>(key);
     if (source === null) return false;
     const batch: EncryptedStoreBatch = { clears: [storeName], puts: [] };
-    source.forEach(value => this.appendProjectionPut(batch, key, value));
+    source.forEach((value) => this.appendProjectionPut(batch, key, value));
     await commitEncryptedStoreBatch(batch);
     return true;
   }
 
-  private async appendQueryIndexPut(batch: EncryptedStoreBatch, key: string, value: unknown): Promise<void> {
+  private async appendQueryIndexPut(
+    batch: EncryptedStoreBatch,
+    key: string,
+    value: unknown,
+  ): Promise<void> {
     const indexStoreName = this.indexStoreNameForCollection(key);
     if (!indexStoreName) return;
     batch.plainPuts ||= [];
     batch.plainPuts.push({
       storeName: indexStoreName,
-      value: key === 'deardiary_entries'
-        ? await entryQueryIndexRecord(value as Entry)
-        : await noteQueryIndexRecord(value as Note),
+      value:
+        key === 'deardiary_entries'
+          ? await entryQueryIndexRecord(value as Entry)
+          : await noteQueryIndexRecord(value as Note),
     });
   }
 
@@ -920,9 +1114,13 @@ export class WebLocalDataStore implements LocalDataStore {
   private mergeEncryptedBatch(target: EncryptedStoreBatch, source: EncryptedStoreBatch): void {
     if (source.puts?.length) target.puts = [...(target.puts || []), ...source.puts];
     if (source.deletes?.length) target.deletes = [...(target.deletes || []), ...source.deletes];
-    if (source.clears?.length) target.clears = [...new Set([...(target.clears || []), ...source.clears])];
-    if (source.plainPuts?.length) target.plainPuts = [...(target.plainPuts || []), ...source.plainPuts];
-    if (source.plainDeletes?.length) target.plainDeletes = [...(target.plainDeletes || []), ...source.plainDeletes];
-    if (source.plainClears?.length) target.plainClears = [...new Set([...(target.plainClears || []), ...source.plainClears])];
+    if (source.clears?.length)
+      target.clears = [...new Set([...(target.clears || []), ...source.clears])];
+    if (source.plainPuts?.length)
+      target.plainPuts = [...(target.plainPuts || []), ...source.plainPuts];
+    if (source.plainDeletes?.length)
+      target.plainDeletes = [...(target.plainDeletes || []), ...source.plainDeletes];
+    if (source.plainClears?.length)
+      target.plainClears = [...new Set([...(target.plainClears || []), ...source.plainClears])];
   }
 }

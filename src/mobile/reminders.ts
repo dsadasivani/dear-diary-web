@@ -4,7 +4,8 @@ import { isNativePlatform } from '../platform';
 
 const REMINDER_ID = 1001;
 
-export type ReminderSyncStatus = 'scheduled' | 'disabled' | 'permission-denied' | 'unsupported' | 'error';
+export type ReminderSyncStatus =
+  'scheduled' | 'disabled' | 'permission-denied' | 'unsupported' | 'error';
 
 export interface ReminderCapability {
   supported: boolean;
@@ -22,11 +23,12 @@ export const getReminderCapability = async (): Promise<ReminderCapability> => {
     const permission = await LocalNotifications.checkPermissions();
     return {
       supported: true,
-      permission: permission.display === 'granted'
-        ? 'granted'
-        : permission.display === 'denied'
-          ? 'denied'
-          : 'prompt',
+      permission:
+        permission.display === 'granted'
+          ? 'granted'
+          : permission.display === 'denied'
+            ? 'denied'
+            : 'prompt',
     };
   } catch {
     return { supported: false, permission: 'unsupported' };
@@ -59,7 +61,9 @@ const parseReminderTime = (time: string): { hour: number; minute: number } => {
   };
 };
 
-export const syncReminderNotification = async (settings: AppSettings): Promise<ReminderSyncStatus> => {
+export const syncReminderNotification = async (
+  settings: AppSettings,
+): Promise<ReminderSyncStatus> => {
   if (!isNativePlatform()) {
     return 'unsupported';
   }
@@ -80,15 +84,17 @@ export const syncReminderNotification = async (settings: AppSettings): Promise<R
     const { hour, minute } = parseReminderTime(settings.reminderTime || '20:00');
 
     await LocalNotifications.schedule({
-      notifications: [{
-        id: REMINDER_ID,
-        title: 'Dear Diary',
-        body: 'Take a quiet moment to write today.',
-        schedule: {
-          on: { hour, minute },
-          repeats: true,
+      notifications: [
+        {
+          id: REMINDER_ID,
+          title: 'Dear Diary',
+          body: 'Take a quiet moment to write today.',
+          schedule: {
+            on: { hour, minute },
+            repeats: true,
+          },
         },
-      }],
+      ],
     });
     return 'scheduled';
   } catch (error) {

@@ -13,13 +13,20 @@ export interface PersistentSafetyStop {
 export class PersistentSafetyStopStore {
   private tail: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly store: LocalDataStore, private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly store: LocalDataStore,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   get(accountId: string): Promise<PersistentSafetyStop | null> {
     return this.exclusive(async () => (await this.read())[accountId] || null);
   }
 
-  engage(accountId: string, errorCode: SyncErrorCode, diagnosticCode: string): Promise<PersistentSafetyStop> {
+  engage(
+    accountId: string,
+    errorCode: SyncErrorCode,
+    diagnosticCode: string,
+  ): Promise<PersistentSafetyStop> {
     return this.exclusive(async () => {
       const stops = await this.read();
       const existing = stops[accountId];
@@ -40,17 +47,21 @@ export class PersistentSafetyStopStore {
   }
 
   async assertDestructiveActionAllowed(accountId: string): Promise<void> {
-    if (await this.get(accountId)) throw new Error('Destructive synchronization actions are disabled by safety stop.');
+    if (await this.get(accountId))
+      throw new Error('Destructive synchronization actions are disabled by safety stop.');
   }
 
   private async read(): Promise<Record<string, PersistentSafetyStop>> {
     const raw = await this.store.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) as Record<string, PersistentSafetyStop> : {};
+    return raw ? (JSON.parse(raw) as Record<string, PersistentSafetyStop>) : {};
   }
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(work, work);
-    this.tail = result.then(() => undefined, () => undefined);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 }

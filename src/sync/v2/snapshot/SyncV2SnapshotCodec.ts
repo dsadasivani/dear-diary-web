@@ -14,7 +14,12 @@ export class AccountKeySyncV2SnapshotCodec implements SyncV2SnapshotCodec {
   constructor(private readonly keyForEpoch: (keyEpoch: number) => Promise<Uint8Array>) {}
 
   async encrypt(payload: Uint8Array, keyEpoch: number): Promise<Uint8Array> {
-    const encrypted = await encryptSyncPayload(await this.keyForEpoch(keyEpoch), 'snapshot', payload, { keyEpoch });
+    const encrypted = await encryptSyncPayload(
+      await this.keyForEpoch(keyEpoch),
+      'snapshot',
+      payload,
+      { keyEpoch },
+    );
     return encrypted.bytes;
   }
 

@@ -64,7 +64,7 @@ const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 const bytesToBase64 = (bytes: Uint8Array): string => {
   let binary = '';
-  bytes.forEach(byte => {
+  bytes.forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
   return btoa(binary);
@@ -87,15 +87,16 @@ const extensionFromMime = (mimeType: string, kind: MediaKind): string => {
   return kind === 'audio' ? 'webm' : 'jpg';
 };
 
-const canBackupUri = (uri: string): boolean => (
+const canBackupUri = (uri: string): boolean =>
   uri.startsWith('data:') ||
   uri.startsWith('blob:') ||
   uri.startsWith('file:') ||
   uri.includes('_capacitor_file_') ||
-  uri.includes('/_capacitor_file_')
-);
+  uri.includes('/_capacitor_file_');
 
-const readMediaBytes = async (uri: string): Promise<{ bytes: Uint8Array; mimeType: string } | null> => {
+const readMediaBytes = async (
+  uri: string,
+): Promise<{ bytes: Uint8Array; mimeType: string } | null> => {
   if (!canBackupUri(uri)) {
     return null;
   }
@@ -112,9 +113,8 @@ const readMediaBytes = async (uri: string): Promise<{ bytes: Uint8Array; mimeTyp
   };
 };
 
-const makeMediaId = (kind: MediaKind, index: number): string => (
-  `${kind}-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`
-);
+const makeMediaId = (kind: MediaKind, index: number): string =>
+  `${kind}-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`;
 
 const sanitizeSettings = (settings: AppSettings): AppSettings => {
   const { remindersEnabled, reminderTime, customTags, customMoods, theme } = settings;
@@ -156,7 +156,10 @@ const addMediaAsset = async (
   return `media://${id}`;
 };
 
-const calculateChecksum = async (dataJson: string, mediaFiles: Record<string, Uint8Array>): Promise<string> => {
+const calculateChecksum = async (
+  dataJson: string,
+  mediaFiles: Record<string, Uint8Array>,
+): Promise<string> => {
   const fileNames = Object.keys(mediaFiles).sort();
   const totalBytes = fileNames.reduce(
     (sum, fileName) => sum + textEncoder.encode(fileName).length + mediaFiles[fileName].length,
@@ -171,18 +174,20 @@ const calculateChecksum = async (dataJson: string, mediaFiles: Record<string, Ui
   };
 
   append(textEncoder.encode(dataJson));
-  fileNames.forEach(fileName => {
+  fileNames.forEach((fileName) => {
     append(textEncoder.encode(fileName));
     append(mediaFiles[fileName]);
   });
 
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest))
-    .map(byte => byte.toString(16).padStart(2, '0'))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
 };
 
-const createPayloadAndMedia = async (context: BackupCreationContext): Promise<{
+const createPayloadAndMedia = async (
+  context: BackupCreationContext,
+): Promise<{
   payload: DearDiaryBackupPayload;
   mediaFiles: Record<string, Uint8Array>;
 }> => {
@@ -200,7 +205,9 @@ const createPayloadAndMedia = async (context: BackupCreationContext): Promise<{
 
   for (const entry of entries) {
     entry.photoUris = await Promise.all(
-      (entry.photoUris || []).map(uri => addMediaAsset(uri, 'photo', mediaAssets, mediaFiles) as Promise<string>),
+      (entry.photoUris || []).map(
+        (uri) => addMediaAsset(uri, 'photo', mediaAssets, mediaFiles) as Promise<string>,
+      ),
     );
     entry.audioUri = await addMediaAsset(entry.audioUri, 'audio', mediaAssets, mediaFiles);
     if (entry.blocks) {
@@ -210,7 +217,12 @@ const createPayloadAndMedia = async (context: BackupCreationContext): Promise<{
     }
   }
 
-  userProfile.avatarUri = await addMediaAsset(userProfile.avatarUri, 'avatar', mediaAssets, mediaFiles);
+  userProfile.avatarUri = await addMediaAsset(
+    userProfile.avatarUri,
+    'avatar',
+    mediaAssets,
+    mediaFiles,
+  );
 
   return {
     payload: {
@@ -228,9 +240,8 @@ const createPayloadAndMedia = async (context: BackupCreationContext): Promise<{
   };
 };
 
-const getAppVersion = (): string => (
-  (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '0.0.0'
-);
+const getAppVersion = (): string =>
+  (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '0.0.0';
 
 const getBackupCreationContext = async (): Promise<BackupCreationContext> => {
   const settings = await diaryRepository.getDriveBackupSettings();
@@ -243,12 +254,17 @@ const getBackupCreationContext = async (): Promise<BackupCreationContext> => {
   };
 };
 
-export const createBackupBundle = async (providedContext?: BackupCreationContext): Promise<BackupBundle> => {
-  const context = providedContext || await getBackupCreationContext();
+export const createBackupBundle = async (
+  providedContext?: BackupCreationContext,
+): Promise<BackupBundle> => {
+  const context = providedContext || (await getBackupCreationContext());
   const { payload, mediaFiles } = await createPayloadAndMedia(context);
   const dataJson = JSON.stringify(payload);
   const checksum = await calculateChecksum(dataJson, mediaFiles);
-  const totalBytes = Object.values(mediaFiles).reduce((sum, bytes) => sum + bytes.length, textEncoder.encode(dataJson).length);
+  const totalBytes = Object.values(mediaFiles).reduce(
+    (sum, bytes) => sum + bytes.length,
+    textEncoder.encode(dataJson).length,
+  );
 
   const manifest: BackupManifest = {
     schemaVersion: BACKUP_SCHEMA_VERSION,
@@ -289,9 +305,8 @@ const createPreRestoreSafetySnapshot = async (): Promise<void> => {
   }
 };
 
-const mediaBytesToDataUri = (bytes: Uint8Array, mimeType: string): string => (
-  `data:${mimeType};base64,${bytesToBase64(bytes)}`
-);
+const mediaBytesToDataUri = (bytes: Uint8Array, mimeType: string): string =>
+  `data:${mimeType};base64,${bytesToBase64(bytes)}`;
 
 const restoreMediaAssets = async (
   payload: DearDiaryBackupPayload,
@@ -312,22 +327,19 @@ const restoreMediaAssets = async (
   return restoredUris;
 };
 
-const replaceMediaRefs = (
-  payload: DearDiaryBackupPayload,
-  mediaMap: Map<string, string>,
-): void => {
-  payload.diaries.forEach(diary => {
+const replaceMediaRefs = (payload: DearDiaryBackupPayload, mediaMap: Map<string, string>): void => {
+  payload.diaries.forEach((diary) => {
     if (diary.coverImage && mediaMap.has(diary.coverImage)) {
       diary.coverImage = mediaMap.get(diary.coverImage);
     }
   });
 
-  payload.entries.forEach(entry => {
-    entry.photoUris = (entry.photoUris || []).map(uri => mediaMap.get(uri) || uri);
+  payload.entries.forEach((entry) => {
+    entry.photoUris = (entry.photoUris || []).map((uri) => mediaMap.get(uri) || uri);
     if (entry.audioUri && mediaMap.has(entry.audioUri)) {
       entry.audioUri = mediaMap.get(entry.audioUri);
     }
-    entry.blocks?.forEach(block => {
+    entry.blocks?.forEach((block) => {
       if (block.audioUri && mediaMap.has(block.audioUri)) {
         block.audioUri = mediaMap.get(block.audioUri);
       }
@@ -351,7 +363,11 @@ const validateBackup = async (
   if (payload.version !== '2.0.0' && payload.version !== '3.0.0') {
     throw new Error('Unsupported Dear Diary backup payload.');
   }
-  if (!Array.isArray(payload.diaries) || !Array.isArray(payload.entries) || !Array.isArray(payload.notes)) {
+  if (
+    !Array.isArray(payload.diaries) ||
+    !Array.isArray(payload.entries) ||
+    !Array.isArray(payload.notes)
+  ) {
     throw new Error('Backup data is incomplete.');
   }
 
@@ -371,14 +387,19 @@ export const restoreBackupBundle = async (bytes: Uint8Array): Promise<BackupMani
   const restoredMedia = await restoreMediaAssets(payload, mediaFiles);
   replaceMediaRefs(payload, restoredMedia);
 
-  await diaryRepository.importSnapshot({
-    diaries: payload.diaries,
-    entries: payload.entries,
-    notes: payload.notes,
-    settings: sanitizeSettings(payload.settings),
-    userProfile: payload.userProfile,
-  }, 'replace-portable');
-  await pruneOrphanedMedia(0).catch(error => console.warn('Post-restore media cleanup will retry later:', error));
+  await diaryRepository.importSnapshot(
+    {
+      diaries: payload.diaries,
+      entries: payload.entries,
+      notes: payload.notes,
+      settings: sanitizeSettings(payload.settings),
+      userProfile: payload.userProfile,
+    },
+    'replace-portable',
+  );
+  await pruneOrphanedMedia(0).catch((error) =>
+    console.warn('Post-restore media cleanup will retry later:', error),
+  );
 
   const currentBackupSettings = await diaryRepository.getDriveBackupSettings();
   await diaryRepository.saveDriveBackupSettings({
@@ -398,27 +419,39 @@ const payloadSnapshot = (payload: DearDiaryBackupPayload): RepositorySnapshot =>
   userProfile: payload.userProfile,
 });
 
-export const previewBackupBundleMerge = async (bytes: Uint8Array): Promise<{
+export const previewBackupBundleMerge = async (
+  bytes: Uint8Array,
+): Promise<{
   manifest: BackupManifest;
   preview: BackupMergePreview;
 }> => {
   const { manifest, payload } = await validateBackupBundleBytes(bytes);
   return {
     manifest,
-    preview: await diaryRepository.previewPortableMerge(payloadSnapshot(payload), payload.mediaAssets?.length || 0),
+    preview: await diaryRepository.previewPortableMerge(
+      payloadSnapshot(payload),
+      payload.mediaAssets?.length || 0,
+    ),
   };
 };
 
-export const mergeBackupBundle = async (bytes: Uint8Array): Promise<{
+export const mergeBackupBundle = async (
+  bytes: Uint8Array,
+): Promise<{
   manifest: BackupManifest;
   result: BackupMergeResult;
 }> => {
   const { files, manifest, payload } = await validateBackupBundleBytes(bytes);
   await createPreRestoreSafetySnapshot();
-  const mediaFiles = Object.fromEntries(Object.entries(files).filter(([path]) => path.startsWith('media/')));
+  const mediaFiles = Object.fromEntries(
+    Object.entries(files).filter(([path]) => path.startsWith('media/')),
+  );
   const restoredMedia = await restoreMediaAssets(payload, mediaFiles);
   replaceMediaRefs(payload, restoredMedia);
-  const result = await diaryRepository.mergePortableSnapshot(payloadSnapshot(payload), payload.mediaAssets?.length || 0);
+  const result = await diaryRepository.mergePortableSnapshot(
+    payloadSnapshot(payload),
+    payload.mediaAssets?.length || 0,
+  );
   const currentBackupSettings = await diaryRepository.getDriveBackupSettings();
   await diaryRepository.saveDriveBackupSettings({
     ...currentBackupSettings,
@@ -430,7 +463,11 @@ export const mergeBackupBundle = async (bytes: Uint8Array): Promise<{
 
 export const validateBackupBundleBytes = async (
   bytes: Uint8Array,
-): Promise<{ files: Record<string, Uint8Array>; manifest: BackupManifest; payload: DearDiaryBackupPayload }> => {
+): Promise<{
+  files: Record<string, Uint8Array>;
+  manifest: BackupManifest;
+  payload: DearDiaryBackupPayload;
+}> => {
   const files = unzipSync(bytes);
   const manifestBytes = files[BACKUP_MANIFEST_FILE];
   const dataBytes = files[BACKUP_DATA_FILE];

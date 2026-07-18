@@ -41,9 +41,8 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
 };
 
 const base64ToBytes = (value: string): Uint8Array => {
-  const binary = typeof atob === 'function'
-    ? atob(value)
-    : Buffer.from(value, 'base64').toString('binary');
+  const binary =
+    typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return bytes;
@@ -53,12 +52,17 @@ const importRootKey = (accountRootKey: Uint8Array): Promise<CryptoKey> => {
   if (accountRootKey.length !== ACCOUNT_ROOT_KEY_BYTES) {
     throw new Error(`Account root key must be ${ACCOUNT_ROOT_KEY_BYTES} bytes.`);
   }
-  return crypto.subtle.importKey('raw', accountRootKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  return crypto.subtle.importKey('raw', accountRootKey, { name: 'AES-GCM' }, false, [
+    'encrypt',
+    'decrypt',
+  ]);
 };
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
 };
 
 export const encryptSyncPayload = async (
@@ -67,70 +71,94 @@ export const encryptSyncPayload = async (
   payload: Uint8Array,
   options: { keyEpoch?: number } = {},
 ): Promise<EncryptedSyncObject> => {
-  return measureAsync('sync.crypto.encrypt', async () => {
-    const nonce = new Uint8Array(12);
-    crypto.getRandomValues(nonce);
-    const header: EncryptedSyncObjectHeader = {
-      version: 1,
-      cipher: 'AES-256-GCM',
-      objectKind,
-      nonce: bytesToBase64(nonce),
-      createdAt: new Date().toISOString(),
-      keyEpoch: options.keyEpoch,
-    };
-    const headerBytes = encoder.encode(JSON.stringify(header));
-    const key = await importRootKey(accountRootKey);
-    const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: nonce, additionalData: headerBytes },
-      key,
-      payload,
-    ));
-    const envelope = encoder.encode(JSON.stringify({
-      header,
-      ciphertext: bytesToBase64(ciphertext),
-    }));
-    return {
-      bytes: envelope,
-      sha256: await sha256Hex(envelope),
-      header,
-    };
-  }, { objectKind, sizeBytes: payload.byteLength, keyEpoch: options.keyEpoch });
+  return measureAsync(
+    'sync.crypto.encrypt',
+    async () => {
+      const nonce = new Uint8Array(12);
+      crypto.getRandomValues(nonce);
+      const header: EncryptedSyncObjectHeader = {
+        version: 1,
+        cipher: 'AES-256-GCM',
+        objectKind,
+        nonce: bytesToBase64(nonce),
+        createdAt: new Date().toISOString(),
+        keyEpoch: options.keyEpoch,
+      };
+      const headerBytes = encoder.encode(JSON.stringify(header));
+      const key = await importRootKey(accountRootKey);
+      const ciphertext = new Uint8Array(
+        await crypto.subtle.encrypt(
+          { name: 'AES-GCM', iv: nonce, additionalData: headerBytes },
+          key,
+          payload,
+        ),
+      );
+      const envelope = encoder.encode(
+        JSON.stringify({
+          header,
+          ciphertext: bytesToBase64(ciphertext),
+        }),
+      );
+      return {
+        bytes: envelope,
+        sha256: await sha256Hex(envelope),
+        header,
+      };
+    },
+    { objectKind, sizeBytes: payload.byteLength, keyEpoch: options.keyEpoch },
+  );
 };
 
 export const decryptSyncPayload = async (
   accountRootKey: Uint8Array,
   bytes: Uint8Array,
 ): Promise<{ objectKind: SyncObjectKind; payload: Uint8Array }> => {
-  return measureAsync('sync.crypto.decrypt', async () => {
-    const envelope = JSON.parse(decoder.decode(bytes)) as {
-      header: EncryptedSyncObjectHeader;
-      ciphertext: string;
-    };
-    if (envelope.header.version !== 1 || envelope.header.cipher !== 'AES-256-GCM') {
-      throw new EncryptedSyncObjectError('UNSUPPORTED_VERSION', 'Encrypted sync object version is not supported.');
-    }
-    const headerBytes = encoder.encode(JSON.stringify(envelope.header));
-    const key = await importRootKey(accountRootKey);
-    try {
-      const payload = new Uint8Array(await crypto.subtle.decrypt(
-        {
-          name: 'AES-GCM',
-          iv: base64ToBytes(envelope.header.nonce),
-          additionalData: headerBytes,
-        },
-        key,
-        base64ToBytes(envelope.ciphertext),
-      ));
-      return { objectKind: envelope.header.objectKind, payload };
-    } catch {
-      throw new EncryptedSyncObjectError('AUTHENTICATION_FAILED', 'Encrypted sync object authentication failed.');
-    }
-  }, { sizeBytes: bytes.byteLength });
+  return measureAsync(
+    'sync.crypto.decrypt',
+    async () => {
+      const envelope = JSON.parse(decoder.decode(bytes)) as {
+        header: EncryptedSyncObjectHeader;
+        ciphertext: string;
+      };
+      if (envelope.header.version !== 1 || envelope.header.cipher !== 'AES-256-GCM') {
+        throw new EncryptedSyncObjectError(
+          'UNSUPPORTED_VERSION',
+          'Encrypted sync object version is not supported.',
+        );
+      }
+      const headerBytes = encoder.encode(JSON.stringify(envelope.header));
+      const key = await importRootKey(accountRootKey);
+      try {
+        const payload = new Uint8Array(
+          await crypto.subtle.decrypt(
+            {
+              name: 'AES-GCM',
+              iv: base64ToBytes(envelope.header.nonce),
+              additionalData: headerBytes,
+            },
+            key,
+            base64ToBytes(envelope.ciphertext),
+          ),
+        );
+        return { objectKind: envelope.header.objectKind, payload };
+      } catch {
+        throw new EncryptedSyncObjectError(
+          'AUTHENTICATION_FAILED',
+          'Encrypted sync object authentication failed.',
+        );
+      }
+    },
+    { sizeBytes: bytes.byteLength },
+  );
 };
 
-export const readEncryptedSyncObjectHeader = (bytes: Uint8Array): EncryptedSyncObjectHeader | null => {
+export const readEncryptedSyncObjectHeader = (
+  bytes: Uint8Array,
+): EncryptedSyncObjectHeader | null => {
   try {
-    return (JSON.parse(decoder.decode(bytes)) as { header?: EncryptedSyncObjectHeader }).header || null;
+    return (
+      (JSON.parse(decoder.decode(bytes)) as { header?: EncryptedSyncObjectHeader }).header || null
+    );
   } catch {
     return null;
   }
@@ -138,11 +166,7 @@ export const readEncryptedSyncObjectHeader = (bytes: Uint8Array): EncryptedSyncO
 
 const keyFingerprint = (key: Uint8Array): string => Array.from(key).join(',');
 
-const addKnownKey = (
-  keys: Uint8Array[],
-  seen: Set<string>,
-  key: Uint8Array | undefined,
-): void => {
+const addKnownKey = (keys: Uint8Array[], seen: Set<string>, key: Uint8Array | undefined): void => {
   if (!key) return;
   const fingerprint = keyFingerprint(key);
   if (seen.has(fingerprint)) return;
@@ -177,13 +201,21 @@ export const decryptSyncPayloadWithKnownKeys = async (
     }
   }
   if (lastError instanceof EncryptedSyncObjectError && lastError.code === 'AUTHENTICATION_FAILED') {
-    const knownEpochs = Object.keys(accountRootKeys || {}).sort((left, right) => Number(left) - Number(right));
+    const knownEpochs = Object.keys(accountRootKeys || {}).sort(
+      (left, right) => Number(left) - Number(right),
+    );
     throw new EncryptedSyncObjectError(
       'AUTHENTICATION_FAILED',
-      `Encrypted sync object authentication failed for ${header?.objectKind || 'unknown object'} `
-      + `(header epoch ${headerKeyEpoch ?? 'unknown'}, metadata epoch ${preferredKeyEpoch ?? 'unknown'}, `
-      + `known epochs ${knownEpochs.length ? knownEpochs.join(',') : 'none'}, tried keys ${keys.length}).`,
+      `Encrypted sync object authentication failed for ${header?.objectKind || 'unknown object'} ` +
+        `(header epoch ${headerKeyEpoch ?? 'unknown'}, metadata epoch ${preferredKeyEpoch ?? 'unknown'}, ` +
+        `known epochs ${knownEpochs.length ? knownEpochs.join(',') : 'none'}, tried keys ${keys.length}).`,
     );
   }
-  throw lastError || new EncryptedSyncObjectError('AUTHENTICATION_FAILED', 'Encrypted sync object authentication failed.');
+  throw (
+    lastError ||
+    new EncryptedSyncObjectError(
+      'AUTHENTICATION_FAILED',
+      'Encrypted sync object authentication failed.',
+    )
+  );
 };

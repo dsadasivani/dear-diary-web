@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote, sanitizeRichTextHtml } from './richTextSanitizer';
+import {
+  richTextHtmlToPlainText,
+  sanitizeEntry,
+  sanitizeNote,
+  sanitizeRichTextHtml,
+} from './richTextSanitizer';
 
 test('preserves editor-supported rich text while removing attributes', () => {
   assert.equal(
-    sanitizeRichTextHtml('<h2 class="hero">Title</h2><p style="color:red">Hello <strong data-x="1">world</strong><br></p>'),
+    sanitizeRichTextHtml(
+      '<h2 class="hero">Title</h2><p style="color:red">Hello <strong data-x="1">world</strong><br></p>',
+    ),
     '<h2>Title</h2><p>Hello <strong>world</strong><br></p>',
   );
 });
@@ -39,7 +46,7 @@ test('removes dangerous rich-text payload variants without leaking executable te
     '<div><b>Nested <i>safe</i></b><style>@import url(javascript:alert(1))</style></div>',
   ];
 
-  payloads.forEach(payload => {
+  payloads.forEach((payload) => {
     const sanitized = sanitizeRichTextHtml(payload);
     assert.doesNotMatch(
       sanitized,
@@ -64,7 +71,13 @@ test('sanitizes entry, block, and note bodies', () => {
     wordCount: 1,
     createdAt: 1,
     updatedAt: 1,
-    blocks: [{ id: 'block-1', time: '10:00', body: '<script>alert(1)</script><strong onclick=alert(1)>ok</strong>' }],
+    blocks: [
+      {
+        id: 'block-1',
+        time: '10:00',
+        body: '<script>alert(1)</script><strong onclick=alert(1)>ok</strong>',
+      },
+    ],
   });
   const note = sanitizeNote({
     id: 'note-1',
@@ -82,7 +95,9 @@ test('sanitizes entry, block, and note bodies', () => {
 });
 
 test('converts rich text to visible plain text for search', () => {
-  const plain = richTextHtmlToPlainText('<p>Hello <strong>visible</strong></p><script>hidden()</script><div>again</div>');
+  const plain = richTextHtmlToPlainText(
+    '<p>Hello <strong>visible</strong></p><script>hidden()</script><div>again</div>',
+  );
   assert.equal(plain, 'Hello visible again');
   assert.equal(plain.toLowerCase().includes('strong'), false);
   assert.equal(plain.toLowerCase().includes('script'), false);

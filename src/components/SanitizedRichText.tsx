@@ -12,10 +12,5 @@ export default function SanitizedRichText({
   className,
 }: SanitizedRichTextProps) {
   const sanitized = sanitizeRichTextHtml(html || fallback);
-  return (
-    <div
-      className={className}
-      dangerouslySetInnerHTML={{ __html: sanitized }}
-    />
-  );
+  return <div className={className} dangerouslySetInnerHTML={{ __html: sanitized }} />;
 }

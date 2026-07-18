@@ -224,13 +224,7 @@ export interface BackupFileSummary {
 export type SyncDeviceRole = 'primary_mobile' | 'web_companion' | 'desktop_companion';
 export type SyncDeviceActivationState = 'active' | 'pending_recovery' | 'aborted';
 export type SyncObjectKind =
-  | 'event'
-  | 'media'
-  | 'snapshot'
-  | 'key_package'
-  | 'manifest'
-  | 'partition_snapshot'
-  | 'thumbnail';
+  'event' | 'media' | 'snapshot' | 'key_package' | 'manifest' | 'partition_snapshot' | 'thumbnail';
 
 export type SyncPartitionKey = 'core' | `month:${string}`;
 export type PairingPlatform = 'android' | 'ios' | 'web' | 'desktop';

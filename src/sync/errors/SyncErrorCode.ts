@@ -25,4 +25,3 @@ export type SyncErrorCode =
   | 'DEPENDENCY_BLOCKED'
   | 'INVARIANT_VIOLATION'
   | 'UNKNOWN';
-

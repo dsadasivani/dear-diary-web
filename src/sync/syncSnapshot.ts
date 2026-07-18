@@ -1,10 +1,7 @@
 import type { DiaryRepository, RepositorySnapshot } from '../repositories/DiaryRepository';
 import type { GoogleAccountSession, SyncObjectMetadata } from '../types';
 import { decryptSyncPayloadWithKnownKeys } from './encryptedSyncObject';
-import {
-  downloadVerifiedSyncObject,
-  type SyncObjectDownloader,
-} from './eventReplay';
+import { downloadVerifiedSyncObject, type SyncObjectDownloader } from './eventReplay';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -35,14 +32,16 @@ const validateRecordVersions = (value: unknown): Record<string, number> => {
 
 const stripLocalMediaUris = (
   pointers: RepositorySnapshot['syncMediaPointers'] | undefined,
-): NonNullable<RepositorySnapshot['syncMediaPointers']> => (
+): NonNullable<RepositorySnapshot['syncMediaPointers']> =>
   Object.fromEntries(
-    Object.entries(pointers || {}).map(([sequence, pointer]) => [sequence, {
-      ...pointer,
-      localUri: undefined,
-    }]),
-  )
-);
+    Object.entries(pointers || {}).map(([sequence, pointer]) => [
+      sequence,
+      {
+        ...pointer,
+        localUri: undefined,
+      },
+    ]),
+  );
 
 export const encodeRepositorySnapshotPayload = (
   snapshot: RepositorySnapshot,
@@ -52,20 +51,22 @@ export const encodeRepositorySnapshotPayload = (
   if (!Number.isInteger(baseSequence) || baseSequence < 0) {
     throw new Error('Snapshot base sequence must be a non-negative integer.');
   }
-  return encoder.encode(JSON.stringify({
-    version: 2,
-    kind: 'snapshot',
-    accountId,
-    baseSequence,
-    exportedAt: new Date().toISOString(),
-    diaries: snapshot.diaries,
-    entries: snapshot.entries,
-    notes: snapshot.notes,
-    settings: snapshot.settings || null,
-    userProfile: snapshot.userProfile || null,
-    syncRecordVersions: snapshot.syncRecordVersions || {},
-    syncMediaPointers: stripLocalMediaUris(snapshot.syncMediaPointers),
-  }));
+  return encoder.encode(
+    JSON.stringify({
+      version: 2,
+      kind: 'snapshot',
+      accountId,
+      baseSequence,
+      exportedAt: new Date().toISOString(),
+      diaries: snapshot.diaries,
+      entries: snapshot.entries,
+      notes: snapshot.notes,
+      settings: snapshot.settings || null,
+      userProfile: snapshot.userProfile || null,
+      syncRecordVersions: snapshot.syncRecordVersions || {},
+      syncMediaPointers: stripLocalMediaUris(snapshot.syncMediaPointers),
+    }),
+  );
 };
 
 export const parseRepositorySnapshotPayload = (
@@ -84,7 +85,11 @@ export const parseRepositorySnapshotPayload = (
   if (payload.version !== 1 && payload.version !== 2) {
     throw new Error('The encrypted snapshot format is unsupported.');
   }
-  if (!Array.isArray(payload.diaries) || !Array.isArray(payload.entries) || !Array.isArray(payload.notes)) {
+  if (
+    !Array.isArray(payload.diaries) ||
+    !Array.isArray(payload.entries) ||
+    !Array.isArray(payload.notes)
+  ) {
     throw new Error('The encrypted snapshot is incomplete.');
   }
   const baseSequence = payload.version === 2 ? payload.baseSequence : 0;
@@ -110,11 +115,8 @@ export const exportRepositorySnapshotPayload = async (
   repository: DiaryRepository,
   accountId: string,
   baseSequence: number,
-): Promise<Uint8Array> => encodeRepositorySnapshotPayload(
-  await repository.exportSnapshot(),
-  accountId,
-  baseSequence,
-);
+): Promise<Uint8Array> =>
+  encodeRepositorySnapshotPayload(await repository.exportSnapshot(), accountId, baseSequence);
 
 export const findLatestValidSnapshot = async (input: {
   objects: SyncObjectMetadata[];
@@ -125,23 +127,29 @@ export const findLatestValidSnapshot = async (input: {
   download?: SyncObjectDownloader;
 }): Promise<ValidSnapshotCandidate> => {
   const candidates = input.objects
-    .filter(object => object.objectKind === 'snapshot')
+    .filter((object) => object.objectKind === 'snapshot')
     .sort((left, right) => right.sequence - left.sequence);
   if (candidates.length === 0) throw new Error('No synced snapshot was found for this account.');
 
   const failures: unknown[] = [];
   for (const object of candidates) {
     try {
-      const encrypted = await downloadVerifiedSyncObject(input.googleSession, object, input.download);
+      const encrypted = await downloadVerifiedSyncObject(
+        input.googleSession,
+        object,
+        input.download,
+      );
       const decrypted = await decryptSyncPayloadWithKnownKeys(
         encrypted,
         input.accountRootKey,
         input.accountRootKeys,
         object.keyEpoch,
       );
-      if (decrypted.objectKind !== 'snapshot') throw new Error('Snapshot metadata does not match its payload.');
+      if (decrypted.objectKind !== 'snapshot')
+        throw new Error('Snapshot metadata does not match its payload.');
       const parsed = parseRepositorySnapshotPayload(decrypted.payload, input.accountId);
-      if (parsed.baseSequence > object.sequence) throw new Error('Snapshot base sequence is ahead of its object sequence.');
+      if (parsed.baseSequence > object.sequence)
+        throw new Error('Snapshot base sequence is ahead of its object sequence.');
       return { object, ...parsed };
     } catch (error) {
       failures.push(error);

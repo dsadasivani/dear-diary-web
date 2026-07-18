@@ -4,7 +4,7 @@ import { emitSyncTelemetry, setSyncTelemetrySink } from './syncTelemetry';
 
 test('emits sync telemetry to an injectable sink', () => {
   const events: ReturnType<typeof emitSyncTelemetry>[] = [];
-  setSyncTelemetrySink(event => events.push(event));
+  setSyncTelemetrySink((event) => events.push(event));
 
   const emitted = emitSyncTelemetry('sync.test.event', { partitionKey: 'month:2026-07' }, 'warn');
 
@@ -18,7 +18,7 @@ test('emits sync telemetry to an injectable sink', () => {
 
 test('redacts sensitive identifiers and diary-shaped values', () => {
   const events: ReturnType<typeof emitSyncTelemetry>[] = [];
-  setSyncTelemetrySink(event => events.push(event));
+  setSyncTelemetrySink((event) => events.push(event));
   emitSyncTelemetry('sync.test.private', {
     accountId: 'account-private',
     title: 'private title',

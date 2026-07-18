@@ -40,7 +40,8 @@ type ArchivePartitionHydrator = (
 export interface ArchiveHydrationServiceDependencies {
   download?: SyncObjectDownloader;
   now?: () => number;
-  getArchiveHydrationPolicyInput: () => ArchiveHydrationPolicyInput | Promise<ArchiveHydrationPolicyInput>;
+  getArchiveHydrationPolicyInput: () =>
+    ArchiveHydrationPolicyInput | Promise<ArchiveHydrationPolicyInput>;
   backgroundArchiveBatchSize?: number;
   hydrateArchivePartition?: ArchivePartitionHydrator;
 }
@@ -48,11 +49,12 @@ export interface ArchiveHydrationServiceDependencies {
 export const defaultArchiveHydrationPolicyInput = async (
   isOnline: () => boolean,
 ): Promise<ArchiveHydrationPolicyInput> => {
-  const nav = typeof navigator === 'undefined' ? undefined : navigator as any;
+  const nav = typeof navigator === 'undefined' ? undefined : (navigator as any);
   const connection = nav?.connection || nav?.mozConnection || nav?.webkitConnection;
   const connectionType = String(connection?.type || '').toLowerCase();
   const effectiveType = String(connection?.effectiveType || '').toLowerCase();
-  const isCellular = connectionType === 'cellular' || ['slow-2g', '2g', '3g'].includes(effectiveType);
+  const isCellular =
+    connectionType === 'cellular' || ['slow-2g', '2g', '3g'].includes(effectiveType);
   let isCharging = true;
   let batteryLevel = 1;
   try {
@@ -78,7 +80,8 @@ export const defaultArchiveHydrationPolicyInput = async (
 export class ArchiveHydrationService {
   private readonly download?: SyncObjectDownloader;
   private readonly now: () => number;
-  private readonly getArchiveHydrationPolicyInput: () => ArchiveHydrationPolicyInput | Promise<ArchiveHydrationPolicyInput>;
+  private readonly getArchiveHydrationPolicyInput: () =>
+    ArchiveHydrationPolicyInput | Promise<ArchiveHydrationPolicyInput>;
   private readonly backgroundArchiveBatchSize: number;
   private readonly hydrateArchivePartitionFromCloud: ArchivePartitionHydrator;
 
@@ -90,13 +93,11 @@ export class ArchiveHydrationService {
     this.now = dependencies.now || Date.now;
     this.getArchiveHydrationPolicyInput = dependencies.getArchiveHydrationPolicyInput;
     this.backgroundArchiveBatchSize = Math.max(1, dependencies.backgroundArchiveBatchSize || 1);
-    this.hydrateArchivePartitionFromCloud = dependencies.hydrateArchivePartition || hydrateArchivePartitionFromCloud;
+    this.hydrateArchivePartitionFromCloud =
+      dependencies.hydrateArchivePartition || hydrateArchivePartitionFromCloud;
   }
 
-  async hydratePartition(
-    runtime: ArchiveHydrationRuntime,
-    partitionKey: string,
-  ): Promise<void> {
+  async hydratePartition(runtime: ArchiveHydrationRuntime, partitionKey: string): Promise<void> {
     const startedAt = this.now();
     emitSyncTelemetry('sync.archive.partition.start', { partitionKey });
     await this.repository.markPartitionHydrating(partitionKey);
@@ -126,7 +127,10 @@ export class ArchiveHydrationService {
       if (currentState) {
         await runtime.controlPlane.updateDeviceCursor({
           deviceId: currentState.deviceId,
-          lastAppliedSequence: Math.max(currentState.currentSyncSequence, result.currentSyncSequence),
+          lastAppliedSequence: Math.max(
+            currentState.currentSyncSequence,
+            result.currentSyncSequence,
+          ),
         });
       }
       emitSyncTelemetry('sync.archive.partition.complete', {
@@ -135,15 +139,22 @@ export class ArchiveHydrationService {
         currentSyncSequence: result.currentSyncSequence,
       });
     } catch (error: any) {
-      await this.repository.markPartitionHydrationFailed(partitionKey, error?.message || 'Archive hydration failed.');
-      const failedState = await this.repository.getPartitionHydrationState(partitionKey);
-      emitSyncTelemetry('sync.archive.partition.failed', {
+      await this.repository.markPartitionHydrationFailed(
         partitionKey,
-        durationMs: this.now() - startedAt,
-        error: error?.message || 'Archive hydration failed.',
-        failureCount: failedState.failureCount || 1,
-        nextRetryAt: failedState.nextRetryAt,
-      }, 'warn');
+        error?.message || 'Archive hydration failed.',
+      );
+      const failedState = await this.repository.getPartitionHydrationState(partitionKey);
+      emitSyncTelemetry(
+        'sync.archive.partition.failed',
+        {
+          partitionKey,
+          durationMs: this.now() - startedAt,
+          error: error?.message || 'Archive hydration failed.',
+          failureCount: failedState.failureCount || 1,
+          nextRetryAt: failedState.nextRetryAt,
+        },
+        'warn',
+      );
       throw error;
     }
   }
@@ -171,10 +182,11 @@ export class ArchiveHydrationService {
 
     const now = this.now();
     const candidates = (await this.repository.listAvailableArchiveMonths())
-      .filter(partition => (
-        partition.status === 'available' ||
-        (partition.status === 'failed' && (partition.nextRetryAt || 0) <= now)
-      ))
+      .filter(
+        (partition) =>
+          partition.status === 'available' ||
+          (partition.status === 'failed' && (partition.nextRetryAt || 0) <= now),
+      )
       .slice(0, this.backgroundArchiveBatchSize);
     if (candidates.length === 0) {
       emitSyncTelemetry('sync.archive.background.skipped', { reason: 'no_retryable_partitions' });
@@ -190,10 +202,14 @@ export class ArchiveHydrationService {
         await this.hydratePartition(runtime, candidate.partitionKey);
         hydratedPartitionKeys.push(candidate.partitionKey);
       } catch (error: any) {
-        emitSyncTelemetry('sync.archive.background.stopped_after_failure', {
-          partitionKey: candidate.partitionKey,
-          error: error?.message || 'Archive hydration failed.',
-        }, 'warn');
+        emitSyncTelemetry(
+          'sync.archive.background.stopped_after_failure',
+          {
+            partitionKey: candidate.partitionKey,
+            error: error?.message || 'Archive hydration failed.',
+          },
+          'warn',
+        );
         break;
       }
     }

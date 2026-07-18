@@ -34,7 +34,7 @@ export class SyncV2RuntimeStore {
 
   async load(): Promise<SyncV2LocalRuntime | null> {
     const raw = await this.store.getItem(RUNTIME_KEY);
-    return raw ? JSON.parse(raw) as SyncV2LocalRuntime : null;
+    return raw ? (JSON.parse(raw) as SyncV2LocalRuntime) : null;
   }
 
   save(runtime: SyncV2LocalRuntime): Promise<void> {
@@ -73,17 +73,27 @@ export class ProtocolBootstrap {
     }
     const readCompatible = this.clientProtocolVersion >= protocol.minimumReadProtocolVersion;
     const writeCompatible = this.clientProtocolVersion >= protocol.minimumWriteProtocolVersion;
-    if (runtime.deviceStatus !== 'ACTIVE') throw new SyncError({ code: 'DEVICE_REVOKED', userActionRequired: true });
+    if (runtime.deviceStatus !== 'ACTIVE')
+      throw new SyncError({ code: 'DEVICE_REVOKED', userActionRequired: true });
     await this.outbox.releaseExpiredLeases(runtime.accountId, this.now());
     const stopped = await this.safetyStop.get(runtime.accountId);
     const schemaCompatible = runtime.eventSchemaVersion === protocol.eventSchemaVersion;
     const appCompatible = isVersionAtLeast(this.appVersion, protocol.minimumSupportedAppVersion);
     const rolloutEligible = await isCanaryEnabled(
-      this.rolloutPseudonym, protocol.syncV2RolloutPercentage, protocol.rolloutSaltVersion,
+      this.rolloutPseudonym,
+      protocol.syncV2RolloutPercentage,
+      protocol.rolloutSaltVersion,
     );
-    const upgradeRequired = !readCompatible || !writeCompatible || !schemaCompatible || !appCompatible;
-    const pullAllowed = rolloutEligible && protocol.featureFlags.remotePullEnabled && readCompatible && schemaCompatible && !stopped;
-    const writesAllowed = rolloutEligible && protocol.featureFlags.syncWritesEnabled && !upgradeRequired && !stopped;
+    const upgradeRequired =
+      !readCompatible || !writeCompatible || !schemaCompatible || !appCompatible;
+    const pullAllowed =
+      rolloutEligible &&
+      protocol.featureFlags.remotePullEnabled &&
+      readCompatible &&
+      schemaCompatible &&
+      !stopped;
+    const writesAllowed =
+      rolloutEligible && protocol.featureFlags.syncWritesEnabled && !upgradeRequired && !stopped;
     await this.health.updateSyncHealth({
       accountId: runtime.accountId,
       localSequence: runtime.lastAppliedSequence,

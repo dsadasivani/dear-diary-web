@@ -73,7 +73,9 @@ export const parseDevicePrivateKeyBundle = (value: string): DevicePrivateKeyBund
   return bundle;
 };
 
-export const exportDeviceSigningPublicKeySpki = async (publicKeyBundle: string): Promise<string> => {
+export const exportDeviceSigningPublicKeySpki = async (
+  publicKeyBundle: string,
+): Promise<string> => {
   const bundle = parseDevicePublicKeyBundle(publicKeyBundle);
   const publicKey = await crypto.subtle.importKey(
     'jwk',
@@ -84,11 +86,15 @@ export const exportDeviceSigningPublicKeySpki = async (publicKeyBundle: string):
   );
   const spki = new Uint8Array(await crypto.subtle.exportKey('spki', publicKey));
   let binary = '';
-  spki.forEach(byte => { binary += String.fromCharCode(byte); });
+  spki.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
   return btoa(binary);
 };
 
 export const fingerprintDevicePublicKey = async (publicKey: string): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(publicKey));
-  return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
 };

@@ -25,7 +25,9 @@ vi.mock('../repositories', () => ({
 }));
 
 vi.mock('../sync/syncSecrets', () => ({ loadSyncSecrets: mocks.loadSyncSecrets }));
-vi.mock('../utils/googleAuth', () => ({ restoreGoogleDriveSession: mocks.restoreGoogleDriveSession }));
+vi.mock('../utils/googleAuth', () => ({
+  restoreGoogleDriveSession: mocks.restoreGoogleDriveSession,
+}));
 vi.mock('../sync/deviceKeyRotation', () => ({
   resumePendingDeviceKeyRotation: mocks.resumePendingDeviceKeyRotation,
   revokeDeviceWithKeyRotation: vi.fn(),
@@ -70,13 +72,23 @@ describe('CompanionApprovalPanel', () => {
 
   it('shows active companions returned by device management', async () => {
     mocks.getLocalSyncAccountState.mockResolvedValue({
-      accountId: 'v2-account', deviceId: 'primary-v2', deviceRole: 'primary_mobile', syncProtocolVersion: 2,
+      accountId: 'v2-account',
+      deviceId: 'primary-v2',
+      deviceRole: 'primary_mobile',
+      syncProtocolVersion: 2,
     });
-    mocks.listSyncV2Devices.mockResolvedValue([{
-      deviceId: 'web-v2', deviceRole: 'COMPANION', deviceStatus: 'ACTIVE', platform: 'web',
-      encryptionPublicKey: 'public', registeredAt: '2026-07-15T00:00:00Z',
-      lastSeenAt: '2026-07-15T00:00:00Z', lastAppVersion: null,
-    }]);
+    mocks.listSyncV2Devices.mockResolvedValue([
+      {
+        deviceId: 'web-v2',
+        deviceRole: 'COMPANION',
+        deviceStatus: 'ACTIVE',
+        platform: 'web',
+        encryptionPublicKey: 'public',
+        registeredAt: '2026-07-15T00:00:00Z',
+        lastSeenAt: '2026-07-15T00:00:00Z',
+        lastAppVersion: null,
+      },
+    ]);
 
     const view = render(<CompanionApprovalPanel />);
 
@@ -88,15 +100,32 @@ describe('CompanionApprovalPanel', () => {
 
   it('routes a primary directly to secure pairing discovery', async () => {
     mocks.getLocalSyncAccountState.mockResolvedValue({
-      accountId: 'v2-account', deviceId: 'primary-v2', deviceRole: 'primary_mobile', syncProtocolVersion: 2,
+      accountId: 'v2-account',
+      deviceId: 'primary-v2',
+      deviceRole: 'primary_mobile',
+      syncProtocolVersion: 2,
     });
-    mocks.listPendingSyncV2Pairings.mockResolvedValue([{
-      accountId: 'v2-account', pairingId: 'pairing-v2', requestedDeviceId: 'web-v2',
-      requestedDeviceEncryptionPublicKey: 'public', platform: 'web', challenge: 'challenge',
-      status: 'REQUESTED', keyEpoch: 1, keyPackageId: null, objectKey: null, sha256: null,
-      sizeBytes: null, downloadUrl: null, downloadExpiresAt: null, upload: null,
-      requestedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    }]);
+    mocks.listPendingSyncV2Pairings.mockResolvedValue([
+      {
+        accountId: 'v2-account',
+        pairingId: 'pairing-v2',
+        requestedDeviceId: 'web-v2',
+        requestedDeviceEncryptionPublicKey: 'public',
+        platform: 'web',
+        challenge: 'challenge',
+        status: 'REQUESTED',
+        keyEpoch: 1,
+        keyPackageId: null,
+        objectKey: null,
+        sha256: null,
+        sizeBytes: null,
+        downloadUrl: null,
+        downloadExpiresAt: null,
+        upload: null,
+        requestedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    ]);
 
     const view = render(<CompanionApprovalPanel />);
 
@@ -109,38 +138,54 @@ describe('CompanionApprovalPanel', () => {
 
   it('loads companion requests when encrypted data synchronization is paused', async () => {
     mocks.pullPending.mockRejectedValue(new Error('Synchronization paused to protect local data.'));
-    mocks.listPendingPairingSessions.mockResolvedValue([{
-      id: 'pairing-1',
-      accountId: 'account-1',
-      requestedDisplayName: 'Writing laptop',
-      requestedPlatform: 'web',
-    }]);
+    mocks.listPendingPairingSessions.mockResolvedValue([
+      {
+        id: 'pairing-1',
+        accountId: 'account-1',
+        requestedDisplayName: 'Writing laptop',
+        requestedPlatform: 'web',
+      },
+    ]);
 
     const view = render(<CompanionApprovalPanel />);
 
     expect(await screen.findByText('Writing laptop')).toBeInTheDocument();
-    expect(screen.queryByText('Synchronization paused to protect local data.')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Synchronization paused to protect local data.'),
+    ).not.toBeInTheDocument();
     expect(mocks.pullPending).not.toHaveBeenCalled();
     expect(mocks.listPendingPairingSessions).toHaveBeenCalledWith('primary-1');
     expect(mocks.listAccountDevices).toHaveBeenCalledWith('primary-1');
 
-    await waitFor(() => expect(screen.queryByText('Could not load companion requests.')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByText('Could not load companion requests.')).not.toBeInTheDocument(),
+    );
     view.unmount();
   });
 
   it('rejects an outdated pairing request for a different account', () => {
-    expect(pairingCompatibilityError({
-      accountId: 'v2-account',
-      v1AccountId: 'v1-account',
-      syncProtocolVersion: 2,
-    }, { accountId: 'v1-account' })).toMatch(/outdated pairing request/);
+    expect(
+      pairingCompatibilityError(
+        {
+          accountId: 'v2-account',
+          v1AccountId: 'v1-account',
+          syncProtocolVersion: 2,
+        },
+        { accountId: 'v1-account' },
+      ),
+    ).toMatch(/outdated pairing request/);
   });
 
   it('accepts a pairing request belonging to the active protocol account', () => {
-    expect(pairingCompatibilityError({
-      accountId: 'v2-account',
-      v1AccountId: 'v1-account',
-      syncProtocolVersion: 2,
-    }, { accountId: 'v2-account' })).toBeNull();
+    expect(
+      pairingCompatibilityError(
+        {
+          accountId: 'v2-account',
+          v1AccountId: 'v1-account',
+          syncProtocolVersion: 2,
+        },
+        { accountId: 'v2-account' },
+      ),
+    ).toBeNull();
   });
 });

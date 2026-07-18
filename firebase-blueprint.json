@@ -63,7 +63,17 @@
         "updatedAt": { "type": "number" },
         "isTimelineBifurcated": { "type": "boolean" }
       },
-      "required": ["id", "diaryId", "date", "title", "body", "moodName", "moodEmoji", "createdAt", "updatedAt"]
+      "required": [
+        "id",
+        "diaryId",
+        "date",
+        "title",
+        "body",
+        "moodName",
+        "moodEmoji",
+        "createdAt",
+        "updatedAt"
+      ]
     },
     "Note": {
       "title": "Note",

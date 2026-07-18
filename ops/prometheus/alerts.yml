@@ -5,27 +5,27 @@ groups:
         expr: increase(deardiary_sync_integrity_hash_mismatch_total[5m]) + increase(sync_object_validation_failure_total{error_code=~".*HASH.*"}[5m]) > 0
         for: 0m
         labels: { severity: critical }
-        annotations: { summary: "Encrypted sync object hash mismatch detected" }
+        annotations: { summary: 'Encrypted sync object hash mismatch detected' }
       - alert: SyncInvariantViolation
         expr: increase(deardiary_sync_integrity_invariant_failure_total[5m]) > 0
         labels: { severity: critical }
-        annotations: { summary: "A sync invariant stopped unsafe processing" }
+        annotations: { summary: 'A sync invariant stopped unsafe processing' }
       - alert: SyncSequenceRegression
         expr: increase(deardiary_sync_pull_failure_total{error_code="SEQUENCE_REGRESSION"}[5m]) > 0
         labels: { severity: critical }
-        annotations: { summary: "Remote sequence regression detected" }
+        annotations: { summary: 'Remote sequence regression detected' }
       - alert: SyncUnexpectedDecryptionFailure
         expr: increase(deardiary_sync_integrity_decryption_failure_total[5m]) > 0
         labels: { severity: critical }
-        annotations: { summary: "Unexpected event decryption failure detected" }
+        annotations: { summary: 'Unexpected event decryption failure detected' }
       - alert: SyncCommittedObjectMissing
         expr: increase(sync_object_validation_failure_total{error_code="OBJECT_MISSING"}[5m]) > 0
         labels: { severity: critical }
-        annotations: { summary: "Committed encrypted object is missing" }
+        annotations: { summary: 'Committed encrypted object is missing' }
       - alert: SyncDatabaseCorruption
         expr: increase(sync_database_corruption_total[5m]) > 0
         labels: { severity: critical }
-        annotations: { summary: "Database corruption was detected" }
+        annotations: { summary: 'Database corruption was detected' }
   - name: dear-diary-operational
     rules:
       - alert: SyncCommitSuccessRateLow

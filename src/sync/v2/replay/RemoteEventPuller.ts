@@ -64,23 +64,27 @@ export class RemoteEventPuller {
           const bytes = await this.transfer.download(envelopes);
           await this.faults.hit('AFTER_REMOTE_DOWNLOAD');
           await this.faults.hit('AFTER_HASH_VERIFICATION');
-          const decoded = await Promise.all(envelopes.map(async (event, eventIndex) => {
-            this.validateEnvelope(event);
-            if (!await this.decryptor.hasKeyEpoch(event.keyEpoch)) {
-              throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', safetyRelevant: true });
-            }
-            const decrypted = await this.decryptor.decrypt(bytes[eventIndex], event.keyEpoch);
-            await this.faults.hit('AFTER_DECRYPTION');
-            return { envelope: event, event: decrypted };
-          }));
+          const decoded = await Promise.all(
+            envelopes.map(async (event, eventIndex) => {
+              this.validateEnvelope(event);
+              if (!(await this.decryptor.hasKeyEpoch(event.keyEpoch))) {
+                throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', safetyRelevant: true });
+              }
+              const decrypted = await this.decryptor.decrypt(bytes[eventIndex], event.keyEpoch);
+              await this.faults.hit('AFTER_DECRYPTION');
+              return { envelope: event, event: decrypted };
+            }),
+          );
           await this.faults.hit('DURING_EVENT_APPLY');
           after = await this.replay.applyBatch(decoded);
           await this.faults.hit('AFTER_LOCAL_COMMIT_BEFORE_SERVER_ACK');
           await this.api.acknowledgeCursor(this.options.deviceId, after);
         }
-        if (page.events.length === 0) await this.api.acknowledgeCursor(this.options.deviceId, after);
+        if (page.events.length === 0)
+          await this.api.acknowledgeCursor(this.options.deviceId, after);
         if (!page.hasMore) break;
-        if (page.events.length === 0) throw new SyncError({ code: 'SEQUENCE_GAP', safetyRelevant: true });
+        if (page.events.length === 0)
+          throw new SyncError({ code: 'SEQUENCE_GAP', safetyRelevant: true });
       }
       await this.health.updateSyncHealth({
         localSequence: after,
@@ -99,9 +103,14 @@ export class RemoteEventPuller {
       if (typed.safetyRelevant) {
         await this.safetyStop.engage(this.options.accountId, typed.code, `pull:${typed.code}`);
       }
-      this.telemetry.counter('deardiary.sync.pull.failure', 1, { error_code: typed.code, retryable: typed.retryable });
-      if (typed.code === 'HASH_MISMATCH') this.telemetry.counter('deardiary.sync.integrity.hash_mismatch', 1);
-      if (typed.code === 'DECRYPTION_FAILED') this.telemetry.counter('deardiary.sync.integrity.decryption_failure', 1);
+      this.telemetry.counter('deardiary.sync.pull.failure', 1, {
+        error_code: typed.code,
+        retryable: typed.retryable,
+      });
+      if (typed.code === 'HASH_MISMATCH')
+        this.telemetry.counter('deardiary.sync.integrity.hash_mismatch', 1);
+      if (typed.code === 'DECRYPTION_FAILED')
+        this.telemetry.counter('deardiary.sync.integrity.decryption_failure', 1);
       span.end(typed.code);
       await this.health.updateSyncHealth({
         integrityState: typed.safetyRelevant ? 'SAFETY_STOP' : 'WARNING',

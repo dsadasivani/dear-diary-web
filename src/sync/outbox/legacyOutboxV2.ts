@@ -1,7 +1,10 @@
 import type { SyncOutboxOperation } from '../../types';
 import type { SyncOutboxOperationV2 } from './SyncOutboxOperationV2';
 
-const V2_RECORD_TYPES: Record<SyncOutboxOperation['recordType'], SyncOutboxOperationV2['recordType']> = {
+const V2_RECORD_TYPES: Record<
+  SyncOutboxOperation['recordType'],
+  SyncOutboxOperationV2['recordType']
+> = {
   diary: 'DIARY',
   entry: 'ENTRY',
   note: 'NOTE',

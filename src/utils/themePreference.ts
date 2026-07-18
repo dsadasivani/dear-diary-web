@@ -4,9 +4,8 @@ export type AppTheme = NonNullable<AppSettings['theme']>;
 
 const THEME_STORAGE_KEY = 'deardiary_theme';
 
-export const normalizeTheme = (theme?: string | null, fallback: AppTheme = 'light'): AppTheme => (
-  theme === 'dark' || theme === 'light' ? theme : fallback
-);
+export const normalizeTheme = (theme?: string | null, fallback: AppTheme = 'light'): AppTheme =>
+  theme === 'dark' || theme === 'light' ? theme : fallback;
 
 export const getLocalThemePreference = (fallback: AppTheme = 'light'): AppTheme => {
   if (typeof window === 'undefined') return fallback;

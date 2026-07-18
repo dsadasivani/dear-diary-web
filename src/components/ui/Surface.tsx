@@ -15,11 +15,23 @@ export function Surface({ children, variant = 'flat', className = '', ...props }
     raised: 'surface-elevated',
     overlay: 'surface-modal',
   }[variant];
-  return <div className={`${variantClass} ${className}`} {...props}>{children}</div>;
+  return (
+    <div className={`${variantClass} ${className}`} {...props}>
+      {children}
+    </div>
+  );
 }
 
-export function PaperSurface({ children, className = '', ...props }: Omit<SurfaceProps, 'variant'>) {
-  return <div className={`surface-paper ${className}`} {...props}>{children}</div>;
+export function PaperSurface({
+  children,
+  className = '',
+  ...props
+}: Omit<SurfaceProps, 'variant'>) {
+  return (
+    <div className={`surface-paper ${className}`} {...props}>
+      {children}
+    </div>
+  );
 }
 
 interface GlassSurfaceProps extends Omit<SurfaceProps, 'variant'> {
@@ -27,6 +39,15 @@ interface GlassSurfaceProps extends Omit<SurfaceProps, 'variant'> {
   className?: string;
 }
 
-export function GlassSurface({ children, strong = false, className = '', ...props }: GlassSurfaceProps) {
-  return <div className={`${strong ? 'surface-glass-strong' : 'surface-glass'} ${className}`} {...props}>{children}</div>;
+export function GlassSurface({
+  children,
+  strong = false,
+  className = '',
+  ...props
+}: GlassSurfaceProps) {
+  return (
+    <div className={`${strong ? 'surface-glass-strong' : 'surface-glass'} ${className}`} {...props}>
+      {children}
+    </div>
+  );
 }

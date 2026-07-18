@@ -12,7 +12,9 @@ test('wraps the account root key exclusively for one companion device', async ()
   const companion = await generateDeviceKeyPair();
   const anotherDevice = await generateDeviceKeyPair();
   const rootKey = crypto.getRandomValues(new Uint8Array(32));
-  const keyPackage = await wrapRootKeyForCompanion(rootKey, 'account-1', companion.publicKey, { keyEpoch: 3 });
+  const keyPackage = await wrapRootKeyForCompanion(rootKey, 'account-1', companion.publicKey, {
+    keyEpoch: 3,
+  });
   assert.equal(keyPackage.keyEpoch, 3);
 
   assert.deepEqual(
@@ -20,12 +22,19 @@ test('wraps the account root key exclusively for one companion device', async ()
     rootKey,
   );
   await assert.rejects(
-    () => unwrapRootKeyForCompanion({ ...keyPackage, keyEpoch: 2 }, companion.publicKey, companion.privateKeyJwk),
+    () =>
+      unwrapRootKeyForCompanion(
+        { ...keyPackage, keyEpoch: 2 },
+        companion.publicKey,
+        companion.privateKeyJwk,
+      ),
     /authentication failed/,
   );
   await assert.rejects(
-    () => unwrapRootKeyForCompanion(keyPackage, anotherDevice.publicKey, anotherDevice.privateKeyJwk),
-    (error: unknown) => error instanceof CompanionKeyPackageError && error.code === 'TARGET_DEVICE_MISMATCH',
+    () =>
+      unwrapRootKeyForCompanion(keyPackage, anotherDevice.publicKey, anotherDevice.privateKeyJwk),
+    (error: unknown) =>
+      error instanceof CompanionKeyPackageError && error.code === 'TARGET_DEVICE_MISMATCH',
   );
 });
 
@@ -66,18 +75,24 @@ test('wraps the mobile PIN verifier without exposing recovery or biometric metad
   const serialized = JSON.stringify(keyPackage);
   assert.doesNotMatch(serialized, /mobile-pin-hash|mobile-pin-salt/);
   assert.deepEqual(
-    (await unwrapRootKeysForCompanion(keyPackage, companion.publicKey, companion.privateKeyJwk)).pinVerifier,
+    (await unwrapRootKeysForCompanion(keyPackage, companion.publicKey, companion.privateKeyJwk))
+      .pinVerifier,
     pinVerifier,
   );
 
   await assert.rejects(
-    () => unwrapRootKeysForCompanion({
-      ...keyPackage,
-      wrappedPinVerifier: {
-        ...keyPackage.wrappedPinVerifier!,
-        ciphertext: `${keyPackage.wrappedPinVerifier!.ciphertext.slice(0, -2)}AA`,
-      },
-    }, companion.publicKey, companion.privateKeyJwk),
+    () =>
+      unwrapRootKeysForCompanion(
+        {
+          ...keyPackage,
+          wrappedPinVerifier: {
+            ...keyPackage.wrappedPinVerifier!,
+            ciphertext: `${keyPackage.wrappedPinVerifier!.ciphertext.slice(0, -2)}AA`,
+          },
+        },
+        companion.publicKey,
+        companion.privateKeyJwk,
+      ),
     /authentication failed/,
   );
 });

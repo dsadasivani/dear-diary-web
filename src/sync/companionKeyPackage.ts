@@ -19,13 +19,18 @@ const HKDF_INFO = encoder.encode('dear-diary/companion-root-key/v1');
 
 const bytesToBase64 = (bytes: Uint8Array): string => {
   let binary = '';
-  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
-  return typeof btoa === 'function' ? btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return typeof btoa === 'function'
+    ? btoa(binary)
+    : Buffer.from(binary, 'binary').toString('base64');
 };
 
 const base64ToBytes = (value: string): Uint8Array => {
-  const binary = typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
-  return Uint8Array.from(binary, character => character.charCodeAt(0));
+  const binary =
+    typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 };
 
 const deriveWrappingKey = async (
@@ -33,7 +38,11 @@ const deriveWrappingKey = async (
   publicKey: CryptoKey,
   salt: Uint8Array,
 ): Promise<CryptoKey> => {
-  const sharedSecret = await crypto.subtle.deriveBits({ name: 'ECDH', public: publicKey }, privateKey, 256);
+  const sharedSecret = await crypto.subtle.deriveBits(
+    { name: 'ECDH', public: publicKey },
+    privateKey,
+    256,
+  );
   const hkdfKey = await crypto.subtle.importKey('raw', sharedSecret, 'HKDF', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
     { name: 'HKDF', hash: 'SHA-256', salt, info: HKDF_INFO },
@@ -54,19 +63,28 @@ export const wrapRootKeyForCompanion = async (
     pinVerifier?: CompanionPinVerifier;
   } = {},
 ): Promise<CompanionKeyPackage> => {
-  if (accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Account root key length is invalid.');
+  if (accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES)
+    throw new Error('Account root key length is invalid.');
   Object.entries(options.accountRootKeys || {}).forEach(([epoch, key]) => {
-    if (!Number.isInteger(Number(epoch)) || Number(epoch) < 1 || key.byteLength !== ACCOUNT_ROOT_KEY_BYTES) {
+    if (
+      !Number.isInteger(Number(epoch)) ||
+      Number(epoch) < 1 ||
+      key.byteLength !== ACCOUNT_ROOT_KEY_BYTES
+    ) {
       throw new Error('Epoch root key metadata is invalid.');
     }
   });
   const targetBundle = parseDevicePublicKeyBundle(targetDevicePublicKey);
   const targetPublicKey = await crypto.subtle.importKey(
-    'jwk', targetBundle.encryption, { name: 'ECDH', namedCurve: 'P-256' }, false, [],
+    'jwk',
+    targetBundle.encryption,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    [],
   );
-  const senderPair = await crypto.subtle.generateKey(
-    { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'],
-  );
+  const senderPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, [
+    'deriveBits',
+  ]);
   const salt = crypto.getRandomValues(new Uint8Array(32));
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const wrappingKey = await deriveWrappingKey(senderPair.privateKey, targetPublicKey, salt);
@@ -76,9 +94,13 @@ export const wrapRootKeyForCompanion = async (
   const wrapEpochRootKey = async (epoch: number, rootKey: Uint8Array, fixedNonce?: Uint8Array) => {
     const epochNonce = fixedNonce || crypto.getRandomValues(new Uint8Array(12));
     const additionalData = encoder.encode(`${accountId}:${targetDevicePublicKeySha256}:${epoch}`);
-    const wrappedRootKey = new Uint8Array(await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: epochNonce, additionalData }, wrappingKey, rootKey,
-    ));
+    const wrappedRootKey = new Uint8Array(
+      await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: epochNonce, additionalData },
+        wrappingKey,
+        rootKey,
+      ),
+    );
     return {
       keyEpoch: epoch,
       nonce: bytesToBase64(epochNonce),
@@ -91,10 +113,12 @@ export const wrapRootKeyForCompanion = async (
     [keyEpoch]: accountRootKey,
   })
     .map(([epoch, key]) => ({ keyEpoch: Number(epoch), rootKey: key }))
-    .filter(entry => Number.isInteger(entry.keyEpoch) && entry.keyEpoch > 0)
+    .filter((entry) => Number.isInteger(entry.keyEpoch) && entry.keyEpoch > 0)
     .sort((left, right) => left.keyEpoch - right.keyEpoch);
   const wrappedEpochRootKeys = options.accountRootKeys
-    ? await Promise.all(epochRootKeys.map(entry => wrapEpochRootKey(entry.keyEpoch, entry.rootKey)))
+    ? await Promise.all(
+        epochRootKeys.map((entry) => wrapEpochRootKey(entry.keyEpoch, entry.rootKey)),
+      )
     : undefined;
   let wrappedPinVerifier: CompanionKeyPackage['wrappedPinVerifier'];
   if (options.pinVerifier) {
@@ -104,14 +128,19 @@ export const wrapRootKeyForCompanion = async (
       !verifier.pinHash ||
       !verifier.pinSalt ||
       (verifier.pinLength !== 4 && verifier.pinLength !== 8)
-    ) throw new Error('Companion PIN verifier is invalid.');
+    )
+      throw new Error('Companion PIN verifier is invalid.');
     const verifierNonce = crypto.getRandomValues(new Uint8Array(12));
-    const additionalData = encoder.encode(`${accountId}:${targetDevicePublicKeySha256}:pin-verifier:v1`);
-    const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: verifierNonce, additionalData },
-      wrappingKey,
-      encoder.encode(JSON.stringify(verifier)),
-    ));
+    const additionalData = encoder.encode(
+      `${accountId}:${targetDevicePublicKeySha256}:pin-verifier:v1`,
+    );
+    const ciphertext = new Uint8Array(
+      await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: verifierNonce, additionalData },
+        wrappingKey,
+        encoder.encode(JSON.stringify(verifier)),
+      ),
+    );
     wrappedPinVerifier = {
       nonce: bytesToBase64(verifierNonce),
       ciphertext: bytesToBase64(ciphertext),
@@ -150,30 +179,50 @@ export const unwrapRootKeysForCompanion = async (
     keyPackage.packageKind !== 'companion_root_key' ||
     keyPackage.cipher !== 'AES-256-GCM' ||
     keyPackage.kdf !== 'HKDF-SHA-256'
-  ) throw new Error('Companion key package is invalid or unsupported.');
+  )
+    throw new Error('Companion key package is invalid or unsupported.');
   const fingerprint = await fingerprintDevicePublicKey(targetDevicePublicKey);
   if (fingerprint !== keyPackage.targetDevicePublicKeySha256) {
     throw new CompanionKeyPackageError('TARGET_DEVICE_MISMATCH');
   }
   const privateBundle = parseDevicePrivateKeyBundle(targetDevicePrivateKey);
   const privateKey = await crypto.subtle.importKey(
-    'jwk', privateBundle.encryption, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits'],
+    'jwk',
+    privateBundle.encryption,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    ['deriveBits'],
   );
   const senderPublicKey = await crypto.subtle.importKey(
-    'jwk', keyPackage.senderEphemeralPublicKey, { name: 'ECDH', namedCurve: 'P-256' }, false, [],
+    'jwk',
+    keyPackage.senderEphemeralPublicKey,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    [],
   );
-  const wrappingKey = await deriveWrappingKey(privateKey, senderPublicKey, base64ToBytes(keyPackage.salt));
-  const unwrapEpochRootKey = async (keyEpoch: number, nonce: string, wrappedRootKey: string): Promise<Uint8Array> => {
-    if (!Number.isInteger(keyEpoch) || keyEpoch < 1) throw new Error('Companion key package epoch is invalid.');
-    const rootKey = new Uint8Array(await crypto.subtle.decrypt(
-      {
-        name: 'AES-GCM',
-        iv: base64ToBytes(nonce),
-        additionalData: encoder.encode(`${keyPackage.accountId}:${fingerprint}:${keyEpoch}`),
-      },
-      wrappingKey,
-      base64ToBytes(wrappedRootKey),
-    ));
+  const wrappingKey = await deriveWrappingKey(
+    privateKey,
+    senderPublicKey,
+    base64ToBytes(keyPackage.salt),
+  );
+  const unwrapEpochRootKey = async (
+    keyEpoch: number,
+    nonce: string,
+    wrappedRootKey: string,
+  ): Promise<Uint8Array> => {
+    if (!Number.isInteger(keyEpoch) || keyEpoch < 1)
+      throw new Error('Companion key package epoch is invalid.');
+    const rootKey = new Uint8Array(
+      await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: base64ToBytes(nonce),
+          additionalData: encoder.encode(`${keyPackage.accountId}:${fingerprint}:${keyEpoch}`),
+        },
+        wrappingKey,
+        base64ToBytes(wrappedRootKey),
+      ),
+    );
     if (rootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Invalid root key length.');
     return rootKey;
   };
@@ -194,7 +243,9 @@ export const unwrapRootKeysForCompanion = async (
     }
     let pinVerifier: CompanionPinVerifier | undefined;
     if (keyPackage.wrappedPinVerifier) {
-      const additionalData = encoder.encode(`${keyPackage.accountId}:${fingerprint}:pin-verifier:v1`);
+      const additionalData = encoder.encode(
+        `${keyPackage.accountId}:${fingerprint}:pin-verifier:v1`,
+      );
       const plaintext = await crypto.subtle.decrypt(
         {
           name: 'AES-GCM',
@@ -210,7 +261,8 @@ export const unwrapRootKeysForCompanion = async (
         !candidate.pinHash ||
         !candidate.pinSalt ||
         (candidate.pinLength !== 4 && candidate.pinLength !== 8)
-      ) throw new Error('Companion PIN verifier is invalid.');
+      )
+        throw new Error('Companion PIN verifier is invalid.');
       pinVerifier = candidate;
     }
     return {
@@ -228,14 +280,12 @@ export const unwrapRootKeyForCompanion = async (
   keyPackage: CompanionKeyPackage,
   targetDevicePublicKey: string,
   targetDevicePrivateKey: string,
-): Promise<Uint8Array> => (
-  (await unwrapRootKeysForCompanion(keyPackage, targetDevicePublicKey, targetDevicePrivateKey)).accountRootKey
-);
+): Promise<Uint8Array> =>
+  (await unwrapRootKeysForCompanion(keyPackage, targetDevicePublicKey, targetDevicePrivateKey))
+    .accountRootKey;
 
-export const encodeCompanionKeyPackage = (keyPackage: CompanionKeyPackage): Uint8Array => (
-  encoder.encode(JSON.stringify(keyPackage))
-);
+export const encodeCompanionKeyPackage = (keyPackage: CompanionKeyPackage): Uint8Array =>
+  encoder.encode(JSON.stringify(keyPackage));
 
-export const decodeCompanionKeyPackage = (bytes: Uint8Array): CompanionKeyPackage => (
-  JSON.parse(decoder.decode(bytes)) as CompanionKeyPackage
-);
+export const decodeCompanionKeyPackage = (bytes: Uint8Array): CompanionKeyPackage =>
+  JSON.parse(decoder.decode(bytes)) as CompanionKeyPackage;

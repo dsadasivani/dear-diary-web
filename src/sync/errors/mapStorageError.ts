@@ -8,4 +8,3 @@ export const mapStorageError = (error: unknown): SyncError => {
   }
   return new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true, cause: error });
 };
-

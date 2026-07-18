@@ -50,21 +50,21 @@ const collectReferencedNames = async (): Promise<ReferencedMedia> => {
     const name = basenameFromUri(uri);
     if (name) names.add(name);
   };
-  snapshot.diaries.forEach(diary => add(diary.coverImage));
-  snapshot.entries.forEach(entry => {
+  snapshot.diaries.forEach((diary) => add(diary.coverImage));
+  snapshot.entries.forEach((entry) => {
     entry.photoUris?.forEach(add);
     add(entry.audioUri);
-    entry.blocks?.forEach(block => add(block.audioUri));
+    entry.blocks?.forEach((block) => add(block.audioUri));
   });
   add(snapshot.userProfile?.avatarUri);
-  Object.values(snapshot.syncMediaPointers || {}).forEach(pointer => {
+  Object.values(snapshot.syncMediaPointers || {}).forEach((pointer) => {
     const name = basenameFromUri(pointer.localUri);
     if (name) {
       pointerByName.set(name, pointer);
       if (
-        referencedSequences.has(pointer.sequence)
-        || referencedMediaIds.has(pointer.mediaId)
-        || referencedDriveFileIds.has(pointer.driveFileId)
+        referencedSequences.has(pointer.sequence) ||
+        referencedMediaIds.has(pointer.mediaId) ||
+        referencedDriveFileIds.has(pointer.driveFileId)
       ) {
         names.add(name);
       }
@@ -94,32 +94,42 @@ export const selectOrphanedMedia = (
   now = Date.now(),
 ): StoredFileEntry[] => {
   const cutoff = now - minimumAgeMs;
-  return files.filter(file => (
-    OWNED_MEDIA_NAME.test(file.name) &&
-    !referenced.has(file.name) &&
-    (minimumAgeMs === 0 || (file.modifiedAt || now) <= cutoff)
-  ));
+  return files.filter(
+    (file) =>
+      OWNED_MEDIA_NAME.test(file.name) &&
+      !referenced.has(file.name) &&
+      (minimumAgeMs === 0 || (file.modifiedAt || now) <= cutoff),
+  );
 };
 
-export const pruneOrphanedMedia = async (minimumAgeMs = DEFAULT_GRACE_MS): Promise<MediaCleanupResult> => {
+export const pruneOrphanedMedia = async (
+  minimumAgeMs = DEFAULT_GRACE_MS,
+): Promise<MediaCleanupResult> => {
   if (!getSyncRuntimeFlags().automaticGarbageCollectionEnabled) {
     return { scanned: 0, removed: 0, retained: 0, reclaimedBytes: 0 };
   }
   const referenced = await collectReferencedNames();
   for (const pointer of referenced.pointers) {
     if (
-      pointer.localUri
-      && !referenced.referencedSequences.has(pointer.sequence)
-      && !referenced.referencedMediaIds.has(pointer.mediaId)
-      && !referenced.referencedDriveFileIds.has(pointer.driveFileId)
+      pointer.localUri &&
+      !referenced.referencedSequences.has(pointer.sequence) &&
+      !referenced.referencedMediaIds.has(pointer.mediaId) &&
+      !referenced.referencedDriveFileIds.has(pointer.driveFileId)
     ) {
       await diaryRepository.saveSyncMediaPointer({ ...pointer, localUri: undefined });
     }
   }
   if (!isNativePlatform()) return { scanned: 0, removed: 0, retained: 0, reclaimedBytes: 0 };
   const files = await fileStorageService.list(MEDIA_DIRECTORY).catch(() => []);
-  const result: MediaCleanupResult = { scanned: files.length, removed: 0, retained: 0, reclaimedBytes: 0 };
-  const removable = new Set(selectOrphanedMedia(files, referenced.names, minimumAgeMs).map(file => file.path));
+  const result: MediaCleanupResult = {
+    scanned: files.length,
+    removed: 0,
+    retained: 0,
+    reclaimedBytes: 0,
+  };
+  const removable = new Set(
+    selectOrphanedMedia(files, referenced.names, minimumAgeMs).map((file) => file.path),
+  );
   for (const file of files) {
     if (!removable.has(file.path)) {
       result.retained += 1;
@@ -146,8 +156,12 @@ export const initializeMediaGarbageCollection = (): void => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      void pruneOrphanedMedia().catch(error => console.warn('Media cleanup will retry later:', error));
+      void pruneOrphanedMedia().catch((error) =>
+        console.warn('Media cleanup will retry later:', error),
+      );
     }, 5_000);
   });
-  void pruneOrphanedMedia().catch(error => console.warn('Startup media cleanup will retry later:', error));
+  void pruneOrphanedMedia().catch((error) =>
+    console.warn('Startup media cleanup will retry later:', error),
+  );
 };

@@ -48,8 +48,14 @@ test('target dimensions preserve aspect ratio within max long edge', () => {
 
 test('skip policy keeps unsupported and already-small images unchanged', () => {
   assert.equal(getImageOptimizationSkipReason('image/gif', 1_000_000, 'photo'), 'unsupported_mime');
-  assert.equal(getImageOptimizationSkipReason('image/svg+xml', 1_000_000, 'cover'), 'unsupported_mime');
-  assert.equal(getImageOptimizationSkipReason('application/octet-stream', 1_000_000, 'photo'), 'unsupported_mime');
+  assert.equal(
+    getImageOptimizationSkipReason('image/svg+xml', 1_000_000, 'cover'),
+    'unsupported_mime',
+  );
+  assert.equal(
+    getImageOptimizationSkipReason('application/octet-stream', 1_000_000, 'photo'),
+    'unsupported_mime',
+  );
   assert.equal(getImageOptimizationSkipReason('image/jpeg', 149 * 1024, 'photo'), 'small_file');
   assert.equal(getImageOptimizationSkipReason('image/jpeg', 49 * 1024, 'avatar'), 'small_file');
   assert.equal(getImageOptimizationSkipReason('image/jpeg', 150 * 1024, 'photo'), null);
@@ -115,22 +121,24 @@ test('optimized data URIs persist optimizer output', async () => {
 
 test('remote profile avatars optimize before persistence', async () => {
   const originalFetch = globalThis.fetch;
-  (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = async () => new Response(
-    new Uint8Array([1, 2, 3]),
-    {
+  (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = async () =>
+    new Response(new Uint8Array([1, 2, 3]), {
       status: 200,
       headers: { 'Content-Type': 'image/jpeg' },
-    },
-  );
+    });
 
   try {
     let receivedKind = '';
     let receivedDataUri = '';
-    const storedUri = await cacheRemoteProfileImage('https://example.test/avatar.jpg', async (input, kind) => {
-      receivedKind = kind;
-      receivedDataUri = typeof input === 'string' ? input : 'dataUri' in input ? input.dataUri : '';
-      return optimizedImage;
-    });
+    const storedUri = await cacheRemoteProfileImage(
+      'https://example.test/avatar.jpg',
+      async (input, kind) => {
+        receivedKind = kind;
+        receivedDataUri =
+          typeof input === 'string' ? input : 'dataUri' in input ? input.dataUri : '';
+        return optimizedImage;
+      },
+    );
 
     assert.equal(receivedKind, 'avatar');
     assert.match(receivedDataUri, /^data:image\/jpeg;base64,/);

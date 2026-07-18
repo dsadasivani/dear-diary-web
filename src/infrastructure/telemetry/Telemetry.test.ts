@@ -1,14 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PrivacySafeTelemetry, type TelemetryAttributes, type TelemetryEnvelope } from './Telemetry';
+import {
+  PrivacySafeTelemetry,
+  type TelemetryAttributes,
+  type TelemetryEnvelope,
+} from './Telemetry';
 
 test('telemetry exports only allowlisted low-cardinality attributes', async () => {
   const exported: TelemetryEnvelope[] = [];
   let now = 10;
-  const telemetry = new PrivacySafeTelemetry({ export: async batch => { exported.push(...batch); } }, 10, 60_000, () => now);
+  const telemetry = new PrivacySafeTelemetry(
+    {
+      export: async (batch) => {
+        exported.push(...batch);
+      },
+    },
+    10,
+    60_000,
+    () => now,
+  );
   const unsafeAttributes = {
     record_type: 'NOTE',
-    record_id: 'must-not-leak', object_url: 'must-not-leak',
+    record_id: 'must-not-leak',
+    object_url: 'must-not-leak',
   } as unknown as TelemetryAttributes;
   telemetry.counter('deardiary.sync.push.success', 1, unsafeAttributes);
   const span = telemetry.startSpan('operation.commit', { protocol_version: 2 });

@@ -2,7 +2,12 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CryptoJS from 'crypto-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppSettings, GoogleAccountSession, SecurityConfig, SupabaseAuthSession } from '../types';
+import type {
+  AppSettings,
+  GoogleAccountSession,
+  SecurityConfig,
+  SupabaseAuthSession,
+} from '../types';
 import LockScreen from './LockScreen';
 
 const mocks = vi.hoisted(() => ({
@@ -112,14 +117,15 @@ const supabaseSession: SupabaseAuthSession = {
   expiresAt: 2_000_000_000,
 };
 
-const renderLockScreen = () => render(
-  <LockScreen
-    initialSettings={initialSettings}
-    initialSecurity={initialSecurity}
-    onSecurityChange={vi.fn()}
-    onUnlock={vi.fn()}
-  />,
-);
+const renderLockScreen = () =>
+  render(
+    <LockScreen
+      initialSettings={initialSettings}
+      initialSecurity={initialSecurity}
+      onSecurityChange={vi.fn()}
+      onUnlock={vi.fn()}
+    />,
+  );
 
 const clickPin = async (user: ReturnType<typeof userEvent.setup>, value: string) => {
   for (const digit of value) {
@@ -141,7 +147,7 @@ describe('LockScreen first-run sync setup', () => {
     vi.clearAllMocks();
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
-      value: vi.fn().mockImplementation(query => ({
+      value: vi.fn().mockImplementation((query) => ({
         matches: false,
         media: query,
         onchange: null,
@@ -162,7 +168,10 @@ describe('LockScreen first-run sync setup', () => {
     mocks.exchangeGoogleIdTokenForSupabaseSession.mockResolvedValue(supabaseSession);
     mocks.hasExistingPrimaryAccount.mockResolvedValue(false);
     mocks.createPrimaryAccount.mockResolvedValue({ accountId: 'account-1', deviceId: 'primary-1' });
-    mocks.recoverPrimaryAccount.mockResolvedValue({ accountId: 'account-1', deviceId: 'recovered-primary-1' });
+    mocks.recoverPrimaryAccount.mockResolvedValue({
+      accountId: 'account-1',
+      deviceId: 'recovered-primary-1',
+    });
   });
 
   it('connects Google before asking new users to create an 8 digit passphrase', async () => {
@@ -194,11 +203,15 @@ describe('LockScreen first-run sync setup', () => {
 
     await user.click(createButton);
 
-    await waitFor(() => expect(mocks.createPrimaryAccount).toHaveBeenCalledWith(expect.objectContaining({
-      recoveryPassphrase: '12345678',
-      googleSession,
-      supabaseSession,
-    })));
+    await waitFor(() =>
+      expect(mocks.createPrimaryAccount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recoveryPassphrase: '12345678',
+          googleSession,
+          supabaseSession,
+        }),
+      ),
+    );
   }, 15_000);
 
   it('shows a security answer field when resuming setup from an incomplete saved state', async () => {
@@ -225,7 +238,9 @@ describe('LockScreen first-run sync setup', () => {
 
     expect(screen.getByRole('button', { name: /tap to unlock/i })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
-    expect(screen.queryByRole('checkbox', { name: /show clock before pin/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('checkbox', { name: /show clock before pin/i }),
+    ).not.toBeInTheDocument();
     expect(await screen.findByTitle(/back to clock/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /reveal pin digits/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /erase last pin digit/i })).toBeDisabled();
@@ -257,7 +272,11 @@ describe('LockScreen first-run sync setup', () => {
     render(
       <LockScreen
         initialSettings={initialSettings}
-        initialSecurity={{ ...pinOnlySecurity, linkedGoogleUserId: googleSession.userId, linkedGoogleEmail: googleSession.email }}
+        initialSecurity={{
+          ...pinOnlySecurity,
+          linkedGoogleUserId: googleSession.userId,
+          linkedGoogleEmail: googleSession.email,
+        }}
         onSecurityChange={vi.fn()}
         onUnlock={vi.fn()}
       />,
@@ -267,7 +286,9 @@ describe('LockScreen first-run sync setup', () => {
     await user.click(await screen.findByRole('button', { name: /forgot security passcode pin/i }));
 
     expect(screen.getByRole('button', { name: /verify google account/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /answer security question/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /answer security question/i }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText(/recovery question unavailable/i)).not.toBeInTheDocument();
   });
 
@@ -300,7 +321,9 @@ describe('LockScreen first-run sync setup', () => {
 
     await waitFor(() => expect(onUnlock).toHaveBeenCalledOnce());
     expect(screen.queryByText(/add recovery question/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /connect google account/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /connect google account/i }),
+    ).not.toBeInTheDocument();
   });
 
   it('asks for the existing recovery passphrase when the Google account already exists', async () => {
@@ -320,11 +343,15 @@ describe('LockScreen first-run sync setup', () => {
     await user.type(screen.getByLabelText(/existing recovery passphrase/i), 'old secret');
     expect(restoreButton).toBeEnabled();
     await user.click(restoreButton);
-    await waitFor(() => expect(mocks.recoverPrimaryAccount).toHaveBeenCalledWith(expect.objectContaining({
-      recoveryPassphrase: 'old secret',
-      googleSession,
-      supabaseSession,
-    })));
+    await waitFor(() =>
+      expect(mocks.recoverPrimaryAccount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recoveryPassphrase: 'old secret',
+          googleSession,
+          supabaseSession,
+        }),
+      ),
+    );
     expect(mocks.createPrimaryAccount).not.toHaveBeenCalled();
   }, 15_000);
 });

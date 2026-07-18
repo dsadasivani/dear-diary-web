@@ -10,17 +10,36 @@ import { createStableSyncMediaReference, encodeSyncMediaPayload } from './syncMe
 test('verifies, decrypts, and applies an event tail in sequence order', async () => {
   const repository = await createRepository(new MemoryDataStore());
   const localState = {
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile' as const,
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   };
   await repository.saveLocalSyncAccountState(localState);
   const rootKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
-  const note = { id: 'note-1', title: 'Synced', body: '', isPinned: false, tags: [], createdAt: 1, updatedAt: 1 };
+  const note = {
+    id: 'note-1',
+    title: 'Synced',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
   const event = createSyncDomainEvent({
-    accountId: localState.accountId, deviceId: 'device-2', recordType: 'note', operation: 'upsert',
-    recordId: note.id, baseRecordVersion: 0, payload: note,
+    accountId: localState.accountId,
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: note.id,
+    baseRecordVersion: 0,
+    payload: note,
   });
   const encrypted = await encryptSyncPayload(rootKey, 'event', encodeSyncDomainEvent(event));
 
@@ -28,13 +47,29 @@ test('verifies, decrypts, and applies an event tail in sequence order', async ()
     repository,
     localState,
     accountRootKey: rootKey,
-    googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'token' },
-    objects: [{
-      id: 'object-1', accountId: localState.accountId, sequence: 3, driveFileId: 'drive-1',
-      objectKind: 'event', sha256: encrypted.sha256, sizeBytes: encrypted.bytes.byteLength,
-      createdByDeviceId: 'device-2', createdAt: '2026-07-05T00:00:00.000Z',
-      recordType: 'note', recordId: note.id, baseRecordVersion: 0, recordVersion: 1,
-    }],
+    googleSession: {
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'token',
+    },
+    objects: [
+      {
+        id: 'object-1',
+        accountId: localState.accountId,
+        sequence: 3,
+        driveFileId: 'drive-1',
+        objectKind: 'event',
+        sha256: encrypted.sha256,
+        sizeBytes: encrypted.bytes.byteLength,
+        createdByDeviceId: 'device-2',
+        createdAt: '2026-07-05T00:00:00.000Z',
+        recordType: 'note',
+        recordId: note.id,
+        baseRecordVersion: 0,
+        recordVersion: 1,
+      },
+    ],
     download: async () => encrypted.bytes,
   });
 
@@ -45,17 +80,36 @@ test('verifies, decrypts, and applies an event tail in sequence order', async ()
 test('can replay historical partition events without moving the global cursor backwards', async () => {
   const repository = await createRepository(new MemoryDataStore());
   const localState = {
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile' as const,
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 50, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 50,
+    linkedAt: 1,
   };
   await repository.saveLocalSyncAccountState(localState);
   const rootKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
-  const note = { id: 'note-old', title: 'Historical', body: '', isPinned: false, tags: [], createdAt: 1, updatedAt: 1 };
+  const note = {
+    id: 'note-old',
+    title: 'Historical',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
   const event = createSyncDomainEvent({
-    accountId: localState.accountId, deviceId: 'device-2', recordType: 'note', operation: 'upsert',
-    recordId: note.id, baseRecordVersion: 0, payload: note,
+    accountId: localState.accountId,
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: note.id,
+    baseRecordVersion: 0,
+    payload: note,
   });
   const encrypted = await encryptSyncPayload(rootKey, 'event', encodeSyncDomainEvent(event));
 
@@ -63,13 +117,29 @@ test('can replay historical partition events without moving the global cursor ba
     repository,
     localState,
     accountRootKey: rootKey,
-    googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'token' },
-    objects: [{
-      id: 'object-1', accountId: localState.accountId, sequence: 12, driveFileId: 'drive-1',
-      objectKind: 'event', sha256: encrypted.sha256, sizeBytes: encrypted.bytes.byteLength,
-      createdByDeviceId: 'device-2', createdAt: '2026-07-05T00:00:00.000Z',
-      recordType: 'note', recordId: note.id, baseRecordVersion: 0, recordVersion: 1,
-    }],
+    googleSession: {
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'token',
+    },
+    objects: [
+      {
+        id: 'object-1',
+        accountId: localState.accountId,
+        sequence: 12,
+        driveFileId: 'drive-1',
+        objectKind: 'event',
+        sha256: encrypted.sha256,
+        sizeBytes: encrypted.bytes.byteLength,
+        createdByDeviceId: 'device-2',
+        createdAt: '2026-07-05T00:00:00.000Z',
+        recordType: 'note',
+        recordId: note.id,
+        baseRecordVersion: 0,
+        recordVersion: 1,
+      },
+    ],
     download: async () => encrypted.bytes,
     allowHistorical: true,
   });
@@ -82,33 +152,71 @@ test('can replay historical partition events without moving the global cursor ba
 test('replays events encrypted with a non-current epoch key', async () => {
   const repository = await createRepository(new MemoryDataStore());
   const localState = {
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile' as const,
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   };
   await repository.saveLocalSyncAccountState(localState);
   const epoch1 = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
   const epoch2 = Uint8Array.from({ length: 32 }, (_, index) => index + 41);
-  const note = { id: 'note-epoch', title: 'Epoch two', body: '', isPinned: false, tags: [], createdAt: 1, updatedAt: 1 };
+  const note = {
+    id: 'note-epoch',
+    title: 'Epoch two',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
   const event = createSyncDomainEvent({
-    accountId: localState.accountId, deviceId: 'device-2', recordType: 'note', operation: 'upsert',
-    recordId: note.id, baseRecordVersion: 0, payload: note,
+    accountId: localState.accountId,
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: note.id,
+    baseRecordVersion: 0,
+    payload: note,
   });
-  const encrypted = await encryptSyncPayload(epoch2, 'event', encodeSyncDomainEvent(event), { keyEpoch: 2 });
+  const encrypted = await encryptSyncPayload(epoch2, 'event', encodeSyncDomainEvent(event), {
+    keyEpoch: 2,
+  });
 
   await replaySyncObjects({
     repository,
     localState,
     accountRootKey: epoch1,
     accountRootKeys: { 1: epoch1, 2: epoch2 },
-    googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'token' },
-    objects: [{
-      id: 'object-epoch', accountId: localState.accountId, sequence: 3, driveFileId: 'drive-epoch',
-      objectKind: 'event', sha256: encrypted.sha256, sizeBytes: encrypted.bytes.byteLength,
-      createdByDeviceId: 'device-2', createdAt: '2026-07-05T00:00:00.000Z',
-      recordType: 'note', recordId: note.id, baseRecordVersion: 0, recordVersion: 1, keyEpoch: 2,
-    }],
+    googleSession: {
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'token',
+    },
+    objects: [
+      {
+        id: 'object-epoch',
+        accountId: localState.accountId,
+        sequence: 3,
+        driveFileId: 'drive-epoch',
+        objectKind: 'event',
+        sha256: encrypted.sha256,
+        sizeBytes: encrypted.bytes.byteLength,
+        createdByDeviceId: 'device-2',
+        createdAt: '2026-07-05T00:00:00.000Z',
+        recordType: 'note',
+        recordId: note.id,
+        baseRecordVersion: 0,
+        recordVersion: 1,
+        keyEpoch: 2,
+      },
+    ],
     download: async () => encrypted.bytes,
   });
 
@@ -118,33 +226,70 @@ test('replays events encrypted with a non-current epoch key', async () => {
 test('replays events using encrypted header epoch when metadata defaults to epoch one', async () => {
   const repository = await createRepository(new MemoryDataStore());
   const localState = {
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile' as const,
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   };
   await repository.saveLocalSyncAccountState(localState);
   const epoch1 = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
   const epoch2 = Uint8Array.from({ length: 32 }, (_, index) => index + 41);
-  const note = { id: 'note-header-epoch', title: 'Header epoch', body: '', isPinned: false, tags: [], createdAt: 1, updatedAt: 1 };
+  const note = {
+    id: 'note-header-epoch',
+    title: 'Header epoch',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
   const event = createSyncDomainEvent({
-    accountId: localState.accountId, deviceId: 'device-2', recordType: 'note', operation: 'upsert',
-    recordId: note.id, baseRecordVersion: 0, payload: note,
+    accountId: localState.accountId,
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: note.id,
+    baseRecordVersion: 0,
+    payload: note,
   });
-  const encrypted = await encryptSyncPayload(epoch2, 'event', encodeSyncDomainEvent(event), { keyEpoch: 2 });
+  const encrypted = await encryptSyncPayload(epoch2, 'event', encodeSyncDomainEvent(event), {
+    keyEpoch: 2,
+  });
 
   await replaySyncObjects({
     repository,
     localState,
     accountRootKey: epoch1,
     accountRootKeys: { 1: epoch1, 2: epoch2 },
-    googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'token' },
-    objects: [{
-      id: 'object-header-epoch', accountId: localState.accountId, sequence: 3, driveFileId: 'drive-header-epoch',
-      objectKind: 'event', sha256: encrypted.sha256, sizeBytes: encrypted.bytes.byteLength,
-      createdByDeviceId: 'device-2', createdAt: '2026-07-05T00:00:00.000Z',
-      recordType: 'note', recordId: note.id, baseRecordVersion: 0, recordVersion: 1,
-    }],
+    googleSession: {
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'token',
+    },
+    objects: [
+      {
+        id: 'object-header-epoch',
+        accountId: localState.accountId,
+        sequence: 3,
+        driveFileId: 'drive-header-epoch',
+        objectKind: 'event',
+        sha256: encrypted.sha256,
+        sizeBytes: encrypted.bytes.byteLength,
+        createdByDeviceId: 'device-2',
+        createdAt: '2026-07-05T00:00:00.000Z',
+        recordType: 'note',
+        recordId: note.id,
+        baseRecordVersion: 0,
+        recordVersion: 1,
+      },
+    ],
     download: async () => encrypted.bytes,
   });
 
@@ -154,10 +299,16 @@ test('replays events using encrypted header epoch when metadata defaults to epoc
 test('hydrates replayed stable media references from another device', async () => {
   const repository = await createRepository(new MemoryDataStore());
   const localState = {
-    accountId: 'account-1', deviceId: 'device-mobile', deviceRole: 'primary_mobile' as const,
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-mobile',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   };
   await repository.saveLocalSyncAccountState(localState);
   const rootKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
@@ -203,7 +354,12 @@ test('hydrates replayed stable media references from another device', async () =
     repository,
     localState,
     accountRootKey: rootKey,
-    googleSession: { userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'token' },
+    googleSession: {
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'token',
+    },
     objects: [
       {
         id: 'object-media-web',
@@ -245,7 +401,11 @@ test('hydrates replayed stable media references from another device', async () =
       accountId: localState.accountId,
       accountRootKey: rootKey,
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
       userId: 'google-1',
@@ -253,20 +413,21 @@ test('hydrates replayed stable media references from another device', async () =
       displayName: null,
       accessToken: 'drive',
     }),
-    createControlPlane: () => ({
-      getDeviceStatus: async () => ({
-        id: localState.deviceId,
-        accountId: localState.accountId,
-        role: localState.deviceRole,
-        publicKey: '{}',
-        displayName: 'Phone',
-        platform: 'android',
-        createdAt: '',
-        lastSeenAt: '',
-        revokedAt: null,
-        replacedByDeviceId: null,
-      }),
-    } as any),
+    createControlPlane: () =>
+      ({
+        getDeviceStatus: async () => ({
+          id: localState.deviceId,
+          accountId: localState.accountId,
+          role: localState.deviceRole,
+          publicKey: '{}',
+          displayName: 'Phone',
+          platform: 'android',
+          createdAt: '',
+          lastSeenAt: '',
+          revokedAt: null,
+          replacedByDeviceId: null,
+        }),
+      }) as any,
     download: async (_session, fileId) => downloads.get(fileId)!,
   });
 

@@ -34,7 +34,9 @@ export interface SyncV2SnapshotCreationJournal {
 }
 
 export interface SyncV2SnapshotStateStore {
-  exportAccountState(accountId: string): Promise<{ throughSequence: number; state: SyncV2CanonicalSnapshotState }>;
+  exportAccountState(
+    accountId: string,
+  ): Promise<{ throughSequence: number; state: SyncV2CanonicalSnapshotState }>;
   restoreAccountStateAtomically(input: {
     accountId: string;
     throughSequence: number;
@@ -48,12 +50,18 @@ export interface SyncV2SnapshotStateStore {
 export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
   private tail: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly store: LocalDataStore, private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly store: LocalDataStore,
+    private readonly now: () => number = Date.now,
+  ) {}
 
-  exportAccountState(accountId: string): Promise<{ throughSequence: number; state: SyncV2CanonicalSnapshotState }> {
+  exportAccountState(
+    accountId: string,
+  ): Promise<{ throughSequence: number; state: SyncV2CanonicalSnapshotState }> {
     return this.exclusive(async () => {
       const runtime = await this.runtime();
-      if (runtime.accountId !== accountId) throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+      if (runtime.accountId !== accountId)
+        throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       const state = await this.readState();
       this.validateState(state);
       return { throughSequence: runtime.lastAppliedSequence, state: structuredClone(state) };
@@ -75,11 +83,20 @@ export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       }
       const existing = await this.read<Record<string, unknown>>(SYNC_V2_RECORDS_KEY, {});
-      const outbox = await this.read<Record<string, SyncOutboxOperationV2>>(SYNC_V2_OUTBOX_STORAGE_KEY, {});
-      const hasUnresolvedLocalWrites = Object.values(outbox).some(operation => (
-        operation.accountId === input.accountId && !TERMINAL_OUTBOX_V2_STATES.has(operation.state)
-      ));
-      if (runtime.lastAppliedSequence !== 0 || Object.keys(existing).length !== 0 || hasUnresolvedLocalWrites) {
+      const outbox = await this.read<Record<string, SyncOutboxOperationV2>>(
+        SYNC_V2_OUTBOX_STORAGE_KEY,
+        {},
+      );
+      const hasUnresolvedLocalWrites = Object.values(outbox).some(
+        (operation) =>
+          operation.accountId === input.accountId &&
+          !TERMINAL_OUTBOX_V2_STATES.has(operation.state),
+      );
+      if (
+        runtime.lastAppliedSequence !== 0 ||
+        Object.keys(existing).length !== 0 ||
+        hasUnresolvedLocalWrites
+      ) {
         throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
       }
       const nextRuntime: SyncV2LocalRuntime = {
@@ -109,7 +126,7 @@ export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
   loadCreationJournal(): Promise<SyncV2SnapshotCreationJournal | null> {
     return this.exclusive(async () => {
       const raw = await this.store.getItem(CREATION_JOURNAL_KEY);
-      return raw ? JSON.parse(raw) as SyncV2SnapshotCreationJournal : null;
+      return raw ? (JSON.parse(raw) as SyncV2SnapshotCreationJournal) : null;
     });
   }
 
@@ -120,7 +137,8 @@ export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
   clearCreationJournal(snapshotId: string): Promise<void> {
     return this.exclusive(async () => {
       const raw = await this.store.getItem(CREATION_JOURNAL_KEY);
-      if (!raw || (JSON.parse(raw) as SyncV2SnapshotCreationJournal).snapshotId !== snapshotId) return;
+      if (!raw || (JSON.parse(raw) as SyncV2SnapshotCreationJournal).snapshotId !== snapshotId)
+        return;
       await this.store.removeItem(CREATION_JOURNAL_KEY);
     });
   }
@@ -135,18 +153,31 @@ export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
   }
 
   private validateState(state: SyncV2CanonicalSnapshotState): void {
-    if (!state || !this.isObject(state.records) || !this.isObject(state.recordVersions) || !this.isObject(state.mediaPointers)) {
+    if (
+      !state ||
+      !this.isObject(state.records) ||
+      !this.isObject(state.recordVersions) ||
+      !this.isObject(state.mediaPointers)
+    ) {
       throw new SyncError({ code: 'SCHEMA_INCOMPATIBLE', safetyRelevant: true });
     }
     for (const [key, version] of Object.entries(state.recordVersions)) {
-      if (!/^(DIARY|ENTRY|NOTE|SETTINGS|PROFILE|SECURITY):[^:]+$/.test(key) || !Number.isInteger(version) || version < 0) {
+      if (
+        !/^(DIARY|ENTRY|NOTE|SETTINGS|PROFILE|SECURITY):[^:]+$/.test(key) ||
+        !Number.isInteger(version) ||
+        version < 0
+      ) {
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       }
     }
-    if (Object.keys(state.records).some(key => !(key in state.recordVersions))) {
+    if (Object.keys(state.records).some((key) => !(key in state.recordVersions))) {
       throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
     }
-    if (Object.values(state.mediaPointers).some(value => typeof value !== 'string' || value.length === 0)) {
+    if (
+      Object.values(state.mediaPointers).some(
+        (value) => typeof value !== 'string' || value.length === 0,
+      )
+    ) {
       throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
     }
   }
@@ -157,7 +188,7 @@ export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
 
   private canonicalJson(value: unknown): string {
     if (value === null || typeof value !== 'object') return JSON.stringify(value);
-    if (Array.isArray(value)) return `[${value.map(item => this.canonicalJson(item)).join(',')}]`;
+    if (Array.isArray(value)) return `[${value.map((item) => this.canonicalJson(item)).join(',')}]`;
     return `{${Object.entries(value as Record<string, unknown>)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, item]) => `${JSON.stringify(key)}:${this.canonicalJson(item)}`)
@@ -172,12 +203,15 @@ export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
 
   private async read<T>(key: string, fallback: T): Promise<T> {
     const raw = await this.store.getItem(key);
-    return raw ? JSON.parse(raw) as T : fallback;
+    return raw ? (JSON.parse(raw) as T) : fallback;
   }
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(work, work);
-    this.tail = result.then(() => undefined, () => undefined);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 }
