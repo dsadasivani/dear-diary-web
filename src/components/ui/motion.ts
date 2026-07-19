@@ -1,11 +1,13 @@
 import type { Transition, Variants } from 'motion/react';
 
 export const motionTransitions = {
+  instant: { duration: 0.1, ease: [0.2, 0, 0, 1] },
   press: { duration: 0.12, ease: [0.2, 0, 0, 1] },
-  state: { duration: 0.18, ease: [0.2, 0, 0, 1] },
-  page: { duration: 0.26, ease: [0.2, 0, 0, 1] },
-  deliberate: { duration: 0.34, ease: [0.2, 0.8, 0.2, 1] },
-  sheet: { type: 'spring', stiffness: 360, damping: 34, mass: 0.9 },
+  state: { duration: 0.16, ease: [0.2, 0, 0, 1] },
+  page: { duration: 0.24, ease: [0.2, 0, 0, 1] },
+  deliberate: { duration: 0.38, ease: [0.16, 1, 0.3, 1] },
+  exit: { duration: 0.18, ease: [0.4, 0, 1, 1] },
+  sheet: { type: 'spring', stiffness: 380, damping: 32, mass: 0.82 },
   sharedObject: { type: 'spring', stiffness: 300, damping: 30, mass: 0.85 },
 } satisfies Record<string, Transition>;
 

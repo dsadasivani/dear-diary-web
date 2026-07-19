@@ -101,7 +101,7 @@ import { signWithDeviceBundle } from './v2CompanionPairing';
 import { clearSyncV2LocalCache } from './clearSyncV2LocalCache';
 
 const PROTOCOL_VERSION = 2;
-const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '0.0.0';
+const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
 const MIGRATION_JOURNAL_KEY = 'deardiary_sync_v2_migration_journal';
 const LEGACY_VERSIONS_KEY = 'deardiary_sync_record_versions';
 const MAX_WORK_PER_FLUSH = 100;

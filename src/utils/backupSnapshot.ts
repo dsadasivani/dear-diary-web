@@ -241,7 +241,7 @@ const createPayloadAndMedia = async (
 };
 
 const getAppVersion = (): string =>
-  (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '0.0.0';
+  (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
 
 const getBackupCreationContext = async (): Promise<BackupCreationContext> => {
   const settings = await diaryRepository.getDriveBackupSettings();

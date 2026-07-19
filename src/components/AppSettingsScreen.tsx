@@ -73,6 +73,9 @@ import {
   getSyncHealthStatusMessage,
   type SyncHealth,
 } from '../sync/health/SyncHealth';
+import { DEFAULT_ACCENT_THEME_ID, type AccentThemeId } from '../design/accentThemes';
+import AccentThemeSelector from './AccentThemeSelector';
+import { calculateLocalStorageUsage, type LocalStorageUsage } from '../utils/localStorageUsage';
 
 interface AppSettingsScreenProps {
   initialSettings: AppSettings;
@@ -85,6 +88,8 @@ interface AppSettingsScreenProps {
   onDataChanged: () => void | Promise<void>;
   onShowToast?: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
   onThemeChange?: (theme: 'light' | 'dark') => void;
+  accentTheme?: AccentThemeId;
+  onAccentThemeChange?: (accentTheme: AccentThemeId) => void;
 }
 
 export type SettingsSection =
@@ -180,6 +185,14 @@ const percentOf = (value: number, total: number): number =>
 
 const storagePercentLabel = (value: number): string => `${Math.round(value)}%`;
 
+const syncAuthorizationMessage = (error: unknown, fallback: string): string => {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (/no credentials available/i.test(message)) {
+    return 'Google could not reopen the linked account. Check Google Play Services, then try again.';
+  }
+  return message || fallback;
+};
+
 const CUSTOM_QUESTION_SELECT_VALUE = 'custom';
 
 export default function AppSettingsScreen({
@@ -193,6 +206,8 @@ export default function AppSettingsScreen({
   onDataChanged,
   onShowToast,
   onThemeChange,
+  accentTheme = DEFAULT_ACCENT_THEME_ID,
+  onAccentThemeChange,
 }: AppSettingsScreenProps) {
   useScreenPerformance('settings');
   const prefersReducedMotion = useReducedMotion();
@@ -267,6 +282,9 @@ export default function AppSettingsScreen({
   const [driveSyncStatus, setDriveSyncStatus] = useState<DriveSyncStatus | null>(null);
   const [isDriveSyncStatusLoading, setIsDriveSyncStatusLoading] = useState(false);
   const [driveSyncStatusError, setDriveSyncStatusError] = useState('');
+  const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
+  const [isLocalStorageUsageLoading, setIsLocalStorageUsageLoading] = useState(false);
+  const [localStorageUsageError, setLocalStorageUsageError] = useState('');
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
   const [syncHealth, setSyncHealth] = useState<SyncHealth | null>(null);
   const [syncStatusError, setSyncStatusError] = useState('');
@@ -328,14 +346,16 @@ export default function AppSettingsScreen({
 
   const reconnectSyncAccount = async (): Promise<void> => {
     setAuthError('');
+    setDriveSyncStatusError('');
     setIsAuthLoading(true);
     try {
       await eventSyncEngine.reauthorize();
-      await eventSyncEngine.pullPending();
-      await refreshDriveSyncStatus();
+      await Promise.all([refreshDriveSyncStatus(), refreshLocalSyncStatus()]);
       onShowToast?.('Encrypted sync authorization renewed.', 'success');
     } catch (error: any) {
-      setAuthError(error?.message || 'Encrypted sync authorization could not be renewed.');
+      setAuthError(
+        syncAuthorizationMessage(error, 'Encrypted sync authorization could not be renewed.'),
+      );
     } finally {
       setIsAuthLoading(false);
     }
@@ -349,9 +369,26 @@ export default function AppSettingsScreen({
       setDriveSyncStatus(await eventSyncEngine.getDriveSyncStatus());
     } catch (error: any) {
       setDriveSyncStatus(null);
-      setDriveSyncStatusError(error?.message || 'Sync & Backup status could not be loaded.');
+      setDriveSyncStatusError(
+        syncAuthorizationMessage(error, 'Cloud storage usage could not be loaded.'),
+      );
     } finally {
       setIsDriveSyncStatusLoading(false);
+    }
+  };
+
+  const refreshLocalStorageUsage = async (): Promise<void> => {
+    setLocalStorageUsageError('');
+    setIsLocalStorageUsageLoading(true);
+    try {
+      setLocalStorageUsage(
+        await calculateLocalStorageUsage(await diaryRepository.exportSnapshot()),
+      );
+    } catch {
+      setLocalStorageUsage(null);
+      setLocalStorageUsageError('On-device usage could not be calculated.');
+    } finally {
+      setIsLocalStorageUsageLoading(false);
     }
   };
 
@@ -381,7 +418,7 @@ export default function AppSettingsScreen({
     if (!syncHealth) return;
     const diagnostics = exportPrivacySafeSyncDiagnostics(
       syncHealth,
-      import.meta.env.VITE_APP_VERSION || '0.0.0',
+      import.meta.env.VITE_APP_VERSION || '1.0.0',
       1,
     );
     const url = URL.createObjectURL(
@@ -448,6 +485,12 @@ export default function AppSettingsScreen({
       void refreshLocalSyncStatus();
     }
   }, [activeTab, syncAccountState?.accountId]);
+
+  useEffect(() => {
+    if (selectedSection === 'data-storage') {
+      void refreshLocalStorageUsage();
+    }
+  }, [selectedSection]);
 
   useEffect(
     () =>
@@ -824,7 +867,7 @@ export default function AppSettingsScreen({
           </button>
           <div>
             <h1
-              className={`${hasSidebar ? 'text-4xl font-semibold' : 'text-xl font-bold'} font-serif-diary text-brand-plum dark:text-brand-text`}
+              className={`${hasSidebar ? 'text-4xl font-semibold' : 'text-xl font-bold'} tracking-[-0.025em] text-brand-plum dark:text-brand-text`}
             >
               {!hasSidebar && mobileSectionOpen ? currentSection.label : 'Settings'}
             </h1>
@@ -850,20 +893,15 @@ export default function AppSettingsScreen({
               type="button"
               onClick={() => openSection(section.id)}
               aria-current={hasSidebar && isActive ? 'page' : undefined}
-              className={`${hasSidebar ? 'mb-1 rounded-2xl px-3 py-3' : 'min-h-[68px] border-b border-brand-border/60 px-4 py-3 last:border-b-0'} group flex w-full items-center gap-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-sage ${hasSidebar && isActive ? 'bg-brand-sage text-white' : 'text-brand-plum hover:bg-brand-blush-light/60 dark:text-brand-text dark:hover:bg-white/5'}`}
+              className={`${hasSidebar ? 'mb-1 rounded-2xl px-3 py-3' : 'min-h-14 border-b border-brand-border/60 px-4 py-2 last:border-b-0'} group flex w-full items-center gap-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-sage ${hasSidebar && isActive ? 'bg-brand-sage text-white' : 'text-brand-plum hover:bg-brand-blush-light/60 dark:text-brand-text dark:hover:bg-white/5'}`}
             >
               <span
-                className={`${hasSidebar && isActive ? 'bg-white/15 text-white' : 'bg-brand-sage/10 text-brand-sage'} flex h-10 w-10 shrink-0 items-center justify-center rounded-xl`}
+                className={`${hasSidebar && isActive ? 'bg-white/15 text-[var(--color-on-primary)]' : 'bg-brand-sage/10 text-brand-sage'} flex h-10 w-10 shrink-0 items-center justify-center rounded-xl`}
               >
                 <Icon className="h-5 w-5" />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-bold">{section.label}</span>
-                {!hasSidebar && (
-                  <span className="mt-0.5 block text-xs leading-5 text-brand-text-muted">
-                    {section.description}
-                  </span>
-                )}
               </span>
               {!hasSidebar && (
                 <ChevronRight
@@ -883,7 +921,7 @@ export default function AppSettingsScreen({
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand-sage">
               Settings
             </p>
-            <h2 className="mt-1 font-serif-diary text-3xl font-semibold text-brand-plum dark:text-brand-text">
+            <h2 className="mt-1 text-3xl font-semibold tracking-[-0.025em] text-brand-plum dark:text-brand-text">
               {currentSection.label}
             </h2>
             <p className="mt-1 text-sm text-brand-text-muted">{currentSection.description}</p>
@@ -972,8 +1010,10 @@ export default function AppSettingsScreen({
                             type="email"
                             value={profileEmail}
                             readOnly
+                            aria-readonly="true"
+                            tabIndex={-1}
                             placeholder={cachedGoogleDriveSession?.email || 'Email address'}
-                            className="w-full bg-brand-bg border border-brand-border py-2.5 pl-10 pr-4 rounded-xl text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
+                            className="w-full cursor-default bg-brand-bg/60 border border-brand-border py-2.5 pl-10 pr-4 rounded-xl text-xs text-brand-text-muted focus:outline-none"
                             required
                           />
                         </div>
@@ -1053,7 +1093,7 @@ export default function AppSettingsScreen({
                       <Info className="h-5 w-5" />
                     </span>
                     <div>
-                      <h3 className="font-serif-diary text-xl font-semibold text-brand-plum dark:text-brand-text">
+                      <h3 className="text-xl font-semibold text-brand-plum dark:text-brand-text">
                         Dear Diary
                       </h3>
                       <p className="text-sm text-brand-text-muted">
@@ -1712,6 +1752,79 @@ export default function AppSettingsScreen({
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
+                        On this device
+                      </h3>
+                      <p className="mt-1 text-sm text-brand-text-muted">Available offline</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void refreshLocalStorageUsage()}
+                      disabled={isLocalStorageUsageLoading}
+                      className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-brand-border text-brand-sage disabled:opacity-40"
+                      aria-label="Refresh on-device storage usage"
+                    >
+                      <RefreshCw
+                        className={`h-4 w-4 ${isLocalStorageUsageLoading ? 'animate-spin' : ''}`}
+                      />
+                    </button>
+                  </div>
+                  <p className="mt-4 text-2xl font-semibold text-brand-plum dark:text-brand-text">
+                    {localStorageUsage
+                      ? formatBytes(localStorageUsage.totalBytes)
+                      : isLocalStorageUsageLoading
+                        ? 'Calculating…'
+                        : 'Unavailable'}
+                  </p>
+                  <div className="mt-4 grid gap-2">
+                    {[
+                      [
+                        'Writing & settings',
+                        localStorageUsage?.writingBytes,
+                        localStorageUsage
+                          ? `${localStorageUsage.journalCount} journals · ${localStorageUsage.entryCount} entries · ${localStorageUsage.noteCount} notes`
+                          : '',
+                      ],
+                      [
+                        'Photos',
+                        localStorageUsage?.imageBytes,
+                        localStorageUsage ? `${localStorageUsage.imageCount} saved locally` : '',
+                      ],
+                      [
+                        'Voice notes',
+                        localStorageUsage?.audioBytes,
+                        localStorageUsage ? `${localStorageUsage.audioCount} saved locally` : '',
+                      ],
+                    ].map(([label, bytes, detail]) => (
+                      <div
+                        key={String(label)}
+                        className="flex items-center justify-between gap-3 rounded-xl bg-brand-bg/50 p-3 text-sm"
+                      >
+                        <span className="min-w-0">
+                          <span className="block font-semibold text-brand-plum dark:text-brand-text">
+                            {label}
+                          </span>
+                          {detail && (
+                            <span className="mt-0.5 block truncate text-xs text-brand-text-muted">
+                              {detail}
+                            </span>
+                          )}
+                        </span>
+                        <span className="shrink-0 font-bold text-brand-sage">
+                          {typeof bytes === 'number' ? formatBytes(bytes) : '—'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {localStorageUsageError && (
+                    <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
+                      {localStorageUsageError}
+                    </p>
+                  )}
+                </div>
+                <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
                         Cloud storage
                       </h3>
                       <p className="mt-1 text-sm text-brand-text-muted">
@@ -1731,7 +1844,7 @@ export default function AppSettingsScreen({
                     </button>
                   </div>
                   <div className="mt-4 flex items-end justify-between gap-3">
-                    <p className="font-serif-diary text-2xl font-semibold text-brand-plum dark:text-brand-text">
+                    <p className="text-2xl font-semibold text-brand-plum dark:text-brand-text">
                       {driveSyncStatus
                         ? formatBytes(appStorageBytes)
                         : isDriveSyncStatusLoading
@@ -1768,16 +1881,19 @@ export default function AppSettingsScreen({
                       Connect encrypted sync to see cloud storage usage.
                     </p>
                   )}
-                </div>
-                <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
-                  <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
-                    Local availability
-                  </h3>
-                  <p className="mt-2 text-sm leading-6 text-brand-text-muted">
-                    Downloaded journals and media remain available offline on this device. Older
-                    memories that are not downloaded can be included from Search when encrypted sync
-                    is connected.
-                  </p>
+                  {driveSyncStatusError && syncAccountState && (
+                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
+                      <p>{driveSyncStatusError}</p>
+                      <button
+                        type="button"
+                        onClick={() => void reconnectSyncAccount()}
+                        disabled={isAuthLoading}
+                        className="mt-2 min-h-11 rounded-xl bg-amber-100 px-3 py-2 text-xs font-bold text-amber-800 disabled:opacity-50 dark:bg-amber-900/40 dark:text-amber-200"
+                      >
+                        {isAuthLoading ? 'Reconnecting…' : 'Reconnect'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -1936,7 +2052,7 @@ export default function AppSettingsScreen({
                               <span>Auth: {syncHealth.authState}</span>
                               <span>Realtime: {syncHealth.realtimeState}</span>
                               <span>Integrity: {syncHealth.integrityState}</span>
-                              <span>App: {import.meta.env.VITE_APP_VERSION || '0.0.0'}</span>
+                              <span>App: {import.meta.env.VITE_APP_VERSION || '1.0.0'}</span>
                             </div>
                             <button
                               type="button"
@@ -2321,50 +2437,57 @@ export default function AppSettingsScreen({
 
                 {/* App Theme Selector */}
                 {selectedSection === 'appearance' && (
-                  <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
-                          {settings.theme === 'dark' ? (
-                            <Moon className="w-4 h-4" />
-                          ) : (
-                            <Sun className="w-4 h-4" />
-                          )}
-                        </span>
-                        <div>
-                          <h3 className="text-sm font-bold text-brand-plum">Application Theme</h3>
-                          <p className="text-xs text-brand-sage mt-0.5">
-                            Toggle between Light and Dark mode
-                          </p>
+                  <>
+                    <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
+                            {settings.theme === 'dark' ? (
+                              <Moon className="w-4 h-4" />
+                            ) : (
+                              <Sun className="w-4 h-4" />
+                            )}
+                          </span>
+                          <div>
+                            <h3 className="text-sm font-bold text-brand-plum">Application Theme</h3>
+                            <p className="text-xs text-brand-sage mt-0.5">
+                              Toggle between Light and Dark mode
+                            </p>
+                          </div>
                         </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          onClick={() => handleThemeChange('light')}
+                          className={`flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-control)] border px-3 py-3 text-xs font-bold transition-all ${
+                            settings.theme !== 'dark'
+                              ? 'border-accent bg-accent text-[var(--color-on-primary)] shadow-sm'
+                              : 'bg-brand-bg text-brand-sage border-brand-border hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                          }`}
+                        >
+                          <Sun className="w-4 h-4" />
+                          Light Mode
+                        </button>
+                        <button
+                          onClick={() => handleThemeChange('dark')}
+                          className={`flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-control)] border px-3 py-3 text-xs font-bold transition-all ${
+                            settings.theme === 'dark'
+                              ? 'border-accent bg-accent text-[var(--color-on-primary)] shadow-sm'
+                              : 'bg-brand-bg text-brand-sage border-brand-border hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
+                          }`}
+                        >
+                          <Moon className="w-4 h-4" />
+                          Dark Mode
+                        </button>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        onClick={() => handleThemeChange('light')}
-                        className={`flex items-center justify-center gap-2 py-3 rounded-2xl border text-xs font-bold transition-all ${
-                          settings.theme !== 'dark'
-                            ? 'bg-brand-pink text-white border-brand-pink scale-[1.01] shadow-sm'
-                            : 'bg-brand-bg text-brand-sage border-brand-border hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
-                        }`}
-                      >
-                        <Sun className="w-4 h-4" />
-                        Light Mode
-                      </button>
-                      <button
-                        onClick={() => handleThemeChange('dark')}
-                        className={`flex items-center justify-center gap-2 py-3 rounded-2xl border text-xs font-bold transition-all ${
-                          settings.theme === 'dark'
-                            ? 'bg-brand-pink text-white border-brand-pink scale-[1.01] shadow-sm'
-                            : 'bg-brand-bg text-brand-sage border-brand-border hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
-                        }`}
-                      >
-                        <Moon className="w-4 h-4" />
-                        Dark Mode
-                      </button>
-                    </div>
-                  </div>
+                    <AccentThemeSelector
+                      value={accentTheme}
+                      onChange={(value) => onAccentThemeChange?.(value)}
+                    />
+                  </>
                 )}
 
                 {/* Custom Tags */}

@@ -72,8 +72,22 @@ import {
   getLocalThemePreference,
   setLocalThemePreference,
 } from './utils/themePreference';
+import {
+  getLocalAccentThemePreference,
+  setLocalAccentThemePreference,
+} from './utils/accentPreference';
+import type { AccentThemeId } from './design/accentThemes';
 import { measureAsync } from './utils/performance';
 import { pageMotion } from './components/ui/motion';
+import {
+  legacyNavigationTarget,
+  resolveNavigationTarget,
+  type AppNavigationTarget,
+  type AppScreen,
+  type RootDestination,
+} from './navigation/appNavigation';
+
+const NEW_NOTE_NAVIGATION_ID = '__new_note__';
 
 const LockScreen = React.lazy(() => import('./components/LockScreen'));
 const HomeScreen = React.lazy(() => import('./components/HomeScreen'));
@@ -176,8 +190,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   );
 
   // Navigation states
-  const [activeTab, setActiveTab] = useState<string>('home'); // home, diaries, notes, search, stats
-  const [currentScreen, setCurrentScreen] = useState<string>('list'); // list, diaryDetail, diarySettings, entryEditor, appSettings
+  const [activeTab, setActiveTab] = useState<RootDestination>('home');
+  const [currentScreen, setCurrentScreen] = useState<AppScreen>('list');
   const [isEditorFocusMode, setIsEditorFocusMode] = useState<boolean>(false);
   const [isLocalFocusedFlow, setIsLocalFocusedFlow] = useState(false);
   const localFocusedFlowBackRef = React.useRef<(() => void) | null>(null);
@@ -250,6 +264,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [diaries, setDiaries] = useState<Diary[]>([]);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
+  const [accentTheme, setAccentTheme] = useState<AccentThemeId>(getLocalAccentThemePreference);
   const [security, setSecurity] = useState<SecurityConfig>(initialSecurity);
   const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
   const [archiveMonths, setArchiveMonths] = useState<PartitionHydrationState[]>([]);
@@ -344,6 +359,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setLocalThemePreference(nextTheme);
     setSettings((prev) => ({ ...prev, theme: nextTheme }));
     void syncNativeStatusBar(nextTheme);
+  };
+
+  const handleLocalAccentThemeChange = (nextAccentTheme: AccentThemeId) => {
+    setLocalAccentThemePreference(nextAccentTheme);
+    setAccentTheme(nextAccentTheme);
   };
 
   const applyRepositoryChange = useCallback((change: RepositoryChange) => {
@@ -695,7 +715,25 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   const [selectedPrompt, setSelectedPrompt] = useState<string>('');
 
-  // Handler to navigate between tabs & sub-screens
+  const navigate = (target: AppNavigationTarget) => {
+    const next = resolveNavigationTarget(target);
+    localFocusedFlowBackRef.current = null;
+    setIsLocalFocusedFlow(false);
+    setActiveTab(next.activeTab);
+    setCurrentScreen(next.currentScreen);
+    setSelectedDiaryId(next.selectedDiaryId);
+    setSelectedEntryId(next.selectedEntryId);
+    setSelectedDate(next.selectedDate);
+    setSelectedNoteId(next.selectedNoteId);
+    setSelectedPrompt(next.selectedPrompt);
+    setIsEditorFocusMode(false);
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      document.scrollingElement?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    });
+  };
+
+  // Compatibility boundary for components that still expose positional callbacks.
   const handleNavigate = (
     tab: string,
     screen: string = 'list',
@@ -705,20 +743,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     noteId: string = '',
     promptText: string = '',
   ) => {
-    localFocusedFlowBackRef.current = null;
-    setIsLocalFocusedFlow(false);
-    setActiveTab(tab);
-    setCurrentScreen(screen);
-    setSelectedDiaryId(diaryId);
-    setSelectedEntryId(entryId);
-    setSelectedDate(dateStr);
-    setSelectedNoteId(noteId);
-    setSelectedPrompt(promptText);
-    setIsEditorFocusMode(false);
-    window.requestAnimationFrame(() => {
-      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-      document.scrollingElement?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-    });
+    navigate(legacyNavigationTarget(tab, screen, diaryId, entryId, dateStr, noteId, promptText));
   };
 
   const handleDesktopSearchSubmit = (event: React.FormEvent) => {
@@ -1379,6 +1404,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               onDataChanged={reloadData}
               onShowToast={showToast}
               onThemeChange={handleLocalThemeChange}
+              accentTheme={accentTheme}
+              onAccentThemeChange={handleLocalAccentThemeChange}
             />
           );
         }
@@ -1446,6 +1473,9 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const renderSyncStatusBadge = (placement: 'desktop' | 'floating' = 'floating') => {
     const status = getSyncStatusDisplay();
     if (!status) return null;
+    // Routine background sync should not compete with the current task on a phone.
+    // Failures and offline queues remain visible because they require attention.
+    if (placement === 'floating' && layout === 'mobile' && status.tone === 'syncing') return null;
     const toneClass =
       status.tone === 'attention'
         ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200'
@@ -1821,6 +1851,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             profile={userProfile}
             onSearch={() => handleNavigate('search')}
             onProfile={() => setIsProfileSheetOpen(true)}
+            onBack={activeTab === 'search' ? () => handleNavigate('home') : undefined}
           />
         )}
         <AnimatePresence mode="wait">
@@ -1834,7 +1865,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         </AnimatePresence>
       </main>
 
-      {layout === 'mobile' && showRootNavigation && (
+      {layout === 'mobile' && showRootNavigation && !isCreateSheetOpen && !isProfileSheetOpen && (
         <MobileBottomNavigation
           active={activeTab}
           onNavigate={(destination) => handleNavigate(destination)}
@@ -1847,7 +1878,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         hasJournals={diaries.length > 0}
         onClose={() => setIsCreateSheetOpen(false)}
         onNewEntry={() => handleCreateEntry()}
-        onNewNote={() => handleNavigate('notes')}
+        onNewNote={() => handleNavigate('notes', 'list', '', '', '', NEW_NOTE_NAVIGATION_ID)}
         onVoice={() => handleCreateEntry('voice')}
         onPhoto={() => handleCreateEntry('photo')}
         onNewJournal={() => handleNavigate('diaries')}

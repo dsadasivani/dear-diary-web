@@ -316,6 +316,7 @@ describe('LockScreen first-run sync setup', () => {
 
     await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
     await screen.findByRole('button', { name: /^1$/ });
+    expect(await screen.findAllByText(/enter this browser's 4-digit pin/i)).not.toHaveLength(0);
     await clickPin(user, '1234');
     await user.click(screen.getByRole('button', { name: /unlock diary/i }));
 

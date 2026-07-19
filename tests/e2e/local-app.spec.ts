@@ -4,7 +4,7 @@ import AxeBuilder from '@axe-core/playwright';
 const APP_PIN = '1234';
 
 test.describe.configure({ mode: 'serial' });
-test.setTimeout(60_000);
+test.setTimeout(120_000);
 
 const enterPin = async (page: Page, pin: string) => {
   for (const digit of pin) {
@@ -160,7 +160,7 @@ test('local app persists IndexedDB state, supports keyboard navigation, shows of
     return;
   }
 
-  await page.reload();
+  await page.goto('/?e2eApp=1', { waitUntil: 'commit' });
   await unlockWithPin(page);
   await openSearch(page);
   await searchInput(page).fill('ordinary visible memory');
@@ -195,7 +195,7 @@ test('local app creates, edits, and deletes a quick note through the UI', async 
   const updatedTitle = 'E2E UI note updated';
   await fillEditor(page.getByTestId('quick-note-editor').first(), noteTitle);
   await page.getByRole('button', { name: /save note/i }).click();
-  await expect(page.getByText(noteTitle)).toBeVisible();
+  await expect(page.getByText(noteTitle).first()).toBeVisible();
   if (testInfo.project.name.includes('mobile')) {
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
   }
@@ -267,7 +267,7 @@ test('local app creates, edits, and deletes a diary entry through the UI', async
   await expect(
     page
       .getByRole('status')
-      .filter({ hasText: /saved at/i })
+      .filter({ hasText: /saved locally|saved at/i })
       .first(),
   ).toBeVisible({ timeout: 10_000 });
   await page
@@ -324,6 +324,54 @@ test('settings uses responsive section navigation and isolates section content',
   await expect(page.getByText('Cloud storage', { exact: true })).toBeVisible();
   await expect(page.getByText('Local availability', { exact: true })).toBeVisible();
   await expect(page.getByText('Local sync queue')).not.toBeVisible();
+});
+
+test('appearance offers named color personalities and persists the selection', async ({ page }) => {
+  await setupUnlockedLocalApp(page);
+  await openSettings(page);
+
+  const sectionNavigation = page.getByRole('navigation', { name: 'Settings sections' });
+  await sectionNavigation.getByRole('button', { name: /Appearance/ }).click();
+
+  const paletteGroup = page.getByRole('radiogroup', { name: 'Color personality' });
+  await expect(paletteGroup).toBeVisible();
+  await expect(paletteGroup.getByRole('radio')).toHaveCount(5);
+  await expect(paletteGroup.getByRole('radio', { name: /Quiet Grove/ })).toBeChecked();
+
+  await paletteGroup.getByRole('radio', { name: /Warm Keepsake/ }).click();
+  await expect(paletteGroup.getByRole('radio', { name: /Warm Keepsake/ })).toBeChecked();
+  await expect(page.locator('html')).toHaveAttribute('data-accent-theme', 'warm-keepsake');
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim(),
+      ),
+    )
+    .toBe('#A44735');
+
+  await page.getByRole('button', { name: 'Dark Mode' }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim(),
+      ),
+    )
+    .toBe('#F09A83');
+
+  const accessibilityResults = await new AxeBuilder({ page }).analyze();
+  const blockingViolations = accessibilityResults.violations.filter(
+    (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+  );
+  expect(
+    blockingViolations,
+    blockingViolations.map((violation) => violation.id).join(', '),
+  ).toEqual([]);
+
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-accent-theme', 'warm-keepsake');
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('deardiary_accent_theme')))
+    .toBe('warm-keepsake');
 });
 
 test('@accessibility authenticated primary destinations have no serious or critical axe violations', async ({

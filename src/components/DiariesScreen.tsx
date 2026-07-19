@@ -36,6 +36,7 @@ import {
 } from './UiPrimitives';
 import { BottomSheet } from './ui/BottomSheet';
 import { ProgressIndicator } from './ui/Feedback';
+import { useAmbientTheme } from '../design/ambientTheme';
 
 type DiaryViewMode = 'gallery' | 'list';
 type DiarySort = 'updated' | 'name' | 'entries' | 'created';
@@ -60,6 +61,7 @@ export default function DiariesScreen({
   onRefreshDiaries,
   onFocusedFlowChange,
 }: DiariesScreenProps) {
+  const { setAmbientContext, resetAmbientContext } = useAmbientTheme();
   const [creating, setCreating] = useState(false);
   const [creationStep, setCreationStep] = useState(0);
   const [showLibraryControls, setShowLibraryControls] = useState(false);
@@ -77,6 +79,11 @@ export default function DiariesScreen({
   const [foilIcons, setFoilIcons] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const coverInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setAmbientContext({ journalColor: color || diaries[0]?.color || null });
+    return resetAmbientContext;
+  }, [color, diaries, resetAmbientContext, setAmbientContext]);
 
   const closeCreator = useCallback(() => {
     setName('');
@@ -158,6 +165,10 @@ export default function DiariesScreen({
 
   const moveToStep = (step: number) => {
     setCreationStep(Math.min(3, Math.max(0, step)));
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      document.scrollingElement?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    });
     void triggerImpact('light');
   };
 
@@ -217,7 +228,7 @@ export default function DiariesScreen({
             className={`${layout === 'mobile' ? '' : 'sticky top-28'} flex flex-col items-center`}
           >
             <JournalCover diary={preview} variant="preview" className="w-44 md:w-52" />
-            <p className="type-metadata mt-4 max-w-52 text-center">
+            <p className="type-metadata mt-4 hidden max-w-52 text-center sm:block">
               Your journal stays on this device and follows your encrypted sync settings.
             </p>
           </div>
@@ -231,7 +242,7 @@ export default function DiariesScreen({
                     value={name}
                     onChange={(event) => setName(event.target.value)}
                     placeholder="e.g., Evening Reflections"
-                    autoFocus
+                    autoFocus={layout !== 'mobile'}
                     className="mt-2 min-h-12 w-full border-0 border-b border-[var(--border-strong)] bg-transparent px-0 font-serif-diary text-2xl text-ink outline-none placeholder:text-ink-tertiary focus:border-accent"
                   />
                 </label>
@@ -239,7 +250,7 @@ export default function DiariesScreen({
                   <span>
                     <span className="block text-sm font-bold">Private journal lock</span>
                     <span className="mt-1 block text-xs leading-relaxed text-ink-secondary">
-                      Require your app PIN or biometrics whenever this journal is opened.
+                      Ask for PIN or biometrics when opened.
                     </span>
                   </span>
                   <input
@@ -304,7 +315,7 @@ export default function DiariesScreen({
               <PaperSurface className="space-y-7 p-5 md:p-7">
                 <fieldset>
                   <legend className="text-sm font-bold">Personal emblem</legend>
-                  <p className="type-supporting mt-1">
+                  <p className="type-supporting mt-1 hidden sm:block">
                     Choose one quiet mark for the journal spine.
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -355,7 +366,7 @@ export default function DiariesScreen({
 
             {creationStep === 3 && (
               <PaperSurface className="p-5 md:p-7">
-                <p className="app-eyebrow">Ready for the shelf</p>
+                <p className="app-eyebrow hidden sm:block">Ready for the shelf</p>
                 <h2 className="mt-2 font-serif-diary text-3xl font-semibold">
                   {name || 'Untitled journal'}
                 </h2>
@@ -378,7 +389,7 @@ export default function DiariesScreen({
               </PaperSurface>
             )}
 
-            <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-5">
+            <footer className="surface-glass-strong sticky bottom-[var(--safe-area-inset-bottom)] z-20 -mx-2 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] px-2 pb-2 pt-4">
               {creationStep > 0 ? (
                 <AppButton onClick={() => moveToStep(creationStep - 1)}>Back</AppButton>
               ) : (
@@ -457,13 +468,15 @@ export default function DiariesScreen({
   return (
     <div className="space-y-7 pb-4">
       <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          {layout !== 'mobile' && <h1 className="type-page-title">Your journals</h1>}
-          <p className={`${layout === 'mobile' ? 'app-eyebrow' : 'type-supporting mt-2'}`}>
-            {diaries.length} private spaces · {totalEntries} entries
-            {latest ? ` · Updated ${latest.lastUpdated}` : ''}
-          </p>
-        </div>
+        {layout !== 'mobile' && (
+          <div>
+            <h1 className="type-page-title">Your journals</h1>
+            <p className="type-supporting mt-2">
+              {diaries.length} private spaces · {totalEntries} entries
+              {latest ? ` · Updated ${latest.lastUpdated}` : ''}
+            </p>
+          </div>
+        )}
         <AppButton tone="primary" onClick={() => setCreating(true)}>
           <Plus className="h-4 w-4" />
           New Journal
@@ -484,7 +497,7 @@ export default function DiariesScreen({
           />
           <AppButton className="md:hidden" onClick={() => setShowLibraryControls(true)}>
             <SlidersHorizontal className="h-4 w-4" />
-            Sort & view
+            View
           </AppButton>
           <div className="hidden md:block">
             <label className="sr-only" htmlFor="journal-sort-desktop">
@@ -544,7 +557,7 @@ export default function DiariesScreen({
       {visible.length === 0 ? (
         <EmptyState
           title="No matching journals"
-          description="Try another search or filter, or create a new private space."
+          description="Try another search or filter."
           action={
             <AppButton tone="primary" onClick={() => setCreating(true)}>
               New Journal
@@ -607,6 +620,7 @@ export default function DiariesScreen({
                 <JournalCover
                   diary={diary}
                   variant="full"
+                  showTitle={false}
                   className="w-full transition-transform duration-200 group-hover:-translate-y-1 group-focus-visible:-translate-y-1"
                 />
                 <span className="mt-3 flex items-start justify-between gap-2">
@@ -615,7 +629,8 @@ export default function DiariesScreen({
                       {diary.name}
                     </span>
                     <span className="type-metadata mt-0.5 block">
-                      {diary.entryCount} entries · {diary.lastUpdated}
+                      {diary.entryCount} entries
+                      {layout !== 'mobile' && ` · ${diary.lastUpdated}`}
                     </span>
                   </span>
                   {diary.isLocked && (
@@ -634,7 +649,6 @@ export default function DiariesScreen({
       <BottomSheet
         open={showLibraryControls}
         title="Sort and view"
-        description="Choose how your journal shelf is arranged."
         onClose={() => setShowLibraryControls(false)}
         footer={
           <AppButton tone="primary" onClick={() => setShowLibraryControls(false)}>

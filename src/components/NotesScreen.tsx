@@ -15,6 +15,7 @@ import type { AppSettings, Diary, Note, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { diaryRepository } from '../repositories';
+import { toLocalDateKey } from '../utils/localDate';
 import RichTextEditor from './RichTextEditor';
 import { AppButton, AppDialog, IconButton, StatusNotice } from './UiPrimitives';
 import { BottomSheet, ConfirmationSheet } from './ui/BottomSheet';
@@ -75,7 +76,7 @@ export default function NotesScreen({
   const [conversionNote, setConversionNote] = useState<Note | null>(null);
   const [conversionJournalId, setConversionJournalId] = useState(diaries[0]?.id || '');
   const [conversionTitle, setConversionTitle] = useState('');
-  const [conversionDate, setConversionDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [conversionDate, setConversionDate] = useState(() => toLocalDateKey());
   const [conversionDisposition, setConversionDisposition] = useState<'keep' | 'delete'>('keep');
   const [listPaneWidth, setListPaneWidth] = useState(() => {
     if (typeof window === 'undefined') return 340;
@@ -110,6 +111,11 @@ export default function NotesScreen({
   }, [loadNotes]);
 
   useEffect(() => {
+    if (initialNoteId === '__new_note__') {
+      openCreator();
+      onClearInitialNoteId?.();
+      return;
+    }
     if (!initialNoteId || notes.length === 0) return;
     const note = notes.find((item) => item.id === initialNoteId);
     if (note) openEditor(note);
@@ -198,7 +204,8 @@ export default function NotesScreen({
   };
 
   const saveDraft = async () => {
-    if (saving) return;
+    const hasContent = Boolean(draft.title.trim() || richTextHtmlToPlainText(draft.body).trim());
+    if (saving || !hasContent) return;
     setSaving(true);
     try {
       const title =
@@ -234,7 +241,7 @@ export default function NotesScreen({
   const openConversion = (note: Note) => {
     setConversionNote(note);
     setConversionTitle(note.title);
-    setConversionDate(new Date().toISOString().slice(0, 10));
+    setConversionDate(toLocalDateKey());
     setConversionJournalId(diaries[0]?.id || '');
     setConversionDisposition('keep');
     setMenuNoteId('');
@@ -257,6 +264,7 @@ export default function NotesScreen({
   };
 
   const activeMenuNote = notes.find((note) => note.id === menuNoteId) || null;
+  const canSaveDraft = Boolean(draft.title.trim() || richTextHtmlToPlainText(draft.body).trim());
 
   const Editor = ({ fullScreen = false }: { fullScreen?: boolean }) => (
     <section
@@ -279,7 +287,11 @@ export default function NotesScreen({
           >
             <Pin className={`h-4 w-4 ${draft.isPinned ? 'fill-current text-brand-pink' : ''}`} />
           </IconButton>
-          <AppButton tone="primary" onClick={() => void saveDraft()} disabled={saving}>
+          <AppButton
+            tone="primary"
+            onClick={() => void saveDraft()}
+            disabled={saving || !canSaveDraft}
+          >
             {editingId ? 'Save Changes' : 'Save Note'}
           </AppButton>
         </div>
@@ -404,7 +416,7 @@ export default function NotesScreen({
         <EmptyState
           icon={<BookOpen className="h-5 w-5" />}
           title="No notes found"
-          description="Capture a thought or adjust your search."
+          description="Try another search or create a note."
           action={
             <AppButton tone="primary" onClick={openCreator}>
               New Note
@@ -457,13 +469,17 @@ export default function NotesScreen({
                       />
                     )}
                   </span>
-                  <span className="mt-1 block line-clamp-2 text-sm leading-relaxed text-brand-text-muted">
+                  <span
+                    className={`mt-1 block text-sm leading-relaxed text-brand-text-muted ${layout === 'mobile' ? 'line-clamp-1' : 'line-clamp-2'}`}
+                  >
                     {richTextHtmlToPlainText(note.body) || 'Empty note'}
                   </span>
-                  <span className="mt-2 block text-xs text-brand-text-muted">
-                    {new Date(note.updatedAt).toLocaleDateString()}
+                  <span
+                    className={`mt-2 text-xs text-brand-text-muted ${layout === 'mobile' && !note.tags.length ? 'hidden' : 'block'}`}
+                  >
+                    {layout !== 'mobile' && new Date(note.updatedAt).toLocaleDateString()}
                     {note.tags.length
-                      ? ` · ${note.tags
+                      ? `${layout === 'mobile' ? '' : ' · '}${note.tags
                           .slice(0, 2)
                           .map((tag) => `#${tag}`)
                           .join(' ')}`
@@ -487,16 +503,12 @@ export default function NotesScreen({
   return (
     <div className="space-y-6 pb-20">
       <header className="flex items-end justify-between gap-4">
-        <div>
-          {layout !== 'mobile' && (
-            <h1 className="font-serif-diary text-4xl font-semibold">Notes</h1>
-          )}
-          <p
-            className={`${layout === 'mobile' ? 'app-eyebrow' : 'mt-1 text-sm text-brand-text-muted'}`}
-          >
-            Lightweight thoughts, kept close.
-          </p>
-        </div>
+        {layout !== 'mobile' && (
+          <div>
+            <h1 className="type-page-title font-bold">Notes</h1>
+            <p className="mt-1 text-sm text-brand-text-muted">Lightweight thoughts, kept close.</p>
+          </div>
+        )}
         <AppButton tone="primary" data-testid="new-note-button" onClick={openCreator}>
           <Plus className="h-4 w-4" />
           New Note
@@ -620,7 +632,6 @@ export default function NotesScreen({
       <BottomSheet
         open={Boolean(activeMenuNote)}
         title={activeMenuNote?.title || 'Note actions'}
-        description="Choose what to do with this note."
         onClose={() => setMenuNoteId('')}
       >
         {activeMenuNote && (

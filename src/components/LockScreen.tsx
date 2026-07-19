@@ -18,7 +18,13 @@ import {
   Sun,
   X,
 } from 'lucide-react';
-import { AppSettings, GoogleAccountSession, SecurityConfig, SupabaseAuthSession } from '../types';
+import {
+  AppSettings,
+  GoogleAccountSession,
+  SecurityConfig,
+  SupabaseAuthSession,
+  SyncDeviceRole,
+} from '../types';
 import {
   createCustomRecoveryQuestionId,
   createInitialPin,
@@ -186,6 +192,17 @@ export default function LockScreen({
   const [confirmRecoveryPassphrase, setConfirmRecoveryPassphrase] = useState('');
   const [showRecoveryPassphrase, setShowRecoveryPassphrase] = useState(false);
   const [syncSetupSelection, setSyncSetupSelection] = useState<SyncSetupSelection | null>(null);
+  const [deviceRole, setDeviceRole] = useState<SyncDeviceRole | null>(null);
+
+  useEffect(() => {
+    let isActive = true;
+    void diaryRepository.getLocalSyncAccountState().then((account) => {
+      if (isActive) setDeviceRole(account?.deviceRole || null);
+    });
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   useEffect(() => {
     const updateTime = () => {
@@ -329,7 +346,11 @@ export default function LockScreen({
         await completeUnlock(unlockedSecurity, pin);
       } else {
         setPin('');
-        fail('Incorrect security PIN.');
+        fail(
+          deviceRole === 'web_companion'
+            ? 'Incorrect PIN for this browser. If your mobile PIN changed after pairing, use recovery or pair this browser again.'
+            : 'Incorrect security PIN.',
+        );
       }
     }
   };
@@ -648,7 +669,9 @@ export default function LockScreen({
               : setupStep === 'welcome'
                 ? 'Set up private access in a few short steps. Your PIN never leaves this device.'
                 : security.isPinCreated
-                  ? `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock your diary.`
+                  ? deviceRole === 'web_companion'
+                    ? `Enter this browser's ${security.pinLength || '4 or 8'}-digit PIN. If your mobile PIN changed after pairing, use recovery or pair this browser again.`
+                    : `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock your diary.`
                   : 'Choose a 4-digit or 8-digit PIN.';
   const setupProgressLabel =
     security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
@@ -670,10 +693,7 @@ export default function LockScreen({
     ? Number(setupProgressLabel.match(/\d+/)?.[0] || 0)
     : 0;
 
-  const activeBgClass =
-    theme === 'dark'
-      ? 'bg-gradient-to-tr from-[#100F10] via-[#21191C] to-[#151214]'
-      : 'bg-gradient-to-tr from-[#FAF7F2] via-[#FFF8F4] to-[#F4EFE7]';
+  const activeBgClass = 'lock-atmosphere bg-brand-bg';
 
   const showRecoveryForm =
     !showBackupChoice &&
@@ -698,13 +718,10 @@ export default function LockScreen({
 
   return (
     <div
-      className={`min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-all duration-700 lg:justify-center lg:px-8 lg:py-8`}
+      className={`min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-colors duration-300 lg:justify-center lg:px-8 lg:py-8`}
     >
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.58),transparent_42%)] dark:bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.08),transparent_40%)]" />
-        <div className="absolute top-[-22%] left-[-16%] h-[42rem] w-[42rem] rounded-full bg-brand-pink/10 blur-[140px] dark:bg-brand-pink/16" />
-        <div className="absolute bottom-[-24%] right-[-12%] h-[44rem] w-[44rem] rounded-full bg-brand-sage/10 blur-[160px] dark:bg-brand-sage/14" />
-        <div className="absolute inset-y-0 left-0 hidden w-1/2 bg-brand-blush-light/28 dark:bg-[#2A1720]/34 lg:block" />
+        <div className="absolute inset-y-0 left-0 hidden w-1/2 bg-accent-soft/30 lg:block" />
         <div className="absolute inset-y-0 left-1/2 hidden w-px bg-brand-border/45 dark:bg-white/10 lg:block" />
       </div>
 
@@ -782,7 +799,7 @@ export default function LockScreen({
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, y: -32, scale: 0.98 }}
               transition={{ duration: 0.4 }}
-              className="w-full flex flex-col items-center text-center justify-between h-[65vh] sm:h-[70vh] py-4 lg:h-auto lg:max-w-[420px] lg:justify-center lg:gap-7 lg:p-0"
+              className="flex w-full flex-col items-center justify-center gap-12 py-4 text-center lg:h-auto lg:max-w-[420px] lg:gap-7 lg:p-0"
             >
               <div className="w-full max-w-[310px] mt-3 select-none px-5 py-5 lg:hidden">
                 <h2 className="font-serif-diary text-[4.75rem] font-bold text-brand-plum dark:text-[#ECE6E1] leading-none">
@@ -826,7 +843,7 @@ export default function LockScreen({
                 </motion.button>
               </div>
 
-              <div className="w-full max-w-xs border-y border-brand-border/70 px-4 py-4 text-center flex flex-col gap-2 lg:hidden">
+              <div className="hidden">
                 <p className="text-xs font-bold tracking-[0.2em] text-brand-pink uppercase">
                   Sanctuary Note
                 </p>
@@ -884,15 +901,18 @@ export default function LockScreen({
                   </div>
                   <div className="space-y-0.5">
                     <h1 className="font-serif-diary text-xl sm:text-2xl lg:text-3xl text-[#2C1D21] dark:text-[#ECE6E1] font-bold tracking-tight">
-                      <span className="lg:hidden">Dear Diary</span>
+                      <span className="lg:hidden">
+                        {security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
+                          ? 'Enter PIN'
+                          : setupTitle}
+                      </span>
                       <span className="hidden lg:inline">
                         {security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
                           ? 'Welcome Back'
                           : setupTitle}
                       </span>
                     </h1>
-                    <p className="text-xs sm:text-xs lg:text-base lg:font-normal lg:normal-case lg:tracking-normal font-bold tracking-[0.25em] text-brand-pink/85 dark:text-brand-pink-dark uppercase">
-                      <span className="lg:hidden">Private Access</span>
+                    <p className="hidden text-xs font-bold uppercase tracking-[0.25em] text-brand-pink/85 dark:text-brand-pink-dark lg:block lg:text-base lg:font-normal lg:normal-case lg:tracking-normal">
                       <span className="hidden lg:inline text-brand-text-muted dark:text-[#EADCD1]/70">
                         {security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
                           ? 'Your sanctuary is currently locked.'
@@ -920,17 +940,22 @@ export default function LockScreen({
                   )}
                 </div>
 
-                <div className="text-center py-1 border-b border-brand-border/45 pb-2 lg:hidden">
-                  <span className="inline-flex p-1.5 bg-brand-pink/10 text-brand-pink rounded-xl mb-1">
-                    <ShieldCheck className="w-4 h-4" />
-                  </span>
-                  <h2 className="text-xs sm:text-sm font-bold text-[#2C1D21] dark:text-[#ECE6E1]">
-                    {setupTitle}
-                  </h2>
-                  <p className="text-xs sm:text-xs text-brand-text-muted mt-1 leading-relaxed max-w-[260px] mx-auto">
-                    {setupCopy}
-                  </p>
-                </div>
+                {(!security.isPinCreated ||
+                  requiresRecoverySetup ||
+                  setupStep === 'complete' ||
+                  deviceRole === 'web_companion') && (
+                  <div className="border-b border-brand-border/45 py-1 pb-2 text-center lg:hidden">
+                    <span className="inline-flex p-1.5 bg-brand-pink/10 text-brand-pink rounded-xl mb-1">
+                      <ShieldCheck className="w-4 h-4" />
+                    </span>
+                    <h2 className="text-xs sm:text-sm font-bold text-[#2C1D21] dark:text-[#ECE6E1]">
+                      {setupTitle}
+                    </h2>
+                    <p className="text-xs sm:text-xs text-brand-text-muted mt-1 leading-relaxed max-w-[260px] mx-auto">
+                      {setupCopy}
+                    </p>
+                  </div>
+                )}
 
                 {setupStep === 'complete' ? (
                   <div className="flex flex-col items-center gap-4 rounded-3xl border border-brand-sage/20 bg-brand-sage/8 p-5 text-center">

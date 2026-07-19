@@ -14,6 +14,7 @@ import { calculateStreak } from '../domain/journalCatalog';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import SyncedImage from './SyncedImage';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import { toLocalDateKey } from '../utils/localDate';
 import { diaryRepository } from '../repositories';
 import type { EntrySummary, GlobalStatistics, NoteSummary } from '../repositories/DiaryRepository';
 import { AppButton, StatusNotice } from './UiPrimitives';
@@ -160,19 +161,19 @@ export default function StatsScreen({
     const counts: { [key: string]: { count: number; emoji: string } } = {};
 
     const defaultEmojis: { [key: string]: string } = {
-      Joyful: 'ðŸ˜Š',
-      Calm: 'ðŸ˜Œ',
-      Sad: 'ðŸ˜¢',
-      Anxious: 'ðŸ˜Ÿ',
-      Excited: 'ðŸ¤©',
-      Reflective: 'ðŸ’­',
-      Tired: 'ðŸ˜´',
-      Creative: 'ðŸŽ¨',
+      Joyful: '😊',
+      Calm: '😌',
+      Sad: '😢',
+      Anxious: '😟',
+      Excited: '🤩',
+      Reflective: '💭',
+      Tired: '😴',
+      Creative: '🎨',
     };
 
     entries.forEach((e) => {
       const mood = e.moodName || 'Reflective';
-      const emoji = e.moodEmoji || defaultEmojis[mood] || 'ðŸ’­';
+      const emoji = e.moodEmoji || defaultEmojis[mood] || '💭';
       if (!counts[mood]) {
         counts[mood] = { count: 0, emoji };
       }
@@ -250,13 +251,11 @@ export default function StatsScreen({
     for (let i = 29; i >= 0; i--) {
       const d = new Date();
       d.setDate(today.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = toLocalDateKey(d);
 
       // Count entries on this date
       const entriesOnDate = entries.filter((e) => e.date === dateStr).length;
-      const notesOnDate = notes.filter(
-        (n) => new Date(n.updatedAt).toISOString().split('T')[0] === dateStr,
-      ).length;
+      const notesOnDate = notes.filter((n) => toLocalDateKey(n.updatedAt) === dateStr).length;
       const weight = entriesOnDate * 2 + notesOnDate; // formal entries weigh more
 
       list.push({
@@ -357,6 +356,10 @@ export default function StatsScreen({
       : selectedMonthEntryCount > 0
         ? `You wrote ${selectedMonthEntryCount} ${selectedMonthEntryCount === 1 ? 'reflection' : 'reflections'} in ${monthNames[selectedPixelMonth]}. ${dominantMoodSummary ? `${dominantMoodSummary.name} was the mood label you used most often across available entries.` : ''}`
         : `No reflections are available for ${monthNames[selectedPixelMonth]} yet. Your current writing streak is ${streak} ${streak === 1 ? 'day' : 'days'}.`;
+  const mobileMonthlySummary =
+    selectedMonthEntryCount > 0
+      ? `${selectedMonthEntryCount} ${selectedMonthEntryCount === 1 ? 'reflection' : 'reflections'}${dominantMoodSummary ? ` · Mostly ${dominantMoodSummary.name.toLowerCase()}` : ''}`
+      : 'No reflections';
   const insightStories = [
     streak > 0
       ? `Your current writing streak is ${streak} ${streak === 1 ? 'day' : 'days'}.`
@@ -368,13 +371,20 @@ export default function StatsScreen({
       ? `#${topTags[0].tag} is your most frequently used theme.`
       : 'Themes will become visible as you add tags.',
   ];
+  const mobileInsightStories = [
+    streak > 0 ? `${streak} day streak` : 'Start a streak',
+    dominantMoodSummary
+      ? `${dominantMoodSummary.name} · ${dominantMoodSummary.percentage}%`
+      : 'Add moods to see patterns',
+    topTags[0] ? `#${topTags[0].tag} · Most used` : 'Add tags to see themes',
+  ];
   const moodPixelClass = (moodName?: string) => {
     const normalized = (moodName || '').toLowerCase();
-    if (normalized.includes('calm')) return 'bg-[#9ab7a0]';
-    if (normalized.includes('joy') || normalized.includes('happy')) return 'bg-[#d88e9c]';
-    if (normalized.includes('sad')) return 'bg-[#8faec6]';
-    if (normalized.includes('anxious')) return 'bg-[#d6b06f]';
-    if (normalized.includes('creative')) return 'bg-[#7aaeb0]';
+    if (normalized.includes('calm')) return 'mood-pixel-calm';
+    if (normalized.includes('joy') || normalized.includes('happy')) return 'mood-pixel-joyful';
+    if (normalized.includes('sad')) return 'mood-pixel-sad';
+    if (normalized.includes('anxious')) return 'mood-pixel-anxious';
+    if (normalized.includes('creative')) return 'mood-pixel-creative';
     return 'bg-brand-sage-light';
   };
   const choosePixelDate = (date: string) => {
@@ -394,18 +404,14 @@ export default function StatsScreen({
   return (
     <div className="space-y-8 pb-24">
       <header className="surface-glass-strong sticky top-0 z-30 -mx-2 flex items-center justify-between border-b border-brand-border/60 px-2 py-3">
-        <div>
-          {layout !== 'mobile' && (
-            <h1 className="font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text">
-              Insights
-            </h1>
-          )}
-          <p
-            className={`${layout === 'mobile' ? 'app-eyebrow' : 'mt-1 text-sm text-brand-text-muted'}`}
-          >
-            A gentle view of your writing over time.
-          </p>
-        </div>
+        {layout !== 'mobile' && (
+          <div>
+            <h1 className="type-page-title font-bold">Insights</h1>
+            <p className="mt-1 text-sm text-brand-text-muted">
+              A gentle view of your writing over time.
+            </p>
+          </div>
+        )}
         <button
           type="button"
           aria-label="Open settings"
@@ -416,19 +422,20 @@ export default function StatsScreen({
         </button>
       </header>
 
-      {hasUnhydratedArchives && <StatusNotice tone="info">{scopeHint}</StatusNotice>}
+      {hasUnhydratedArchives && (
+        <StatusNotice tone="info">
+          {layout === 'mobile' ? 'Totals use downloaded entries.' : scopeHint}
+        </StatusNotice>
+      )}
       {loading ? (
         <LoadingSkeleton lines={7} label="Loading insights" className="py-12" />
       ) : entries.length === 0 ? (
         <EmptyState
           icon={<Sparkles className="h-5 w-5" />}
           title="Your reflection is just beginning"
-          description="Write a few entries and this space will reveal gentle patterns in your practice."
+          description="Write a few entries to see patterns."
           action={
-            <AppButton
-              tone="primary"
-              onClick={() => createReflectionForDate(new Date().toISOString().slice(0, 10))}
-            >
+            <AppButton tone="primary" onClick={() => createReflectionForDate(toLocalDateKey())}>
               Write an entry
             </AppButton>
           }
@@ -436,45 +443,66 @@ export default function StatsScreen({
       ) : (
         <>
           <section className="surface-paper rounded-[var(--radius-sheet)] border-x border-brand-border/60 px-5 py-7 md:px-8 md:py-9">
-            <p className="app-eyebrow">Monthly reflection</p>
-            <h2 className="mt-3 max-w-4xl font-serif-diary text-3xl font-semibold leading-tight text-brand-plum dark:text-brand-text md:text-4xl">
-              {monthlyNarrative}
-            </h2>
+            <p className="app-eyebrow hidden sm:block">Monthly reflection</p>
+            {layout === 'mobile' ? (
+              <div>
+                <h2 className="font-serif-diary text-3xl font-semibold leading-tight text-brand-plum dark:text-brand-text">
+                  {monthNames[selectedPixelMonth]}
+                </h2>
+                <p className="mt-1 text-sm font-semibold text-brand-text-muted">
+                  {mobileMonthlySummary}
+                </p>
+              </div>
+            ) : (
+              <h2 className="mt-3 max-w-4xl font-serif-diary text-3xl font-semibold leading-tight text-brand-plum dark:text-brand-text md:text-4xl">
+                {monthlyNarrative}
+              </h2>
+            )}
             <div className="mt-7 grid grid-cols-3 gap-4 border-t border-brand-border/60 pt-5">
               <div>
                 <Flame className="h-4 w-4 text-brand-pink" />
-                <p className="mt-2 font-serif-diary text-3xl font-semibold">{streak}</p>
-                <p className="text-xs text-brand-text-muted">day streak</p>
+                <p className="mt-2 text-3xl font-bold tabular-nums">{streak}</p>
+                <p className="text-xs text-brand-text-muted">
+                  {layout === 'mobile' ? 'streak' : 'day streak'}
+                </p>
               </div>
               <div>
                 <BookOpen className="h-4 w-4 text-brand-sage" />
-                <p className="mt-2 font-serif-diary text-3xl font-semibold">{entries.length}</p>
-                <p className="text-xs text-brand-text-muted">{entryScopeLabel.toLowerCase()}</p>
+                <p className="mt-2 text-3xl font-bold tabular-nums">{entries.length}</p>
+                <p className="text-xs text-brand-text-muted">
+                  {layout === 'mobile' ? 'entries' : entryScopeLabel.toLowerCase()}
+                </p>
               </div>
               <div>
                 <Camera className="h-4 w-4 text-brand-pink" />
-                <p className="mt-2 font-serif-diary text-3xl font-semibold">{totalPhotos}</p>
-                <p className="text-xs text-brand-text-muted">{photoScopeLabel.toLowerCase()}</p>
+                <p className="mt-2 text-3xl font-bold tabular-nums">{totalPhotos}</p>
+                <p className="text-xs text-brand-text-muted">
+                  {layout === 'mobile' ? 'photos' : photoScopeLabel.toLowerCase()}
+                </p>
               </div>
             </div>
           </section>
 
           <section aria-label="Insight stories">
-            <h2 className="font-serif-diary text-2xl font-semibold">A few things you may notice</h2>
+            <h2 className="type-section-title font-bold">
+              {layout === 'mobile' ? 'Highlights' : 'A few things you may notice'}
+            </h2>
             <div
               className="no-scrollbar mt-4 flex snap-x gap-3 overflow-x-auto pb-2"
               tabIndex={0}
               aria-label="Insight stories; scroll horizontally for more"
             >
-              {insightStories.map((story, index) => (
+              {(layout === 'mobile' ? mobileInsightStories : insightStories).map((story, index) => (
                 <article
                   key={story}
-                  className="surface-paper min-w-[82%] snap-start rounded-[var(--radius-card)] border border-brand-border/60 p-5 sm:min-w-[280px]"
+                  className={`surface-paper snap-start rounded-[var(--radius-card)] border border-brand-border/60 p-5 sm:min-w-[280px] ${layout === 'mobile' ? 'min-w-[58%]' : 'min-w-[82%]'}`}
                 >
                   <p className="text-xs font-bold text-brand-pink">
                     {String(index + 1).padStart(2, '0')}
                   </p>
-                  <p className="mt-5 font-serif-diary text-xl leading-snug text-brand-plum dark:text-brand-text">
+                  <p
+                    className={`${layout === 'mobile' ? 'mt-3 text-lg' : 'mt-5 text-xl'} font-serif-diary leading-snug text-brand-plum dark:text-brand-text`}
+                  >
                     {story}
                   </p>
                 </article>
@@ -492,14 +520,14 @@ export default function StatsScreen({
               >
                 <div className="flex items-end justify-between gap-4">
                   <div>
-                    <h2 id="consistency-title" className="font-serif-diary text-2xl font-semibold">
+                    <h2 id="consistency-title" className="type-section-title font-bold">
                       Writing consistency
                     </h2>
-                    <p className="mt-1 text-sm text-brand-text-muted">
+                    <p className="mt-1 hidden text-sm text-brand-text-muted sm:block">
                       The last 30 days, with entries weighted a little more than notes.
                     </p>
                   </div>
-                  <span className="text-xs font-bold text-brand-text-muted">Less â†’ More</span>
+                  <span className="text-xs font-bold text-brand-text-muted">Less → More</span>
                 </div>
                 <div
                   className="mt-6 grid grid-cols-10 gap-2"
@@ -519,7 +547,7 @@ export default function StatsScreen({
               <section aria-labelledby="pixels-title">
                 <div className="flex flex-wrap items-end justify-between gap-4">
                   <div>
-                    <h2 id="pixels-title" className="font-serif-diary text-2xl font-semibold">
+                    <h2 id="pixels-title" className="type-section-title font-bold">
                       {pixelViewMode === 'month' ? 'Month' : 'Year'} in Pixels
                     </h2>
                     <p className="mt-1 text-sm text-brand-text-muted">
@@ -666,7 +694,7 @@ export default function StatsScreen({
                       <X className="h-4 w-4" />
                     </button>
                     <p className="text-xs font-bold text-brand-text-muted">
-                      {selectedPixelDate} Â· {selectedPixelEntry.moodName}
+                      {selectedPixelDate} · {selectedPixelEntry.moodName}
                     </p>
                     <h3 className="mt-2 font-serif-diary text-xl font-semibold">
                       {selectedPixelEntry.title}
@@ -708,16 +736,16 @@ export default function StatsScreen({
 
             <aside className="space-y-8 xl:border-l xl:border-brand-border/60 xl:pl-8">
               <section>
-                <h2 className="font-serif-diary text-2xl font-semibold">Mood landscape</h2>
+                <h2 className="type-section-title font-bold">Mood landscape</h2>
                 <p className="mt-1 text-sm text-brand-text-muted">
-                  Descriptive labels from available entriesâ€”not a diagnosis.
+                  Descriptive labels from available entries—not a diagnosis.
                 </p>
                 <div className="mt-5 space-y-4">
                   {moodData.slice(0, 6).map((item) => (
                     <div key={item.name}>
                       <ProgressIndicator
                         value={item.percentage}
-                        label={`${item.name} Â· ${item.count}`}
+                        label={`${item.name} · ${item.count}`}
                       />
                     </div>
                   ))}
@@ -738,13 +766,13 @@ export default function StatsScreen({
                 )}
               </section>
               <section className="border-t border-brand-border/60 pt-6">
-                <h2 className="font-serif-diary text-2xl font-semibold">Themes</h2>
+                <h2 className="type-section-title font-bold">Themes</h2>
                 <div className="mt-5 space-y-4">
                   {topTags.map((item) => (
                     <div key={item.tag}>
                       <ProgressIndicator
                         value={item.percentage}
-                        label={`#${item.tag} Â· ${item.count}`}
+                        label={`#${item.tag} · ${item.count}`}
                       />
                     </div>
                   ))}
@@ -760,7 +788,7 @@ export default function StatsScreen({
             <section>
               <div className="flex items-end justify-between">
                 <div>
-                  <h2 className="font-serif-diary text-2xl font-semibold">Photo memories</h2>
+                  <h2 className="type-section-title font-bold">Photo memories</h2>
                   <p className="mt-1 text-sm text-brand-text-muted">
                     A few visual moments from recent pages.
                   </p>
@@ -800,9 +828,7 @@ export default function StatsScreen({
             </summary>
             <div className="grid gap-6 py-5 md:grid-cols-2">
               <section>
-                <h3 className="font-serif-diary text-xl font-semibold">
-                  Topics with selected moods
-                </h3>
+                <h3 className="type-card-title font-bold">Topics with selected moods</h3>
                 <p className="mt-1 text-sm text-brand-text-muted">
                   These labels appeared together; the pattern does not imply cause.
                 </p>
@@ -819,7 +845,7 @@ export default function StatsScreen({
                 </div>
               </section>
               <section>
-                <h3 className="font-serif-diary text-xl font-semibold">Available data</h3>
+                <h3 className="type-card-title font-bold">Available data</h3>
                 <dl className="mt-4 divide-y divide-brand-border/40 text-sm">
                   <div className="flex justify-between py-2">
                     <dt>Entries</dt>

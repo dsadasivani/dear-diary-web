@@ -21,6 +21,7 @@ import {
   type EncryptedStoreBatch,
 } from './webEncryptedKeyValueStore';
 import { richTextHtmlToPlainText } from '../../domain/richTextSanitizer';
+import { toLocalDateKey } from '../../utils/localDate';
 
 interface EntryQueryIndexRecord {
   id: string;
@@ -149,7 +150,7 @@ const entryQueryIndexRecord = async (entry: Entry): Promise<EntryQueryIndexRecor
 const noteQueryIndexRecord = async (note: Note): Promise<NoteQueryIndexRecord> => ({
   id: note.id,
   updatedAt: note.updatedAt || 0,
-  updatedDate: new Date(note.updatedAt || 0).toISOString().slice(0, 10),
+  updatedDate: toLocalDateKey(note.updatedAt || 0),
   createdAt: note.createdAt || 0,
   isPinned: note.isPinned ? 1 : 0,
   tagTokens: await queryIndexTokens(note.tags || []),
@@ -436,7 +437,7 @@ export class WebLocalDataStore implements LocalDataStore {
         return true;
       })
       .filter((note) => {
-        const date = new Date(note.updatedAt).toISOString().slice(0, 10);
+        const date = toLocalDateKey(note.updatedAt);
         return (
           (!options.fromDate || date >= options.fromDate) &&
           (!options.toDate || date <= options.toDate)
@@ -510,7 +511,7 @@ export class WebLocalDataStore implements LocalDataStore {
         return true;
       })
       .filter((note) => {
-        const updatedDate = new Date(note.updatedAt).toISOString().slice(0, 10);
+        const updatedDate = toLocalDateKey(note.updatedAt);
         return (
           (!options.fromDate || updatedDate >= options.fromDate) &&
           (!options.toDate || updatedDate <= options.toDate)

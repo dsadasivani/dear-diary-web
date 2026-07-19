@@ -155,6 +155,8 @@ export interface EventSyncEngineDependencies {
   loadSecrets?: () => Promise<SyncSecrets | null>;
   saveSecrets?: (secrets: SyncSecrets) => Promise<void>;
   restoreGoogleSession?: (secrets: SyncSecrets) => Promise<GoogleAccountSession | null>;
+  restoreGoogleSessionInteractively?: () => Promise<GoogleAccountSession | null>;
+  startGoogleSyncAuth?: () => Promise<GoogleAccountSession>;
   createControlPlane?: (accessToken: string) => SupabaseControlPlaneClient;
   upload?: (input: UploadDriveSyncObjectInput) => Promise<{ id: string }>;
   download?: SyncObjectDownloader;
@@ -362,6 +364,8 @@ export class EventSyncEngine {
   private readonly restoreGoogleSession: (
     secrets: SyncSecrets,
   ) => Promise<GoogleAccountSession | null>;
+  private readonly restoreGoogleSessionInteractively: () => Promise<GoogleAccountSession | null>;
+  private readonly startGoogleSyncAuth: () => Promise<GoogleAccountSession>;
   private readonly createControlPlane: (accessToken: string) => SupabaseControlPlaneClient;
   private readonly upload: (input: UploadDriveSyncObjectInput) => Promise<{ id: string }>;
   private readonly download?: SyncObjectDownloader;
@@ -394,6 +398,9 @@ export class EventSyncEngine {
         isNativePlatform()
           ? restoreGoogleDriveSession(false)
           : Promise.resolve(secrets.googleSession || null));
+    this.restoreGoogleSessionInteractively =
+      dependencies.restoreGoogleSessionInteractively || (() => restoreGoogleDriveSession(true));
+    this.startGoogleSyncAuth = dependencies.startGoogleSyncAuth || (() => startGoogleAuth('sync'));
     this.createControlPlane =
       dependencies.createControlPlane ||
       ((accessToken) =>
@@ -618,7 +625,38 @@ export class EventSyncEngine {
     const state = await this.repository.getLocalSyncAccountState();
     const secrets = await this.loadSecrets();
     if (!state || !secrets) throw new SyncError({ code: 'AUTH_INVALID', userActionRequired: true });
-    const googleSession = await startGoogleAuth('sync');
+
+    // The native Drive bridge already stores the exact linked account. Renew its Drive grant
+    // first so reconnect does not depend on Credential Manager opening an account chooser.
+    // A full Google sign-in remains the fallback when the Supabase session also needs a new ID token.
+    const restoredSession =
+      (await this.restoreGoogleSession(secrets).catch(() => null)) ||
+      (await this.restoreGoogleSessionInteractively().catch(() => null));
+    if (restoredSession?.accessToken && restoredSession.userId === state.googleUserId) {
+      let supabaseSession = secrets.supabaseSession;
+      const expiresSoon = (supabaseSession.expiresAt || 0) <= Math.floor(this.now() / 1000) + 90;
+      if (expiresSoon && supabaseSession.refreshToken) {
+        supabaseSession = await refreshSupabaseSession({
+          supabaseUrl: getConfiguredSupabaseUrl(),
+          anonKey: getConfiguredSupabaseAnonKey(),
+          refreshToken: supabaseSession.refreshToken,
+        }).catch(() => supabaseSession);
+      }
+      const sessionIsUsable = (supabaseSession.expiresAt || 0) > Math.floor(this.now() / 1000) + 90;
+      if (sessionIsUsable) {
+        await this.saveSecrets({
+          ...secrets,
+          googleSession: {
+            ...restoredSession,
+            idToken: restoredSession.idToken || secrets.googleSession?.idToken || null,
+          },
+          supabaseSession,
+        });
+        return;
+      }
+    }
+
+    const googleSession = await this.startGoogleSyncAuth();
     if (googleSession.userId !== state.googleUserId || !googleSession.idToken) {
       throw new SyncError({ code: 'AUTH_INVALID', userActionRequired: true });
     }

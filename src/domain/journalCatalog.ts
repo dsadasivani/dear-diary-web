@@ -1,4 +1,5 @@
 import type { Entry, Mood } from '../types';
+import { calculateLocalStreak, toLocalDateKey } from '../utils/localDate';
 
 export const PREDEFINED_MOODS: Mood[] = [
   { name: 'Joyful', emoji: '\uD83D\uDE0A' },
@@ -24,63 +25,49 @@ export const PREDEFINED_TAGS = [
 
 export const PREDEFINED_COLORS = [
   {
-    name: 'Velvet Fig',
-    hex: '#8A3D55',
-    bgClass: 'bg-brand-pink',
-    borderClass: 'border-brand-pink',
+    name: 'Memory Violet',
+    hex: '#6C5CE7',
+    bgClass: 'bg-accent',
+    borderClass: 'border-accent',
   },
   {
-    name: 'Royal Sage',
-    hex: '#4C6A58',
-    bgClass: 'bg-brand-sage',
-    borderClass: 'border-brand-sage',
+    name: 'Living Coral',
+    hex: '#D93F6B',
+    bgClass: 'bg-[var(--color-secondary)]',
+    borderClass: 'border-[var(--color-secondary)]',
   },
   {
-    name: 'Terracotta',
-    hex: '#B85C4B',
-    bgClass: 'bg-brand-rose',
-    borderClass: 'border-brand-rose',
+    name: 'Fresh Teal',
+    hex: '#0C8F80',
+    bgClass: 'bg-[var(--color-tertiary)]',
+    borderClass: 'border-[var(--color-tertiary)]',
   },
   {
-    name: 'Warm Sand',
-    hex: '#F3EFE9',
-    bgClass: 'bg-brand-blush-light',
-    borderClass: 'border-brand-border',
+    name: 'Midnight Ink',
+    hex: '#30364A',
+    bgClass: 'bg-[#30364A]',
+    borderClass: 'border-[#30364A]',
   },
-  { name: 'Rich Amber', hex: '#D49B4E', bgClass: 'bg-[#D49B4E]', borderClass: 'border-[#C1883F]' },
   {
-    name: 'Slate Lavender',
-    hex: '#6C7598',
-    bgClass: 'bg-[#6C7598]',
-    borderClass: 'border-[#5A6384]',
+    name: 'Luminous Sky',
+    hex: '#4476C8',
+    bgClass: 'bg-[#4476C8]',
+    borderClass: 'border-[#4476C8]',
+  },
+  {
+    name: 'Soft Orchid',
+    hex: '#8A5FB5',
+    bgClass: 'bg-[#8A5FB5]',
+    borderClass: 'border-[#8A5FB5]',
   },
 ];
 
-const localDateString = (date: Date): string =>
-  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-
 export const getTodayWordCount = (entries: Array<Pick<Entry, 'date' | 'wordCount'>>): number => {
-  const today = localDateString(new Date());
+  const today = toLocalDateKey();
   return entries
     .filter((entry) => entry.date === today)
     .reduce((sum, entry) => sum + (entry.wordCount || 0), 0);
 };
 
-export const calculateStreak = (entries: Array<Pick<Entry, 'date'>>): number => {
-  if (entries.length === 0) return 0;
-
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const entryDates = new Set(entries.map((entry) => entry.date));
-  const startDate = entryDates.has(localDateString(today)) ? today : yesterday;
-  if (!entryDates.has(localDateString(startDate))) return 0;
-
-  let streak = 0;
-  const cursor = new Date(startDate);
-  while (entryDates.has(localDateString(cursor))) {
-    streak += 1;
-    cursor.setDate(cursor.getDate() - 1);
-  }
-  return streak;
-};
+export const calculateStreak = (entries: Array<Pick<Entry, 'date'>>): number =>
+  calculateLocalStreak(entries.map((entry) => entry.date));

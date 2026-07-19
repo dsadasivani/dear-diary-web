@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { X } from 'lucide-react';
 import OverlayPortal from '../OverlayPortal';
@@ -27,6 +27,8 @@ export function BottomSheet({
 }: BottomSheetProps) {
   const sheetRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
   const reducedMotion = useReducedMotion();
 
   useEffect(() => {
@@ -80,7 +82,8 @@ export function BottomSheet({
               role="dialog"
               aria-modal="true"
               aria-label={label}
-              aria-labelledby={label ? undefined : 'bottom-sheet-title'}
+              aria-labelledby={label ? undefined : titleId}
+              aria-describedby={description ? descriptionId : undefined}
               variants={reducedMotion ? reducedMotionVariants : sheetVariants}
               initial="hidden"
               animate="visible"
@@ -94,10 +97,14 @@ export function BottomSheet({
               />
               <header className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] pb-4">
                 <div>
-                  <h2 id={label ? undefined : 'bottom-sheet-title'} className="type-section-title">
+                  <h2 id={label ? undefined : titleId} className="type-section-title">
                     {title}
                   </h2>
-                  {description && <p className="type-supporting mt-1">{description}</p>}
+                  {description && (
+                    <p id={descriptionId} className="type-supporting mt-1">
+                      {description}
+                    </p>
+                  )}
                 </div>
                 <button
                   ref={closeRef}
@@ -158,7 +165,7 @@ export function ConfirmationSheet({
           <button
             type="button"
             onClick={onConfirm}
-            className={`inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] px-4 text-sm font-bold text-white ${destructive ? 'bg-[var(--danger)]' : 'bg-accent'}`}
+            className={`inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] px-4 text-sm font-bold ${destructive ? 'bg-[var(--danger)] text-[var(--color-on-danger)]' : 'bg-accent text-[var(--color-on-primary)]'}`}
           >
             {confirmLabel}
           </button>

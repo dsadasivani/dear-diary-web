@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { useId, type KeyboardEvent, type ReactNode } from 'react';
 import { Check } from 'lucide-react';
 
 interface SwitchProps {
@@ -126,6 +126,23 @@ export function SegmentedControl<Value extends string>({
   label,
   className = '',
 }: SegmentedControlProps<Value>) {
+  const moveSelection = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key))
+      return;
+    event.preventDefault();
+    const backwards = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
+    const nextIndex =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? options.length - 1
+          : (index + (backwards ? -1 : 1) + options.length) % options.length;
+    const next = options[nextIndex];
+    onChange(next.value);
+    event.currentTarget.parentElement
+      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+      [nextIndex]?.focus();
+  };
   return (
     <fieldset className={className}>
       <legend className="sr-only">{label}</legend>
@@ -134,14 +151,16 @@ export function SegmentedControl<Value extends string>({
         role="radiogroup"
         aria-label={label}
       >
-        {options.map((option) => (
+        {options.map((option, index) => (
           <button
             key={option.value}
             type="button"
             role="radio"
             aria-checked={option.value === value}
+            tabIndex={option.value === value ? 0 : -1}
             onClick={() => onChange(option.value)}
-            className={`inline-flex min-h-9 shrink-0 items-center justify-center gap-2 rounded-[calc(var(--radius-control)-0.25rem)] px-3 text-sm font-bold transition-colors ${option.value === value ? 'bg-surface-raised text-ink shadow-[var(--elevation-subtle)]' : 'text-ink-secondary hover:text-ink'}`}
+            onKeyDown={(event) => moveSelection(event, index)}
+            className={`inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-[calc(var(--radius-control)-0.25rem)] px-3 text-sm font-bold transition-colors ${option.value === value ? 'bg-surface-raised text-ink shadow-[var(--elevation-subtle)]' : 'text-ink-secondary hover:text-ink'}`}
           >
             {option.icon}
             {option.label}

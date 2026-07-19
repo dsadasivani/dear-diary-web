@@ -25,16 +25,17 @@ export function AppButton({
   ...props
 }: AppButtonProps) {
   const toneClass = {
-    primary: 'border-accent bg-accent text-white hover:bg-accent-strong',
+    primary: 'border-accent bg-accent text-[var(--color-on-primary)] hover:bg-accent-strong',
     secondary: 'border-[var(--border-subtle)] bg-surface text-ink hover:border-accent',
-    danger: 'border-[var(--danger)] bg-[var(--danger)] text-white hover:brightness-95',
-    quiet: 'border-transparent bg-transparent text-accent hover:bg-accent-soft',
+    danger:
+      'border-[var(--danger)] bg-[var(--danger)] text-[var(--color-on-danger)] hover:brightness-95',
+    quiet: 'border-transparent bg-transparent text-accent-strong hover:bg-accent-soft',
   }[tone];
   return (
     <button
       {...props}
       type={type}
-      className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-control)] border px-4 py-2.5 text-sm font-bold transition-[background-color,border-color,color,transform] duration-200 active:scale-[0.985] disabled:scale-100 disabled:opacity-45 md:min-h-9 ${toneClass} ${className}`}
+      className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-control)] border px-4 py-2.5 text-sm font-bold transition-[background-color,border-color,color,transform] duration-200 active:scale-[0.985] disabled:scale-100 disabled:opacity-45 ${toneClass} ${className}`}
     />
   );
 }
@@ -167,5 +168,5 @@ export { FilterChip, SearchField, TagChip } from './ui/Fields';
 export { FocusedFlow, PageLayout } from './ui/Layout';
 export { GlassSurface, PaperSurface, Surface } from './ui/Surface';
 export { Checkbox, SegmentedControl, Switch } from './ui/Controls';
-export { ContextMenu, OverflowMenu, menuItemClassName } from './ui/Menu';
+export { ContextMenu, MenuItem, OverflowMenu, menuItemClassName } from './ui/Menu';
 export { Toast, ToastViewport } from './ui/Toast';

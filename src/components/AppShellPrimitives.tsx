@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   BarChart2,
   BookOpen,
   ClipboardList,
@@ -11,6 +12,9 @@ import {
 import ProfileAvatar from './ProfileAvatar';
 import type { UserProfile } from '../types';
 import { BottomSheet } from './ui/BottomSheet';
+import { motion, useReducedMotion } from 'motion/react';
+import { triggerImpact } from '../mobile/haptics';
+import { motionTransitions } from './ui/motion';
 
 export type PrimaryDestination = 'home' | 'diaries' | 'notes' | 'stats';
 
@@ -33,6 +37,7 @@ interface NavigationProps {
 }
 
 export function MobileBottomNavigation({ active, onNavigate, onCreate }: NavigationProps) {
+  const reducedMotion = useReducedMotion();
   const first = destinations.slice(0, 2);
   const last = destinations.slice(2);
   const renderItem = ({ id, label, icon: Icon, testId }: (typeof destinations)[number]) => {
@@ -44,9 +49,20 @@ export function MobileBottomNavigation({ active, onNavigate, onCreate }: Navigat
         data-testid={testId}
         aria-current={selected ? 'page' : undefined}
         aria-label={label}
-        onClick={() => onNavigate(id)}
+        onClick={() => {
+          if (!selected) void triggerImpact('light');
+          onNavigate(id);
+        }}
         className={`app-nav-item ${selected ? 'app-nav-item-active' : ''}`}
       >
+        {selected && (
+          <motion.span
+            layoutId="mobile-primary-selection"
+            aria-hidden="true"
+            className="app-nav-selection"
+            transition={reducedMotion ? { duration: 0.01 } : motionTransitions.sharedObject}
+          />
+        )}
         <span className="app-nav-icon" aria-hidden="true">
           <Icon className="h-[1.15rem] w-[1.15rem]" />
         </span>
@@ -58,7 +74,15 @@ export function MobileBottomNavigation({ active, onNavigate, onCreate }: Navigat
   return (
     <nav aria-label="Primary" className="mobile-bottom-navigation bottom-nav-safe">
       {first.map(renderItem)}
-      <button type="button" onClick={onCreate} className="app-create-button" aria-label="Create">
+      <button
+        type="button"
+        onClick={() => {
+          void triggerImpact('light');
+          onCreate();
+        }}
+        className="app-create-button"
+        aria-label="Create"
+      >
         <span className="app-create-icon" aria-hidden="true">
           <Plus className="h-5 w-5" />
         </span>
@@ -134,32 +158,50 @@ interface AppHeaderProps {
   profile: UserProfile;
   onSearch: () => void;
   onProfile: () => void;
+  onBack?: () => void;
 }
 
-export function AppHeader({ title, profile, onSearch, onProfile }: AppHeaderProps) {
+export function AppHeader({ title, profile, onSearch, onProfile, onBack }: AppHeaderProps) {
   return (
-    <header className="app-header">
-      <div className="min-w-0">
-        <p className="app-eyebrow">Dear Diary</p>
-        <h1 className="truncate font-serif-diary text-2xl font-semibold text-brand-plum dark:text-brand-text">
-          {title}
-        </h1>
+    <header className={`app-header ${onBack ? 'app-header-with-back' : ''}`}>
+      <div className="app-header-leading">
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="app-header-action app-header-back"
+            aria-label="Back to Today"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+        ) : null}
+        <div className="app-header-copy">
+          <p className="app-header-eyebrow">
+            {!onBack && (
+              <BookOpen className="app-header-eyebrow-icon" strokeWidth={2.1} aria-hidden="true" />
+            )}
+            <span>Dear Diary</span>
+          </p>
+          <h1 className="app-header-title">{title}</h1>
+        </div>
       </div>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          data-testid="nav-search"
-          onClick={onSearch}
-          className="icon-button"
-          aria-label="Search"
-        >
-          <Search className="h-5 w-5" />
-        </button>
+      <div className="app-header-actions">
+        {!onBack && (
+          <button
+            type="button"
+            data-testid="nav-search"
+            onClick={onSearch}
+            className="app-header-action"
+            aria-label="Search"
+          >
+            <Search className="h-5 w-5" />
+          </button>
+        )}
         <button
           type="button"
           data-testid="profile-menu-button"
           onClick={onProfile}
-          className="icon-button overflow-hidden"
+          className="app-header-action app-header-profile"
           aria-label="Open profile and settings"
           style={{ backgroundColor: profile.avatarColor }}
         >
@@ -201,22 +243,10 @@ export function ProfileActionSheet({
       open={open}
       onClose={onClose}
       title={profile.name}
-      description="Your private journal space"
       label="Profile menu"
       className="md:max-w-sm"
     >
-      <div className="mb-4 flex items-center gap-3">
-        <span
-          className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full"
-          style={{ backgroundColor: profile.avatarColor }}
-        >
-          <ProfileAvatar profile={profile} />
-        </span>
-        <p className="text-sm leading-relaxed text-ink-secondary">
-          Manage your sanctuary or lock it before stepping away.
-        </p>
-      </div>
-      <div className="grid gap-1 border-t border-[var(--border-subtle)] pt-3">
+      <div className="grid gap-1">
         <button
           type="button"
           onClick={() => {
@@ -258,33 +288,24 @@ export function CreateActionSheet({
   const actions = [
     {
       label: 'New Journal Entry',
-      detail: 'Write in a journal',
       onClick: onNewEntry,
       disabled: !hasJournals,
     },
-    { label: 'Quick Note', detail: 'Capture a thought', onClick: onNewNote },
+    { label: 'Quick Note', onClick: onNewNote },
     {
       label: 'Voice Reflection',
-      detail: 'Record in a new entry',
       onClick: onVoice,
       disabled: !hasJournals,
     },
     {
       label: 'Photo Memory',
-      detail: 'Add a photo to a new entry',
       onClick: onPhoto,
       disabled: !hasJournals,
     },
-    { label: 'New Journal', detail: 'Create a private space', onClick: onNewJournal },
+    { label: 'New Journal', onClick: onNewJournal },
   ];
   return (
-    <BottomSheet
-      open={open}
-      onClose={onClose}
-      title="What would you like to capture?"
-      description="Choose a starting point. You can add more once you begin."
-      className="md:max-w-md"
-    >
+    <BottomSheet open={open} onClose={onClose} title="Create" className="md:max-w-md">
       <div className="grid gap-1">
         {actions.map((action) => (
           <button
@@ -299,9 +320,9 @@ export function CreateActionSheet({
           >
             <span>
               <span className="block text-sm font-bold">{action.label}</span>
-              <span className="block text-xs text-ink-secondary">
-                {action.disabled ? 'Create a journal first' : action.detail}
-              </span>
+              {action.disabled && (
+                <span className="block text-xs text-ink-secondary">Create a journal first</span>
+              )}
             </span>
             <Plus className="h-4 w-4 text-ink-tertiary transition-transform group-hover:rotate-90" />
           </button>

@@ -1,4 +1,5 @@
 import type { AppSettings } from '../types';
+import { applyAccentThemePreference, getLocalAccentThemePreference } from './accentPreference';
 
 export type AppTheme = NonNullable<AppSettings['theme']>;
 
@@ -19,6 +20,7 @@ export const getLocalThemePreference = (fallback: AppTheme = 'light'): AppTheme 
 export const applyThemePreference = (theme: AppTheme): void => {
   if (typeof document === 'undefined') return;
   document.documentElement.classList.toggle('dark', theme === 'dark');
+  applyAccentThemePreference(getLocalAccentThemePreference());
 };
 
 export const setLocalThemePreference = (theme: AppTheme): void => {

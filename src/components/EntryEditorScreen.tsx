@@ -46,6 +46,15 @@ import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { measureAsync } from '../utils/performance';
 import { triggerImpact, triggerSuccess } from '../mobile/haptics';
 import { BottomSheet } from './ui/BottomSheet';
+import { toLocalDateKey } from '../utils/localDate';
+import {
+  getActiveRichTextFormats,
+  insertTextAtSelection,
+  toggleBlockFormat as applyBlockFormat,
+  toggleInlineFormat,
+  toggleUnorderedList,
+} from '../utils/richTextSelection';
+import EntrySaveStatus, { type EntrySaveState } from './editor/EntrySaveStatus';
 
 interface EntryEditorScreenProps {
   diaries: Diary[];
@@ -66,6 +75,14 @@ interface EntryEditorScreenProps {
     detail?: string,
   ) => Promise<void>;
   showDiarySelector?: boolean;
+}
+
+interface ComposedEntryDraft {
+  finalTitle: string;
+  finalBlocks: EntryBlock[];
+  finalBody: string;
+  hasDraftText: boolean;
+  hasContent: boolean;
 }
 
 export default function EntryEditorScreen({
@@ -90,7 +107,7 @@ export default function EntryEditorScreen({
   const [diaryId, setDiaryId] = useState<string>(
     initialDiaryId || diaries[0]?.id || 'diary-default',
   );
-  const [date, setDate] = useState<string>(initialDate || new Date().toISOString().split('T')[0]); // Default to today
+  const [date, setDate] = useState<string>(initialDate || toLocalDateKey());
   const [time, setTime] = useState<string>(() => {
     const now = new Date();
     return now.toTimeString().split(' ')[0].substring(0, 5); // Default to current time "HH:MM"
@@ -1325,7 +1342,7 @@ export default function EntryEditorScreen({
 
     let inserted = false;
 
-    // 1. Try to insert at the cursor position using DOM execCommand (nice for UX if supported)
+    // Prefer the active selection so dictation lands at the writer's cursor.
     const activeEditor = document.activeElement as HTMLElement;
     const isEditorActive =
       activeEditor &&
@@ -1340,12 +1357,9 @@ export default function EntryEditorScreen({
           selection?.addRange(savedSelectionRef.current);
         }
 
-        document.execCommand('insertText', false, text + ' ');
-        // Trigger input event to update React state
-        activeEditor.dispatchEvent(new Event('input', { bubbles: true }));
-        inserted = true;
+        inserted = insertTextAtSelection(text + ' ');
       } catch (err) {
-        console.warn('execCommand failed, falling back to state update:', err);
+        console.warn('Cursor insertion failed, falling back to the draft state:', err);
       }
     }
 
@@ -1589,7 +1603,7 @@ export default function EntryEditorScreen({
     return () => window.removeEventListener('beforeunload', warnBeforeUnload);
   }, [isDirty]);
 
-  const composeEntryDraft = () => {
+  const composeEntryDraft = (draftBlockId?: string): ComposedEntryDraft => {
     const finalTitle = title.trim() || 'Untitled entry';
     const finalBlocks = [...blocks].filter(
       (block) => richTextHtmlToPlainText(block.body) !== '' || block.audioUri,
@@ -1597,7 +1611,7 @@ export default function EntryEditorScreen({
     const hasDraftText = richTextHtmlToPlainText(body) !== '';
     if (hasDraftText || audioUri) {
       finalBlocks.push({
-        id: `block-draft-${workingEntryIdRef.current || 'new'}`,
+        id: draftBlockId || `block-draft-${workingEntryIdRef.current || 'new'}`,
         time: currentTimeText,
         body,
         audioUri,
@@ -1616,6 +1630,46 @@ export default function EntryEditorScreen({
     };
   };
 
+  const persistEntryDraft = async (draft: ComposedEntryDraft): Promise<void> => {
+    const existingId = workingEntryIdRef.current;
+    if (existingId) {
+      const existing = await diaryRepository.getEntry(existingId);
+      if (!existing) throw new Error('This entry is no longer available.');
+      await diaryRepository.updateEntry({
+        ...existing,
+        diaryId,
+        date,
+        time: draft.finalBlocks[0]?.time || time,
+        title: draft.finalTitle,
+        body: draft.finalBody,
+        moodName: mood.name,
+        moodEmoji: mood.emoji,
+        tags: selectedTags,
+        photoUris,
+        photoCount: photoUris.length,
+        wordCount: liveWordCount,
+        audioUri: undefined,
+        updatedAt: Date.now(),
+        blocks: draft.finalBlocks,
+      });
+      return;
+    }
+    const created = await diaryRepository.createEntry({
+      diaryId,
+      date,
+      time: draft.finalBlocks[0]?.time || time,
+      title: draft.finalTitle,
+      body: draft.finalBody,
+      moodName: mood.name,
+      moodEmoji: mood.emoji,
+      tags: selectedTags,
+      photoUris,
+      audioUri: undefined,
+      blocks: draft.finalBlocks,
+    });
+    workingEntryIdRef.current = created.id;
+  };
+
   useEffect(() => {
     if (!isEditorReady || !isDirty || isSaving || isAutosaving) return;
     const timeout = window.setTimeout(() => {
@@ -1626,43 +1680,7 @@ export default function EntryEditorScreen({
         setIsAutosaving(true);
         setAutosaveError('');
         try {
-          const existingId = workingEntryIdRef.current;
-          if (existingId) {
-            const existing = await diaryRepository.getEntry(existingId);
-            if (!existing) throw new Error('This entry is no longer available.');
-            await diaryRepository.updateEntry({
-              ...existing,
-              diaryId,
-              date,
-              time: draft.finalBlocks[0]?.time || time,
-              title: draft.finalTitle,
-              body: draft.finalBody,
-              moodName: mood.name,
-              moodEmoji: mood.emoji,
-              tags: selectedTags,
-              photoUris,
-              photoCount: photoUris.length,
-              wordCount: liveWordCount,
-              audioUri: undefined,
-              updatedAt: Date.now(),
-              blocks: draft.finalBlocks,
-            });
-          } else {
-            const created = await diaryRepository.createEntry({
-              diaryId,
-              date,
-              time: draft.finalBlocks[0]?.time || time,
-              title: draft.finalTitle,
-              body: draft.finalBody,
-              moodName: mood.name,
-              moodEmoji: mood.emoji,
-              tags: selectedTags,
-              photoUris,
-              audioUri: undefined,
-              blocks: draft.finalBlocks,
-            });
-            workingEntryIdRef.current = created.id;
-          }
+          await persistEntryDraft(draft);
           baselineFingerprintRef.current = draftFingerprint;
           setIsDirty(false);
           setLastSavedAt(new Date());
@@ -1739,83 +1757,18 @@ export default function EntryEditorScreen({
 
   const handleSave = async () => {
     if (isSaving) return;
-
-    const finalTitle = title.trim() || 'Untitled entry';
-
-    let finalBlocks = [...blocks].filter((b) => {
-      const hasText = richTextHtmlToPlainText(b.body) !== '';
-      return hasText || b.audioUri;
-    });
-
-    // Add new moment block if drafting area is not empty OR there is an audio note
-    const hasDraftText = richTextHtmlToPlainText(body) !== '';
-    if (hasDraftText || audioUri) {
-      const newBlock: EntryBlock = {
-        id: `block-${Date.now()}`,
-        time: currentTimeText,
-        body,
-        audioUri, // Store the current recording in the block
-      };
-      finalBlocks.push(newBlock);
-    }
-
-    // If absolutely everything is empty, don't save (or maybe show warning)
-    if (finalBlocks.length === 0 && !title.trim()) {
+    const draft = composeEntryDraft(`block-${Date.now()}`);
+    if (!draft.hasContent) {
       onBack(); // Just go back if they saved nothing
       return;
     }
 
-    finalBlocks.sort((a, b) => a.time.localeCompare(b.time));
-    // Save all block texts combined as the overall entry body so standard view displays them
-    const finalBody = finalBlocks
-      .map((b) => b.body)
-      .filter(Boolean)
-      .join('<br/><br/>');
-
     try {
       setIsSaving(true);
       const saveOperation = async () => {
-        const workingEntryId = workingEntryIdRef.current;
-        if (workingEntryId) {
-          const entryObj = await diaryRepository.getEntry(workingEntryId);
-          if (entryObj) {
-            const updated: Entry = {
-              ...entryObj,
-              diaryId,
-              date,
-              time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
-              title: finalTitle,
-              body: finalBody,
-              moodName: mood.name,
-              moodEmoji: mood.emoji,
-              tags: selectedTags,
-              photoUris,
-              photoCount: photoUris.length,
-              wordCount: liveWordCount,
-              audioUri: undefined,
-              updatedAt: Date.now(),
-              blocks: finalBlocks,
-            };
-            await diaryRepository.updateEntry(updated);
-          }
-        } else {
-          const created = await diaryRepository.createEntry({
-            diaryId,
-            date,
-            time: finalBlocks.length > 0 ? finalBlocks[0].time : time,
-            title: finalTitle,
-            body: finalBody,
-            moodName: mood.name,
-            moodEmoji: mood.emoji,
-            tags: selectedTags,
-            photoUris,
-            audioUri: undefined,
-            blocks: finalBlocks,
-          });
-          workingEntryIdRef.current = created.id;
-        }
+        await persistEntryDraft(draft);
 
-        if (hasDraftText || audioUri) {
+        if (draft.hasDraftText || audioUri) {
           setAudioUri(undefined);
           setBody('');
         }
@@ -1830,7 +1783,7 @@ export default function EntryEditorScreen({
       await measureAsync('app.entrySaveToNavigation', saveOperation, {
         isEditing,
         hasMedia: photoUris.length > 0,
-        blockCount: finalBlocks.length,
+        blockCount: draft.finalBlocks.length,
       });
     } catch (saveError: any) {
       onShowToast(
@@ -1886,34 +1839,8 @@ export default function EntryEditorScreen({
     fileInputRef.current?.click();
   };
 
-  const isInsideBlockElement = (tagName: string): boolean => {
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return false;
-    let node: Node | null = selection.anchorNode;
-    while (node && node !== document.body) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-        if (el.tagName.toLowerCase() === tagName.toLowerCase()) {
-          return true;
-        }
-      }
-      node = node.parentNode;
-    }
-    return false;
-  };
-
   const updateActiveFormats = () => {
-    setActiveFormats({
-      bold: document.queryCommandState('bold'),
-      italic: document.queryCommandState('italic'),
-      underline: document.queryCommandState('underline'),
-      strikeThrough: document.queryCommandState('strikeThrough'),
-      h2: document.queryCommandValue('formatBlock') === 'h2' || isInsideBlockElement('h2'),
-      blockquote:
-        document.queryCommandValue('formatBlock') === 'blockquote' ||
-        isInsideBlockElement('blockquote'),
-      list: document.queryCommandState('insertUnorderedList'),
-    });
+    setActiveFormats(getActiveRichTextFormats());
   };
 
   useEffect(() => {
@@ -1927,33 +1854,21 @@ export default function EntryEditorScreen({
   }, []);
 
   const execCommand = (command: string) => {
-    document.execCommand(command, false, undefined);
+    if (command === 'insertUnorderedList') toggleUnorderedList();
+    else if (
+      command === 'bold' ||
+      command === 'italic' ||
+      command === 'underline' ||
+      command === 'strikeThrough'
+    ) {
+      toggleInlineFormat(command);
+    }
     setTimeout(updateActiveFormats, 10);
   };
 
   const toggleFormatBlock = (tagName: string) => {
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
-
-    // Find nearest ancestor block or container to check tag
-    let node: Node | null = selection.anchorNode;
-    let isInsideTag = false;
-    while (node && node !== document.body) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-        if (el.tagName.toLowerCase() === tagName.toLowerCase()) {
-          isInsideTag = true;
-          break;
-        }
-      }
-      node = node.parentNode;
-    }
-
-    if (isInsideTag) {
-      document.execCommand('formatBlock', false, '<p>');
-    } else {
-      document.execCommand('formatBlock', false, `<${tagName}>`);
-    }
+    if (tagName !== 'h2' && tagName !== 'blockquote') return;
+    applyBlockFormat(tagName);
     setTimeout(updateActiveFormats, 10);
   };
 
@@ -2259,25 +2174,19 @@ export default function EntryEditorScreen({
     </section>
   );
 
-  const saveStatusText = isSaving
-    ? 'Saving entry...'
-    : isAutosaving
-      ? 'Saving draft...'
-      : autosaveError
-        ? autosaveError
-        : isDirty
-          ? 'Unsaved changes'
-          : lastSavedAt
-            ? `Saved at ${lastSavedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-            : 'All changes saved locally';
-
+  const saveState: EntrySaveState = autosaveError
+    ? 'error'
+    : isSaving || isAutosaving
+      ? 'saving'
+      : isDirty
+        ? 'dirty'
+        : 'saved';
   const saveStatusUI = (
-    <p
-      role="status"
-      className={`text-xs font-bold ${autosaveError ? 'text-brand-rose' : isDirty ? 'text-amber-700 dark:text-amber-300' : 'text-brand-sage'}`}
-    >
-      {saveStatusText}
-    </p>
+    <EntrySaveStatus
+      state={saveState}
+      message={autosaveError || undefined}
+      lastSavedAt={lastSavedAt}
+    />
   );
 
   const leaveConfirmationUI = (
@@ -2412,7 +2321,7 @@ export default function EntryEditorScreen({
                                   updated[index].time = e.target.value;
                                   setBlocks(updated);
                                 }}
-                                className="text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0.5 transition-colors"
+                                className="w-28 min-w-28 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0.5 transition-colors"
                               />
                             </div>
                             <div className="flex items-center gap-2">
@@ -2507,7 +2416,7 @@ export default function EntryEditorScreen({
                         aria-label="New moment time"
                         value={currentTimeText}
                         onChange={(e) => setCurrentTimeText(e.target.value)}
-                        className="text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
+                        className="w-28 min-w-28 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer"
                       />
                     </div>
                   </div>
@@ -3511,7 +3420,7 @@ export default function EntryEditorScreen({
             {blocks.length > 0 && (
               <div className="flex flex-col gap-5 mb-4">
                 <span className="text-xs font-extrabold text-brand-pink uppercase tracking-wider pl-1 border-b border-brand-pink/10 pb-1.5">
-                  Saved Moments ({blocks.length})
+                  Moments ({blocks.length})
                 </span>
                 <div className="flex flex-col gap-5 animate-fade-in">
                   {blocks.map((b, index) => {
@@ -3528,7 +3437,7 @@ export default function EntryEditorScreen({
                           <div className="flex items-center gap-2 overflow-hidden">
                             <span className="font-mono text-xs font-bold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded flex items-center gap-1 border border-brand-pink/10 shadow-sm">
                               <Clock className="w-3.5 h-3.5" />
-                              {formatTime12(b.time)}
+                              Moment {index + 1}
                             </span>
                             <input
                               type="time"
@@ -3539,7 +3448,7 @@ export default function EntryEditorScreen({
                                 updated[index].time = e.target.value;
                                 setBlocks(updated);
                               }}
-                              className="text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0 transition-colors w-20 cursor-pointer"
+                              className="w-28 min-w-28 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0 transition-colors cursor-pointer"
                             />
                           </div>
                           <div className="flex items-center gap-1">
@@ -3625,7 +3534,7 @@ export default function EntryEditorScreen({
                 <div className="flex items-center gap-1.5 select-none overflow-hidden w-full">
                   <Clock className="w-3.5 h-3.5 text-brand-pink flex-shrink-0" />
                   <span className="text-xs font-bold text-brand-pink uppercase tracking-wider truncate">
-                    Drafting Moment at {formatTime12(currentTimeText)}
+                    New moment
                   </span>
                   <div className="ml-auto flex items-center">
                     <input
@@ -3633,7 +3542,7 @@ export default function EntryEditorScreen({
                       aria-label="New moment time"
                       value={currentTimeText}
                       onChange={(e) => setCurrentTimeText(e.target.value)}
-                      className="ml-1 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer w-14"
+                      className="ml-1 w-28 min-w-28 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/30 focus:outline-none focus:border-brand-pink p-0 cursor-pointer"
                     />
                   </div>
                 </div>
@@ -3643,7 +3552,7 @@ export default function EntryEditorScreen({
                 html={body}
                 onChange={setBody}
                 onFocus={() => setActiveBlockId(null)}
-                placeholder="Write a brand-new moment reflection..."
+                placeholder="Write a moment…"
                 testId="entry-body-editor"
                 className={`rich-text-editor min-h-[260px] w-full text-lg leading-[1.75] text-brand-plum focus:outline-none focus:ring-0 ${
                   fontFamily === 'serif'
@@ -3703,7 +3612,6 @@ export default function EntryEditorScreen({
       <BottomSheet
         open={showAddTools}
         title="Add to this entry"
-        description="Bring in a moment, change the writing layer, or adjust entry details."
         onClose={() => setShowAddTools(false)}
       >
         <div className="grid grid-cols-2 gap-3">

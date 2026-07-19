@@ -25,6 +25,77 @@ const parsePort = (value: string | undefined): number => {
   return port;
 };
 
+export const contentSecurityPolicy = (
+  mode: 'development' | 'production',
+  developmentApiUrl = process.env.VITE_SYNC_V2_API_URL,
+  developmentObjectStoreUrl =
+    process.env.SYNC_OBJECT_STORE_ENDPOINT || 'http://localhost:9000',
+): string => {
+  const connectSources = [
+    "'self'",
+    'https://*.supabase.co',
+    'wss://*.supabase.co',
+    'https://www.googleapis.com',
+  ];
+  if (mode === 'development') {
+    connectSources.push('ws:', 'wss:');
+    for (const developmentUrl of [developmentApiUrl, developmentObjectStoreUrl]) {
+      if (!developmentUrl) continue;
+      try {
+        const url = new URL(developmentUrl);
+        if (
+          (url.protocol === 'http:' || url.protocol === 'https:') &&
+          !connectSources.includes(url.origin)
+        ) {
+          connectSources.push(url.origin);
+        }
+      } catch {
+        // Invalid service URLs are handled by the application configuration checks.
+      }
+    }
+  }
+  const scriptSources = ["'self'"];
+  // Vite injects the React Refresh preamble as an inline module during local
+  // development. Keep production strict while allowing that dev-only bootstrap.
+  if (mode === 'development') scriptSources.push("'unsafe-inline'");
+
+  return [
+    "default-src 'self'",
+    "base-uri 'self'",
+    `connect-src ${connectSources.join(' ')}`,
+    "font-src 'self' data:",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "frame-src 'none'",
+    "img-src 'self' data: blob: https:",
+    "manifest-src 'self'",
+    "media-src 'self' data: blob:",
+    "object-src 'none'",
+    `script-src ${scriptSources.join(' ')}`,
+    "style-src 'self' 'unsafe-inline'",
+    "worker-src 'self' blob:",
+  ].join('; ');
+};
+
+const securityHeaders =
+  (mode: 'development' | 'production'): express.RequestHandler =>
+  (_req, res, next) => {
+    res.setHeader('Content-Security-Policy', contentSecurityPolicy(mode));
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader(
+      'Permissions-Policy',
+      'camera=(self), microphone=(self), geolocation=(), payment=(), usb=()',
+    );
+    if (mode === 'production') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    next();
+  };
+
 const apiNotFound: express.RequestHandler = (_req, res) => {
   res.status(404).type('application/json').json({ error: 'not_found' });
 };
@@ -53,6 +124,7 @@ export const createApp = async (options: CreateAppOptions = {}): Promise<express
   const mode = options.mode || resolveMode();
 
   app.disable('x-powered-by');
+  app.use(securityHeaders(mode));
   app.use(express.json({ limit: options.jsonLimit || '10mb' }));
 
   app.get('/api/health', (_req, res) => {

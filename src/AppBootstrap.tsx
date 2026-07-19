@@ -10,6 +10,7 @@ import { isWeb } from './platform';
 import WebCompanionLink from './components/WebCompanionLink';
 import { measureAsync } from './utils/performance';
 import { seedE2eRepositoryIfRequested } from './testing/e2eRepositorySeed';
+import { AppButton, LoadingSkeleton, StatusNotice } from './components/UiPrimitives';
 
 interface BootstrapData {
   settings: AppSettings;
@@ -70,9 +71,9 @@ export default function AppBootstrap() {
       .then((result) => {
         if (active) setData(result);
       })
-      .catch((bootstrapError) => {
+      .catch(() => {
         bootstrapPromise = null;
-        if (active) setError(bootstrapError?.message || 'Local storage could not be opened.');
+        if (active) setError('Dear Diary could not open local storage safely.');
       });
     return () => {
       active = false;
@@ -93,26 +94,38 @@ export default function AppBootstrap() {
   }
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-brand-bg flex flex-col items-center justify-center gap-5 px-6 text-center">
-      <div className="w-16 h-16 rounded-3xl bg-brand-pink/10 text-brand-pink flex items-center justify-center shadow-sm">
-        <BookOpen className="w-7 h-7" />
-      </div>
-      <h1 className="font-serif-diary text-2xl font-bold text-brand-plum">Dear Diary</h1>
-      {error ? (
-        <div className="flex flex-col items-center gap-3 max-w-xs">
-          <p className="text-xs text-brand-pink-dark">{error}</p>
-          <button
-            type="button"
-            onClick={() => setAttempt((value) => value + 1)}
-            className="w-10 h-10 rounded-full bg-brand-sage text-white flex items-center justify-center shadow-sm"
-            title="Retry local storage"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
+    <main className="app-canvas flex min-h-screen min-h-[100dvh] items-center justify-center px-6 py-10 text-center">
+      <section className="w-full max-w-sm" aria-labelledby="bootstrap-title">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[1.35rem] bg-accent text-[var(--color-on-primary)] shadow-[var(--shadow-floating)]">
+          <BookOpen aria-hidden="true" className="h-7 w-7" />
         </div>
-      ) : (
-        <div className="w-8 h-8 rounded-full border-2 border-brand-rose-light border-t-brand-pink animate-spin" />
-      )}
-    </div>
+        <p className="app-eyebrow mt-6">Living memories</p>
+        <h1 id="bootstrap-title" className="type-page-title mt-1 font-semibold">
+          Dear Diary
+        </h1>
+        <p className="type-supporting mx-auto mt-2 max-w-xs">
+          Preparing your private sanctuary on this device.
+        </p>
+        <div className="mt-7">
+          {error ? (
+            <div className="grid gap-4">
+              <StatusNotice tone="danger" role="alert">
+                {error} Your memories have not been changed.
+              </StatusNotice>
+              <AppButton
+                tone="primary"
+                onClick={() => setAttempt((value) => value + 1)}
+                className="w-full"
+              >
+                <RefreshCw aria-hidden="true" className="h-4 w-4" />
+                Try again
+              </AppButton>
+            </div>
+          ) : (
+            <LoadingSkeleton lines={3} label="Opening Dear Diary" className="mx-auto max-w-xs" />
+          )}
+        </div>
+      </section>
+    </main>
   );
 }

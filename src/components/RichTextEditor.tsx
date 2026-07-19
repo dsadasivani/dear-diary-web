@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { sanitizeRichTextHtml } from '../domain/richTextSanitizer';
+import { insertHtmlAtSelection, insertTextAtSelection } from '../utils/richTextSelection';
 
 interface RichTextEditorProps {
   html: string;
@@ -45,11 +46,8 @@ export default function RichTextEditor({
     const textContent = e.clipboardData.getData('text/plain');
     const pasted = htmlContent || textContent;
     if (!pasted) return;
-    document.execCommand(
-      htmlContent ? 'insertHTML' : 'insertText',
-      false,
-      htmlContent ? sanitizeRichTextHtml(htmlContent) : textContent,
-    );
+    if (htmlContent) insertHtmlAtSelection(sanitizeRichTextHtml(htmlContent));
+    else insertTextAtSelection(textContent);
   };
 
   return (

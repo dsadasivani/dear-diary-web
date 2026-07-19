@@ -28,6 +28,7 @@ import { resolveEntryIndexForEntryId } from './diaryDetailNavigation';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 import JournalCover from './JournalCover';
+import { useAmbientTheme } from '../design/ambientTheme';
 
 interface DiaryDetailScreenProps {
   diary: Diary;
@@ -75,6 +76,7 @@ export default function DiaryDetailScreen({
 }: DiaryDetailScreenProps) {
   useScreenPerformance('diaryDetail');
   const prefersReducedMotion = useReducedMotion();
+  const { setAmbientContext, resetAmbientContext } = useAmbientTheme();
   const [diaryEntries, setDiaryEntries] = useState<Entry[]>([]);
   const [calendarEntryDates, setCalendarEntryDates] = useState<Set<string>>(() => new Set());
 
@@ -178,6 +180,14 @@ export default function DiaryDetailScreen({
     }
     return filteredEntries[0];
   }, [filteredEntries, diaryEntries, currentIndex]);
+
+  React.useEffect(() => {
+    setAmbientContext({
+      journalColor: diary.color,
+      mood: activeEntry?.moodName || 'neutral',
+    });
+    return resetAmbientContext;
+  }, [activeEntry?.moodName, diary.color, resetAmbientContext, setAmbientContext]);
 
   const activeEntryIndex = useMemo(() => {
     if (!activeEntry || filteredEntries.length === 0) return -1;
@@ -699,7 +709,7 @@ export default function DiaryDetailScreen({
                           src={src}
                           alt={`Memory ${index + 1}`}
                           className="h-full w-full object-cover transition-transform duration-500 hover:scale-105"
-                          fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                          fallbackSrc="/journal-memory-fallback.svg"
                           label="entry photo"
                         />
                       </button>
@@ -744,7 +754,7 @@ export default function DiaryDetailScreen({
                     alt="Enlarged memory"
                     className="max-h-[80vh] max-w-full rounded-2xl object-contain"
                     referrerPolicy="no-referrer"
-                    fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=1200"
+                    fallbackSrc="/journal-memory-fallback.svg"
                     label="entry photo"
                   />
                 </motion.div>
@@ -768,6 +778,7 @@ export default function DiaryDetailScreen({
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
+          <JournalCover diary={diary} variant="thumbnail" showTitle={false} className="h-11 w-8" />
           <h1 className="max-w-[170px] truncate font-serif-diary text-lg font-semibold text-ink">
             {diary.name}
           </h1>
@@ -839,7 +850,7 @@ export default function DiaryDetailScreen({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search page titles, words, tags..."
+              placeholder="Search entries"
               className="w-full bg-transparent pl-9 pr-4 py-2 text-sm text-brand-plum placeholder-brand-sage/60 focus:outline-none focus:border-brand-pink"
             />
             {searchQuery && (
@@ -1079,7 +1090,7 @@ export default function DiaryDetailScreen({
         <div className="flex flex-col gap-6 pb-16">
           {/* Header Pagination & Nav Buttons */}
           <div className="flex flex-col items-center gap-2 border-y border-[var(--border-subtle)] py-3">
-            <span className="text-xs font-bold text-[var(--accent-secondary)] tracking-[0.12em]">
+            <span className="text-xs font-bold text-[var(--color-secondary-on-container)] tracking-[0.12em]">
               Page {activeEntryIndex + 1} of {filteredEntries.length}{' '}
               {searchQuery ? '(Filtered)' : ''}
             </span>
@@ -1142,7 +1153,7 @@ export default function DiaryDetailScreen({
           <div className="flex flex-col items-center gap-3">
             <div className="flex flex-wrap gap-2 justify-center">
               {/* Mood Badge */}
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--accent-secondary-soft)] px-3.5 py-1.5 text-xs font-bold text-[var(--accent-secondary)]">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--accent-secondary-soft)] px-3.5 py-1.5 text-xs font-bold text-[var(--color-secondary-on-container)]">
                 <span>{activeEntry.moodEmoji}</span>
                 <span>{activeEntry.moodName}</span>
               </span>
@@ -1159,7 +1170,7 @@ export default function DiaryDetailScreen({
                 ))}
             </div>
 
-            <p className="text-xs font-bold text-brand-text-muted">
+            <p className="hidden text-xs font-bold text-brand-text-muted sm:block">
               {activeEntry.isTimelineBifurcated ? 'Timeline entry' : 'Journal entry'} · Change
               structure in Edit Entry
             </p>
@@ -1281,7 +1292,7 @@ export default function DiaryDetailScreen({
                       alt={`Memory ${idx + 1}`}
                       className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                       referrerPolicy="no-referrer"
-                      fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=600"
+                      fallbackSrc="/journal-memory-fallback.svg"
                       label="entry photo"
                       onClick={setLightboxImg}
                     />
@@ -1304,7 +1315,7 @@ export default function DiaryDetailScreen({
               className="bg-brand-pink text-white hover:bg-brand-pink-dark px-8 py-3.5 rounded-full text-xs font-bold transition-all shadow-md shadow-brand-pink/15 flex items-center gap-2"
             >
               <Edit className="w-4 h-4" />
-              Edit this entry
+              {layout === 'mobile' ? 'Edit' : 'Edit this entry'}
             </motion.button>
           </div>
 
@@ -1455,7 +1466,7 @@ export default function DiaryDetailScreen({
                   alt="Enlarged memory"
                   className="max-w-full max-h-[80vh] object-contain rounded-2xl"
                   referrerPolicy="no-referrer"
-                  fallbackSrc="https://images.unsplash.com/photo-1517842645767-c639042777db?w=1200"
+                  fallbackSrc="/journal-memory-fallback.svg"
                   label="entry photo"
                 />
               </motion.div>

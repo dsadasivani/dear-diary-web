@@ -34,7 +34,7 @@ export function SearchField({
           <button
             type="button"
             onClick={onClear}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:bg-surface-subtle"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-ink-tertiary hover:bg-surface-subtle"
             aria-label="Clear search"
           >
             <X className="h-4 w-4" />
@@ -60,16 +60,16 @@ export function FilterChip({
 }) {
   return (
     <span
-      className={`inline-flex min-h-9 items-center overflow-hidden rounded-full border text-xs font-bold ${selected ? 'border-accent bg-accent-soft text-accent-strong' : 'border-[var(--border-subtle)] bg-surface text-ink-secondary'}`}
+      className={`inline-flex min-h-11 items-center overflow-hidden rounded-full border text-xs font-bold ${selected ? 'border-accent bg-accent-soft text-accent-strong' : 'border-[var(--border-subtle)] bg-surface text-ink-secondary'}`}
     >
-      <button type="button" aria-pressed={selected} onClick={onClick} className="min-h-9 px-3">
+      <button type="button" aria-pressed={selected} onClick={onClick} className="min-h-11 px-3">
         {children}
       </button>
       {onRemove && (
         <button
           type="button"
           onClick={onRemove}
-          className="flex min-h-9 min-w-9 items-center justify-center border-l border-current/15"
+          className="flex min-h-11 min-w-11 items-center justify-center border-l border-current/15"
           aria-label={`Remove ${String(children)}`}
         >
           <X className="h-3.5 w-3.5" />

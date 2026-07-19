@@ -3,12 +3,37 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  AppHeader,
   CreateActionSheet,
   MobileBottomNavigation,
   isRootDestinationScreen,
 } from './AppShellPrimitives';
 
 describe('redesigned application shell', () => {
+  it('keeps mobile header actions clear and accessible', () => {
+    render(
+      <AppHeader
+        title="Today"
+        profile={{
+          name: 'Writer',
+          email: '',
+          bio: '',
+          avatarEmoji: '🌸',
+          avatarColor: '#97415f',
+          writingGoal: 250,
+          joinedDate: '07/2026',
+        }}
+        onSearch={vi.fn()}
+        onProfile={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Today' })).toBeInTheDocument();
+    expect(screen.getByText('Dear Diary')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Search' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Open profile and settings' })).toBeVisible();
+  });
+
   it('only classifies primary list screens as root destinations', () => {
     expect(isRootDestinationScreen('home', 'list')).toBe(true);
     expect(isRootDestinationScreen('diaries', 'diaryDetail')).toBe(false);

@@ -6,7 +6,7 @@ import test from 'node:test';
 import request from 'supertest';
 
 process.env.DEAR_DIARY_DISABLE_SERVER_AUTOSTART = 'true';
-const { createApp } = await import('./server.ts');
+const { contentSecurityPolicy, createApp } = await import('./server.ts');
 
 const createDist = async () => {
   const distPath = await mkdtemp(path.join(os.tmpdir(), 'dear-diary-dist-'));
@@ -24,6 +24,44 @@ test('GET /api/health returns JSON health status', async () => {
 
   assert.match(response.headers['content-type'], /application\/json/);
   assert.deepEqual(response.body, { status: 'ok', offline: true });
+});
+
+test('production responses include a restrictive browser security policy', async () => {
+  const app = await createApp({ mode: 'production', distPath: await createDist() });
+  const response = await request(app).get('/').expect(200);
+
+  assert.match(response.headers['content-security-policy'], /default-src 'self'/);
+  assert.match(response.headers['content-security-policy'], /frame-ancestors 'none'/);
+  assert.match(response.headers['content-security-policy'], /object-src 'none'/);
+  assert.equal(response.headers['x-content-type-options'], 'nosniff');
+  assert.equal(response.headers['x-frame-options'], 'DENY');
+  assert.equal(response.headers['referrer-policy'], 'strict-origin-when-cross-origin');
+  assert.equal(response.headers['cross-origin-opener-policy'], 'same-origin-allow-popups');
+  assert.match(response.headers['permissions-policy'], /geolocation=\(\)/);
+  assert.match(response.headers['strict-transport-security'], /max-age=31536000/);
+  assert.equal(response.headers['x-powered-by'], undefined);
+});
+
+test('development policy permits Vite runtime features without weakening production scripts', () => {
+  const developmentPolicy = contentSecurityPolicy(
+    'development',
+    'http://localhost:8080/api/v2/sync',
+    'http://localhost:9000/dear-diary-sync',
+  );
+  const productionPolicy = contentSecurityPolicy(
+    'production',
+    'http://localhost:8080/api/v2/sync',
+    'http://localhost:9000/dear-diary-sync',
+  );
+
+  assert.match(developmentPolicy, /connect-src[^;]+ws:/);
+  assert.match(developmentPolicy, /connect-src[^;]+http:\/\/localhost:8080/);
+  assert.match(developmentPolicy, /connect-src[^;]+http:\/\/localhost:9000/);
+  assert.match(developmentPolicy, /script-src[^;]*'unsafe-inline'/);
+  assert.doesNotMatch(productionPolicy, /connect-src[^;]+ ws:/);
+  assert.doesNotMatch(productionPolicy, /connect-src[^;]+localhost:8080/);
+  assert.doesNotMatch(productionPolicy, /connect-src[^;]+localhost:9000/);
+  assert.doesNotMatch(productionPolicy, /script-src[^;]*'unsafe-inline'/);
 });
 
 test('unknown API routes return JSON 404 instead of the SPA shell', async () => {

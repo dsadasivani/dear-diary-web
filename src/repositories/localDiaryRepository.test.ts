@@ -22,6 +22,7 @@ import { createSyncDomainEvent } from '../sync/domainEvents';
 import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import type { SyncOutboxOperationV2 } from '../sync/outbox';
+import { toLocalDateKey } from '../utils/localDate';
 
 class MemoryDataStore implements LocalDataStore {
   private values = new Map<string, string>();
@@ -157,7 +158,7 @@ class StructuredMemoryDataStore extends MemoryDataStore {
         return true;
       })
       .filter((note) => {
-        const date = new Date(note.updatedAt).toISOString().slice(0, 10);
+        const date = toLocalDateKey(note.updatedAt);
         return (
           (!options.fromDate || date >= options.fromDate) &&
           (!options.toDate || date <= options.toDate)

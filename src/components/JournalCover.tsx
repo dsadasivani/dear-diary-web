@@ -13,10 +13,13 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { CSSProperties } from 'react';
+import { motion, useReducedMotion } from 'motion/react';
 import type { Diary } from '../types';
+import { motionTransitions } from './ui/motion';
 
 interface JournalCoverProps {
-  diary: Pick<Diary, 'name' | 'emoji' | 'color' | 'coverImage' | 'foilIcons' | 'isLocked'>;
+  diary: Pick<Diary, 'name' | 'emoji' | 'color' | 'coverImage' | 'foilIcons' | 'isLocked'> &
+    Partial<Pick<Diary, 'id'>>;
   variant?: 'full' | 'thumbnail' | 'preview';
   className?: string;
   showTitle?: boolean;
@@ -50,12 +53,16 @@ export default function JournalCover({
   className = '',
   showTitle = true,
 }: JournalCoverProps) {
+  const reducedMotion = useReducedMotion();
   const large = variant === 'full' || variant === 'preview';
   const Emblem = emblemFor(diary);
   const foilCount = Math.min(4, diary.foilIcons?.length || 0);
 
   return (
-    <div
+    <motion.div
+      layoutId={diary.id ? `journal-cover-${diary.id}` : undefined}
+      transition={reducedMotion ? { duration: 0.01 } : motionTransitions.sharedObject}
+      whileTap={reducedMotion ? undefined : { scale: 0.985 }}
       className={`relative isolate overflow-hidden border border-black/15 bg-[var(--cover-color)] text-white shadow-[0_16px_36px_rgba(37,22,27,0.16),inset_1px_0_rgba(255,255,255,0.18)] ${large ? 'aspect-[3/4.35] rounded-[0.7rem_1.15rem_1.15rem_0.7rem]' : 'h-16 w-12 rounded-[0.35rem_0.65rem_0.65rem_0.35rem]'} ${className}`}
       style={
         {
@@ -123,6 +130,6 @@ export default function JournalCover({
       {large && (
         <span className="absolute inset-y-[7%] right-[-2px] w-[3px] rounded-full bg-[#f6eee4]/75 shadow-[-1px_0_2px_rgba(0,0,0,0.18)]" />
       )}
-    </div>
+    </motion.div>
   );
 }

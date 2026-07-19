@@ -21,6 +21,7 @@ import type { AppSettings, Note, PartitionHydrationState, ResponsiveLayout } fro
 import { getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
+import { toLocalDateKey } from '../utils/localDate';
 import { diaryRepository } from '../repositories';
 import type { SettingsSection } from './AppSettingsScreen';
 import { AppButton, SearchField, StatusNotice } from './UiPrimitives';
@@ -228,7 +229,7 @@ export default function SearchScreen({
               id: note.id,
               title: note.title,
               body: richTextHtmlToPlainText(note.body),
-              date: new Date(note.updatedAt).toISOString().split('T')[0],
+              date: toLocalDateKey(note.updatedAt),
               tags: note.tags,
               rawObj: note,
             }),
@@ -399,8 +400,9 @@ export default function SearchScreen({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p>
-              Some older memories are not downloaded. {unloadedArchiveMonths.length} archive month
-              {unloadedArchiveMonths.length === 1 ? '' : 's'} can be included.
+              {layout === 'mobile'
+                ? `${unloadedArchiveMonths.length} archive month${unloadedArchiveMonths.length === 1 ? '' : 's'} not on this device.`
+                : `Some older memories are not downloaded. ${unloadedArchiveMonths.length} archive month${unloadedArchiveMonths.length === 1 ? '' : 's'} can be included.`}
             </p>
             {nextRestorableArchiveStatus && (
               <p className="mt-1 text-xs">{nextRestorableArchiveStatus}</p>
@@ -422,7 +424,11 @@ export default function SearchScreen({
                 ) : (
                   <Download className="h-3.5 w-3.5" />
                 )}
-                {restoringArchiveKey ? 'Restoring' : 'Restore next'}
+                {restoringArchiveKey
+                  ? 'Restoring'
+                  : layout === 'mobile'
+                    ? 'Restore'
+                    : 'Restore next'}
               </AppButton>
             )}
             {onHydrateAllArchiveMonths && restorableArchiveMonths.length > 1 && (
@@ -435,7 +441,7 @@ export default function SearchScreen({
             )}
             {onOpenSettingsSection && (
               <AppButton tone="quiet" onClick={() => onOpenSettingsSection('data-storage')}>
-                Manage storage
+                {layout === 'mobile' ? 'Storage' : 'Manage storage'}
               </AppButton>
             )}
           </div>
@@ -447,7 +453,7 @@ export default function SearchScreen({
     <div className="space-y-8 py-4">
       {recentSearches.length > 0 && (
         <section>
-          <h2 className="font-serif-diary text-2xl font-semibold">Recent searches</h2>
+          <h2 className="type-section-title font-bold">Recent searches</h2>
           <div className="mt-3 flex flex-wrap gap-2">
             {recentSearches.map((value) => (
               <button
@@ -463,10 +469,14 @@ export default function SearchScreen({
         </section>
       )}
       <section>
-        <h2 className="font-serif-diary text-2xl font-semibold">Find a thread</h2>
-        <p className="mt-1 text-sm text-brand-text-muted">
-          Start with a journal entry, a quick note, or a familiar theme.
-        </p>
+        <h2 className="type-section-title font-bold">
+          {layout === 'mobile' ? 'Search your memories' : 'Find a thread'}
+        </h2>
+        {layout !== 'mobile' && (
+          <p className="mt-1 text-sm text-brand-text-muted">
+            Start with a journal entry, a quick note, or a familiar theme.
+          </p>
+        )}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <button
             type="button"
@@ -474,12 +484,16 @@ export default function SearchScreen({
               setSelectedSource('diaries');
               setShowFilters(false);
             }}
-            className="surface-paper flex min-h-24 items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left"
+            className={`surface-paper flex items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left ${layout === 'mobile' ? 'min-h-16' : 'min-h-24'}`}
           >
             <BookOpen className="h-6 w-6 text-brand-sage" />
             <span>
-              <span className="block font-bold">Journal entries</span>
-              <span className="text-xs text-brand-text-muted">Long-form pages and moments</span>
+              <span className="block font-bold">
+                {layout === 'mobile' ? 'Entries' : 'Journal entries'}
+              </span>
+              {layout !== 'mobile' && (
+                <span className="text-xs text-brand-text-muted">Long-form pages and moments</span>
+              )}
             </span>
           </button>
           <button
@@ -488,19 +502,21 @@ export default function SearchScreen({
               setSelectedSource('notes');
               setShowFilters(false);
             }}
-            className="surface-paper flex min-h-24 items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left"
+            className={`surface-paper flex items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left ${layout === 'mobile' ? 'min-h-16' : 'min-h-24'}`}
           >
             <FileText className="h-6 w-6 text-brand-pink" />
             <span>
-              <span className="block font-bold">Quick notes</span>
-              <span className="text-xs text-brand-text-muted">Lightweight thoughts</span>
+              <span className="block font-bold">Notes</span>
+              {layout !== 'mobile' && (
+                <span className="text-xs text-brand-text-muted">Lightweight thoughts</span>
+              )}
             </span>
           </button>
         </div>
       </section>
       {availableTags.length > 0 && (
         <section>
-          <h2 className="font-serif-diary text-2xl font-semibold">Suggested themes</h2>
+          <h2 className="type-section-title font-bold">Suggested themes</h2>
           <div className="mt-3 flex flex-wrap gap-2">
             {availableTags.slice(0, 8).map((tag) => (
               <button
@@ -515,7 +531,7 @@ export default function SearchScreen({
           </div>
         </section>
       )}
-      {!recentSearches.length && (
+      {!recentSearches.length && layout !== 'mobile' && (
         <p className="max-w-xl border-l-2 border-brand-pink/30 pl-4 font-serif-diary text-lg italic text-brand-text-muted">
           Search by a phrase you remember, a feeling you named, or a theme you want to revisit.
         </p>
@@ -566,7 +582,9 @@ export default function SearchScreen({
           <h2 className="mt-2 font-serif-diary text-2xl font-semibold text-brand-plum dark:text-brand-text">
             {highlightMatch(item.title, query)}
           </h2>
-          <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-brand-text-muted">
+          <p
+            className={`${layout === 'mobile' ? 'line-clamp-2' : 'line-clamp-3'} mt-2 text-sm leading-relaxed text-brand-text-muted`}
+          >
             {highlightMatch(item.body, query)}
           </p>
           {item.tags.length > 0 && (
@@ -588,7 +606,7 @@ export default function SearchScreen({
         <div className="flex items-end justify-between gap-4">
           {layout !== 'mobile' && (
             <div>
-              <h1 className="font-serif-diary text-4xl font-semibold">Search</h1>
+              <h1 className="type-page-title font-bold">Search</h1>
               <p className="mt-1 text-sm text-brand-text-muted">Find a memory, not a record.</p>
             </div>
           )}
@@ -616,7 +634,7 @@ export default function SearchScreen({
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={searchKeyDown}
             onClear={() => setQuery('')}
-            placeholder="Search thoughts, memories, dreams…"
+            placeholder="Search memories"
             label="Search memories"
             className="text-base"
           />
@@ -728,7 +746,6 @@ export default function SearchScreen({
       <BottomSheet
         open={showFilters && layout !== 'desktop'}
         title="Refine memories"
-        description="Narrow the search without losing your place."
         onClose={() => setShowFilters(false)}
         footer={
           <>

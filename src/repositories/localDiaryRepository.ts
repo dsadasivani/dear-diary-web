@@ -22,6 +22,7 @@ import type {
   LocalNoteProjection,
   LocalStructuredRecordMutation,
 } from '../platform/storage';
+import { toLocalDateKey } from '../utils/localDate';
 import type {
   AcknowledgeLocalMutationInput,
   ApplyLocalMutationWithOutboxInput,
@@ -209,11 +210,17 @@ const sortEntries = <T extends Pick<Entry, 'id' | 'date' | 'createdAt' | 'update
     );
   if (sort === 'updated-desc')
     return sorted.sort(
-      (left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id),
+      (left, right) =>
+        right.updatedAt - left.updatedAt ||
+        right.date.localeCompare(left.date) ||
+        left.id.localeCompare(right.id),
     );
   if (sort === 'created-desc')
     return sorted.sort(
-      (left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id),
+      (left, right) =>
+        right.createdAt - left.createdAt ||
+        right.date.localeCompare(left.date) ||
+        left.id.localeCompare(right.id),
     );
   return sorted.sort(
     (left, right) =>
@@ -813,7 +820,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       const notes = await this.readCollection<Note>(STORAGE_KEYS.notes, []);
       const filtered = notes
         .filter((note) => {
-          const date = new Date(note.updatedAt).toISOString().slice(0, 10);
+          const date = toLocalDateKey(note.updatedAt);
           return (
             (!filters.fromDate || date >= filters.fromDate) &&
             (!filters.toDate || date <= filters.toDate)
