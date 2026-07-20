@@ -77,22 +77,28 @@ See [docs/local-sync-v2.md](docs/local-sync-v2.md) for endpoints, emulator netwo
 
 ## Common commands
 
-| Command                      | Purpose                                                                        |
-| ---------------------------- | ------------------------------------------------------------------------------ |
-| `npm run dev`                | Start Express with Vite middleware.                                            |
-| `npm run format`             | Format supported source, configuration, and documentation files with Prettier. |
-| `npm run format:check`       | Verify formatting without changing files.                                      |
-| `npm run lint`               | Run TypeScript checks, including unused locals and parameters.                 |
-| `npm run test:unit`          | Run the core TypeScript unit suites.                                           |
-| `npm run test:component`     | Run Vitest component tests.                                                    |
-| `npm run test:server`        | Run Express host tests.                                                        |
-| `npm run backend:test`       | Run the Spring Boot backend test suite.                                        |
-| `npm run test:supabase`      | Run Docker-backed compatibility migrations and RPC tests.                      |
-| `npm run test:e2e`           | Run Playwright end-to-end tests.                                               |
-| `npm run test:accessibility` | Run the accessibility-tagged Playwright checks.                                |
-| `npm run test:ops`           | Validate dashboards and alert configuration.                                   |
-| `npm run scan:secrets`       | Check for secrets and generated artifacts.                                     |
-| `npm run build`              | Build the web client and bundled Express host.                                 |
+| Command                               | Purpose                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------ |
+| `npm run dev`                         | Start Express with Vite middleware.                                            |
+| `npm run format`                      | Format supported source, configuration, and documentation files with Prettier. |
+| `npm run format:check`                | Verify formatting without changing files.                                      |
+| `npm run lint`                        | Run TypeScript checks, including unused locals and parameters.                 |
+| `npm run test:unit`                   | Run the core TypeScript unit suites.                                           |
+| `npm run test:component`              | Run Vitest component tests.                                                    |
+| `npm run test:server`                 | Run Express host tests.                                                        |
+| `npm run backend:test`                | Run the Spring Boot backend test suite.                                        |
+| `npm run backend:bootRun:development` | Start the backend with the development Spring profile.                         |
+| `npm run backend:bootRun:staging`     | Start the backend with the staging Spring profile.                             |
+| `npm run backend:bootRun:production`  | Start the backend with the production Spring profile.                          |
+| `npm run test:supabase`               | Run Docker-backed compatibility migrations and RPC tests.                      |
+| `npm run test:e2e`                    | Run Playwright end-to-end tests.                                               |
+| `npm run test:accessibility`          | Run the accessibility-tagged Playwright checks.                                |
+| `npm run test:ops`                    | Validate dashboards and alert configuration.                                   |
+| `npm run scan:secrets`                | Check for secrets and generated artifacts.                                     |
+| `npm run build`                       | Build the web client and bundled Express host.                                 |
+| `npm run build:staging`               | Build the staging web client and bundled Express host.                         |
+| `npm run build:web:staging`           | Build only the staging web companion.                                          |
+| `npm run build:web:production`        | Build only the production web companion.                                       |
 
 The all-in-one `npm run test:all` command also requires Docker, Playwright browsers, and the Android toolchain. Use the focused commands while developing and the complete command in a fully provisioned release environment.
 
@@ -119,7 +125,15 @@ Native WebView inspection is disabled by default. For a local debug build only, 
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill only the services needed for the workflow being run. Vite exposes only variables prefixed with `VITE_` to browser code.
+The frontend uses Vite modes with safe tracked defaults:
+
+- `.env.development` for local development
+- `.env.staging` for the AWS staging environment
+- `.env.production` for production
+
+Put credentials and developer-specific overrides in ignored `.env.local` or `.env.<environment>.local` files.
+Amplify build variables override tracked defaults. Vite exposes only variables prefixed with `VITE_` to
+browser code; such values must never be treated as secrets.
 
 The main client settings are:
 
@@ -128,9 +142,14 @@ The main client settings are:
 - `VITE_SYNC_V2_API_URL` for the Spring Boot Sync V2 service.
 - `VITE_TELEMETRY_ENDPOINT` and `VITE_CRASH_REPORT_ENDPOINT` for optional privacy-safe reporting.
 
-Backend database, JWT, object-store, notification, garbage-collection, tracing, and CORS settings are documented inline in [.env.example](.env.example). Production release builds validate required configuration and fail closed when it is incomplete.
+Backend database, JWT, object-store, notification, garbage-collection, tracing, and CORS settings are documented
+inline in [.env.example](.env.example). Select `development`, `staging`, or `production` with
+`SPRING_PROFILES_ACTIVE`. Environment variables and SSM-injected secrets take precedence over the corresponding
+Spring profile. Production release builds validate required frontend configuration and fail closed when it is
+incomplete.
 
-Never commit `.env`; the repository ignores `.env*` except `.env.example`.
+Never commit `.env.local`, `.env.<environment>.local`, or credentials. Only the documented safe mode files and
+`.env.example` are allowed by the repository secret scan.
 
 ## Storage and security
 

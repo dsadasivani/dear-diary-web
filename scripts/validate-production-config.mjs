@@ -1,10 +1,21 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { loadEnv } from 'vite';
 
 const root = process.cwd();
 const dist = path.join(root, 'dist');
+const mode = process.env.VITE_MODE?.trim() || 'production';
+const environment = { ...loadEnv(mode, root, ''), ...process.env };
 const releaseBuild = process.env.DEAR_DIARY_RELEASE_BUILD === 'true';
 const failures = [];
+
+const appEnvironments = new Set(['development', 'staging', 'production']);
+const appEnvironment = environment.VITE_APP_ENV?.trim();
+if (!appEnvironment || !appEnvironments.has(appEnvironment)) {
+  failures.push('VITE_APP_ENV must be development, staging, or production.');
+} else if (appEnvironment !== mode) {
+  failures.push(`VITE_APP_ENV=${appEnvironment} does not match the Vite mode ${mode}.`);
+}
 
 const walk = async (directory) =>
   (
@@ -44,21 +55,28 @@ for (const flag of [
 }
 
 for (const variable of ['CAPACITOR_WEBVIEW_DEBUG', 'CAPACITOR_DEBUG', 'CAPACITOR_BRIDGE_LOGGING']) {
-  if (process.env[variable] === 'true') failures.push(`${variable} must not be enabled.`);
+  if (environment[variable] === 'true') failures.push(`${variable} must not be enabled.`);
 }
-if (process.env.VITE_DISABLE_ENCRYPTION === 'true') failures.push('Encryption cannot be disabled.');
-if (process.env.VITE_USE_MOCK_AUTH === 'true')
+if (environment.VITE_DISABLE_ENCRYPTION === 'true') failures.push('Encryption cannot be disabled.');
+if (environment.VITE_USE_MOCK_AUTH === 'true')
   failures.push('Mock authentication cannot be enabled.');
+const backendUrl = environment.VITE_SYNC_V2_API_URL || environment.VITE_BACKEND_URL;
 if (
-  process.env.VITE_BACKEND_URL &&
-  /localhost|127\.0\.0\.1|\.local(?:\/|$)/i.test(process.env.VITE_BACKEND_URL)
+  appEnvironment !== 'development' &&
+  /localhost|127\.0\.0\.1|\.local(?:\/|$)/i.test(backendUrl || '')
 ) {
   failures.push('Development backend URLs are forbidden.');
 }
 
 if (releaseBuild) {
-  for (const variable of ['VITE_MINIMUM_PROTOCOL_VERSION', 'VITE_TELEMETRY_RELEASE_VERSION']) {
-    if (!process.env[variable]?.trim())
+  for (const variable of [
+    'VITE_SUPABASE_URL',
+    'VITE_SUPABASE_ANON_KEY',
+    'VITE_SYNC_V2_API_URL',
+    'VITE_MINIMUM_PROTOCOL_VERSION',
+    'VITE_TELEMETRY_RELEASE_VERSION',
+  ]) {
+    if (!environment[variable]?.trim())
       failures.push(`${variable} is required for release builds.`);
   }
 }

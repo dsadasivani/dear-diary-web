@@ -14,7 +14,9 @@ Sync V2 uses:
 - an S3-compatible object store for encrypted events, media, snapshots, and key packages;
 - client-held encryption keys and client-side hash verification, encryption, and decryption.
 
-The API URL is configured with `VITE_SYNC_V2_API_URL`. Backend settings are listed in `.env.example`.
+The API URL is configured with `VITE_SYNC_V2_API_URL` in the selected Vite mode. Backend settings use matching
+Spring profiles selected by `SPRING_PROFILES_ACTIVE`; sensitive values remain runtime environment variables or
+SSM-injected secrets. The complete variable list is in `.env.example`.
 
 New Android primary accounts are registered directly with Sync V2. A browser companion creates a short-lived pairing request and becomes active only after approval and target-bound key-package delivery from the primary device.
 

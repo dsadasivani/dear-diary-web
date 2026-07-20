@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 
 const manualChunks = (id: string): string | undefined => {
   if (!id.includes('node_modules')) return undefined;
@@ -23,10 +23,12 @@ const manualChunks = (id: string): string | undefined => {
   return undefined;
 };
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  const fileEnvironment = loadEnv(mode, process.cwd(), '');
+  const environment = { ...fileEnvironment, ...process.env };
   const includeTestHooks =
-    process.env.VITE_DEAR_DIARY_E2E === '1' || process.env.VITE_ENABLE_MD_FLOW_HOOKS === 'true';
-  const disableHmr = process.env.DISABLE_HMR === 'true' || process.env.VITE_DEAR_DIARY_E2E === '1';
+    environment.VITE_DEAR_DIARY_E2E === '1' || environment.VITE_ENABLE_MD_FLOW_HOOKS === 'true';
+  const disableHmr = environment.DISABLE_HMR === 'true' || environment.VITE_DEAR_DIARY_E2E === '1';
   return {
     plugins: [react(), tailwindcss()],
     build: {
@@ -59,7 +61,7 @@ export default defineConfig(() => {
     },
     define: {
       'import.meta.env.VITE_APP_VERSION': JSON.stringify(
-        process.env.npm_package_version || '1.0.0',
+        environment.VITE_APP_VERSION || environment.npm_package_version || '1.0.0',
       ),
     },
     server: {

@@ -17,6 +17,25 @@ npm run backend:bootRun
 Runtime database configuration is supplied through `SYNC_DB_URL`, `SYNC_DB_USERNAME`, and `SYNC_DB_PASSWORD`.
 No production credentials are committed or required for unit tests.
 
+Environment-specific defaults use standard Spring profiles:
+
+- `development` for the local PostgreSQL/MinIO workflow
+- `staging` for the AWS staging service
+- `production` for fail-fast production configuration
+
+Set `SPRING_PROFILES_ACTIVE` at runtime. For local PowerShell development:
+
+```powershell
+npm run backend:bootRun:development
+```
+
+The equivalent staging and production commands are `npm run backend:bootRun:staging` and
+`npm run backend:bootRun:production`; supply their required runtime variables before starting them.
+
+The staging and production profiles require database credentials from the runtime environment. Production also
+requires CORS, JWT issuer/JWKS, and object-store bucket values. Environment variables and SSM-injected secrets
+override the tracked profile defaults.
+
 ## Container
 
 Build the same Java 21 image used by the hosted service from this directory:

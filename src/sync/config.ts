@@ -14,14 +14,20 @@ import {
   NOOP_CRASH_REPORTER,
   type CrashReporter,
 } from '../infrastructure/telemetry/CrashReporter';
+import { APP_ENVIRONMENT } from '../config/environment';
 
 export type SupabaseAccessTokenProvider = NonNullable<SupabaseControlPlaneConfig['accessToken']>;
 
 const readViteEnv = (key: string): string => {
   const value = (import.meta.env[key] as string | undefined)?.trim();
-  if (!value) throw new Error(`Missing ${key}. Add it to .env before enabling multi-device sync.`);
+  if (!value)
+    throw new Error(
+      `Missing ${key} for ${APP_ENVIRONMENT}. Add it to the environment-specific configuration before enabling multi-device sync.`,
+    );
   return value;
 };
+
+export const getConfiguredAppEnvironment = () => APP_ENVIRONMENT;
 
 export const getConfiguredSupabaseUrl = (): string => readViteEnv('VITE_SUPABASE_URL');
 

@@ -13,7 +13,7 @@ const forbiddenPatterns = [
   /\.(?:db|db-wal|db-shm|sqlite|sqlite-wal|sqlite-shm|sqlite3|sqlite3-wal|sqlite3-shm)$/i,
 ];
 
-const allowed = new Set(['.env.example']);
+const allowed = new Set(['.env.example', '.env.development', '.env.staging', '.env.production']);
 const violations = tracked.filter(
   (file) => !allowed.has(file) && forbiddenPatterns.some((pattern) => pattern.test(file)),
 );

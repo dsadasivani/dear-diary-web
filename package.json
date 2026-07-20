@@ -5,10 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs && node scripts/validate-production-config.mjs",
+    "build": "cross-env VITE_MODE=production vite build --mode production && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs && cross-env VITE_MODE=production node scripts/validate-production-config.mjs",
+    "build:staging": "cross-env VITE_MODE=staging vite build --mode staging && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs && cross-env VITE_MODE=staging node scripts/validate-production-config.mjs",
     "build:release": "cross-env DEAR_DIARY_RELEASE_BUILD=true npm run build",
-    "build:web": "vite build && node scripts/validate-production-config.mjs",
-    "build:web:release": "cross-env DEAR_DIARY_RELEASE_BUILD=true npm run build:web",
+    "build:web": "npm run build:web:production",
+    "build:web:staging": "cross-env VITE_MODE=staging vite build --mode staging && cross-env VITE_MODE=staging node scripts/validate-production-config.mjs",
+    "build:web:production": "cross-env VITE_MODE=production vite build --mode production && cross-env VITE_MODE=production node scripts/validate-production-config.mjs",
+    "build:web:release": "cross-env DEAR_DIARY_RELEASE_BUILD=true npm run build:web:production",
+    "build:web:release:staging": "cross-env DEAR_DIARY_RELEASE_BUILD=true npm run build:web:staging",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "node scripts/clean.mjs",
@@ -26,6 +30,9 @@
     "test:server": "tsx --test server.test.ts",
     "backend:test": "node scripts/run-backend-gradle.mjs test",
     "backend:bootRun": "node scripts/run-backend-gradle.mjs bootRun",
+    "backend:bootRun:development": "cross-env SPRING_PROFILES_ACTIVE=development npm run backend:bootRun",
+    "backend:bootRun:staging": "cross-env SPRING_PROFILES_ACTIVE=staging npm run backend:bootRun",
+    "backend:bootRun:production": "cross-env SPRING_PROFILES_ACTIVE=production npm run backend:bootRun",
     "test:supabase": "node scripts/supabase-integration-tests.mjs",
     "test:e2e": "playwright test",
     "test:accessibility": "playwright test --grep @accessibility",
@@ -48,7 +55,9 @@
     "android:bundle": "node scripts/run-gradle.mjs bundleRelease",
     "assets:generate": "npx @capacitor/assets generate --android --assetPath resources --iconBackgroundColor \"#232427\" --iconBackgroundColorDark \"#17181a\" --splashBackgroundColor \"#232427\" --splashBackgroundColorDark \"#17181a\" --logoSplashScale 0.36",
     "mobile:build": "npm run build",
-    "mobile:sync": "npm run mobile:build && cap sync"
+    "mobile:build:staging": "npm run build:staging",
+    "mobile:sync": "npm run mobile:build && cap sync",
+    "mobile:sync:staging": "npm run mobile:build:staging && cap sync"
   },
   "dependencies": {
     "@aparajita/capacitor-secure-storage": "^8.0.0",

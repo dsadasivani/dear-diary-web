@@ -24,3 +24,6 @@ android/keystore.properties
 *.keystore
 .env*
 !.env.example
+!.env.development
+!.env.staging
+!.env.production

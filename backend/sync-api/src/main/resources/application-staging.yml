@@ -1,0 +1,35 @@
+spring:
+  datasource:
+    url: ${SYNC_DB_URL}
+    username: ${SYNC_DB_USERNAME}
+    password: ${SYNC_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${SYNC_DB_MAX_POOL_SIZE:3}
+      minimum-idle: ${SYNC_DB_MIN_IDLE:0}
+
+management:
+  tracing:
+    enabled: ${SYNC_TRACING_ENABLED:false}
+
+sync:
+  cors:
+    allowed-origins: ${SYNC_CORS_ALLOWED_ORIGINS:http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://feature-aws-deployment.d33b4rjnv35mrn.amplifyapp.com}
+  object-store:
+    enabled: ${SYNC_OBJECT_STORE_ENABLED:true}
+    bucket: ${SYNC_OBJECT_STORE_BUCKET:dear-diary-sync-staging-908027418886}
+    region: ${SYNC_OBJECT_STORE_REGION:ap-south-1}
+    path-style-access: ${SYNC_OBJECT_STORE_PATH_STYLE:false}
+  security:
+    jwt:
+      enabled: ${SYNC_JWT_ENABLED:true}
+      issuer-uri: ${SYNC_JWT_ISSUER_URI:https://rephepalwmzlmsphigms.supabase.co/auth/v1}
+      jwk-set-uri: ${SYNC_JWT_JWK_SET_URI:https://rephepalwmzlmsphigms.supabase.co/auth/v1/.well-known/jwks.json}
+      audience: ${SYNC_JWT_AUDIENCE:authenticated}
+  notification:
+    publisher:
+      enabled: ${SYNC_NOTIFICATION_PUBLISHER_ENABLED:false}
+    worker:
+      enabled: ${SYNC_NOTIFICATION_WORKER_ENABLED:false}
+  garbage-collection:
+    enabled: ${SYNC_GC_WORKER_ENABLED:false}
+    dry-run: ${SYNC_GC_DRY_RUN:true}

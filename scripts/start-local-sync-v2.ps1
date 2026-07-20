@@ -32,6 +32,7 @@ do {
 if ($LASTEXITCODE -ne 0) { throw 'Local PostgreSQL did not become ready.' }
 
 $env:SYNC_DB_URL = 'jdbc:postgresql://localhost:5432/dear_diary_sync'
+$env:SPRING_PROFILES_ACTIVE = 'development'
 $env:SYNC_DB_USERNAME = 'dear_diary_sync'
 $env:SYNC_DB_PASSWORD = 'dear_diary_local'
 $env:SYNC_JWT_ENABLED = 'true'
