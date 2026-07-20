@@ -60,10 +60,10 @@ This is a variable, not a secret: an IAM role ARN contains no credentials.
 
 1. Commit and push the repository changes.
 2. Wait for CI to succeed on that commit.
-3. Run **Actions > Deploy staging > Run workflow** with `deploy_frontend` unchecked.
+3. While this workflow exists only on the feature branch, trigger the backend pilot with a commit whose message contains `[deploy-staging]`. The workflow waits for CI on that exact commit before deploying. Ordinary commits do not deploy.
 4. Verify backend synchronization from web and mobile.
 5. Disable Amplify auto-build for `feature/aws-deployment`.
-6. Run the workflow again with `deploy_frontend` checked.
+6. Trigger the full pilot with a commit whose message contains `[deploy-staging-web]`.
 7. Verify login and two-way synchronization.
 
-After both pilot runs succeed, change the workflow trigger so a successful staging-branch CI run starts the deployment automatically.
+After the workflow reaches the default branch, GitHub also exposes its manual `workflow_dispatch` control in the Actions tab. After both pilot runs succeed, replace the commit-message gate so a successful staging-branch CI run starts the deployment automatically.

@@ -1,6 +1,9 @@
 name: Deploy staging
 
 on:
+  push:
+    branches:
+      - feature/aws-deployment
   workflow_dispatch:
     inputs:
       deploy_frontend:
@@ -21,6 +24,10 @@ permissions:
 jobs:
   deploy:
     name: Backend, then web
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[deploy-staging]') ||
+      contains(github.event.head_commit.message, '[deploy-staging-web]')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: staging
@@ -61,12 +68,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          successful_runs=$(gh api \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=completed&per_page=20" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')
-          if (( successful_runs < 1 )); then
-            echo "No successful CI push run exists for commit $GITHUB_SHA." >&2
+          ci_conclusion=""
+          for attempt in {1..80}; do
+            run=$(gh api \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=1")
+            ci_status=$(jq -r '.workflow_runs[0].status // "not-found"' <<< "$run")
+            ci_conclusion=$(jq -r '.workflow_runs[0].conclusion // ""' <<< "$run")
+            echo "Waiting for CI ($attempt/80): status=$ci_status conclusion=${ci_conclusion:-pending}"
+
+            if [[ "$ci_status" == "completed" ]]; then
+              if [[ "$ci_conclusion" == "success" ]]; then
+                break
+              fi
+              echo "CI completed with conclusion $ci_conclusion; deployment is blocked." >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          if [[ "$ci_conclusion" != "success" ]]; then
+            echo "Timed out waiting for successful CI on commit $GITHUB_SHA." >&2
             exit 1
           fi
 
@@ -228,7 +249,9 @@ jobs:
           echo "active-task-definition=$active_task_definition" >> "$GITHUB_OUTPUT"
 
       - name: Start Amplify staging release
-        if: inputs.deploy_frontend
+        if: >-
+          inputs.deploy_frontend ||
+          contains(github.event.head_commit.message, '[deploy-staging-web]')
         id: amplify
         run: |
           set -euo pipefail
@@ -268,7 +291,9 @@ jobs:
           fi
 
       - name: Verify deployed web assets
-        if: inputs.deploy_frontend
+        if: >-
+          inputs.deploy_frontend ||
+          contains(github.event.head_commit.message, '[deploy-staging-web]')
         run: node scripts/verify-web-deployment.mjs "$STAGING_WEB_URL"
 
       - name: Write deployment summary
