@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - feature/aws-deployment
       - feature/dear-diary-v2
       - feature/local-first-performance
       - feature/production-sync-v2
