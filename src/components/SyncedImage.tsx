@@ -157,7 +157,9 @@ export default function SyncedImage({
     }
 
     const node = imageRef.current;
-    setLoadedSrc(node?.complete && node.naturalWidth > 0 ? displaySrc : null);
+    setLoadedSrc((current) =>
+      current === displaySrc || (node?.complete && node.naturalWidth > 0) ? displaySrc : null,
+    );
   }, [displaySrc, isPlaceholder]);
 
   const displayClassName = [

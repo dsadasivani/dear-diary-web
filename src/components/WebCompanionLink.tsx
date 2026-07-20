@@ -251,7 +251,11 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           {!context && status && (
             <p className="mt-3 text-center text-xs text-brand-text-muted">{status}</p>
           )}
-          {error && <p className="mt-3 text-center text-xs font-semibold text-red-600">{error}</p>}
+          {error && (
+            <p className="mt-3 text-center text-xs font-semibold text-red-700 dark:text-red-300">
+              {error}
+            </p>
+          )}
         </section>
 
         <div className="flex items-start gap-2 text-xs leading-relaxed text-brand-text-muted">
