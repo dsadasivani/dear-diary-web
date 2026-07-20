@@ -1,0 +1,122 @@
+{
+  "family": "default-dear-diary-sync-staging",
+  "taskRoleArn": "arn:aws:iam::908027418886:role/DearDiarySyncTaskRole",
+  "executionRoleArn": "arn:aws:iam::908027418886:role/DearDiaryEcsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "containerDefinitions": [
+    {
+      "name": "Main",
+      "image": "908027418886.dkr.ecr.ap-south-1.amazonaws.com/dear-diary-sync-api:replaced-by-deploy-workflow",
+      "cpu": 1024,
+      "memoryReservation": 2048,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "name": "main-8080-tcp"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "SPRING_PROFILES_ACTIVE",
+          "value": "staging"
+        },
+        {
+          "name": "SYNC_CORS_ALLOWED_ORIGINS",
+          "value": "http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://feature-aws-deployment.d33b4rjnv35mrn.amplifyapp.com"
+        },
+        {
+          "name": "SYNC_DB_MAX_POOL_SIZE",
+          "value": "3"
+        },
+        {
+          "name": "SYNC_DB_MIN_IDLE",
+          "value": "0"
+        },
+        {
+          "name": "SYNC_GC_DRY_RUN",
+          "value": "true"
+        },
+        {
+          "name": "SYNC_GC_WORKER_ENABLED",
+          "value": "false"
+        },
+        {
+          "name": "SYNC_JWT_AUDIENCE",
+          "value": "authenticated"
+        },
+        {
+          "name": "SYNC_JWT_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "SYNC_JWT_ISSUER_URI",
+          "value": "https://rephepalwmzlmsphigms.supabase.co/auth/v1"
+        },
+        {
+          "name": "SYNC_JWT_JWK_SET_URI",
+          "value": "https://rephepalwmzlmsphigms.supabase.co/auth/v1/.well-known/jwks.json"
+        },
+        {
+          "name": "SYNC_NOTIFICATION_PUBLISHER_ENABLED",
+          "value": "false"
+        },
+        {
+          "name": "SYNC_NOTIFICATION_WORKER_ENABLED",
+          "value": "false"
+        },
+        {
+          "name": "SYNC_OBJECT_STORE_BUCKET",
+          "value": "dear-diary-sync-staging-908027418886"
+        },
+        {
+          "name": "SYNC_OBJECT_STORE_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "SYNC_OBJECT_STORE_PATH_STYLE",
+          "value": "false"
+        },
+        {
+          "name": "SYNC_OBJECT_STORE_REGION",
+          "value": "ap-south-1"
+        },
+        {
+          "name": "SYNC_TRACING_ENABLED",
+          "value": "false"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "SYNC_DB_PASSWORD",
+          "valueFrom": "arn:aws:ssm:ap-south-1:908027418886:parameter/dear-diary/staging/sync-db-password"
+        },
+        {
+          "name": "SYNC_DB_URL",
+          "valueFrom": "arn:aws:ssm:ap-south-1:908027418886:parameter/dear-diary/staging/sync-db-url"
+        },
+        {
+          "name": "SYNC_DB_USERNAME",
+          "valueFrom": "arn:aws:ssm:ap-south-1:908027418886:parameter/dear-diary/staging/sync-db-username"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/aws/ecs/default/dear-diary-sync-staging-76f5",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ],
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  }
+}

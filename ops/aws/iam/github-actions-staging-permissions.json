@@ -1,0 +1,63 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EcrLogin",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "PushAndInspectStagingImages",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:CompleteLayerUpload",
+        "ecr:DescribeImages",
+        "ecr:DescribeImageScanFindings",
+        "ecr:InitiateLayerUpload",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
+      ],
+      "Resource": "arn:aws:ecr:ap-south-1:908027418886:repository/dear-diary-sync-api"
+    },
+    {
+      "Sid": "RegisterAndReadTaskDefinitions",
+      "Effect": "Allow",
+      "Action": ["ecs:DescribeTaskDefinition", "ecs:RegisterTaskDefinition"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DeployOnlyTheStagingService",
+      "Effect": "Allow",
+      "Action": ["ecs:DescribeServices", "ecs:UpdateService"],
+      "Resource": "arn:aws:ecs:ap-south-1:908027418886:service/default/dear-diary-sync-staging"
+    },
+    {
+      "Sid": "PassOnlyExistingEcsTaskRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::908027418886:role/DearDiarySyncTaskRole",
+        "arn:aws:iam::908027418886:role/DearDiaryEcsTaskExecutionRole"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ReadTheStagingRollbackAlarm",
+      "Effect": "Allow",
+      "Action": "cloudwatch:DescribeAlarms",
+      "Resource": "*"
+    },
+    {
+      "Sid": "RunAndInspectAmplifyStagingJobs",
+      "Effect": "Allow",
+      "Action": ["amplify:GetJob", "amplify:StartJob"],
+      "Resource": "arn:aws:amplify:ap-south-1:908027418886:apps/d33b4rjnv35mrn/branches/feature-aws-deployment/jobs/*"
+    }
+  ]
+}
