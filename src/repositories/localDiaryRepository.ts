@@ -80,7 +80,11 @@ import {
   type SyncHealth,
   type SyncHealthPatch,
 } from '../sync/health/SyncHealth';
-import { pendingOutboxV2FromLegacy, type SyncOutboxOperationV2 } from '../sync/outbox';
+import {
+  pendingOutboxV2FromLegacy,
+  withSyncOutboxMutationLock,
+  type SyncOutboxOperationV2,
+} from '../sync/outbox';
 
 const STORAGE_KEYS = {
   diaries: 'deardiary_diaries',
@@ -2393,7 +2397,8 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   private enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.writeTail.then(operation, operation);
+    const synchronizedOperation = () => withSyncOutboxMutationLock(this.store, operation);
+    const result = this.writeTail.then(synchronizedOperation, synchronizedOperation);
     this.writeTail = result.then(
       () => undefined,
       () => undefined,

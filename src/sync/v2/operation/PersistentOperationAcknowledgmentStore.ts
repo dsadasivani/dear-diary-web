@@ -3,6 +3,7 @@ import { SyncError } from '../../errors';
 import type { SyncOutboxOperationV2 } from '../../outbox';
 import type { SyncV2CommitResult } from '../api/SyncV2ApiTypes';
 import type { SyncV2LocalRuntime } from '../protocol/ProtocolBootstrap';
+import { withSyncOutboxMutationLock } from '../../outbox/SyncOutboxMutationLock';
 
 const OUTBOX_KEY = 'deardiary_sync_outbox_v2';
 const RUNTIME_KEY = 'deardiary_sync_v2_runtime';
@@ -83,7 +84,8 @@ export class PersistentOperationAcknowledgmentStore implements OperationAcknowle
   }
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(work, work);
+    const synchronizedWork = () => withSyncOutboxMutationLock(this.store, work);
+    const result = this.tail.then(synchronizedWork, synchronizedWork);
     this.tail = result.then(
       () => undefined,
       () => undefined,

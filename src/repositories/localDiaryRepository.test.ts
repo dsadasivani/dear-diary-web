@@ -21,7 +21,7 @@ import { LocalDiaryRepository } from './localDiaryRepository';
 import { createSyncDomainEvent } from '../sync/domainEvents';
 import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
-import type { SyncOutboxOperationV2 } from '../sync/outbox';
+import { PersistentOutboxRepository, type SyncOutboxOperationV2 } from '../sync/outbox';
 import { toLocalDateKey } from '../utils/localDate';
 
 class MemoryDataStore implements LocalDataStore {
@@ -45,6 +45,39 @@ class MemoryDataStore implements LocalDataStore {
 
   async clear(): Promise<void> {
     this.values.clear();
+  }
+}
+
+class PausingMemoryDataStore extends MemoryDataStore {
+  private pause:
+    | {
+        key: string;
+        entered: () => void;
+        release: Promise<void>;
+      }
+    | undefined;
+
+  pauseNextWriteContaining(key: string): { entered: Promise<void>; release: () => void } {
+    let markEntered!: () => void;
+    let releaseWrite!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    this.pause = { key, entered: markEntered, release };
+    return { entered, release: releaseWrite };
+  }
+
+  override async setItems(items: Record<string, string>): Promise<void> {
+    const pause = this.pause;
+    if (pause && Object.hasOwn(items, pause.key)) {
+      this.pause = undefined;
+      pause.entered();
+      await pause.release;
+    }
+    await super.setItems(items);
   }
 }
 
@@ -1446,6 +1479,73 @@ test('rapid same-record saves never reset an in-flight V2 operation', async () =
   assert.equal(v2['operation-rapid-2'].state, 'PENDING');
   assert.equal(v2['operation-rapid-2'].dependencyOperationId, 'operation-rapid-1');
   assert.equal(v2['operation-rapid-2'].baseRecordVersion, 1);
+});
+
+test('local autosaves and V2 worker transitions cannot overwrite each other', async () => {
+  const store = new PausingMemoryDataStore();
+  const repository = await createRepository(store);
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 0,
+    linkedAt: 1,
+  });
+  const account = (await repository.getLocalSyncAccountState())!;
+  const note: Note = {
+    id: 'note-concurrent',
+    title: 'First',
+    body: '<p>First.</p>',
+    isPinned: false,
+    tags: [],
+    createdAt: 10,
+    updatedAt: 10,
+  };
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-concurrent-1',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account,
+    localPayload: note,
+  });
+
+  const worker = new PersistentOutboxRepository(store);
+  await worker.transition('operation-concurrent-1', 'PENDING', 'PREPARING');
+  const gate = store.pauseNextWriteContaining('deardiary_sync_outbox_v2');
+  const autosave = repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-concurrent-2',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account,
+    localPayload: { ...note, title: 'Second', updatedAt: 20 },
+  });
+  await gate.entered;
+
+  let workerFinished = false;
+  const transition = worker
+    .transition('operation-concurrent-1', 'PREPARING', 'UPLOADING')
+    .then(() => {
+      workerFinished = true;
+    });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(workerFinished, false);
+
+  gate.release();
+  await Promise.all([autosave, transition]);
+  const outbox = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+    string,
+    SyncOutboxOperationV2
+  >;
+  assert.equal(outbox['operation-concurrent-1'].state, 'UPLOADING');
+  assert.equal(outbox['operation-concurrent-2'].state, 'PENDING');
+  assert.equal(outbox['operation-concurrent-2'].dependencyOperationId, 'operation-concurrent-1');
 });
 
 test('manages preserved conflicts separately from retryable outbox failures', async () => {

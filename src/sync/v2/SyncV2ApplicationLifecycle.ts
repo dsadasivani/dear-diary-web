@@ -48,7 +48,7 @@ import {
   wrapAccountRootKeyForRecovery,
 } from '../e2eeKeyPackage';
 import {
-  SYNC_V2_OUTBOX_STORAGE_KEY,
+  reconcileDurableOutboxes,
   type OutboxRepository,
   type SyncOutboxOperationV2,
 } from '../outbox';
@@ -1026,21 +1026,7 @@ export class SyncV2ApplicationLifecycle {
   }
 
   private async reconcileAcknowledgedOutbox(): Promise<void> {
-    const raw = await this.store.getItem(SYNC_V2_OUTBOX_STORAGE_KEY);
-    if (!raw) return;
-    const v2Outbox = JSON.parse(raw) as Record<string, SyncOutboxOperationV2>;
-    const acknowledgedIds = new Set(
-      Object.values(v2Outbox)
-        .filter((operation) => operation.state === 'ACKNOWLEDGED')
-        .map((operation) => operation.operationId),
-    );
-    if (acknowledgedIds.size === 0) return;
-    const legacyOutbox = await this.repository.listSyncOutboxOperations();
-    for (const operation of legacyOutbox) {
-      if (acknowledgedIds.has(operation.operationId)) {
-        await this.repository.removeSyncOutboxOperation(operation.operationId);
-      }
-    }
+    await reconcileDurableOutboxes(this.repository, this.outbox);
   }
 
   private async handleRuntimeError(context: string, error: unknown): Promise<void> {

@@ -3,6 +3,7 @@ import { SyncError } from '../errors';
 import { assertAllowedOutboxTransition } from './OutboxStateMachine';
 import type { OutboxRepository } from './OutboxRepository';
 import { TERMINAL_OUTBOX_V2_STATES, type SyncOutboxOperationV2 } from './SyncOutboxOperationV2';
+import { withSyncOutboxMutationLock } from './SyncOutboxMutationLock';
 
 export const SYNC_V2_OUTBOX_STORAGE_KEY = 'deardiary_sync_outbox_v2';
 const STORAGE_KEY = SYNC_V2_OUTBOX_STORAGE_KEY;
@@ -184,7 +185,8 @@ export class PersistentOutboxRepository implements OutboxRepository {
   }
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.operationTail.then(work, work);
+    const synchronizedWork = () => withSyncOutboxMutationLock(this.store, work);
+    const result = this.operationTail.then(synchronizedWork, synchronizedWork);
     this.operationTail = result.then(
       () => undefined,
       () => undefined,
