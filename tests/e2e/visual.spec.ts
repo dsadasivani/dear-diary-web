@@ -46,10 +46,7 @@ const openSearch = async (page: Page) => {
   await page.getByTestId('nav-search').focus();
   await page.keyboard.press('Enter');
   await expect(
-    page
-      .locator('main')
-      .getByPlaceholder(/Search thoughts|Search keywords/)
-      .first(),
+    page.locator('main').getByRole('searchbox', { name: 'Search memories' }).first(),
   ).toBeVisible();
 };
 

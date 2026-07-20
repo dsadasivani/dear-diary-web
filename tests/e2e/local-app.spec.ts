@@ -57,10 +57,7 @@ const openSearch = async (page: Page) => {
 };
 
 const searchInput = (page: Page): Locator =>
-  page
-    .locator('main')
-    .getByPlaceholder(/Search thoughts|Search keywords/)
-    .first();
+  page.locator('main').getByRole('searchbox', { name: 'Search memories' }).first();
 
 const fillEditor = async (editor: Locator, text: string) => {
   await editor.scrollIntoViewIfNeeded();
@@ -297,7 +294,9 @@ test('local app renders sanitized content and archive availability without execu
   );
   expect(xssFlag).toBeUndefined();
 
-  await expect(page.getByText(/Some older memories are not downloaded/)).toBeVisible();
+  await expect(
+    page.getByText(/Some older memories are not downloaded|archive month not on this device/),
+  ).toBeVisible();
 });
 
 test('settings uses responsive section navigation and isolates section content', async ({
@@ -322,11 +321,12 @@ test('settings uses responsive section navigation and isolates section content',
 
   await sectionNavigation.getByRole('button', { name: /Data & Storage/ }).click();
   await expect(page.getByText('Cloud storage', { exact: true })).toBeVisible();
-  await expect(page.getByText('Local availability', { exact: true })).toBeVisible();
+  await expect(page.getByText('On this device', { exact: true })).toBeVisible();
   await expect(page.getByText('Local sync queue')).not.toBeVisible();
 });
 
 test('appearance offers named color personalities and persists the selection', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await setupUnlockedLocalApp(page);
   await openSettings(page);
 
@@ -350,6 +350,7 @@ test('appearance offers named color personalities and persists the selection', a
     .toBe('#A44735');
 
   await page.getByRole('button', { name: 'Dark Mode' }).click();
+  await expect(page.locator('html')).toHaveClass(/dark/);
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -357,6 +358,13 @@ test('appearance offers named color personalities and persists the selection', a
       ),
     )
     .toBe('#F09A83');
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--color-on-primary').trim(),
+      ),
+    )
+    .toBe('#35130C');
 
   const accessibilityResults = await new AxeBuilder({ page }).analyze();
   const blockingViolations = accessibilityResults.violations.filter(

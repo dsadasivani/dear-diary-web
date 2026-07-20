@@ -75,9 +75,7 @@ describe('redesigned application shell', () => {
       />,
     );
 
-    expect(
-      screen.getByRole('dialog', { name: 'What would you like to capture?' }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Create' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /New Journal Entry/ })).toBeDisabled();
     expect(screen.getAllByText('Create a journal first').length).toBeGreaterThan(0);
     await user.keyboard('{Escape}');

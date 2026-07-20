@@ -1805,7 +1805,13 @@ export default function EntryEditorScreen({
       return;
     }
     isLeavingRef.current = true;
-    onBack();
+    void (async () => {
+      try {
+        await onRefreshEntries();
+      } finally {
+        onBack();
+      }
+    })();
   };
 
   const handleDiscardAndLeave = async () => {

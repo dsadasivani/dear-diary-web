@@ -822,7 +822,7 @@ button:disabled {
   box-shadow: inset 3px 0 0 var(--brand-sage);
 }
 .rail-item.rail-create {
-  color: white;
+  color: var(--color-on-primary);
 }
 
 @media (min-width: 768px) and (max-width: 1199px) {
