@@ -60,7 +60,6 @@ const searchInput = (page: Page): Locator =>
   page.locator('main').getByRole('searchbox', { name: 'Search memories' }).first();
 
 const fillEditor = async (editor: Locator, text: string) => {
-  await editor.scrollIntoViewIfNeeded();
   await editor.fill(text);
 };
 
