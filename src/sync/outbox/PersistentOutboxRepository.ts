@@ -123,6 +123,52 @@ export class PersistentOutboxRepository implements OutboxRepository {
     });
   }
 
+  supersedeConflictAndRebaseDependentDelete(
+    deleteOperationId: string,
+    conflictOperationId: string,
+    baseRecordVersion: number,
+  ): Promise<SyncOutboxOperationV2> {
+    return this.exclusive(async () => {
+      const operations = await this.read();
+      const operation = operations[deleteOperationId];
+      const conflict = operations[conflictOperationId];
+      if (
+        !operation ||
+        operation.state !== 'PENDING' ||
+        operation.operationType !== 'DELETE' ||
+        operation.dependencyOperationId !== conflictOperationId ||
+        !conflict ||
+        conflict.state !== 'CONFLICT' ||
+        conflict.accountId !== operation.accountId ||
+        conflict.recordType !== operation.recordType ||
+        conflict.recordId !== operation.recordId ||
+        !Number.isSafeInteger(baseRecordVersion) ||
+        baseRecordVersion < 0
+      ) {
+        throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+      }
+      assertAllowedOutboxTransition(conflict.state, 'SUPERSEDED');
+      const { dependencyOperationId: _dependency, ...rest } = operation;
+      const rebased = {
+        ...rest,
+        baseRecordVersion,
+        nextAttemptAt: 0,
+        updatedAt: Date.now(),
+      };
+      operations[deleteOperationId] = rebased;
+      operations[conflictOperationId] = {
+        ...conflict,
+        state: 'SUPERSEDED',
+        supersededByOperationId: deleteOperationId,
+        leaseOwner: undefined,
+        leaseExpiresAt: undefined,
+        updatedAt: Date.now(),
+      };
+      await this.write(operations);
+      return clone(rebased);
+    });
+  }
+
   transition(
     operationId: string,
     expectedState: SyncOutboxOperationV2['state'],

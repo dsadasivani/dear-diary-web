@@ -149,6 +149,37 @@ test('dependency operations block claims until acknowledged', async () => {
   );
 });
 
+test('rebases a pending dependent operation and releases it for processing', async () => {
+  const repository = new PersistentOutboxRepository(new MemoryStore());
+  await repository.enqueue({ ...operation('parent', 1), recordId: 'shared-record' });
+  await repository.enqueue({
+    ...operation('child', 2),
+    recordId: 'shared-record',
+    operationType: 'DELETE',
+    baseRecordVersion: 4,
+    dependencyOperationId: 'parent',
+  });
+  await repository.transition('parent', 'PENDING', 'PREPARING');
+  await repository.transition('parent', 'PREPARING', 'CONFLICT');
+
+  const rebased = await repository.supersedeConflictAndRebaseDependentDelete('child', 'parent', 7);
+
+  assert.equal(rebased.baseRecordVersion, 7);
+  assert.equal(rebased.dependencyOperationId, undefined);
+  assert.equal((await repository.getById('parent'))?.state, 'SUPERSEDED');
+  assert.equal(
+    (
+      await repository.claimNextRunnable({
+        accountId: 'account-1',
+        workerId: 'worker',
+        now: Date.now(),
+        leaseDurationMs: 50,
+      })
+    )?.operationId,
+    'child',
+  );
+});
+
 test('compare-and-set transition rejects stale and invalid state changes', async () => {
   const repository = new PersistentOutboxRepository(new MemoryStore());
   await repository.enqueue(operation('op-1'));

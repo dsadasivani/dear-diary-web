@@ -1270,6 +1270,183 @@ test('pullPending resumes a committed outbox write at startup', async () => {
   assert.ok(cursorUpdates.includes(3));
 });
 
+test('rebases a delete blocked by a conflicted write and commits the latest delete intent', async () => {
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
+  const outboxRepository = new PersistentOutboxRepository(store);
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 7,
+    linkedAt: 1,
+  });
+  await store.setItem('deardiary_sync_record_versions', JSON.stringify({ 'entry:entry-1': 7 }));
+  const staleEntry = {
+    id: 'entry-1',
+    diaryId: 'diary-default',
+    date: '2026-07-20',
+    title: 'Stale mobile edit',
+    body: '',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  await repository.saveSyncOutboxOperation({
+    operationId: 'conflicted-upsert',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    partitionKey: 'month:2026-07',
+    affectedPartitionKeys: ['month:2026-07'],
+    recordType: 'entry',
+    recordId: staleEntry.id,
+    operation: 'upsert',
+    payload: staleEntry,
+    baseRecordVersion: 3,
+    state: 'prepared',
+    localApplied: true,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await repository.saveSyncOutboxOperation({
+    operationId: 'dependent-delete',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    partitionKey: 'core',
+    affectedPartitionKeys: ['core'],
+    recordType: 'entry',
+    recordId: staleEntry.id,
+    operation: 'delete',
+    payload: null,
+    baseRecordVersion: 4,
+    dependsOnOperationId: 'conflicted-upsert',
+    state: 'prepared',
+    localApplied: true,
+    createdAt: 2,
+    updatedAt: 2,
+  });
+  await outboxRepository.enqueue({
+    operationId: 'conflicted-upsert',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    recordType: 'ENTRY',
+    recordId: staleEntry.id,
+    operationType: 'UPSERT',
+    baseRecordVersion: 3,
+    state: 'PENDING',
+    retryCount: 0,
+    nextAttemptAt: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await outboxRepository.transition('conflicted-upsert', 'PENDING', 'PREPARING');
+  await outboxRepository.transition('conflicted-upsert', 'PREPARING', 'CONFLICT', {
+    retryCount: 1,
+    lastErrorCode: 'RECORD_VERSION_CONFLICT',
+  });
+  await outboxRepository.enqueue({
+    operationId: 'dependent-delete',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    recordType: 'ENTRY',
+    recordId: staleEntry.id,
+    operationType: 'DELETE',
+    baseRecordVersion: 4,
+    state: 'PENDING',
+    retryCount: 0,
+    nextAttemptAt: 0,
+    dependencyOperationId: 'conflicted-upsert',
+    createdAt: 2,
+    updatedAt: 2,
+  });
+  const device: SyncDevice = {
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
+  };
+  let committedInput: any;
+  const controlPlane = {
+    getDeviceStatus: async () => device,
+    listSyncObjectsAfter: async () => [],
+    updateDeviceCursor: async () => ({}),
+    commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
+      committedInput = input;
+      return {
+        id: 'delete-object-8',
+        accountId: 'account-1',
+        sequence: 8,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: input.recordType,
+        recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion,
+        recordVersion: 8,
+        affectedRecords: [],
+        partitionKey: input.partitionKey,
+      };
+    },
+  } as unknown as SupabaseControlPlaneClient;
+  let uploadedEventBytes: Uint8Array | undefined;
+  const engine = new EventSyncEngine(repository, {
+    isOnline: () => true,
+    now: () => 10,
+    loadSecrets: async () => ({
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
+    }),
+    restoreGoogleSession: async () => ({
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
+    }),
+    createControlPlane: () => controlPlane,
+    upload: async (input) => {
+      uploadedEventBytes = input.bytes;
+      return { id: 'drive-delete-8' };
+    },
+    outboxRepository,
+    outboxWorkerId: 'recovery-worker',
+  });
+
+  await engine.flushPendingOutbox();
+
+  assert.ok(uploadedEventBytes);
+  const decrypted = await decryptSyncPayload(new Uint8Array(32), uploadedEventBytes);
+  const event = JSON.parse(new TextDecoder().decode(decrypted.payload));
+  assert.equal(event.operation, 'delete');
+  assert.equal(committedInput.baseRecordVersion, 7);
+  assert.equal((await outboxRepository.getById('conflicted-upsert'))?.state, 'SUPERSEDED');
+  assert.equal((await outboxRepository.getById('dependent-delete'))?.state, 'ACKNOWLEDGED');
+  assert.equal((await repository.listSyncOutboxOperations()).length, 0);
+});
+
 test('rejects writes while offline without changing local content', async () => {
   const repository = await createRepository();
   const engine = new EventSyncEngine(repository, { isOnline: () => false });
