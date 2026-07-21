@@ -1,7 +1,15 @@
 import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { DriveBackupSettings, GoogleAccountSession, PrimaryRecoveryAttempt, SecurityConfig, SyncAccount, SyncDevice, SyncObjectMetadata } from '../types';
+import type {
+  DriveBackupSettings,
+  GoogleAccountSession,
+  PrimaryRecoveryAttempt,
+  SecurityConfig,
+  SyncAccount,
+  SyncDevice,
+  SyncObjectMetadata,
+} from '../types';
 import {
   bootstrapNewMobileAccount,
   loadPendingPrimaryRecovery,
@@ -26,14 +34,20 @@ import {
   encodePartitionSnapshotPayload,
 } from './syncPartitioning';
 import { encodeRepositorySnapshotPayload } from './syncSnapshot';
-import type { SupabaseControlPlaneClient } from './supabaseControlPlane';
+import { SupabaseControlPlaneError, type SupabaseControlPlaneClient } from './supabaseControlPlane';
 import { createRepository } from './testSupport';
 
 class MemorySecretStorage implements SyncSecretStorage {
   private readonly values = new Map<string, string>();
-  async getItem(key: string): Promise<string | null> { return this.values.get(key) ?? null; }
-  async setItem(key: string, value: string): Promise<void> { this.values.set(key, value); }
-  async removeItem(key: string): Promise<void> { this.values.delete(key); }
+  async getItem(key: string): Promise<string | null> {
+    return this.values.get(key) ?? null;
+  }
+  async setItem(key: string, value: string): Promise<void> {
+    this.values.set(key, value);
+  }
+  async removeItem(key: string): Promise<void> {
+    this.values.delete(key);
+  }
 }
 
 class FailSecondSyncSecretWriteStorage extends MemorySecretStorage {
@@ -50,7 +64,7 @@ class FailSecondSyncSecretWriteStorage extends MemorySecretStorage {
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 const googleSession: GoogleAccountSession = {
@@ -95,21 +109,23 @@ const createPartitionedPendingRecoveryFixture = async () => {
   const secretStorage = new MemorySecretStorage();
   const accountRootKey = crypto.getRandomValues(new Uint8Array(32));
   const deviceKeys = await generateDeviceKeyPair();
-  const recoveryBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
-    accountRootKey,
-    'a sufficiently long passphrase',
-    { accountId: 'account-1' },
-  ));
+  const recoveryBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(accountRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+    }),
+  );
   const snapshot = {
-    diaries: [{
-      id: 'diary-default',
-      name: 'Diary',
-      emoji: 'D',
-      color: '#000',
-      isLocked: false,
-      entryCount: 0,
-      lastUpdated: 'No entries yet',
-    }],
+    diaries: [
+      {
+        id: 'diary-default',
+        name: 'Diary',
+        emoji: 'D',
+        color: '#000',
+        isLocked: false,
+        entryCount: 0,
+        lastUpdated: 'No entries yet',
+      },
+    ],
     entries: [],
     notes: [],
     syncRecordVersions: {},
@@ -306,13 +322,13 @@ const createPartitionedPendingRecoveryFixture = async () => {
       callOrder.push(`cursor:${input.lastAppliedSequence}`);
       return {};
     },
-    listSyncObjectsAfter: async (_deviceId: string, afterSequence: number) => (
-      afterSequence < tailObject.sequence ? [tailObject] : []
-    ),
+    listSyncObjectsAfter: async (_deviceId: string, afterSequence: number) =>
+      afterSequence < tailObject.sequence ? [tailObject] : [],
     finalizePrimaryMobileRecovery: async (input: { restoredSequence: number }) => {
       callOrder.push(`finalize:${input.restoredSequence}`);
       finalizeSequences.push(input.restoredSequence);
-      if (finalizeSequences.length === 1) throw new Error('stale_recovery_sequence');
+      if (finalizeSequences.length === 1)
+        throw new SupabaseControlPlaneError('conflict', 409, { code: 'stale_recovery_sequence' });
       account.activePrimaryDeviceId = device.id;
       return {};
     },
@@ -342,26 +358,30 @@ test('new account setup populates the local profile from Google', async () => {
   const driveFileIds = ['drive-recovery', 'drive-snapshot'];
   globalThis.fetch = (async (_input: RequestInfo | URL, init: RequestInit = {}) => {
     const body = init.body;
-    const bytes = body instanceof Uint8Array
-      ? body
-      : body instanceof ArrayBuffer
-        ? new Uint8Array(body)
-        : typeof body === 'string'
-          ? new TextEncoder().encode(body)
-          : null;
+    const bytes =
+      body instanceof Uint8Array
+        ? body
+        : body instanceof ArrayBuffer
+          ? new Uint8Array(body)
+          : typeof body === 'string'
+            ? new TextEncoder().encode(body)
+            : null;
     if (!bytes) throw new Error('Expected multipart Drive upload body.');
     const text = new TextDecoder().decode(bytes.slice(0, 4096));
     const name = /"name":"([^"]+)"/.exec(text)?.[1] || `upload-${uploadedNames.length + 1}`;
     uploadedNames.push(name);
-    return new Response(JSON.stringify({
-      id: driveFileIds[uploadedNames.length - 1],
-      name,
-      size: String(bytes.byteLength),
-      appProperties: {},
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({
+        id: driveFileIds[uploadedNames.length - 1],
+        name,
+        size: String(bytes.byteLength),
+        appProperties: {},
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
   }) as typeof fetch;
   const account: SyncAccount = {
     id: 'account-1',
@@ -394,7 +414,14 @@ test('new account setup populates the local profile from Google', async () => {
         },
       };
     },
-    commitSyncObject: async (input: { deviceId: string; driveFileId: string; objectKind: SyncObjectMetadata['objectKind']; sha256: string; sizeBytes: number; keyEpoch?: number }): Promise<SyncObjectMetadata> => ({
+    commitSyncObject: async (input: {
+      deviceId: string;
+      driveFileId: string;
+      objectKind: SyncObjectMetadata['objectKind'];
+      sha256: string;
+      sizeBytes: number;
+      keyEpoch?: number;
+    }): Promise<SyncObjectMetadata> => ({
       id: `${input.objectKind}-${input.driveFileId}`,
       accountId: account.id,
       sequence: input.objectKind === 'key_package' ? 1 : 2,
@@ -423,7 +450,7 @@ test('new account setup populates the local profile from Google', async () => {
       controlPlane,
       platform: 'android',
       secretStorage,
-      cacheGoogleAvatar: async imageUrl => {
+      cacheGoogleAvatar: async (imageUrl) => {
         assert.equal(imageUrl, 'https://example.com/avatar.jpg');
         return 'file:///google-avatar.jpg';
       },
@@ -467,17 +494,18 @@ test('explicit create mode refuses to recover an existing account', async () => 
   } as unknown as SupabaseControlPlaneClient;
 
   await assert.rejects(
-    () => bootstrapNewMobileAccount({
-      googleSession,
-      supabaseSession,
-      recoveryPassphrase: '12345678',
-      localPin: '1234',
-      recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
-      repository,
-      controlPlane,
-      accountMode: 'create',
-      preflightAccount: existingAccount,
-    }),
+    () =>
+      bootstrapNewMobileAccount({
+        googleSession,
+        supabaseSession,
+        recoveryPassphrase: '12345678',
+        localPin: '1234',
+        recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+        repository,
+        controlPlane,
+        accountMode: 'create',
+        preflightAccount: existingAccount,
+      }),
     /already exists/i,
   );
 });
@@ -494,17 +522,18 @@ test('explicit recover mode refuses to create when no account exists', async () 
   } as unknown as SupabaseControlPlaneClient;
 
   await assert.rejects(
-    () => bootstrapNewMobileAccount({
-      googleSession,
-      supabaseSession,
-      recoveryPassphrase: 'legacy recovery passphrase',
-      localPin: '1234',
-      recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
-      repository,
-      controlPlane,
-      accountMode: 'recover',
-      preflightAccount: null,
-    }),
+    () =>
+      bootstrapNewMobileAccount({
+        googleSession,
+        supabaseSession,
+        recoveryPassphrase: 'legacy recovery passphrase',
+        localPin: '1234',
+        recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+        repository,
+        controlPlane,
+        accountMode: 'recover',
+        preflightAccount: null,
+      }),
     /no existing encrypted/i,
   );
 });
@@ -556,15 +585,24 @@ test('primary recovery aborts without finalizing when restore fails', async () =
     accountRootKey: originalRootKey,
     accountRootKeys: { 1: originalRootKey },
     devicePrivateKeyJwk: '{}',
-    supabaseSession: { accessToken: 'old-supabase-token', refreshToken: 'old-refresh', expiresAt: 2_000_000_000 },
-    googleSession: { userId: 'old-google', email: 'old@example.com', displayName: 'Old Writer', accessToken: 'old-drive-token' },
+    supabaseSession: {
+      accessToken: 'old-supabase-token',
+      refreshToken: 'old-refresh',
+      expiresAt: 2_000_000_000,
+    },
+    googleSession: {
+      userId: 'old-google',
+      email: 'old@example.com',
+      displayName: 'Old Writer',
+      accessToken: 'old-drive-token',
+    },
   });
   const accountRootKey = crypto.getRandomValues(new Uint8Array(32));
-  const recoveryBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
-    accountRootKey,
-    'a sufficiently long passphrase',
-    { accountId: 'account-1' },
-  ));
+  const recoveryBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(accountRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+    }),
+  );
   const badManifestBytes = new TextEncoder().encode('not an encrypted manifest');
   const recoveryObject: SyncObjectMetadata = {
     id: 'recovery-object',
@@ -670,27 +708,34 @@ test('primary recovery aborts without finalizing when restore fails', async () =
   ]);
   const warnings: string[] = [];
   const originalWarn = console.warn;
-  console.warn = (...args: unknown[]) => { warnings.push(String(args[0])); };
+  console.warn = (...args: unknown[]) => {
+    warnings.push(String(args[0]));
+  };
 
   try {
     await assert.rejects(
-      () => bootstrapNewMobileAccount({
-        googleSession: {
-          userId: 'google-1',
-          email: 'writer@example.com',
-          displayName: 'Writer',
-          accessToken: 'drive-token',
-        },
-        supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
-        recoveryPassphrase: 'a sufficiently long passphrase',
-        localPin: '1234',
-        recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
-        repository,
-        controlPlane,
-        displayName: 'Phone',
-        platform: 'android',
-        download: async (_session, fileId) => files.get(fileId)!,
-      }),
+      () =>
+        bootstrapNewMobileAccount({
+          googleSession: {
+            userId: 'google-1',
+            email: 'writer@example.com',
+            displayName: 'Writer',
+            accessToken: 'drive-token',
+          },
+          supabaseSession: {
+            accessToken: 'supabase-token',
+            refreshToken: 'refresh',
+            expiresAt: 2_000_000_000,
+          },
+          recoveryPassphrase: 'a sufficiently long passphrase',
+          localPin: '1234',
+          recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+          repository,
+          controlPlane,
+          displayName: 'Phone',
+          platform: 'android',
+          download: async (_session, fileId) => files.get(fileId)!,
+        }),
       /authentication failed|manifest|invalid|checksum|unexpected token|json/i,
     );
   } finally {
@@ -711,31 +756,35 @@ test('primary recovery aborts without finalizing when restore fails', async () =
 test('primary recovery falls back to legacy snapshot when partitioned manifest restore fails', async () => {
   const repository = await createRepository();
   const accountRootKey = crypto.getRandomValues(new Uint8Array(32));
-  const recoveryBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
-    accountRootKey,
-    'a sufficiently long passphrase',
-    { accountId: 'account-1' },
-  ));
+  const recoveryBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(accountRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+    }),
+  );
   const snapshot = {
-    diaries: [{
-      id: 'diary-default',
-      name: 'Diary',
-      emoji: 'D',
-      color: '#000',
-      isLocked: false,
-      entryCount: 0,
-      lastUpdated: 'No entries yet',
-    }],
+    diaries: [
+      {
+        id: 'diary-default',
+        name: 'Diary',
+        emoji: 'D',
+        color: '#000',
+        isLocked: false,
+        entryCount: 0,
+        lastUpdated: 'No entries yet',
+      },
+    ],
     entries: [],
-    notes: [{
-      id: 'note-legacy',
-      title: 'Legacy note',
-      body: 'Restored after manifest failure.',
-      isPinned: false,
-      tags: [],
-      createdAt: 1,
-      updatedAt: 1,
-    }],
+    notes: [
+      {
+        id: 'note-legacy',
+        title: 'Legacy note',
+        body: 'Restored after manifest failure.',
+        isPinned: false,
+        tags: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
     syncRecordVersions: {},
     syncMediaPointers: {},
   };
@@ -853,7 +902,9 @@ test('primary recovery falls back to legacy snapshot when partitioned manifest r
   ]);
   const warnings: string[] = [];
   const originalWarn = console.warn;
-  console.warn = (...args: unknown[]) => { warnings.push(String(args[0])); };
+  console.warn = (...args: unknown[]) => {
+    warnings.push(String(args[0]));
+  };
 
   try {
     const result = await bootstrapNewMobileAccount({
@@ -883,22 +934,25 @@ test('primary recovery falls back to legacy snapshot when partitioned manifest r
 
 test('primary recovery finalizes after partition restore and stale tail replay', async () => {
   const repository = await createRepository();
+  await repository.saveSecurityConfig(recoveredSecurityConfig);
   const accountRootKey = crypto.getRandomValues(new Uint8Array(32));
-  const recoveryBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
-    accountRootKey,
-    'a sufficiently long passphrase',
-    { accountId: 'account-1' },
-  ));
+  const recoveryBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(accountRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+    }),
+  );
   const snapshot = {
-    diaries: [{
-      id: 'diary-default',
-      name: 'Diary',
-      emoji: 'D',
-      color: '#000',
-      isLocked: false,
-      entryCount: 0,
-      lastUpdated: 'No entries yet',
-    }],
+    diaries: [
+      {
+        id: 'diary-default',
+        name: 'Diary',
+        emoji: 'D',
+        color: '#000',
+        isLocked: false,
+        entryCount: 0,
+        lastUpdated: 'No entries yet',
+      },
+    ],
     entries: [],
     notes: [],
     syncRecordVersions: {},
@@ -1063,23 +1117,25 @@ test('primary recovery finalizes after partition restore and stale tail replay',
     }),
     getPartitionRestoreBundle: async (_deviceId: string, partitionKeys: string[]) => {
       assert.deepEqual(partitionKeys, ['core']);
-      return [{
-        partitionKey: 'core',
-        snapshotObject: coreObject,
-        tailObjects: [],
-      }];
+      return [
+        {
+          partitionKey: 'core',
+          snapshotObject: coreObject,
+          tailObjects: [],
+        },
+      ];
     },
     updateDeviceCursor: async (input: { lastAppliedSequence: number }) => {
       callOrder.push(`cursor:${input.lastAppliedSequence}`);
       return {};
     },
-    listSyncObjectsAfter: async (_deviceId: string, afterSequence: number) => (
-      afterSequence < tailObject.sequence ? [tailObject] : []
-    ),
+    listSyncObjectsAfter: async (_deviceId: string, afterSequence: number) =>
+      afterSequence < tailObject.sequence ? [tailObject] : [],
     finalizePrimaryMobileRecovery: async (input: { restoredSequence: number }) => {
       callOrder.push(`finalize:${input.restoredSequence}`);
       finalizeSequences.push(input.restoredSequence);
-      if (finalizeSequences.length === 1) throw new Error('stale_recovery_sequence');
+      if (finalizeSequences.length === 1)
+        throw new SupabaseControlPlaneError('conflict', 409, { code: 'stale_recovery_sequence' });
       return {};
     },
     abortPrimaryMobileRecovery: async () => {
@@ -1100,10 +1156,14 @@ test('primary recovery finalizes after partition restore and stale tail replay',
       displayName: 'Writer',
       accessToken: 'drive-token',
     },
-    supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+    supabaseSession: {
+      accessToken: 'supabase-token',
+      refreshToken: 'refresh',
+      expiresAt: 2_000_000_000,
+    },
     recoveryPassphrase: 'a sufficiently long passphrase',
     localPin: '1234',
-    recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+    recoveryQuestion: { questionId: 'first-pet', answer: '' },
     repository,
     controlPlane,
     displayName: 'Phone',
@@ -1116,6 +1176,10 @@ test('primary recovery finalizes after partition restore and stale tail replay',
   assert.deepEqual(callOrder, ['cursor:5', 'finalize:5', 'cursor:6', 'finalize:6']);
   assert.equal((await repository.getNote(tailNote.id))?.title, 'Tail note');
   assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 6);
+  assert.equal(
+    (await repository.getSecurityConfig()).recoveryAnswerHash,
+    recoveredSecurityConfig.recoveryAnswerHash,
+  );
 });
 
 test('primary recovery restores partition snapshots encrypted with older key epochs', async () => {
@@ -1123,26 +1187,32 @@ test('primary recovery restores partition snapshots encrypted with older key epo
   const secretStorage = new MemorySecretStorage();
   const epochOneRootKey = crypto.getRandomValues(new Uint8Array(32));
   const epochTwoRootKey = crypto.getRandomValues(new Uint8Array(32));
-  const recoveryOneBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
-    epochOneRootKey,
-    'a sufficiently long passphrase',
-    { accountId: 'account-1', keyEpoch: 1, keyVersion: 1 },
-  ));
-  const recoveryTwoBytes = encodeRecoveryKeyPackage(await wrapAccountRootKeyForRecovery(
-    epochTwoRootKey,
-    'a sufficiently long passphrase',
-    { accountId: 'account-1', keyEpoch: 2, keyVersion: 2 },
-  ));
+  const recoveryOneBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(epochOneRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+      keyEpoch: 1,
+      keyVersion: 1,
+    }),
+  );
+  const recoveryTwoBytes = encodeRecoveryKeyPackage(
+    await wrapAccountRootKeyForRecovery(epochTwoRootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+      keyEpoch: 2,
+      keyVersion: 2,
+    }),
+  );
   const snapshot = {
-    diaries: [{
-      id: 'diary-default',
-      name: 'Diary',
-      emoji: 'D',
-      color: '#000',
-      isLocked: false,
-      entryCount: 0,
-      lastUpdated: 'No entries yet',
-    }],
+    diaries: [
+      {
+        id: 'diary-default',
+        name: 'Diary',
+        emoji: 'D',
+        color: '#000',
+        isLocked: false,
+        entryCount: 0,
+        lastUpdated: 'No entries yet',
+      },
+    ],
     entries: [],
     notes: [],
     syncRecordVersions: {},
@@ -1344,23 +1414,26 @@ test('primary recovery keeps its journal when final cleanup fails after server f
   } as unknown as SupabaseControlPlaneClient;
   const warnings: string[] = [];
   const originalWarn = console.warn;
-  console.warn = (...args: unknown[]) => { warnings.push(String(args[0])); };
+  console.warn = (...args: unknown[]) => {
+    warnings.push(String(args[0]));
+  };
 
   try {
     await assert.rejects(
-      () => bootstrapNewMobileAccount({
-        googleSession,
-        supabaseSession,
-        recoveryPassphrase: 'a sufficiently long passphrase',
-        localPin: '1234',
-        recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
-        repository: fixture.repository,
-        controlPlane,
-        displayName: 'Phone',
-        platform: 'android',
-        download: async (_session, fileId) => fixture.files.get(fileId)!,
-        secretStorage,
-      }),
+      () =>
+        bootstrapNewMobileAccount({
+          googleSession,
+          supabaseSession,
+          recoveryPassphrase: 'a sufficiently long passphrase',
+          localPin: '1234',
+          recoveryQuestion: { questionId: 'first-pet', answer: 'Answer' },
+          repository: fixture.repository,
+          controlPlane,
+          displayName: 'Phone',
+          platform: 'android',
+          download: async (_session, fileId) => fixture.files.get(fileId)!,
+          secretStorage,
+        }),
       /post-finalize secret write failure/,
     );
   } finally {
@@ -1372,7 +1445,10 @@ test('primary recovery keeps its journal when final cleanup fails after server f
   assert.equal(fixture.pending.account.activePrimaryDeviceId, fixture.pending.device.id);
   assert.deepEqual(fixture.finalizeSequences, [5, 6]);
   assert.equal((await fixture.repository.getNote(fixture.tailNote.id))?.title, 'Tail note');
-  assert.equal((await fixture.repository.getLocalSyncAccountState())?.deviceId, fixture.pending.device.id);
+  assert.equal(
+    (await fixture.repository.getLocalSyncAccountState())?.deviceId,
+    fixture.pending.device.id,
+  );
   assert.equal((await loadSyncSecrets(secretStorage))?.accountId, fixture.pending.account.id);
   assert.equal((await loadPendingPrimaryRecovery(secretStorage))?.phase, 'server_finalized');
 });
@@ -1401,7 +1477,10 @@ test('primary recovery resumes a registered pending attempt without the passphra
   assert.equal((await fixture.repository.getNote(fixture.tailNote.id))?.title, 'Tail note');
   assert.equal((await fixture.repository.getLocalSyncAccountState())?.currentSyncSequence, 6);
   assert.equal((await fixture.repository.getSecurityConfig()).linkedGoogleUserId, 'google-1');
-  assert.deepEqual((await loadSyncSecrets(fixture.secretStorage))?.accountRootKey, fixture.accountRootKey);
+  assert.deepEqual(
+    (await loadSyncSecrets(fixture.secretStorage))?.accountRootKey,
+    fixture.accountRootKey,
+  );
   assert.equal(await loadPendingPrimaryRecovery(fixture.secretStorage), null);
 });
 
@@ -1425,15 +1504,18 @@ test('primary recovery resume clears the journal when server finalize already su
     keyEpoch: 1,
     linkedAt: 1,
   });
-  await saveSyncSecrets({
-    version: 1,
-    accountId: pending.account.id,
-    accountRootKey: fixture.accountRootKey,
-    accountRootKeys: { 1: fixture.accountRootKey },
-    devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
-    supabaseSession,
-    googleSession,
-  }, fixture.secretStorage);
+  await saveSyncSecrets(
+    {
+      version: 1,
+      accountId: pending.account.id,
+      accountRootKey: fixture.accountRootKey,
+      accountRootKeys: { 1: fixture.accountRootKey },
+      devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
+      supabaseSession,
+      googleSession,
+    },
+    fixture.secretStorage,
+  );
   await savePendingPrimaryRecoverySecret(pending, fixture.secretStorage);
   const controlPlane = {
     lookupCurrentGoogleAccount: async () => ({
@@ -1442,7 +1524,9 @@ test('primary recovery resume clears the journal when server finalize already su
       currentSyncSequence: 6,
     }),
     finalizePrimaryMobileRecovery: async () => {
-      throw new Error('recovery_attempt_not_pending');
+      throw new SupabaseControlPlaneError('conflict', 409, {
+        code: 'recovery_attempt_not_pending',
+      });
     },
     updateDeviceCursor: async () => {
       throw new Error('cursor should not be updated again');
@@ -1458,6 +1542,9 @@ test('primary recovery resume clears the journal when server finalize already su
 
   assert.equal(result.status, 'completed');
   assert.equal(result.primaryDeviceId, pending.device.id);
-  assert.deepEqual((await loadSyncSecrets(fixture.secretStorage))?.accountRootKey, fixture.accountRootKey);
+  assert.deepEqual(
+    (await loadSyncSecrets(fixture.secretStorage))?.accountRootKey,
+    fixture.accountRootKey,
+  );
   assert.equal(await loadPendingPrimaryRecovery(fixture.secretStorage), null);
 });

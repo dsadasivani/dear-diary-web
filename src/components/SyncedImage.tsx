@@ -2,7 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { eventSyncEngine } from '../repositories';
 import { parseSyncMediaReference } from '../sync/syncMedia';
 
-interface SyncedImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src' | 'onClick'> {
+interface SyncedImageProps extends Omit<
+  React.ImgHTMLAttributes<HTMLImageElement>,
+  'src' | 'onClick'
+> {
   src: string;
   fallbackSrc?: string;
   label?: string;
@@ -12,16 +15,26 @@ interface SyncedImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement
 const resolvedCache = new Map<string, string>();
 const inFlight = new Map<string, Promise<string>>();
 const MAX_CACHE_SIZE = 100;
-const TRANSPARENT_PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+const TRANSPARENT_PLACEHOLDER_SRC =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
 const classifyHydrationError = (error: unknown): string => {
   const message = String((error as { message?: unknown })?.message || '').toLowerCase();
   if (typeof navigator !== 'undefined' && !navigator.onLine) return 'Offline. Tap to retry.';
-  if (message.includes('authorization') || message.includes('sign in') || message.includes('session')) {
+  if (
+    message.includes('authorization') ||
+    message.includes('sign in') ||
+    message.includes('session')
+  ) {
     return 'Authorization required. Tap to retry.';
   }
-  if (message.includes('missing') || message.includes('not found')) return 'Object missing. Tap to retry.';
-  if (message.includes('integrity') || message.includes('verification') || message.includes('authentication')) {
+  if (message.includes('missing') || message.includes('not found'))
+    return 'Object missing. Tap to retry.';
+  if (
+    message.includes('integrity') ||
+    message.includes('verification') ||
+    message.includes('authentication')
+  ) {
     return 'Integrity check failed. Tap to retry.';
   }
   return 'Image unavailable. Tap to retry.';
@@ -42,13 +55,14 @@ const hydrateReference = (reference: string, label: string): Promise<string> => 
   if (cached) return Promise.resolve(cached);
   const existing = inFlight.get(reference);
   if (existing) return existing;
-  const pending = eventSyncEngine.hydrateMediaReference(reference, label)
-    .then(resolved => {
+  const pending = eventSyncEngine
+    .hydrateMediaReference(reference, label)
+    .then((resolved) => {
       rememberResolved(reference, resolved);
       inFlight.delete(reference);
       return resolved;
     })
-    .catch(error => {
+    .catch((error) => {
       inFlight.delete(reference);
       throw error;
     });
@@ -66,12 +80,14 @@ export default function SyncedImage({
   ...imgProps
 }: SyncedImageProps) {
   const imageRef = useRef<HTMLImageElement | null>(null);
-  const [resolvedSrc, setResolvedSrc] = useState<string | null>(() => (
-    parseSyncMediaReference(src) ? resolvedCache.get(src) || null : src
-  ));
+  const [resolvedSrc, setResolvedSrc] = useState<string | null>(() =>
+    parseSyncMediaReference(src) ? resolvedCache.get(src) || null : src,
+  );
   const [hydrationError, setHydrationError] = useState('');
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
-  const [isVisible, setIsVisible] = useState(() => !parseSyncMediaReference(src) || resolvedCache.has(src));
+  const [isVisible, setIsVisible] = useState(
+    () => !parseSyncMediaReference(src) || resolvedCache.has(src),
+  );
   const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
@@ -90,12 +106,15 @@ export default function SyncedImage({
     }
     const node = imageRef.current;
     if (!node) return undefined;
-    const observer = new IntersectionObserver(entries => {
-      if (entries.some(entry => entry.isIntersecting)) {
-        setIsVisible(true);
-        observer.disconnect();
-      }
-    }, { rootMargin: '240px' });
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setIsVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '240px' },
+    );
     observer.observe(node);
     return () => observer.disconnect();
   }, [src]);
@@ -109,10 +128,10 @@ export default function SyncedImage({
     if (!isVisible) return;
 
     void hydrateReference(src, label)
-      .then(resolved => {
+      .then((resolved) => {
         if (!cancelled) setResolvedSrc(resolved);
       })
-      .catch(error => {
+      .catch((error) => {
         console.warn(`Synced ${label} could not be shown yet:`, error);
         if (!cancelled) {
           setHydrationError(classifyHydrationError(error));
@@ -124,7 +143,9 @@ export default function SyncedImage({
     };
   }, [isVisible, label, retryNonce, src]);
 
-  const displaySrc = hydrationError ? (fallbackSrc || TRANSPARENT_PLACEHOLDER_SRC) : resolvedSrc || TRANSPARENT_PLACEHOLDER_SRC;
+  const displaySrc = hydrationError
+    ? fallbackSrc || TRANSPARENT_PLACEHOLDER_SRC
+    : resolvedSrc || TRANSPARENT_PLACEHOLDER_SRC;
   const isPlaceholder = displaySrc === TRANSPARENT_PLACEHOLDER_SRC;
   const hydrationFailed = Boolean(hydrationError);
   const isSkeleton = isPlaceholder || loadedSrc !== displaySrc;
@@ -136,14 +157,20 @@ export default function SyncedImage({
     }
 
     const node = imageRef.current;
-    setLoadedSrc(node?.complete && node.naturalWidth > 0 ? displaySrc : null);
+    setLoadedSrc((current) =>
+      current === displaySrc || (node?.complete && node.naturalWidth > 0) ? displaySrc : null,
+    );
   }, [displaySrc, isPlaceholder]);
 
   const displayClassName = [
     className,
-    isSkeleton ? 'synced-image-skeleton ring-1 ring-inset ring-brand-border/45 dark:ring-white/10' : '',
+    isSkeleton
+      ? 'synced-image-skeleton ring-1 ring-inset ring-brand-border/45 dark:ring-white/10'
+      : '',
     isSkeleton && !hydrationFailed ? 'animate-pulse' : '',
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
   const clickableSrc = resolvedSrc && !hydrationFailed ? resolvedSrc : null;
 
   return (
@@ -177,9 +204,9 @@ export default function SyncedImage({
             setResolvedSrc(null);
             setLoadedSrc(null);
             setHydrationError('');
-            setRetryNonce(value => value + 1);
+            setRetryNonce((value) => value + 1);
           }}
-          className="absolute inset-0 flex items-center justify-center bg-brand-plum/55 px-2 text-center text-[10px] font-extrabold uppercase tracking-wide text-white"
+          className="absolute inset-0 flex items-center justify-center bg-brand-plum/55 px-2 text-center text-xs font-extrabold uppercase tracking-wide text-white"
         >
           {hydrationError}
         </button>

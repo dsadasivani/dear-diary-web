@@ -168,9 +168,10 @@ const camelPrimaryRecoveryAttempt = (row: any): PrimaryRecoveryAttempt => ({
   status: row.status,
   startedAt: row.started_at,
   finalizedAt: row.finalized_at || null,
-  restoredSequence: row.restored_sequence === null || row.restored_sequence === undefined
-    ? null
-    : Number(row.restored_sequence),
+  restoredSequence:
+    row.restored_sequence === null || row.restored_sequence === undefined
+      ? null
+      : Number(row.restored_sequence),
 });
 
 const camelKeyEpochRotation = (row: any): KeyEpochRotation => ({
@@ -181,9 +182,10 @@ const camelKeyEpochRotation = (row: any): KeyEpochRotation => ({
   reason: row.reason,
   nextKeyEpoch: Number(row.next_key_epoch),
   startingSequence: Number(row.starting_sequence || 0),
-  keyPackageSequence: row.key_package_sequence === null || row.key_package_sequence === undefined
-    ? null
-    : Number(row.key_package_sequence),
+  keyPackageSequence:
+    row.key_package_sequence === null || row.key_package_sequence === undefined
+      ? null
+      : Number(row.key_package_sequence),
   status: row.status,
   createdAt: row.created_at,
   finalizedAt: row.finalized_at || null,
@@ -201,12 +203,14 @@ const camelSyncObject = (row: any): SyncObjectMetadata => ({
   createdAt: row.created_at,
   recordType: row.record_type || null,
   recordId: row.record_id || null,
-  baseRecordVersion: row.base_record_version === null || row.base_record_version === undefined
-    ? null
-    : Number(row.base_record_version),
-  recordVersion: row.record_version === null || row.record_version === undefined
-    ? null
-    : Number(row.record_version),
+  baseRecordVersion:
+    row.base_record_version === null || row.base_record_version === undefined
+      ? null
+      : Number(row.base_record_version),
+  recordVersion:
+    row.record_version === null || row.record_version === undefined
+      ? null
+      : Number(row.record_version),
   affectedRecords: Array.isArray(row.affected_records)
     ? row.affected_records.map((record: any) => ({
         recordType: record.record_type,
@@ -217,7 +221,9 @@ const camelSyncObject = (row: any): SyncObjectMetadata => ({
     : [],
   retiredAt: row.retired_at || null,
   partitionKey: row.partition_key || null,
-  affectedPartitionKeys: Array.isArray(row.affected_partition_keys) ? row.affected_partition_keys : [],
+  affectedPartitionKeys: Array.isArray(row.affected_partition_keys)
+    ? row.affected_partition_keys
+    : [],
   operationId: row.operation_id || null,
   keyEpoch: Number(row.key_epoch || 1),
 });
@@ -259,9 +265,10 @@ const camelPairingSession = (row: any): PairingSession => ({
   approvedDeviceId: row.approved_device_id,
   keyPackageDriveFileId: row.key_package_drive_file_id,
   keyPackageSha256: row.key_package_sha256,
-  keyPackageSizeBytes: row.key_package_size_bytes === null || row.key_package_size_bytes === undefined
-    ? null
-    : Number(row.key_package_size_bytes),
+  keyPackageSizeBytes:
+    row.key_package_size_bytes === null || row.key_package_size_bytes === undefined
+      ? null
+      : Number(row.key_package_size_bytes),
 });
 
 const camelPairingDetails = (row: any): PairingSessionDetails => ({
@@ -295,7 +302,11 @@ const createTimeoutSignal = (timeoutMs: number): { signal: AbortSignal; cancel: 
   };
 };
 
-const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> => {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -312,12 +323,17 @@ const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: 
 export class SupabaseControlPlaneError extends Error {
   readonly status: number;
   readonly detail: unknown;
+  readonly providerCode?: string;
 
   constructor(message: string, status: number, detail: unknown) {
     super(message);
     this.name = 'SupabaseControlPlaneError';
     this.status = status;
     this.detail = detail;
+    this.providerCode =
+      typeof (detail as { code?: unknown } | null)?.code === 'string'
+        ? (detail as { code: string }).code
+        : undefined;
   }
 }
 
@@ -335,7 +351,9 @@ export class SupabaseControlPlaneClient {
     return row ? camelAccount(row) : null;
   }
 
-  async createPrimaryMobileAccount(input: CreatePrimaryMobileInput): Promise<{ account: SyncAccount; device: SyncDevice }> {
+  async createPrimaryMobileAccount(
+    input: CreatePrimaryMobileInput,
+  ): Promise<{ account: SyncAccount; device: SyncDevice }> {
     const row = await this.rpc<any>('create_primary_mobile_account', {
       p_google_user_id: input.googleUserId,
       p_google_email: input.googleEmail,
@@ -350,7 +368,9 @@ export class SupabaseControlPlaneClient {
     };
   }
 
-  async transferPrimaryMobile(input: RegisterPrimaryTransferInput): Promise<{ account: SyncAccount; device: SyncDevice; revokedDevices: SyncDevice[] }> {
+  async transferPrimaryMobile(
+    input: RegisterPrimaryTransferInput,
+  ): Promise<{ account: SyncAccount; device: SyncDevice; revokedDevices: SyncDevice[] }> {
     const row = await this.rpc<any>('transfer_primary_mobile', {
       p_google_user_id: input.googleUserId,
       p_google_email: input.googleEmail,
@@ -407,11 +427,16 @@ export class SupabaseControlPlaneClient {
     };
   }
 
-  async abortPrimaryMobileRecovery(recoveryAttemptId: string, deviceId: string): Promise<PrimaryRecoveryAttempt> {
-    return camelPrimaryRecoveryAttempt(await this.rpc<any>('abort_primary_mobile_recovery', {
-      p_recovery_attempt_id: recoveryAttemptId,
-      p_device_id: deviceId,
-    }));
+  async abortPrimaryMobileRecovery(
+    recoveryAttemptId: string,
+    deviceId: string,
+  ): Promise<PrimaryRecoveryAttempt> {
+    return camelPrimaryRecoveryAttempt(
+      await this.rpc<any>('abort_primary_mobile_recovery', {
+        p_recovery_attempt_id: recoveryAttemptId,
+        p_device_id: deviceId,
+      }),
+    );
   }
 
   async getDeviceStatus(deviceId: string): Promise<SyncDevice | null> {
@@ -437,7 +462,7 @@ export class SupabaseControlPlaneClient {
       p_record_type: input.recordType || null,
       p_record_id: input.recordId || null,
       p_base_record_version: input.baseRecordVersion ?? null,
-      p_affected_records: (input.affectedRecords || []).map(record => ({
+      p_affected_records: (input.affectedRecords || []).map((record) => ({
         record_type: record.recordType,
         record_id: record.recordId,
         base_record_version: record.baseRecordVersion,
@@ -455,7 +480,7 @@ export class SupabaseControlPlaneClient {
     const rows = await this.rpc<any[]>('commit_sync_batch', {
       p_device_id: input.deviceId,
       p_operation_id: input.operationId,
-      p_objects: input.objects.map(object => ({
+      p_objects: input.objects.map((object) => ({
         drive_file_id: object.driveFileId,
         object_kind: object.objectKind,
         sha256: object.sha256,
@@ -465,7 +490,7 @@ export class SupabaseControlPlaneClient {
       p_record_type: input.recordType || null,
       p_record_id: input.recordId || null,
       p_base_record_version: input.baseRecordVersion ?? null,
-      p_affected_records: (input.affectedRecords || []).map(record => ({
+      p_affected_records: (input.affectedRecords || []).map((record) => ({
         record_type: record.recordType,
         record_id: record.recordId,
         base_record_version: record.baseRecordVersion,
@@ -478,7 +503,11 @@ export class SupabaseControlPlaneClient {
     return rows.map(camelSyncObject);
   }
 
-  async listSyncObjectsAfter(deviceId: string, afterSequence: number, limit = 100): Promise<SyncObjectMetadata[]> {
+  async listSyncObjectsAfter(
+    deviceId: string,
+    afterSequence: number,
+    limit = 100,
+  ): Promise<SyncObjectMetadata[]> {
     const rows = await this.rpc<any[]>('list_sync_objects_after', {
       p_device_id: deviceId,
       p_after_sequence: afterSequence,
@@ -511,22 +540,29 @@ export class SupabaseControlPlaneClient {
     const row = await this.rpc<any>('get_latest_restore_manifest', { p_device_id: deviceId });
     return {
       manifestObject: row.manifest_object ? camelSyncObject(row.manifest_object) : null,
-      coreSnapshotObject: row.core_snapshot_object ? camelSyncObject(row.core_snapshot_object) : null,
+      coreSnapshotObject: row.core_snapshot_object
+        ? camelSyncObject(row.core_snapshot_object)
+        : null,
       currentSyncSequence: Number(row.current_sync_sequence || 0),
       keyEpoch: Number(row.key_epoch || 1),
     };
   }
 
-  async getPartitionRestoreBundle(deviceId: string, partitionKeys: string[]): Promise<{
-    partitionKey: string;
-    snapshotObject: SyncObjectMetadata | null;
-    tailObjects: SyncObjectMetadata[];
-  }[]> {
+  async getPartitionRestoreBundle(
+    deviceId: string,
+    partitionKeys: string[],
+  ): Promise<
+    {
+      partitionKey: string;
+      snapshotObject: SyncObjectMetadata | null;
+      tailObjects: SyncObjectMetadata[];
+    }[]
+  > {
     const rows = await this.rpc<any[]>('get_partition_restore_bundle', {
       p_device_id: deviceId,
       p_partition_keys: partitionKeys,
     });
-    return rows.map(row => ({
+    return rows.map((row) => ({
       partitionKey: row.partition_key,
       snapshotObject: row.snapshot_object ? camelSyncObject(row.snapshot_object) : null,
       tailObjects: (row.tail_objects || []).map(camelSyncObject),
@@ -573,7 +609,9 @@ export class SupabaseControlPlaneClient {
   }
 
   async getPairingSession(sessionId: string): Promise<PairingSessionDetails> {
-    return camelPairingDetails(await this.rpc<any>('get_pairing_session', { p_session_id: sessionId }));
+    return camelPairingDetails(
+      await this.rpc<any>('get_pairing_session', { p_session_id: sessionId }),
+    );
   }
 
   async listPendingPairingSessions(primaryDeviceId: string): Promise<PairingSession[]> {
@@ -614,11 +652,13 @@ export class SupabaseControlPlaneClient {
   }
 
   async beginDeviceKeyRotation(input: BeginDeviceKeyRotationInput): Promise<KeyEpochRotation> {
-    return camelKeyEpochRotation(await this.rpc<any>('begin_device_key_rotation', {
-      p_primary_device_id: input.primaryDeviceId,
-      p_revoked_device_id: input.deviceId,
-      p_reason: input.reason,
-    }));
+    return camelKeyEpochRotation(
+      await this.rpc<any>('begin_device_key_rotation', {
+        p_primary_device_id: input.primaryDeviceId,
+        p_revoked_device_id: input.deviceId,
+        p_reason: input.reason,
+      }),
+    );
   }
 
   async finalizeDeviceKeyRotation(input: FinalizeDeviceKeyRotationInput): Promise<{
@@ -638,14 +678,22 @@ export class SupabaseControlPlaneClient {
     };
   }
 
-  async abortDeviceKeyRotation(primaryDeviceId: string, rotationId: string): Promise<KeyEpochRotation> {
-    return camelKeyEpochRotation(await this.rpc<any>('abort_device_key_rotation', {
-      p_primary_device_id: primaryDeviceId,
-      p_rotation_id: rotationId,
-    }));
+  async abortDeviceKeyRotation(
+    primaryDeviceId: string,
+    rotationId: string,
+  ): Promise<KeyEpochRotation> {
+    return camelKeyEpochRotation(
+      await this.rpc<any>('abort_device_key_rotation', {
+        p_primary_device_id: primaryDeviceId,
+        p_rotation_id: rotationId,
+      }),
+    );
   }
 
-  async retireKeyPackages(primaryDeviceId: string, driveFileIds: string[]): Promise<SyncObjectMetadata[]> {
+  async retireKeyPackages(
+    primaryDeviceId: string,
+    driveFileIds: string[],
+  ): Promise<SyncObjectMetadata[]> {
     const rows = await this.rpc<any[]>('retire_key_packages', {
       p_primary_device_id: primaryDeviceId,
       p_drive_file_ids: driveFileIds,
@@ -666,7 +714,10 @@ export class SupabaseControlPlaneClient {
     return rows.map(camelSyncObject);
   }
 
-  async retireSnapshots(primaryDeviceId: string, driveFileIds: string[]): Promise<SyncObjectMetadata[]> {
+  async retireSnapshots(
+    primaryDeviceId: string,
+    driveFileIds: string[],
+  ): Promise<SyncObjectMetadata[]> {
     const rows = await this.rpc<any[]>('retire_snapshots', {
       p_primary_device_id: primaryDeviceId,
       p_drive_file_ids: driveFileIds,
@@ -674,7 +725,10 @@ export class SupabaseControlPlaneClient {
     return rows.map(camelSyncObject);
   }
 
-  async retireSyncObjects(primaryDeviceId: string, driveFileIds: string[]): Promise<SyncObjectMetadata[]> {
+  async retireSyncObjects(
+    primaryDeviceId: string,
+    driveFileIds: string[],
+  ): Promise<SyncObjectMetadata[]> {
     const rows = await this.rpc<any[]>('retire_sync_objects', {
       p_primary_device_id: primaryDeviceId,
       p_drive_file_ids: driveFileIds,
@@ -683,47 +737,55 @@ export class SupabaseControlPlaneClient {
   }
 
   private async rpc<T>(functionName: string, payload: Record<string, unknown>): Promise<T> {
-    return measureAsync('sync.supabase.rpc', async () => {
-      const accessToken = typeof this.config.accessToken === 'function'
-        ? await this.config.accessToken()
-        : this.config.accessToken;
-      const timeoutMs = this.config.timeoutMs || DEFAULT_RPC_TIMEOUT_MS;
-      const timeout = createTimeoutSignal(timeoutMs);
-      let response: Response;
-      try {
-        response = await withTimeout(
-          this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/${functionName}`, {
-            method: 'POST',
-            headers: {
-              apikey: this.config.anonKey,
-              Authorization: `Bearer ${accessToken || this.config.anonKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-            signal: timeout.signal,
-          }),
-          timeoutMs,
-          `Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`,
-        );
-      } catch (error: any) {
-        if (error?.name === 'AbortError') {
-          throw new Error(`Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`);
+    return measureAsync(
+      'sync.supabase.rpc',
+      async () => {
+        const accessToken =
+          typeof this.config.accessToken === 'function'
+            ? await this.config.accessToken()
+            : this.config.accessToken;
+        const timeoutMs = this.config.timeoutMs || DEFAULT_RPC_TIMEOUT_MS;
+        const timeout = createTimeoutSignal(timeoutMs);
+        let response: Response;
+        try {
+          response = await withTimeout(
+            this.fetchImpl(`${this.baseUrl}/rest/v1/rpc/${functionName}`, {
+              method: 'POST',
+              headers: {
+                apikey: this.config.anonKey,
+                Authorization: `Bearer ${accessToken || this.config.anonKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(payload),
+              signal: timeout.signal,
+            }),
+            timeoutMs,
+            `Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`,
+          );
+        } catch (error: any) {
+          if (error?.name === 'AbortError') {
+            throw new Error(
+              `Supabase control-plane request timed out while calling ${functionName}. Check the emulator network connection and try again.`,
+            );
+          }
+          throw error;
+        } finally {
+          timeout.cancel();
         }
-        throw error;
-      } finally {
-        timeout.cancel();
-      }
 
-      if (!response.ok) {
-        const detail = await response.json().catch(() => ({}));
-        const message = typeof detail?.message === 'string'
-          ? detail.message
-          : `Supabase control-plane request failed (${response.status}).`;
-        throw new SupabaseControlPlaneError(message, response.status, detail);
-      }
+        if (!response.ok) {
+          const detail = await response.json().catch(() => ({}));
+          const message =
+            typeof detail?.message === 'string'
+              ? detail.message
+              : `Supabase control-plane request failed (${response.status}).`;
+          throw new SupabaseControlPlaneError(message, response.status, detail);
+        }
 
-      return response.json() as Promise<T>;
-    }, { functionName, payloadKeys: Object.keys(payload).sort() });
+        return response.json() as Promise<T>;
+      },
+      { functionName, payloadKeys: Object.keys(payload).sort() },
+    );
   }
 }
 

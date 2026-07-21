@@ -19,7 +19,7 @@ import type { EventSyncEngine } from './eventSyncEngine';
 
 const sha256 = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 export const rotateRecoveryPassphrase = async (input: {
@@ -31,14 +31,21 @@ export const rotateRecoveryPassphrase = async (input: {
   await input.syncEngine.pullPending();
   const state = await input.repository.getLocalSyncAccountState();
   const secrets = await loadSyncSecrets();
-  if (!state || state.deviceRole !== 'primary_mobile' || !secrets || secrets.accountId !== state.accountId) {
+  if (
+    !state ||
+    state.deviceRole !== 'primary_mobile' ||
+    !secrets ||
+    secrets.accountId !== state.accountId
+  ) {
     throw new Error('Only the active primary mobile can rotate the recovery passphrase.');
   }
   const googleSession = isNativePlatform()
     ? await restoreGoogleDriveSession(false)
     : secrets.googleSession || null;
   if (!googleSession?.accessToken) throw new Error('Google Drive authorization is required.');
-  const controlPlane = createConfiguredSupabaseControlPlaneClient(secrets.supabaseSession.accessToken);
+  const controlPlane = createConfiguredSupabaseControlPlaneClient(
+    secrets.supabaseSession.accessToken,
+  );
   const objects: SyncObjectMetadata[] = [];
   let afterSequence = 0;
   while (true) {
@@ -49,9 +56,11 @@ export const rotateRecoveryPassphrase = async (input: {
   }
   const oldRecoveryObjects = [];
   let keyVersion = 1;
-  for (const object of objects.filter(candidate => candidate.objectKind === 'key_package')) {
+  for (const object of objects.filter((candidate) => candidate.objectKind === 'key_package')) {
     try {
-      const keyPackage = decodeRecoveryKeyPackage(await downloadDriveSyncObject(googleSession, object.driveFileId));
+      const keyPackage = decodeRecoveryKeyPackage(
+        await downloadDriveSyncObject(googleSession, object.driveFileId),
+      );
       if (keyPackage.accountId && keyPackage.accountId !== state.accountId) continue;
       oldRecoveryObjects.push(object);
       keyVersion = Math.max(keyVersion, keyPackage.keyVersion + 1);
@@ -93,13 +102,20 @@ export const rotateRecoveryPassphrase = async (input: {
     recoveryKeyDriveFileId: committed.driveFileId,
     currentSyncSequence: committed.sequence,
   });
-  await controlPlane.updateDeviceCursor({ deviceId: state.deviceId, lastAppliedSequence: committed.sequence });
+  await controlPlane.updateDeviceCursor({
+    deviceId: state.deviceId,
+    lastAppliedSequence: committed.sequence,
+  });
 
-  const oldFileIds = oldRecoveryObjects.map(object => object.driveFileId);
+  const oldFileIds = oldRecoveryObjects.map((object) => object.driveFileId);
   if (oldFileIds.length > 0) {
     await controlPlane.retireKeyPackages(state.deviceId, oldFileIds);
-    await Promise.all(oldFileIds.map(fileId => deleteDriveSyncObject(googleSession, fileId).catch(error => {
-      console.warn('Retired recovery key package could not be deleted from Drive:', error);
-    })));
+    await Promise.all(
+      oldFileIds.map((fileId) =>
+        deleteDriveSyncObject(googleSession, fileId).catch((error) => {
+          console.warn('Retired recovery key package could not be deleted from Drive:', error);
+        }),
+      ),
+    );
   }
 };

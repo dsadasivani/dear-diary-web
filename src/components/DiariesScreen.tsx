@@ -1,830 +1,663 @@
-import React, { useState, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  BookOpen, Plus, Lock, ArrowLeft, Check, List, LayoutGrid, Upload, Search
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from 'react';
+import {
+  ArrowLeft,
+  Check,
+  ImagePlus,
+  LayoutGrid,
+  List,
+  Lock,
+  Plus,
+  SlidersHorizontal,
+  Trash2,
 } from 'lucide-react';
-import { Diary, ResponsiveLayout } from '../types';
+import type { Diary, ResponsiveLayout } from '../types';
 import { PREDEFINED_COLORS } from '../domain/journalCatalog';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
 import { persistOptimizedImageFile } from '../mobile/mediaStorage';
+import { triggerImpact, triggerSuccess } from '../mobile/haptics';
 import { diaryRepository } from '../repositories';
+import JournalCover from './JournalCover';
+import {
+  AppButton,
+  EmptyState,
+  FilterChip,
+  IconButton,
+  PaperSurface,
+  SearchField,
+  SectionHeader,
+} from './UiPrimitives';
+import { BottomSheet } from './ui/BottomSheet';
+import { ProgressIndicator } from './ui/Feedback';
+import { useAmbientTheme } from '../design/ambientTheme';
 
-type DiaryViewMode = 'compact' | 'list';
+type DiaryViewMode = 'gallery' | 'list';
+type DiarySort = 'updated' | 'name' | 'entries' | 'created';
+type DiaryFilter = 'all' | 'locked' | 'unlocked' | 'empty';
 
 interface DiariesScreenProps {
   diaries: Diary[];
   layout?: ResponsiveLayout;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onRefreshDiaries: () => void | Promise<void>;
+  onFocusedFlowChange?: (active: boolean, onBack?: () => void) => void;
 }
 
 const EMOJI_OPTIONS = ['📔', '✈️', '🌙', '🌿', '🎨', '💼', '☕', '🏠', '🔑', '📝', '🌸', '✨'];
-const FOIL_ICON_OPTIONS = ['⭐', '👑', '🕊️', '🍀', '🗝️', '💎', '🌙', '☀️', '🌸', '✨', '🔥', '🦁', '🦉', '🪐', '🐚', '🛡️'];
+const FOIL_ICON_OPTIONS = ['⭐', '👑', '🕊️', '🍀', '🗝️', '💎', '🌙', '☀️', '🌸', '✨', '🔥', '🪐'];
+const STEP_LABELS = ['Name & privacy', 'Cover', 'Decoration', 'Review'];
 
-export default function DiariesScreen({ 
-  diaries, 
+export default function DiariesScreen({
+  diaries,
   layout = 'mobile',
   onNavigate,
-  onRefreshDiaries
+  onRefreshDiaries,
+  onFocusedFlowChange,
 }: DiariesScreenProps) {
-  const [showCreateForm, setShowCreateForm] = useState<boolean>(false);
-  const [diarySearch, setDiarySearch] = useState('');
-  
-  // View mode state: compact (uniform grid), list (classic list)
-  const [viewMode, setViewMode] = useState<DiaryViewMode>(() => {
-    return localStorage.getItem('deardiary_diary_viewmode') === 'list' ? 'list' : 'compact';
-  });
+  const { setAmbientContext, resetAmbientContext } = useAmbientTheme();
+  const [creating, setCreating] = useState(false);
+  const [creationStep, setCreationStep] = useState(0);
+  const [showLibraryControls, setShowLibraryControls] = useState(false);
+  const [query, setQuery] = useState('');
+  const [viewMode, setViewMode] = useState<DiaryViewMode>(() =>
+    localStorage.getItem('deardiary_diary_viewmode') === 'list' ? 'list' : 'gallery',
+  );
+  const [sortBy, setSortBy] = useState<DiarySort>('updated');
+  const [filterBy, setFilterBy] = useState<DiaryFilter>('all');
+  const [name, setName] = useState('');
+  const [emoji, setEmoji] = useState('📔');
+  const [color, setColor] = useState(PREDEFINED_COLORS[0].hex);
+  const [locked, setLocked] = useState(false);
+  const [coverImage, setCoverImage] = useState<string>();
+  const [foilIcons, setFoilIcons] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const coverInputRef = useRef<HTMLInputElement>(null);
 
-  const handleViewModeChange = (mode: DiaryViewMode) => {
+  useEffect(() => {
+    setAmbientContext({ journalColor: color || diaries[0]?.color || null });
+    return resetAmbientContext;
+  }, [color, diaries, resetAmbientContext, setAmbientContext]);
+
+  const closeCreator = useCallback(() => {
+    setName('');
+    setEmoji('📔');
+    setColor(PREDEFINED_COLORS[0].hex);
+    setLocked(false);
+    setCoverImage(undefined);
+    setFoilIcons([]);
+    setCreationStep(0);
+    setCreating(false);
+  }, []);
+
+  useEffect(() => {
+    if (!creating) {
+      onFocusedFlowChange?.(false);
+      return;
+    }
+    onFocusedFlowChange?.(true, closeCreator);
+    return () => onFocusedFlowChange?.(false);
+  }, [closeCreator, creating, onFocusedFlowChange]);
+
+  const visible = useMemo(
+    () =>
+      diaries
+        .filter(
+          (diary) => !query.trim() || diary.name.toLowerCase().includes(query.trim().toLowerCase()),
+        )
+        .filter(
+          (diary) =>
+            filterBy === 'all' ||
+            (filterBy === 'locked' && diary.isLocked) ||
+            (filterBy === 'unlocked' && !diary.isLocked) ||
+            (filterBy === 'empty' && diary.entryCount === 0),
+        )
+        .sort((left, right) => {
+          if (sortBy === 'name') return left.name.localeCompare(right.name);
+          if (sortBy === 'entries') return right.entryCount - left.entryCount;
+          if (sortBy === 'created') return diaries.indexOf(right) - diaries.indexOf(left);
+          return (right.lastEntryUpdatedAt || 0) - (left.lastEntryUpdatedAt || 0);
+        }),
+    [diaries, filterBy, query, sortBy],
+  );
+
+  const latest = useMemo(
+    () =>
+      [...diaries].sort(
+        (left, right) => (right.lastEntryUpdatedAt || 0) - (left.lastEntryUpdatedAt || 0),
+      )[0],
+    [diaries],
+  );
+  const totalEntries = diaries.reduce((sum, diary) => sum + diary.entryCount, 0);
+
+  const setMode = (mode: DiaryViewMode) => {
     setViewMode(mode);
     localStorage.setItem('deardiary_diary_viewmode', mode);
     persistNativeLocalStorageItem('deardiary_diary_viewmode', mode);
   };
 
-  // New diary form state
-  const [diaryName, setDiaryName] = useState<string>('');
-  const [diaryDesc, setDiaryDesc] = useState<string>('');
-  const [selectedEmoji, setSelectedEmoji] = useState<string>('📔');
-  const [selectedColor, setSelectedColor] = useState<string>(PREDEFINED_COLORS[0].hex);
-  const [isLocked, setIsLocked] = useState<boolean>(false);
-  
-  // Custom cover and foil icon state
-  const [coverImage, setCoverImage] = useState<string | undefined>(undefined);
-  const [selectedFoilIcons, setSelectedFoilIcons] = useState<string[]>([]);
-  const coverFileInputRef = useRef<HTMLInputElement>(null);
-
-  const totalEntries = diaries.reduce((sum, diary) => sum + diary.entryCount, 0);
-  const visibleDiaries = diaries.filter(diary => (
-    !diarySearch.trim() ||
-    diary.name.toLowerCase().includes(diarySearch.trim().toLowerCase())
-  ));
-
-  const handleDiaryClick = (diary: Diary) => {
-    onNavigate('diaries', 'diaryDetail', diary.id);
-  };
-
-  const handleCoverImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    void persistOptimizedImageFile(file, 'cover')
-      .then(setCoverImage)
-      .catch(error => {
-        console.warn('Cover image could not be attached:', error);
+  const createJournal = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    try {
+      await diaryRepository.createDiary({
+        name: name.trim(),
+        emoji,
+        color,
+        isLocked: locked,
+        coverImage,
+        foilIcons,
       });
-    e.target.value = '';
-  };
-
-  const handleFoilIconToggle = (icon: string) => {
-    if (selectedFoilIcons.includes(icon)) {
-      setSelectedFoilIcons(prev => prev.filter(i => i !== icon));
-    } else {
-      if (selectedFoilIcons.length >= 4) {
-        return; // Max 4 foil icons
-      }
-      setSelectedFoilIcons(prev => [...prev, icon]);
+      await onRefreshDiaries();
+      void triggerSuccess();
+      closeCreator();
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleCreateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!diaryName.trim()) return;
-
-    await diaryRepository.createDiary({
-      name: diaryName,
-      emoji: selectedEmoji,
-      color: selectedColor,
-      isLocked,
-      coverImage,
-      foilIcons: selectedFoilIcons,
+  const moveToStep = (step: number) => {
+    setCreationStep(Math.min(3, Math.max(0, step)));
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      document.scrollingElement?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     });
-    await onRefreshDiaries();
-    
-    // Reset form
-    setDiaryName('');
-    setDiaryDesc('');
-    setSelectedEmoji('📔');
-    setSelectedColor(PREDEFINED_COLORS[0].hex);
-    setIsLocked(false);
-    setCoverImage(undefined);
-    setSelectedFoilIcons([]);
-    setShowCreateForm(false);
+    void triggerImpact('light');
   };
 
-  if (layout === 'desktop' && !showCreateForm) {
+  const uploadCover = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    void persistOptimizedImageFile(file, 'cover')
+      .then(setCoverImage)
+      .catch((error) => console.warn('Cover image could not be attached:', error));
+  };
+
+  if (creating) {
+    const preview: Diary = {
+      id: 'preview',
+      name: name || 'Untitled journal',
+      emoji,
+      color,
+      isLocked: locked,
+      entryCount: 0,
+      lastUpdated: 'Now',
+      coverImage,
+      foilIcons,
+    };
     return (
-      <div className="space-y-7">
-        <header className="flex items-start justify-between gap-6">
-          <div>
-            <h1 className="font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
-              Diaries Library
+      <form onSubmit={createJournal} className="mx-auto w-full max-w-5xl pb-10">
+        <header className="surface-glass-strong sticky top-0 z-30 -mx-1 flex items-center justify-between gap-3 rounded-[var(--radius-modal)] px-2 py-2">
+          <IconButton label="Back to journals" onClick={closeCreator}>
+            <ArrowLeft className="h-5 w-5" />
+          </IconButton>
+          <div className="min-w-0 text-center">
+            <p className="app-eyebrow">Step {creationStep + 1} of 4</p>
+            <h1 className="truncate font-serif-diary text-2xl font-semibold">
+              {STEP_LABELS[creationStep]}
             </h1>
-            <p className="mt-2 text-lg text-brand-text-muted">Your collection of safe spaces and quiet reflections.</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowCreateForm(true)}
-            className="inline-flex items-center gap-2 rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark"
-          >
-            <Plus className="h-4 w-4" />
-            Start New
-          </button>
+          {creationStep === 3 ? (
+            <AppButton type="submit" tone="primary" disabled={!name.trim() || saving}>
+              {saving ? 'Creating…' : 'Create Journal'}
+            </AppButton>
+          ) : (
+            <span className="w-11" aria-hidden="true" />
+          )}
         </header>
 
-        <section className="grid grid-cols-3 gap-4">
-          <div className="rounded-[22px] border border-brand-border bg-white/65 p-5 shadow-sm dark:bg-brand-card-bg/60">
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-sage">Diaries</p>
-            <p className="mt-2 font-serif-diary text-3xl font-semibold text-brand-plum dark:text-brand-text">{diaries.length}</p>
-          </div>
-          <div className="rounded-[22px] border border-brand-border bg-white/65 p-5 shadow-sm dark:bg-brand-card-bg/60">
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-sage">Entries</p>
-            <p className="mt-2 font-serif-diary text-3xl font-semibold text-brand-plum dark:text-brand-text">{totalEntries}</p>
-          </div>
-          <div className="rounded-[22px] border border-brand-border bg-white/65 p-5 shadow-sm dark:bg-brand-card-bg/60">
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-sage">Last Updated</p>
-            <p className="mt-2 font-serif-diary text-3xl font-semibold text-brand-plum dark:text-brand-text">{diaries[0]?.lastUpdated || 'Today'}</p>
-          </div>
-        </section>
+        <ProgressIndicator
+          value={creationStep + 1}
+          max={4}
+          label={`Journal setup: ${STEP_LABELS[creationStep]}`}
+          className="mx-auto mt-5 max-w-md px-2"
+        />
 
-        <section className="flex items-center gap-4 rounded-[26px] border border-brand-border bg-white/68 p-3 shadow-[0_14px_44px_rgba(62,36,41,0.07)] dark:bg-brand-card-bg/60">
-          <div className="relative min-w-0 flex-1">
-            <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-brand-text-muted" />
-            <input
-              type="text"
-              value={diarySearch}
-              onChange={(event) => setDiarySearch(event.target.value)}
-              placeholder="Search within diaries..."
-              className="w-full rounded-2xl border border-transparent bg-transparent py-3 pl-12 pr-4 text-base font-semibold text-brand-plum outline-none placeholder:text-brand-text-muted/55 focus:border-brand-border focus:bg-white dark:text-brand-text"
-            />
+        <div
+          className={`mt-8 grid gap-8 ${layout === 'mobile' ? '' : 'grid-cols-[minmax(210px,280px)_minmax(0,1fr)] items-start'}`}
+        >
+          <div
+            className={`${layout === 'mobile' ? '' : 'sticky top-28'} flex flex-col items-center`}
+          >
+            <JournalCover diary={preview} variant="preview" className="w-44 md:w-52" />
+            <p className="type-metadata mt-4 hidden max-w-52 text-center sm:block">
+              Your journal stays on this device and follows your encrypted sync settings.
+            </p>
           </div>
-          <div className="flex items-center gap-1 rounded-xl bg-brand-bg/70 p-1">
-            <button
-              type="button"
-              onClick={() => handleViewModeChange('compact')}
-              className={`rounded-lg p-3 transition-all ${viewMode === 'compact' ? 'bg-white text-brand-sage shadow-sm' : 'text-brand-text-muted hover:text-brand-sage'}`}
-              title="Grid view"
-            >
-              <LayoutGrid className="h-5 w-5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => handleViewModeChange('list')}
-              className={`rounded-lg p-3 transition-all ${viewMode === 'list' ? 'bg-white text-brand-sage shadow-sm' : 'text-brand-text-muted hover:text-brand-sage'}`}
-              title="List view"
-            >
-              <List className="h-5 w-5" />
-            </button>
-          </div>
-        </section>
 
-        {viewMode === 'compact' ? (
-          <section className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-5">
-            {visibleDiaries.map(diary => (
-              <button
-                key={diary.id}
-                type="button"
-                onClick={() => handleDiaryClick(diary)}
-                className="group relative min-h-[248px] overflow-hidden rounded-[28px] border border-brand-border bg-white/76 p-6 text-left shadow-[0_16px_44px_rgba(62,36,41,0.07)] transition-all hover:-translate-y-1 hover:bg-white hover:shadow-[0_24px_60px_rgba(62,36,41,0.11)] dark:bg-brand-card-bg/70"
-              >
-                <div className="absolute inset-x-0 top-0 h-24 opacity-[0.18]" style={{ background: `linear-gradient(135deg, ${diary.color}, transparent)` }} />
-                <div className="flex items-start justify-between">
-                  <span className="flex h-16 w-16 items-center justify-center rounded-3xl text-3xl shadow-inner" style={{ backgroundColor: diary.color }}>
-                    {diary.emoji}
+          <main className="space-y-5" aria-live="polite">
+            {creationStep === 0 && (
+              <PaperSurface className="space-y-5 p-5 md:p-7">
+                <label className="block text-sm font-bold text-ink">
+                  Journal name
+                  <input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="e.g., Evening Reflections"
+                    autoFocus={layout !== 'mobile'}
+                    className="mt-2 min-h-12 w-full border-0 border-b border-[var(--border-strong)] bg-transparent px-0 font-serif-diary text-2xl text-ink outline-none placeholder:text-ink-tertiary focus:border-accent"
+                  />
+                </label>
+                <label className="flex min-h-14 items-center justify-between gap-4 border-t border-[var(--border-subtle)] pt-4">
+                  <span>
+                    <span className="block text-sm font-bold">Private journal lock</span>
+                    <span className="mt-1 block text-xs leading-relaxed text-ink-secondary">
+                      Ask for PIN or biometrics when opened.
+                    </span>
                   </span>
-                  {diary.isLocked ? (
-                    <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-brand-border bg-brand-bg text-brand-text-muted">
-                      <Lock className="h-4 w-4" />
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-brand-bg/70 px-3 py-1 text-xs font-bold text-brand-text-muted">
-                      {diary.lastUpdated}
-                    </span>
-                  )}
-                </div>
-                <div className="relative mt-12">
-                  <h2 className="font-serif-diary text-3xl font-bold leading-tight text-brand-plum transition-colors group-hover:text-brand-pink-dark dark:text-brand-text">
-                    {diary.name}
-                  </h2>
-                  <p className="mt-3 text-sm leading-relaxed text-brand-text-muted">
-                    {diary.entryCount > 0 ? `${diary.entryCount} private entries` : 'A quiet space ready for its first reflection.'}
-                  </p>
-                </div>
-                <div className="relative mt-5 h-1.5 overflow-hidden rounded-full bg-brand-border/40">
-                  <span className="block h-full w-1/2 rounded-full bg-brand-sage/70 transition-all group-hover:w-3/4" />
-                </div>
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setShowCreateForm(true)}
-              className="flex min-h-[248px] flex-col items-center justify-center rounded-[28px] border-2 border-dashed border-brand-border bg-white/38 p-6 text-center transition-all hover:border-brand-sage hover:bg-white/66 dark:bg-brand-card-bg/35"
-            >
-              <span className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-blush-light text-brand-sage">
-                <Plus className="h-7 w-7" />
-              </span>
-              <h2 className="mt-6 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">Start New</h2>
-              <p className="mt-2 text-sm font-semibold text-brand-text-muted">Create a new theme or safe space.</p>
-            </button>
-          </section>
-        ) : (
-          <section className="divide-y divide-brand-border overflow-hidden rounded-2xl border border-brand-border bg-white/60 dark:bg-brand-card-bg/60">
-            {visibleDiaries.map(diary => (
-              <button
-                key={diary.id}
-                type="button"
-                onClick={() => handleDiaryClick(diary)}
-                className="flex w-full items-center gap-5 px-6 py-5 text-left transition-colors hover:bg-brand-blush-light/40"
-              >
-                <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-2xl shadow-inner" style={{ backgroundColor: diary.color }}>
-                  {diary.emoji}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">{diary.name}</span>
-                  <span className="text-sm font-semibold text-brand-text-muted">{diary.entryCount} entries {' '}&bull;{' '}{diary.lastUpdated}</span>
-                </span>
-                {diary.isLocked && <Lock className="h-5 w-5 text-brand-text-muted" />}
-              </button>
-            ))}
-          </section>
-        )}
+                  <input
+                    type="checkbox"
+                    checked={locked}
+                    onChange={(event) => setLocked(event.target.checked)}
+                    className="h-5 w-5 accent-brand-sage"
+                  />
+                </label>
+              </PaperSurface>
+            )}
 
-        {visibleDiaries.length === 0 && (
-          <section className="rounded-2xl border border-dashed border-brand-border bg-white/45 p-12 text-center">
-            <BookOpen className="mx-auto h-10 w-10 text-brand-sage" />
-            <h2 className="mt-4 font-serif-diary text-2xl font-bold text-brand-plum dark:text-brand-text">No matching diaries</h2>
-            <p className="mt-2 text-sm text-brand-text-muted">Try a different search term or start a new diary.</p>
-          </section>
-        )}
-      </div>
+            {creationStep === 1 && (
+              <PaperSurface className="space-y-7 p-5 md:p-7">
+                <div>
+                  <p className="text-sm font-bold">Cover image</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <AppButton onClick={() => coverInputRef.current?.click()}>
+                      <ImagePlus className="h-4 w-4" />
+                      {coverImage ? 'Change image' : 'Choose image'}
+                    </AppButton>
+                    {coverImage && (
+                      <AppButton tone="quiet" onClick={() => setCoverImage(undefined)}>
+                        <Trash2 className="h-4 w-4" />
+                        Remove
+                      </AppButton>
+                    )}
+                    <input
+                      ref={coverInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={uploadCover}
+                      className="hidden"
+                    />
+                  </div>
+                </div>
+                <fieldset>
+                  <legend className="text-sm font-bold">Cover color</legend>
+                  <div className="mt-3 grid grid-cols-6 gap-3">
+                    {PREDEFINED_COLORS.map((option) => (
+                      <button
+                        key={option.hex}
+                        type="button"
+                        aria-label={`Use ${option.name} cover color`}
+                        aria-pressed={color === option.hex}
+                        disabled={Boolean(coverImage)}
+                        onClick={() => setColor(option.hex)}
+                        className="aspect-square rounded-full border border-black/10 shadow-sm disabled:opacity-35"
+                        style={{ backgroundColor: option.hex }}
+                      >
+                        {color === option.hex && !coverImage && (
+                          <Check className="mx-auto h-5 w-5 text-white" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+              </PaperSurface>
+            )}
+
+            {creationStep === 2 && (
+              <PaperSurface className="space-y-7 p-5 md:p-7">
+                <fieldset>
+                  <legend className="text-sm font-bold">Personal emblem</legend>
+                  <p className="type-supporting mt-1 hidden sm:block">
+                    Choose one quiet mark for the journal spine.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {EMOJI_OPTIONS.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        aria-label={`Use ${option} as journal emblem`}
+                        aria-pressed={emoji === option}
+                        onClick={() => setEmoji(option)}
+                        className={`h-11 w-11 rounded-full text-xl ${emoji === option ? 'border-2 border-accent bg-accent-soft' : 'border border-[var(--border-subtle)] bg-surface'}`}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+                <fieldset>
+                  <legend className="text-sm font-bold">Foil marks ({foilIcons.length}/4)</legend>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {FOIL_ICON_OPTIONS.map((option) => {
+                      const selected = foilIcons.includes(option);
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          aria-label={`${selected ? 'Remove' : 'Add'} ${option} foil mark`}
+                          aria-pressed={selected}
+                          onClick={() =>
+                            setFoilIcons((current) =>
+                              selected
+                                ? current.filter((item) => item !== option)
+                                : current.length < 4
+                                  ? [...current, option]
+                                  : current,
+                            )
+                          }
+                          className={`h-11 w-11 rounded-full text-lg ${selected ? 'border-2 border-amber-600 bg-amber-50 text-amber-900' : 'border border-[var(--border-subtle)] bg-surface'}`}
+                        >
+                          {option}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              </PaperSurface>
+            )}
+
+            {creationStep === 3 && (
+              <PaperSurface className="p-5 md:p-7">
+                <p className="app-eyebrow hidden sm:block">Ready for the shelf</p>
+                <h2 className="mt-2 font-serif-diary text-3xl font-semibold">
+                  {name || 'Untitled journal'}
+                </h2>
+                <dl className="mt-6 divide-y divide-[var(--border-subtle)] text-sm">
+                  <div className="flex justify-between py-3">
+                    <dt className="text-ink-secondary">Privacy</dt>
+                    <dd className="font-bold">{locked ? 'Locked' : 'Uses app lock'}</dd>
+                  </div>
+                  <div className="flex justify-between py-3">
+                    <dt className="text-ink-secondary">Cover</dt>
+                    <dd className="font-bold">{coverImage ? 'Custom image' : 'Color cover'}</dd>
+                  </div>
+                  <div className="flex justify-between py-3">
+                    <dt className="text-ink-secondary">Decoration</dt>
+                    <dd className="font-bold">
+                      {foilIcons.length ? `${foilIcons.length} foil marks` : 'Emblem only'}
+                    </dd>
+                  </div>
+                </dl>
+              </PaperSurface>
+            )}
+
+            <footer className="surface-glass-strong sticky bottom-[var(--safe-area-inset-bottom)] z-20 -mx-2 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] px-2 pb-2 pt-4">
+              {creationStep > 0 ? (
+                <AppButton onClick={() => moveToStep(creationStep - 1)}>Back</AppButton>
+              ) : (
+                <span />
+              )}
+              <div className="flex flex-wrap justify-end gap-2">
+                {creationStep === 0 && (
+                  <AppButton type="submit" tone="quiet" disabled={!name.trim() || saving}>
+                    Create Journal
+                  </AppButton>
+                )}
+                {creationStep < 3 && (
+                  <AppButton
+                    tone="primary"
+                    disabled={creationStep === 0 && !name.trim()}
+                    onClick={() => moveToStep(creationStep + 1)}
+                  >
+                    {creationStep === 0
+                      ? 'Customize appearance (optional)'
+                      : creationStep === 2
+                        ? 'Review'
+                        : 'Next'}
+                  </AppButton>
+                )}
+                {creationStep === 3 && (
+                  <AppButton type="submit" tone="primary" disabled={!name.trim() || saving}>
+                    {saving ? 'Creating…' : 'Create Journal'}
+                  </AppButton>
+                )}
+              </div>
+            </footer>
+          </main>
+        </div>
+      </form>
     );
   }
 
+  const libraryControls = (
+    <>
+      <label className="block text-sm font-bold" htmlFor="journal-sort">
+        Sort journals
+        <select
+          id="journal-sort"
+          value={sortBy}
+          onChange={(event) => setSortBy(event.target.value as DiarySort)}
+          className="mt-2 min-h-11 w-full rounded-[var(--radius-control)] border border-[var(--border-subtle)] bg-surface px-3 text-sm font-bold"
+        >
+          <option value="updated">Recently updated</option>
+          <option value="name">Name</option>
+          <option value="entries">Most entries</option>
+          <option value="created">Newest created</option>
+        </select>
+      </label>
+      <fieldset className="mt-5">
+        <legend className="text-sm font-bold">View</legend>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <AppButton
+            onClick={() => setMode('gallery')}
+            tone={viewMode === 'gallery' ? 'primary' : 'secondary'}
+          >
+            <LayoutGrid className="h-4 w-4" />
+            Gallery
+          </AppButton>
+          <AppButton
+            onClick={() => setMode('list')}
+            tone={viewMode === 'list' ? 'primary' : 'secondary'}
+          >
+            <List className="h-4 w-4" />
+            List
+          </AppButton>
+        </div>
+      </fieldset>
+    </>
+  );
+
   return (
-    <div className="flex flex-col gap-6 font-sans relative">
-      <AnimatePresence mode="wait">
-        {!showCreateForm ? (
-          /* DIARIES LIST SCREEN WITH TWO VIEW OPTIONS */
-          <motion.div
-            key="list"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="flex flex-col gap-6"
-          >
-            {/* Header */}
-            <header className="flex justify-between items-center bg-brand-bg/95 backdrop-blur-md sticky top-0 py-3 z-30 select-none">
-              <div className="flex items-center gap-3">
-                <span className="p-2.5 bg-brand-pink/10 text-brand-pink rounded-2xl">
-                  <BookOpen className="w-5 h-5" />
-                </span>
-                <h1 className="font-serif-diary text-3xl text-brand-plum tracking-tight font-bold">Dear Diary</h1>
-              </div>
-              <div className="text-[10px] font-extrabold text-brand-pink tracking-widest uppercase bg-brand-pink/5 px-4 py-2 rounded-full border border-brand-pink/10">
-                {diaries.length} Books • {totalEntries} Entries
-              </div>
-            </header>
-
-            {/* Title & View Selector Section */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/40 dark:bg-brand-card-bg/20 p-4 rounded-3xl border border-brand-border/30">
-              <div className="space-y-1">
-                <h2 className="font-serif-diary text-2xl font-bold text-brand-plum italic">Your Bookcases</h2>
-                <p className="text-xs text-brand-text-muted font-medium">Click on a journal to flip open its pages and explore your journey.</p>
-              </div>
-
-              {/* View Selector Buttons */}
-              <div className="flex items-center gap-1 bg-white/90 dark:bg-brand-card-bg/90 border border-brand-border p-1 rounded-2xl shadow-sm self-start sm:self-auto">
-                <button
-                  onClick={() => handleViewModeChange('compact')}
-                  className={`p-2.5 rounded-xl transition-all ${
-                    viewMode === 'compact'
-                      ? 'bg-brand-pink text-white shadow-md'
-                      : 'text-brand-sage hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
-                  }`}
-                  title="Compact Cover View"
-                >
-                  <LayoutGrid className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => handleViewModeChange('list')}
-                  className={`p-2.5 rounded-xl transition-all ${
-                    viewMode === 'list'
-                      ? 'bg-brand-pink text-white shadow-md'
-                      : 'text-brand-sage hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
-                  }`}
-                  title="Classic List View"
-                >
-                  <List className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* CONDITIONAL RENDER BY VIEW MODE */}
-            <AnimatePresence mode="wait">
-              {viewMode === 'compact' && (
-                /* COMPACT CARD VIEW (UNIFORM GRID) */
-                <motion.div
-                  key="compact"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="grid grid-cols-2 sm:grid-cols-3 gap-5 pb-24"
-                >
-                  {diaries.map((diary) => (
-                    <motion.div
-                      key={diary.id}
-                      whileHover={{ y: -6 }}
-                      transition={{ type: "spring", stiffness: 260, damping: 20 }}
-                      onClick={() => handleDiaryClick(diary)}
-                      className="group relative aspect-[3/4.2] cursor-pointer select-none"
-                    >
-                      {/* Double-layered realistic skeuomorphic shadow (shady effect) */}
-                      <div className="absolute inset-y-1 left-3 right-1 bg-black/35 blur-[2px] rounded-r-xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-1 group-hover:translate-y-1 group-hover:blur-[3px] group-hover:bg-black/40" />
-                      <div className="absolute inset-y-3 left-4 right-0 bg-black/15 blur-lg rounded-r-xl pointer-events-none z-0 transition-all duration-300 group-hover:translate-x-2 group-hover:translate-y-2 group-hover:blur-xl group-hover:bg-black/20" />
-
-                      {/* Tactile Satin Bookmark Ribbon */}
-                      <div 
-                        className="absolute bottom-[-10px] right-6 w-2.5 h-5 rounded-b shadow-[1px_2px_4px_rgba(0,0,0,0.3)] z-0 origin-top group-hover:scale-y-115 transition-all duration-300" 
-                        style={{ backgroundColor: diary.color === '#8A3D55' ? '#DCA153' : '#8A3D55' }}
-                      />
-
-                      {/* Realistic Layered Pages peeking out from right and bottom */}
-                      <div className="absolute top-[3px] bottom-[3px] right-[1px] left-3.5 bg-gradient-to-r from-[#d0c9b1] via-[#FAF8F3] to-[#F3EFE6] rounded-r border-y border-r border-black/10 z-0 shadow-[inset_1px_0_0_rgba(255,255,255,0.4)]" />
-                      <div 
-                        className="absolute top-[5px] bottom-[5px] right-[3px] left-3.5 bg-gradient-to-r from-[#c0b89b] via-[#FFFDF9] to-[#FAF6EE] rounded-r border-y border-r border-black/5 z-0"
-                        style={{
-                          backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 1px, rgba(0,0,0,0.03) 1px, rgba(0,0,0,0.03) 2px)'
-                        }}
-                      />
-
-                      {/* Front Cover */}
-                      <div 
-                        className="absolute inset-y-0 left-0 right-2 rounded-r-[14px] rounded-l-[4px] shadow-[3px_3px_12px_rgba(0,0,0,0.25)] group-hover:shadow-[6px_8px_18px_rgba(0,0,0,0.32)] border-y border-r border-white/10 flex flex-col justify-between p-3.5 z-10 overflow-hidden transition-all duration-300"
-                        style={{
-                          backgroundColor: diary.color,
-                          backgroundImage: diary.coverImage ? `url(${diary.coverImage})` : undefined,
-                          backgroundSize: 'cover',
-                          backgroundPosition: 'center'
-                        }}
-                      >
-                        {/* Cover highlight gloss with sheen sweep effect */}
-                        <div className="absolute inset-0 bg-gradient-to-tr from-black/25 via-white/[0.04] to-white/[0.15] pointer-events-none z-20" />
-                        
-                        {/* Hover Sheen sweep effect (high fidelity gloss shine) */}
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out pointer-events-none z-20" />
-                        
-                        {/* Realistic spine fold shading (hinge crease) */}
-                        <div className="absolute left-0 top-0 bottom-0 w-3.5 bg-gradient-to-r from-black/45 via-black/15 to-transparent pointer-events-none z-20" />
-
-                        {/* Page opening edge soft shadow to convey cover thickness */}
-                        <div className="absolute right-0 top-0 bottom-0 w-2 bg-gradient-to-l from-black/20 to-transparent pointer-events-none z-20" />
-                        <div className="absolute right-1 top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
-                        
-                        {/* Spine binding lines */}
-                        <div className="absolute left-[11px] top-0 bottom-0 w-[1px] bg-black/25 pointer-events-none z-20" />
-                        <div className="absolute left-[12px] top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
-
-                        {/* Raised spine bands */}
-                        <div className="absolute left-0 top-[20%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-                        <div className="absolute left-0 top-[40%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-                        <div className="absolute left-0 top-[60%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-                        <div className="absolute left-0 top-[80%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-
-                        {/* Gold corners */}
-                        {!diary.coverImage && (
-                          <>
-                            <div className="absolute top-0 right-0 w-3 h-3 border-t border-r border-yellow-500/40 rounded-tr-lg pointer-events-none z-20" />
-                            <div className="absolute bottom-0 right-0 w-3 h-3 border-b border-r border-yellow-500/40 rounded-br-lg pointer-events-none z-20" />
-                          </>
-                        )}
-
-                        {diary.coverImage && (
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-black/10 z-10" />
-                        )}
-
-                        <div className="flex justify-between items-start relative z-20 pl-1">
-                          <span className="w-7 h-7 rounded-lg bg-white/95 flex items-center justify-center text-xs shadow-sm">
-                            {diary.emoji}
-                          </span>
-                          {diary.isLocked && (
-                            <span className="p-1 bg-black/20 backdrop-blur-sm rounded-md text-white">
-                              <Lock className="w-2.5 h-2.5" />
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Foil stamps preview inside compact cover */}
-                        {diary.foilIcons && diary.foilIcons.length > 0 && (
-                          <div className="flex flex-wrap gap-1 bg-yellow-500/15 backdrop-blur-md border border-yellow-500/35 px-1.5 py-1 rounded-lg max-w-max relative z-20 mt-1.5 ml-1">
-                            {diary.foilIcons.slice(0, 4).map((icon, idx) => (
-                              <span key={idx} className="text-[10px] filter drop-shadow-[0_1px_1px_rgba(234,179,8,0.95)]">{icon}</span>
-                            ))}
-                          </div>
-                        )}
-
-                        <div className="bg-white/95 dark:bg-brand-card-bg/95 p-2 rounded-lg shadow-md border border-brand-border/10 relative z-20 mt-auto ml-1">
-                          <h3 className="font-serif-diary font-bold text-[11px] text-brand-plum truncate leading-tight">
-                            {diary.name}
-                          </h3>
-                          <p className="text-[7.5px] font-extrabold text-brand-pink-dark uppercase tracking-wider mt-0.5">
-                            {diary.entryCount} entries
-                          </p>
-                        </div>
-                      </div>
-                    </motion.div>
-                  ))}
-                </motion.div>
-              )}
-
-              {viewMode === 'list' && (
-                /* CLASSIC LIST VIEW */
-                <motion.div
-                  key="list"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="flex flex-col gap-4.5 pb-24"
-                >
-                  {diaries.map((diary) => (
-                    <motion.div
-                      key={diary.id}
-                      whileHover={{ x: 4, scale: 1.01 }}
-                      onClick={() => handleDiaryClick(diary)}
-                      className="group relative overflow-hidden bg-white dark:bg-brand-card-bg rounded-2xl p-4.5 cursor-pointer border border-brand-border/60 dark:border-brand-border/10 shadow-sm flex items-center justify-between transition-all select-none hover:shadow-md"
-                    >
-                      <div className="flex items-center gap-4">
-                        {/* Tiny Spine Accent represent the book */}
-                        <div 
-                          className="w-4 h-15 rounded-md relative overflow-hidden flex-shrink-0 shadow-inner"
-                          style={{
-                            backgroundColor: diary.color,
-                            backgroundImage: diary.coverImage ? `url(${diary.coverImage})` : undefined,
-                            backgroundSize: 'cover',
-                            backgroundPosition: 'center'
-                          }}
-                        >
-                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-black/20" />
-                          <div className="absolute inset-0 bg-white/5 pointer-events-none" />
-                        </div>
-
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm">{diary.emoji}</span>
-                            <h3 className="font-serif-diary font-bold text-base text-brand-plum group-hover:text-brand-pink transition-colors">
-                              {diary.name}
-                            </h3>
-                            {diary.isLocked && <Lock className="w-3.5 h-3.5 text-brand-sage" />}
-                          </div>
-                          
-                          <div className="flex items-center gap-3 text-[10px] font-bold text-brand-text-muted">
-                            <span>{diary.entryCount} {diary.entryCount === 1 ? 'entry' : 'entries'}</span>
-                            <span className="w-1 h-1 bg-brand-border rounded-full" />
-                            <span className="italic">Updated {diary.lastUpdated.toLowerCase()}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Embossed foil stamps in list item row */}
-                      {diary.foilIcons && diary.foilIcons.length > 0 && (
-                        <div className="flex gap-1 bg-yellow-500/10 border border-yellow-500/25 px-2 py-1 rounded-xl">
-                          {diary.foilIcons.map((icon, idx) => (
-                            <span key={idx} className="text-xs filter drop-shadow-[0_1px_1px_rgba(234,179,8,0.95)]">{icon}</span>
-                          ))}
-                        </div>
-                      )}
-                    </motion.div>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Floating Create FAB */}
-            <motion.button 
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => setShowCreateForm(true)}
-              className="fixed bottom-24 right-6 md:right-10 w-15 h-15 bg-brand-pink hover:bg-brand-pink-dark text-white rounded-3xl flex items-center justify-center shadow-xl shadow-brand-pink/20 transition-all z-40 border border-brand-pink-dark/10"
-              title="Bind a new journal"
-            >
-              <Plus className="w-7 h-7" />
-            </motion.button>
-          </motion.div>
-        ) : (
-          /* CREATE DIARY SCREEN */
-          <motion.div
-            key="create"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 15 }}
-            className="flex flex-col gap-6 pb-28"
-          >
-            {/* Header */}
-            <header className="flex justify-between items-center py-3 bg-brand-bg sticky top-0 z-30 border-b border-brand-border/40 select-none">
-              <button 
-                onClick={() => setShowCreateForm(false)}
-                className="p-2.5 text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-full transition-all active:scale-90"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <h1 className="font-serif-diary text-xl font-bold text-brand-plum italic">Bind a New Journal</h1>
-              <div className="w-10 h-10" />
-            </header>
-
-            <form onSubmit={handleCreateSubmit} className="flex flex-col gap-6">
-              
-              {/* Cover Preview Card with Custom cover and Foil seals support */}
-              <div className="flex flex-col items-center py-6 select-none">
-                <div className="w-44 aspect-[3/4.2] relative">
-                  {/* Double-layered realistic skeuomorphic shadow (shady effect) */}
-                  <div className="absolute inset-y-1 left-3 right-1 bg-black/35 blur-[2px] rounded-r-xl pointer-events-none z-0 transition-all duration-300" />
-                  <div className="absolute inset-y-3 left-4 right-0 bg-black/15 blur-lg rounded-r-xl pointer-events-none z-0 transition-all duration-300" />
-
-                  {/* Bookmark ribbon */}
-                  <div 
-                    className="absolute bottom-[-10px] right-8 w-2.5 h-5 rounded-b shadow-[1px_2px_4px_rgba(0,0,0,0.3)] z-0" 
-                    style={{ backgroundColor: selectedColor === '#8A3D55' ? '#DCA153' : '#8A3D55' }}
-                  />
-
-                  {/* Layered paper pages peeking */}
-                  <div className="absolute top-[3px] bottom-[3px] right-[1px] left-3.5 bg-gradient-to-r from-[#d0c9b1] via-[#FAF8F3] to-[#F3EFE6] rounded-r border-y border-r border-black/10 z-0 shadow-[inset_1px_0_0_rgba(255,255,255,0.4)]" />
-                  <div 
-                    className="absolute top-[5px] bottom-[5px] right-[3px] left-3.5 bg-gradient-to-r from-[#c0b89b] via-[#FFFDF9] to-[#FAF6EE] rounded-r border-y border-r border-black/5 z-0"
-                    style={{
-                      backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 1px, rgba(0,0,0,0.03) 1px, rgba(0,0,0,0.03) 2px)'
-                    }}
-                  />
-
-                  {/* Front Cover */}
-                  <motion.div 
-                    animate={{ backgroundColor: coverImage ? undefined : selectedColor }}
-                    className="absolute inset-y-0 left-0 right-2 rounded-r-[14px] rounded-l-[4px] shadow-[3px_3px_12px_rgba(0,0,0,0.25)] border-y border-r border-white/10 flex flex-col justify-between p-3.5 z-10 overflow-hidden"
-                    style={{
-                      backgroundImage: coverImage ? `url(${coverImage})` : undefined,
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center'
-                    }}
-                  >
-                    {/* Cover gloss highlight */}
-                    <div className="absolute inset-0 bg-gradient-to-tr from-black/25 via-white/[0.04] to-white/[0.15] pointer-events-none z-20" />
-                    
-                    {/* Spine shading with skeuomorphic fold depth */}
-                    <div className="absolute left-0 top-0 bottom-0 w-3.5 bg-gradient-to-r from-black/45 via-black/15 to-transparent pointer-events-none z-20" />
-                    
-                    {/* Vertical binding lines */}
-                    <div className="absolute left-[11px] top-0 bottom-0 w-[1px] bg-black/25 pointer-events-none z-20" />
-                    <div className="absolute left-[12px] top-0 bottom-0 w-[1px] bg-white/10 pointer-events-none z-20" />
-
-                    {/* Spine ridges */}
-                    <div className="absolute left-0 top-[20%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-                    <div className="absolute left-0 top-[40%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-                    <div className="absolute left-0 top-[60%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-                    <div className="absolute left-0 top-[80%] w-3 h-[2.5px] bg-black/20 border-b border-white/5 z-20 pointer-events-none shadow-[0_1px_0_rgba(0,0,0,0.1)]" />
-
-                    {/* Vintage corners */}
-                    {!coverImage && (
-                      <>
-                        <div className="absolute top-0 right-0 w-3 h-3 border-t border-r border-yellow-500/40 rounded-tr-lg pointer-events-none z-20" />
-                        <div className="absolute bottom-0 right-0 w-3 h-3 border-b border-r border-yellow-500/40 rounded-br-lg pointer-events-none z-20" />
-                      </>
-                    )}
-
-                    {coverImage && (
-                      <div className="absolute inset-0 bg-black/40 z-10" />
-                    )}
-
-                    <div className="flex justify-between items-start relative z-25 pl-1">
-                      <span className="w-8 h-8 rounded-lg bg-white/95 flex items-center justify-center text-md shadow-sm text-brand-plum">
-                        {selectedEmoji}
-                      </span>
-                      {isLocked && (
-                        <span className="p-1 bg-black/20 backdrop-blur-sm rounded-md text-white">
-                          <Lock className="w-2.5 h-2.5" />
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Foil stamps preview inside preview cover */}
-                    {selectedFoilIcons.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-2 bg-yellow-500/20 backdrop-blur-md border border-yellow-500/40 px-1.5 py-1 rounded-lg max-w-max self-start relative z-25 ml-1">
-                        {selectedFoilIcons.map((icon, idx) => (
-                          <span key={idx} className="text-[10px] filter drop-shadow-[0_1.5px_1.5px_rgba(234,179,8,0.95)]">{icon}</span>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="bg-white/95 dark:bg-brand-card-bg/95 p-2.5 rounded-lg shadow-md border border-brand-border/15 ml-1 relative z-25">
-                      <h3 className="font-serif-diary font-bold text-[11px] leading-tight text-brand-plum truncate">
-                        {diaryName || 'Untangled Pages'}
-                      </h3>
-                      <p className="text-[7px] font-bold text-brand-pink-dark uppercase tracking-widest mt-0.5">
-                        Custom Bound Cover
-                      </p>
-                    </div>
-                  </motion.div>
-                </div>
-                <p className="text-[10px] text-brand-text-muted font-bold uppercase tracking-wider mt-4">Cover Art Preview</p>
-              </div>
-
-              {/* Basic Info Section */}
-              <div className="flex flex-col gap-5 bg-white/90 dark:bg-brand-card-bg p-6 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">Journal Title</label>
-                  <input 
-                    type="text" 
-                    value={diaryName}
-                    onChange={(e) => setDiaryName(e.target.value)}
-                    placeholder="e.g., Midnight Musings"
-                    required
-                    maxLength={32}
-                    className="w-full bg-transparent border-b border-brand-border/60 py-2.5 text-base text-brand-plum focus:outline-none focus:border-brand-pink transition-colors font-serif-diary placeholder-brand-plum/25 font-semibold"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">Aesthetic Intent (Optional)</label>
-                  <textarea 
-                    value={diaryDesc}
-                    onChange={(e) => setDiaryDesc(e.target.value)}
-                    placeholder="Describe the emotional theme or goal for this specific journal..."
-                    rows={2}
-                    maxLength={140}
-                    className="w-full bg-transparent border-b border-brand-border/60 py-2 text-sm text-brand-plum focus:outline-none focus:border-brand-pink transition-colors font-serif-diary resize-none placeholder-brand-plum/25 leading-relaxed"
-                  />
-                </div>
-              </div>
-
-              {/* Cover Page Background Image Upload */}
-              <div className="flex flex-col gap-3.5 bg-white/90 dark:bg-brand-card-bg p-6 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">Custom Cover Image</label>
-                  {coverImage && (
-                    <button
-                      type="button"
-                      onClick={() => setCoverImage(undefined)}
-                      className="text-[10px] font-extrabold text-red-500 uppercase tracking-widest hover:underline"
-                    >
-                      Clear Image
-                    </button>
-                  )}
-                </div>
-                
-                <div className="flex items-center gap-4">
-                  <button
-                    type="button"
-                    onClick={() => coverFileInputRef.current?.click()}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-brand-pink/10 hover:bg-brand-pink/15 text-brand-pink border border-brand-pink/20 rounded-2xl text-xs font-bold transition-all active:scale-95"
-                  >
-                    <Upload className="w-4 h-4" />
-                    <span>Upload Background Cover</span>
-                  </button>
-                  <input
-                    ref={coverFileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleCoverImageUpload}
-                    className="hidden"
-                  />
-                  {coverImage && (
-                    <div className="w-10 h-10 rounded-lg overflow-hidden border border-brand-border shadow-sm">
-                      <img src={coverImage} alt="Cover upload" className="w-full h-full object-cover" />
-                    </div>
-                  )}
-                </div>
-                <p className="text-[10px] text-brand-text-muted">Upload any photo (JPG/PNG) to wrap your journal cover instead of solid colors.</p>
-              </div>
-
-              {/* Cover Emoji Selector */}
-              <div className="flex flex-col gap-3.5 bg-white/90 dark:bg-brand-card-bg p-6 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm">
-                <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">Embossed Foil Icon</label>
-                <div className="grid grid-cols-6 gap-2.5">
-                  {EMOJI_OPTIONS.map(emoji => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => setSelectedEmoji(emoji)}
-                      className={`aspect-square text-xl flex items-center justify-center rounded-2xl transition-all ${
-                        selectedEmoji === emoji 
-                          ? 'bg-brand-pink/15 text-brand-pink-dark border-2 border-brand-pink scale-110 shadow-sm' 
-                          : 'bg-brand-bg/50 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-brand-plum'
-                      }`}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Point 6: Embossed Foil Seals Multi-Selection */}
-              <div className="flex flex-col gap-3.5 bg-white/90 dark:bg-brand-card-bg p-6 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">Embossed Gold Foil Seals ({selectedFoilIcons.length}/4)</label>
-                  {selectedFoilIcons.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedFoilIcons([])}
-                      className="text-[10px] font-extrabold text-brand-pink-dark uppercase tracking-widest hover:underline"
-                    >
-                      Reset Foil Stamps
-                    </button>
-                  )}
-                </div>
-                
-                <p className="text-[11px] text-brand-text-muted mt-0.5">Toggle up to 4 shiny gold metallic seals to stamp onto your notebook cover.</p>
-                
-                <div className="grid grid-cols-6 gap-2.5">
-                  {FOIL_ICON_OPTIONS.map(icon => {
-                    const isSelected = selectedFoilIcons.includes(icon);
-                    return (
-                      <button
-                        key={icon}
-                        type="button"
-                        onClick={() => handleFoilIconToggle(icon)}
-                        className={`aspect-square text-xl flex items-center justify-center rounded-2xl relative transition-all ${
-                          isSelected 
-                            ? 'bg-yellow-500/20 text-yellow-600 border-2 border-yellow-500 scale-110 shadow-md' 
-                            : 'bg-brand-bg/50 hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-brand-plum'
-                        }`}
-                      >
-                        {icon}
-                        {isSelected && (
-                          <div className="absolute top-1 right-1 w-3 h-3 bg-yellow-500 rounded-full flex items-center justify-center border border-white">
-                            <Check className="w-2 h-2 text-white stroke-[5px]" />
-                          </div>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Cover Theme Palette Selection */}
-              <div className="flex flex-col gap-3.5 bg-white/90 dark:bg-brand-card-bg p-6 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm">
-                <label className="text-[10px] font-extrabold text-brand-pink uppercase tracking-widest">Cover Leather Color</label>
-                <div className="grid grid-cols-6 gap-3">
-                  {PREDEFINED_COLORS.map(color => (
-                    <button
-                      key={color.hex}
-                      type="button"
-                      onClick={() => setSelectedColor(color.hex)}
-                      disabled={!!coverImage}
-                      className={`aspect-square rounded-2xl relative flex items-center justify-center shadow-md transition-transform hover:scale-105 ${
-                        coverImage ? 'opacity-30 cursor-not-allowed' : ''
-                      }`}
-                      style={{ backgroundColor: color.hex }}
-                    >
-                      {selectedColor === color.hex && !coverImage && (
-                        <div className="w-6 h-6 rounded-full bg-white flex items-center justify-center text-brand-pink shadow-sm">
-                          <Check className="w-3.5 h-3.5 stroke-[4px]" />
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-                {coverImage && <p className="text-[10px] text-amber-600 font-semibold">Custom cover image is active, backing leather color is hidden.</p>}
-              </div>
-
-              {/* Password Protection Toggle */}
-              <div className="bg-white/90 dark:bg-brand-card-bg p-6 rounded-[32px] border border-brand-border/80 dark:border-brand-border/10 shadow-sm flex items-center justify-between">
-                <div className="flex items-center gap-3.5">
-                  <span className="p-3 bg-brand-pink/10 text-brand-pink rounded-2xl">
-                    <Lock className="w-4.5 h-4.5" />
-                  </span>
-                  <div>
-                    <h3 className="text-sm font-bold text-brand-plum">Private Lock Status</h3>
-                    <p className="text-[11px] text-brand-text-muted mt-0.5">Encrypt and protect this book with biometrics</p>
-                  </div>
-                </div>
-
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={isLocked}
-                    onChange={(e) => setIsLocked(e.target.checked)}
-                    className="sr-only peer" 
-                  />
-                  <div className="w-11 h-6 bg-brand-sage-light/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-brand-sage-light after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-sage" />
-                </label>
-              </div>
-
-              {/* Footer Actions */}
-              <footer className="flex gap-4 pt-4 select-none">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateForm(false)}
-                  className="flex-1 py-3.5 rounded-full border border-brand-pink text-brand-pink font-bold text-xs hover:bg-brand-pink/5 transition-all active:scale-95"
-                >
-                  Discard Setup
-                </button>
-                <button
-                  type="submit"
-                  disabled={!diaryName.trim()}
-                  className="flex-1 py-3.5 rounded-full bg-brand-pink disabled:opacity-40 hover:bg-brand-pink-dark text-white font-bold text-xs shadow-lg shadow-brand-pink/15 transition-all active:scale-95"
-                >
-                  Bind Cover
-                </button>
-              </footer>
-            </form>
-          </motion.div>
+    <div className="space-y-7 pb-4">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        {layout !== 'mobile' && (
+          <div>
+            <h1 className="type-page-title">Your journals</h1>
+            <p className="type-supporting mt-2">
+              {diaries.length} private spaces · {totalEntries} entries
+              {latest ? ` · Updated ${latest.lastUpdated}` : ''}
+            </p>
+          </div>
         )}
-      </AnimatePresence>
+        <AppButton tone="primary" onClick={() => setCreating(true)}>
+          <Plus className="h-4 w-4" />
+          New Journal
+        </AppButton>
+      </header>
+
+      <section
+        aria-label="Journal search and filters"
+        className="space-y-3 border-y border-[var(--border-subtle)] py-4"
+      >
+        <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_auto_auto]">
+          <SearchField
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onClear={() => setQuery('')}
+            placeholder="Find a journal"
+            label="Search journals"
+          />
+          <AppButton className="md:hidden" onClick={() => setShowLibraryControls(true)}>
+            <SlidersHorizontal className="h-4 w-4" />
+            View
+          </AppButton>
+          <div className="hidden md:block">
+            <label className="sr-only" htmlFor="journal-sort-desktop">
+              Sort journals
+            </label>
+            <select
+              id="journal-sort-desktop"
+              value={sortBy}
+              onChange={(event) => setSortBy(event.target.value as DiarySort)}
+              className="min-h-11 rounded-[var(--radius-control)] border border-[var(--border-subtle)] bg-surface px-3 text-sm font-bold"
+            >
+              <option value="updated">Recently updated</option>
+              <option value="name">Name</option>
+              <option value="entries">Most entries</option>
+              <option value="created">Newest created</option>
+            </select>
+          </div>
+          <div className="hidden items-center rounded-[var(--radius-control)] border border-[var(--border-subtle)] p-1 md:flex">
+            <IconButton
+              label="Gallery view"
+              aria-pressed={viewMode === 'gallery'}
+              onClick={() => setMode('gallery')}
+              className={viewMode === 'gallery' ? 'bg-accent-soft' : ''}
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </IconButton>
+            <IconButton
+              label="List view"
+              aria-pressed={viewMode === 'list'}
+              onClick={() => setMode('list')}
+              className={viewMode === 'list' ? 'bg-accent-soft' : ''}
+            >
+              <List className="h-4 w-4" />
+            </IconButton>
+          </div>
+        </div>
+        <div
+          className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-1"
+          aria-label="Filter journals"
+        >
+          <SlidersHorizontal
+            className="mr-1 h-4 w-4 shrink-0 text-ink-tertiary"
+            aria-hidden="true"
+          />
+          {(['all', 'locked', 'unlocked', 'empty'] as DiaryFilter[]).map((filter) => (
+            <FilterChip
+              key={filter}
+              selected={filterBy === filter}
+              onClick={() => setFilterBy(filter)}
+            >
+              {filter === 'all' ? 'All' : filter[0].toUpperCase() + filter.slice(1)}
+            </FilterChip>
+          ))}
+        </div>
+      </section>
+
+      {visible.length === 0 ? (
+        <EmptyState
+          title="No matching journals"
+          description="Try another search or filter."
+          action={
+            <AppButton tone="primary" onClick={() => setCreating(true)}>
+              New Journal
+            </AppButton>
+          }
+        />
+      ) : viewMode === 'list' ? (
+        <section
+          aria-label="Journal list"
+          className="divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]"
+        >
+          {visible.map((diary) => (
+            <button
+              key={diary.id}
+              type="button"
+              data-testid="diary-card"
+              onClick={() => {
+                void triggerImpact('light');
+                onNavigate('diaries', 'diaryDetail', diary.id);
+              }}
+              className="group flex w-full items-center gap-4 px-1 py-4 text-left hover:bg-surface-subtle/60"
+            >
+              <JournalCover diary={diary} variant="thumbnail" showTitle={false} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-serif-diary text-xl font-semibold">
+                  {diary.name}
+                </span>
+                <span className="type-metadata mt-1 block">
+                  {diary.entryCount} entries · {diary.lastUpdated}
+                </span>
+              </span>
+              {diary.isLocked && (
+                <span className="flex items-center gap-1 text-xs font-semibold text-ink-secondary">
+                  <Lock className="h-4 w-4" />
+                  Locked
+                </span>
+              )}
+            </button>
+          ))}
+        </section>
+      ) : (
+        <section aria-label="Journal gallery">
+          <SectionHeader
+            eyebrow={layout === 'desktop' ? 'Library' : undefined}
+            title={query || filterBy !== 'all' ? 'Matching journals' : 'On your shelf'}
+            className="mb-5"
+          />
+          <div className="grid grid-cols-2 gap-x-5 gap-y-8 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
+            {visible.map((diary) => (
+              <button
+                key={diary.id}
+                type="button"
+                data-testid="diary-card"
+                onClick={() => {
+                  void triggerImpact('light');
+                  onNavigate('diaries', 'diaryDetail', diary.id);
+                }}
+                className="group min-w-0 text-left"
+              >
+                <JournalCover
+                  diary={diary}
+                  variant="full"
+                  showTitle={false}
+                  className="w-full transition-transform duration-200 group-hover:-translate-y-1 group-focus-visible:-translate-y-1"
+                />
+                <span className="mt-3 flex items-start justify-between gap-2">
+                  <span className="min-w-0">
+                    <span className="block truncate font-serif-diary text-lg font-semibold text-ink">
+                      {diary.name}
+                    </span>
+                    <span className="type-metadata mt-0.5 block">
+                      {diary.entryCount} entries
+                      {layout !== 'mobile' && ` · ${diary.lastUpdated}`}
+                    </span>
+                  </span>
+                  {diary.isLocked && (
+                    <Lock
+                      className="mt-1 h-3.5 w-3.5 shrink-0 text-ink-tertiary"
+                      aria-label="Locked journal"
+                    />
+                  )}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <BottomSheet
+        open={showLibraryControls}
+        title="Sort and view"
+        onClose={() => setShowLibraryControls(false)}
+        footer={
+          <AppButton tone="primary" onClick={() => setShowLibraryControls(false)}>
+            Done
+          </AppButton>
+        }
+      >
+        {libraryControls}
+      </BottomSheet>
     </div>
   );
 }

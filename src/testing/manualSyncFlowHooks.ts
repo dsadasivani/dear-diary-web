@@ -14,10 +14,8 @@ export type ManualSyncFlowCheckpoint =
 const PAUSE_AT_KEY = 'deardiary.manualTest.pauseAt';
 const LAST_CHECKPOINT_KEY = 'deardiary.manualTest.lastCheckpoint';
 
-const hooksEnabled = (): boolean => (
-  typeof window !== 'undefined' &&
-  import.meta.env?.VITE_ENABLE_MD_FLOW_HOOKS === 'true'
-);
+const hooksEnabled = (): boolean =>
+  typeof window !== 'undefined' && import.meta.env?.VITE_ENABLE_MD_FLOW_HOOKS === 'true';
 
 const getPauseTarget = (): string | null => {
   try {
@@ -30,10 +28,13 @@ const getPauseTarget = (): string | null => {
 const markCheckpointHit = (checkpoint: ManualSyncFlowCheckpoint): void => {
   try {
     window.localStorage.removeItem(PAUSE_AT_KEY);
-    window.localStorage.setItem(LAST_CHECKPOINT_KEY, JSON.stringify({
-      checkpoint,
-      hitAt: new Date().toISOString(),
-    }));
+    window.localStorage.setItem(
+      LAST_CHECKPOINT_KEY,
+      JSON.stringify({
+        checkpoint,
+        hitAt: new Date().toISOString(),
+      }),
+    );
   } catch {
     // Manual force-stop hooks are diagnostic only.
   }
@@ -45,7 +46,9 @@ export const manualSyncFlowCheckpoint = async (
   if (!hooksEnabled() || getPauseTarget() !== checkpoint) return;
 
   markCheckpointHit(checkpoint);
-  window.dispatchEvent(new CustomEvent('deardiary-manual-test-checkpoint', { detail: { checkpoint } }));
+  window.dispatchEvent(
+    new CustomEvent('deardiary-manual-test-checkpoint', { detail: { checkpoint } }),
+  );
   console.warn(`Manual sync checkpoint reached: ${checkpoint}. Force-stop com.deardiary.app now.`);
   await new Promise<void>(() => undefined);
 };

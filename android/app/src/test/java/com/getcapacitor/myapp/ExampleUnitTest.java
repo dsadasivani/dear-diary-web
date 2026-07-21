@@ -1,18 +1,22 @@
-package com.getcapacitor.myapp;
+package com.deardiary.app;
 
 import static org.junit.Assert.*;
 
 import org.junit.Test;
 
-/**
- * Example local unit test, which will execute on the development machine (host).
- *
- * @see <a href="http://d.android.com/tools/testing">Testing documentation</a>
- */
 public class ExampleUnitTest {
 
     @Test
-    public void addition_isCorrect() throws Exception {
-        assertEquals(4, 2 + 2);
+    public void backupScheduleAcceptsValidTime() {
+        assertArrayEquals(new int[] { 0, 0 }, DriveBackupScheduler.parseHourMinute("00:00"));
+        assertArrayEquals(new int[] { 23, 59 }, DriveBackupScheduler.parseHourMinute("23:59"));
+    }
+
+    @Test
+    public void backupScheduleFallsBackForInvalidTime() {
+        assertArrayEquals(new int[] { 2, 0 }, DriveBackupScheduler.parseHourMinute(null));
+        assertArrayEquals(new int[] { 2, 0 }, DriveBackupScheduler.parseHourMinute("24:00"));
+        assertArrayEquals(new int[] { 2, 0 }, DriveBackupScheduler.parseHourMinute("09:75"));
+        assertArrayEquals(new int[] { 2, 0 }, DriveBackupScheduler.parseHourMinute("not-a-time"));
     }
 }

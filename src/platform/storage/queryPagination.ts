@@ -52,20 +52,22 @@ const compareCursorValues = (
   return 0;
 };
 
-export const normalizePageLimit = (limit?: number): number => (
-  Math.max(1, Math.min(limit || 50, MAX_PAGE_LIMIT))
-);
+export const normalizePageLimit = (limit?: number, maxLimit = MAX_PAGE_LIMIT): number =>
+  Math.max(1, Math.min(limit || 50, maxLimit));
 
 export const encodeKeysetCursor = (
   recordType: CursorRecordType,
   sort: string,
   values: CursorValue[],
-): string => `${KEYSET_CURSOR_PREFIX}${encodeURIComponent(JSON.stringify({
-  v: 1,
-  recordType,
-  sort,
-  values: values.map(normalizeCursorValue),
-}))}`;
+): string =>
+  `${KEYSET_CURSOR_PREFIX}${encodeURIComponent(
+    JSON.stringify({
+      v: 1,
+      recordType,
+      sort,
+      values: values.map(normalizeCursorValue),
+    }),
+  )}`;
 
 export const decodePageCursor = (
   cursor: string | undefined,
@@ -128,21 +130,33 @@ export const entrySortDirections = (sort: EntrySortKey = 'date-desc'): Array<'as
   return ['desc', 'desc', 'asc'];
 };
 
-export const noteSortDirections = (sort: NoteSortKey = 'pinned-updated-desc'): Array<'asc' | 'desc'> => (
-  sort === 'updated-desc' ? ['desc', 'asc'] : ['desc', 'desc', 'asc']
-);
+export const noteSortDirections = (
+  sort: NoteSortKey = 'pinned-updated-desc',
+): Array<'asc' | 'desc'> => (sort === 'updated-desc' ? ['desc', 'asc'] : ['desc', 'desc', 'asc']);
 
-export const compareEntriesForSort = <T extends Pick<Entry, 'id' | 'date' | 'createdAt' | 'updatedAt'>>(
+export const compareEntriesForSort = <
+  T extends Pick<Entry, 'id' | 'date' | 'createdAt' | 'updatedAt'>,
+>(
   left: T,
   right: T,
   sort: EntrySortKey = 'date-desc',
-): number => compareCursorValues(entryCursorValues(left, sort), entryCursorValues(right, sort), entrySortDirections(sort));
+): number =>
+  compareCursorValues(
+    entryCursorValues(left, sort),
+    entryCursorValues(right, sort),
+    entrySortDirections(sort),
+  );
 
 export const compareNotesForSort = <T extends Pick<Note, 'id' | 'isPinned' | 'updatedAt'>>(
   left: T,
   right: T,
   sort: NoteSortKey = 'pinned-updated-desc',
-): number => compareCursorValues(noteCursorValues(left, sort), noteCursorValues(right, sort), noteSortDirections(sort));
+): number =>
+  compareCursorValues(
+    noteCursorValues(left, sort),
+    noteCursorValues(right, sort),
+    noteSortDirections(sort),
+  );
 
 const pageSortedRecords = <T>(
   sortedItems: T[],
@@ -151,56 +165,62 @@ const pageSortedRecords = <T>(
   valuesForItem: (item: T) => CursorValue[],
   directions: Array<'asc' | 'desc'>,
   makeCursor: (item: T) => string,
+  maxLimit = MAX_PAGE_LIMIT,
 ): { items: T[]; nextCursor?: string; total: number } => {
-  const limit = normalizePageLimit(options.limit);
+  const limit = normalizePageLimit(options.limit, maxLimit);
   let start = Math.max(0, options.offset || 0);
   if (cursor.kind === 'offset') {
     start = cursor.offset || start;
   } else {
-    const nextIndex = sortedItems.findIndex(item => (
-      compareCursorValues(valuesForItem(item), cursor.values, directions) > 0
-    ));
+    const nextIndex = sortedItems.findIndex(
+      (item) => compareCursorValues(valuesForItem(item), cursor.values, directions) > 0,
+    );
     start = nextIndex >= 0 ? nextIndex : sortedItems.length;
   }
 
   const page = sortedItems.slice(start, start + limit);
   return {
     items: page,
-    nextCursor: start + page.length < sortedItems.length && page.length > 0
-      ? makeCursor(page[page.length - 1])
-      : undefined,
+    nextCursor:
+      start + page.length < sortedItems.length && page.length > 0
+        ? makeCursor(page[page.length - 1])
+        : undefined,
     total: sortedItems.length,
   };
 };
 
-export const pageEntries = <T extends Entry>(
+export const pageEntries = <T extends Pick<Entry, 'id' | 'date' | 'createdAt' | 'updatedAt'>>(
   entries: T[],
   options: PageCursorOptions,
   sort: EntrySortKey = 'date-desc',
+  maxLimit = MAX_PAGE_LIMIT,
 ): { items: T[]; nextCursor?: string; total: number } => {
   const sorted = [...entries].sort((left, right) => compareEntriesForSort(left, right, sort));
   return pageSortedRecords(
     sorted,
     options,
     decodePageCursor(options.cursor, 'entry', sort),
-    entry => entryCursorValues(entry, sort),
+    (entry) => entryCursorValues(entry, sort),
     entrySortDirections(sort),
-    entry => encodeKeysetCursor('entry', sort, entryCursorValues(entry, sort)),
+    (entry) => encodeKeysetCursor('entry', sort, entryCursorValues(entry, sort)),
+    maxLimit,
   );
 };
 
-export const pageNotes = <T extends Note>(
+export const pageNotes = <T extends Pick<Note, 'id' | 'isPinned' | 'updatedAt'>>(
   notes: T[],
   options: PageCursorOptions,
   sort: NoteSortKey = 'pinned-updated-desc',
+  maxLimit = MAX_PAGE_LIMIT,
 ): { items: T[]; nextCursor?: string; total: number } => {
   const sorted = [...notes].sort((left, right) => compareNotesForSort(left, right, sort));
   return pageSortedRecords(
     sorted,
     options,
     decodePageCursor(options.cursor, 'note', sort),
-    note => noteCursorValues(note, sort),
+    (note) => noteCursorValues(note, sort),
     noteSortDirections(sort),
-    note => encodeKeysetCursor('note', sort, noteCursorValues(note, sort)),
+    (note) => encodeKeysetCursor('note', sort, noteCursorValues(note, sort)),
+    maxLimit,
   );
 };

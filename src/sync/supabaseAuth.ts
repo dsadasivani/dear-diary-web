@@ -42,7 +42,11 @@ const createTimeoutSignal = (timeoutMs: number): { signal: AbortSignal; cancel: 
   };
 };
 
-const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> => {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -87,7 +91,10 @@ export const exchangeGoogleIdTokenForSupabaseSession = async ({
       'Supabase sign-in timed out. Check the emulator network connection and try again.',
     );
   } catch (error: any) {
-    if (error?.name === 'AbortError') throw new Error('Supabase sign-in timed out. Check the emulator network connection and try again.');
+    if (error?.name === 'AbortError')
+      throw new Error(
+        'Supabase sign-in timed out. Check the emulator network connection and try again.',
+      );
     throw error;
   } finally {
     timeout.cancel();
@@ -96,7 +103,9 @@ export const exchangeGoogleIdTokenForSupabaseSession = async ({
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new SupabaseAuthExchangeError(
-      payload?.msg || payload?.message || `Supabase Auth rejected the Google ID token (${response.status}).`,
+      payload?.msg ||
+        payload?.message ||
+        `Supabase Auth rejected the Google ID token (${response.status}).`,
       response.status,
       payload,
     );
@@ -133,7 +142,10 @@ export const refreshSupabaseSession = async ({
       'Supabase session refresh timed out. Check the emulator network connection and try again.',
     );
   } catch (error: any) {
-    if (error?.name === 'AbortError') throw new Error('Supabase session refresh timed out. Check the emulator network connection and try again.');
+    if (error?.name === 'AbortError')
+      throw new Error(
+        'Supabase session refresh timed out. Check the emulator network connection and try again.',
+      );
     throw error;
   } finally {
     timeout.cancel();

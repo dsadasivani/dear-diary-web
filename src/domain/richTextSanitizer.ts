@@ -23,18 +23,17 @@ const ALLOWED_TAGS = [
 const ALLOWED_TAG_SET = new Set<string>(ALLOWED_TAGS);
 const DROP_CONTENT_TAGS = new Set(['script', 'style', 'iframe', 'svg', 'math', 'object', 'embed']);
 
-const escapeHtml = (value: string): string => value
-  .replace(/&/g, '&amp;')
-  .replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;');
+const escapeHtml = (value: string): string =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-const decodeBasicHtmlEntities = (value: string): string => value
-  .replace(/&nbsp;/g, ' ')
-  .replace(/&amp;/g, '&')
-  .replace(/&lt;/g, '<')
-  .replace(/&gt;/g, '>')
-  .replace(/&quot;/g, '"')
-  .replace(/&#39;/g, "'");
+const decodeBasicHtmlEntities = (value: string): string =>
+  value
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 
 const normalizePlainText = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
@@ -100,7 +99,9 @@ export const sanitizeRichTextHtml = (html: string | null | undefined): string =>
   const browserWindow = getBrowserWindow();
   if (!browserWindow) return sanitizeWithFallback(String(html));
 
-  const purifier = createDOMPurify(browserWindow as unknown as Parameters<typeof createDOMPurify>[0]);
+  const purifier = createDOMPurify(
+    browserWindow as unknown as Parameters<typeof createDOMPurify>[0],
+  );
   return purifier.sanitize(String(html), {
     ALLOWED_TAGS: [...ALLOWED_TAGS],
     ALLOWED_ATTR: [],
@@ -154,6 +155,6 @@ export const sanitizeNote = <T extends Note>(note: T): T => ({
 
 export const sanitizeRepositorySnapshot = (snapshot: RepositorySnapshot): RepositorySnapshot => ({
   ...snapshot,
-  entries: snapshot.entries.map(entry => sanitizeEntry(entry)),
-  notes: snapshot.notes.map(note => sanitizeNote(note)),
+  entries: snapshot.entries.map((entry) => sanitizeEntry(entry)),
+  notes: snapshot.notes.map((note) => sanitizeNote(note)),
 });

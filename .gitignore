@@ -1,7 +1,13 @@
 node_modules/
+.gradle/
 build/
+backend/sync-api/bin/
 dist/
 coverage/
+benchmarks/
+playwright-report/
+test-results/
+.local/
 .DS_Store
 *.log
 *.db
@@ -18,3 +24,6 @@ android/keystore.properties
 *.keystore
 .env*
 !.env.example
+!.env.development
+!.env.staging
+!.env.production

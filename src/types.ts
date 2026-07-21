@@ -1,4 +1,4 @@
-export type ResponsiveLayout = 'mobile' | 'desktop';
+export type ResponsiveLayout = 'mobile' | 'tablet' | 'desktop';
 
 export interface Diary {
   id: string;
@@ -67,7 +67,6 @@ export interface SecurityConfig {
   linkedGoogleUserId?: string; // Locally bound Google account for backup and PIN reset
   linkedGoogleEmail?: string | null; // Email for the locally bound Google account
   linkedGoogleBoundAt?: number; // Timestamp when the Google account was locally bound
-  linkedGoogleUid?: string; // Legacy Firebase UID field, migrated to linkedGoogleUserId
 }
 
 export interface Mood {
@@ -81,6 +80,8 @@ export interface AppSettings {
   customTags?: string[];
   customMoods?: Mood[];
   theme?: 'light' | 'dark';
+  /** @deprecated Retained for persisted-data compatibility; the ambient clock is always shown before PIN entry. */
+  showAmbientLockScreen?: boolean;
 }
 
 export interface UserProfile {
@@ -222,13 +223,7 @@ export interface BackupFileSummary {
 export type SyncDeviceRole = 'primary_mobile' | 'web_companion' | 'desktop_companion';
 export type SyncDeviceActivationState = 'active' | 'pending_recovery' | 'aborted';
 export type SyncObjectKind =
-  | 'event'
-  | 'media'
-  | 'snapshot'
-  | 'key_package'
-  | 'manifest'
-  | 'partition_snapshot'
-  | 'thumbnail';
+  'event' | 'media' | 'snapshot' | 'key_package' | 'manifest' | 'partition_snapshot' | 'thumbnail';
 
 export type SyncPartitionKey = 'core' | `month:${string}`;
 export type PairingPlatform = 'android' | 'ios' | 'web' | 'desktop';
@@ -529,7 +524,18 @@ export interface CompanionKeyPackage {
     nonce: string;
     wrappedRootKey: string;
   }>;
+  wrappedPinVerifier?: {
+    nonce: string;
+    ciphertext: string;
+  };
   createdAt: string;
+}
+
+export interface CompanionPinVerifier {
+  version: 1;
+  pinHash: string;
+  pinSalt: string;
+  pinLength: 4 | 8;
 }
 
 export interface DeviceRevocation {
@@ -561,6 +567,8 @@ export interface RecoveryKeyPackage {
 
 export interface LocalSyncAccountState {
   accountId: string;
+  v1AccountId?: string;
+  syncProtocolVersion?: 1 | 2;
   deviceId: string;
   deviceRole: SyncDeviceRole;
   googleUserId: string;

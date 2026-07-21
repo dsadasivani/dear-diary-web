@@ -14,7 +14,11 @@ const googleSession: GoogleAccountSession = {
 
 test('populates an untouched local profile from Google', async () => {
   const profile = createDefaultUserProfile();
-  const updated = await populateUserProfileFromGoogle(profile, googleSession, async () => 'file:///avatar.jpg');
+  const updated = await populateUserProfileFromGoogle(
+    profile,
+    googleSession,
+    async () => 'file:///avatar.jpg',
+  );
 
   assert.equal(updated.name, 'Google Writer');
   assert.equal(updated.email, 'writer@example.com');

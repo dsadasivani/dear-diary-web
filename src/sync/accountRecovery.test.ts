@@ -8,7 +8,7 @@ import { recoverAccountRootKey } from './accountRecovery';
 
 const sha256 = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 test('skips newer companion packages when recovering with a passphrase package', async () => {
@@ -18,12 +18,24 @@ test('skips newer companion packages when recovering with a passphrase package',
     await wrapRootKeyForCompanion(rootKey, 'account-1', device.publicKey),
   );
   const recoveryBytes = encodeRecoveryKeyPackage(
-    await wrapAccountRootKeyForRecovery(rootKey, 'a sufficiently long passphrase', { accountId: 'account-1' }),
+    await wrapAccountRootKeyForRecovery(rootKey, 'a sufficiently long passphrase', {
+      accountId: 'account-1',
+    }),
   );
-  const makeObject = async (sequence: number, id: string, bytes: Uint8Array): Promise<SyncObjectMetadata> => ({
-    id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: id,
-    objectKind: 'key_package', sha256: await sha256(bytes), sizeBytes: bytes.byteLength,
-    createdByDeviceId: 'device-1', createdAt: '',
+  const makeObject = async (
+    sequence: number,
+    id: string,
+    bytes: Uint8Array,
+  ): Promise<SyncObjectMetadata> => ({
+    id: `object-${sequence}`,
+    accountId: 'account-1',
+    sequence,
+    driveFileId: id,
+    objectKind: 'key_package',
+    sha256: await sha256(bytes),
+    sizeBytes: bytes.byteLength,
+    createdByDeviceId: 'device-1',
+    createdAt: '',
   });
   const objects = [
     await makeObject(9, 'companion', companionBytes),
@@ -35,7 +47,7 @@ test('skips newer companion packages when recovering with a passphrase package',
     accountId: 'account-1',
     recoveryPassphrase: 'a sufficiently long passphrase',
     googleSession: { userId: 'google-1', email: null, displayName: null, accessToken: 'token' },
-    download: async (_session, id) => id === 'companion' ? companionBytes : recoveryBytes,
+    download: async (_session, id) => (id === 'companion' ? companionBytes : recoveryBytes),
   });
 
   assert.deepEqual(recovered.accountRootKey, rootKey);
@@ -65,9 +77,16 @@ test('collects passphrase recovery keys across key epochs', async () => {
     bytes: Uint8Array,
     keyEpoch: number,
   ): Promise<SyncObjectMetadata> => ({
-    id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: id,
-    objectKind: 'key_package', sha256: await sha256(bytes), sizeBytes: bytes.byteLength,
-    createdByDeviceId: 'device-1', createdAt: '', keyEpoch,
+    id: `object-${sequence}`,
+    accountId: 'account-1',
+    sequence,
+    driveFileId: id,
+    objectKind: 'key_package',
+    sha256: await sha256(bytes),
+    sizeBytes: bytes.byteLength,
+    createdByDeviceId: 'device-1',
+    createdAt: '',
+    keyEpoch,
   });
   const objects = [
     await makeObject(1, 'recovery-1', recoveryOneBytes, 1),
@@ -119,9 +138,16 @@ test('stops scanning recovery packages when newest package contains required epo
     bytes: Uint8Array,
     keyEpoch: number,
   ): Promise<SyncObjectMetadata> => ({
-    id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: id,
-    objectKind: 'key_package', sha256: await sha256(bytes), sizeBytes: bytes.byteLength,
-    createdByDeviceId: 'device-1', createdAt: '', keyEpoch,
+    id: `object-${sequence}`,
+    accountId: 'account-1',
+    sequence,
+    driveFileId: id,
+    objectKind: 'key_package',
+    sha256: await sha256(bytes),
+    sizeBytes: bytes.byteLength,
+    createdByDeviceId: 'device-1',
+    createdAt: '',
+    keyEpoch,
   });
   const objects = [
     await makeObject(1, 'recovery-1', oldRecoveryBytes, 1),

@@ -19,7 +19,7 @@ const getGoogleWebClientId = (): string => {
   const clientId = (import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID as string | undefined)?.trim();
   if (!clientId) {
     throw new Error(
-      'Mobile Google sign-in is missing VITE_GOOGLE_WEB_CLIENT_ID. Add the Google Cloud OAuth Web application client ID to .env, then rebuild and reinstall the APK.'
+      'Mobile Google sign-in is missing VITE_GOOGLE_WEB_CLIENT_ID. Add the Google Cloud OAuth Web application client ID to .env, then rebuild and reinstall the APK.',
     );
   }
   return clientId;
@@ -38,7 +38,11 @@ const initializeNativeGoogleSignIn = async (includeDriveScope = false): Promise<
   nativeGoogleInitializationKey = initializationKey;
 };
 
-const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> => {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -52,11 +56,12 @@ const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: 
   }
 };
 
-const authorizeDrive = async (interactive: boolean) => withTimeout(
-  nativeDriveBackupBridge.authorize({ interactive }),
-  DRIVE_AUTH_TIMEOUT_MS,
-  'Google Drive authorization did not finish. Open the emulator, confirm any Google permission prompt, then try again.',
-);
+const authorizeDrive = async (interactive: boolean) =>
+  withTimeout(
+    nativeDriveBackupBridge.authorize({ interactive }),
+    DRIVE_AUTH_TIMEOUT_MS,
+    'Google Drive authorization did not finish. Open the emulator, confirm any Google permission prompt, then try again.',
+  );
 
 const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleAccountSession> => {
   const needsDriveAccess = intent === 'backup' || intent === 'sync';
@@ -77,7 +82,8 @@ const signInWithNativeGoogle = async (intent: GoogleAuthIntent): Promise<GoogleA
   };
 
   if (needsDriveAccess) {
-    if (!result.email) throw new Error('Google did not return an email address for the selected account.');
+    if (!result.email)
+      throw new Error('Google did not return an email address for the selected account.');
     const account: GoogleAccountIdentity = {
       userId: result.userId,
       email: result.email,
@@ -110,7 +116,9 @@ export const startGoogleAuth = async (intent: GoogleAuthIntent): Promise<GoogleA
     return signInWithNativeGoogle(intent);
   }
 
-  throw new Error('Google Drive backup is available in the native mobile app. Use the local encrypted export on web.');
+  throw new Error(
+    'Google Drive backup is available in the native mobile app. Use the local encrypted export on web.',
+  );
 };
 
 export const clearGoogleAuthIntent = (): void => {
@@ -126,10 +134,13 @@ export const getGoogleConnectionState = async (): Promise<GoogleConnectionState>
   return nativeDriveBackupBridge.getConnectionState();
 };
 
-export const restoreGoogleDriveSession = async (interactive = false): Promise<GoogleAccountSession | null> => {
+export const restoreGoogleDriveSession = async (
+  interactive = false,
+): Promise<GoogleAccountSession | null> => {
   if (!isNativePlatform()) return null;
   const authorization = await authorizeDrive(interactive);
-  if (!authorization.authorized || !authorization.accessToken || !authorization.account) return null;
+  if (!authorization.authorized || !authorization.accessToken || !authorization.account)
+    return null;
   const session: GoogleAccountSession = {
     userId: authorization.account.userId,
     email: authorization.account.email,

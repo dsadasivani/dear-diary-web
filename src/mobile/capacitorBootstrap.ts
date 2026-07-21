@@ -28,7 +28,7 @@ export const setupCapacitorBootstrap = async (): Promise<void> => {
   });
 
   requestAnimationFrame(() => {
-    SplashScreen.hide().catch(error => {
+    SplashScreen.hide().catch((error) => {
       console.warn('Splash screen hide failed:', error);
     });
   });
@@ -40,8 +40,16 @@ export const syncNativeStatusBar = async (theme: 'light' | 'dark'): Promise<void
   }
 
   try {
-    await StatusBar.setStyle({ style: theme === 'dark' ? Style.Dark : Style.Light });
-    await StatusBar.setBackgroundColor({ color: theme === 'dark' ? '#131012' : '#FCFAF7' });
+    const isAndroid = Capacitor.getPlatform() === 'android';
+    // Android 15+ owns the status-bar inset and keeps it light in this layout.
+    // Use dark icons there in both app themes; older Android also receives the
+    // matching light background below. iOS can continue following the app theme.
+    await StatusBar.setStyle({
+      style: isAndroid ? Style.Light : theme === 'dark' ? Style.Dark : Style.Light,
+    });
+    await StatusBar.setBackgroundColor({
+      color: isAndroid ? '#FCFAF7' : theme === 'dark' ? '#131012' : '#FCFAF7',
+    });
   } catch (error) {
     console.warn('Status bar configuration failed:', error);
   }
@@ -58,7 +66,7 @@ export const addNativeAppStateListener = (
   if (!isCapacitorNative()) return () => undefined;
   let listener: PluginListenerHandle | null = null;
   let disposed = false;
-  void CapacitorApp.addListener('appStateChange', handler).then(handle => {
+  void CapacitorApp.addListener('appStateChange', handler).then((handle) => {
     if (disposed) {
       void handle.remove();
       return;
@@ -69,6 +77,31 @@ export const addNativeAppStateListener = (
     disposed = true;
     void listener?.remove();
   };
+};
+
+export const addNativeUrlOpenListener = (
+  handler: (event: { url: string }) => void,
+): (() => void) => {
+  if (!isCapacitorNative()) return () => undefined;
+  let listener: PluginListenerHandle | null = null;
+  let disposed = false;
+  void CapacitorApp.addListener('appUrlOpen', handler).then((handle) => {
+    if (disposed) {
+      void handle.remove();
+      return;
+    }
+    listener = handle;
+  });
+  return () => {
+    disposed = true;
+    void listener?.remove();
+  };
+};
+
+export const getNativeLaunchUrl = async (): Promise<string | null> => {
+  if (!isCapacitorNative()) return null;
+  const launchUrl = await CapacitorApp.getLaunchUrl();
+  return launchUrl?.url || null;
 };
 
 export const exitNativeApp = async (): Promise<void> => {

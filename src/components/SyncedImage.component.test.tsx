@@ -24,9 +24,11 @@ describe('SyncedImage', () => {
 
   it('shows a neutral placeholder while hydrating synced media', async () => {
     let resolveHydration: (value: string) => void = () => undefined;
-    mocks.hydrateMediaReference.mockReturnValue(new Promise<string>(resolve => {
-      resolveHydration = resolve;
-    }));
+    mocks.hydrateMediaReference.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveHydration = resolve;
+      }),
+    );
 
     render(
       <SyncedImage
@@ -51,8 +53,8 @@ describe('SyncedImage', () => {
 
     fireEvent.load(image);
 
+    await waitFor(() => expect(image).toHaveAttribute('data-image-state', 'ready'));
     expect(image).not.toHaveAttribute('aria-busy');
-    expect(image).toHaveAttribute('data-image-state', 'ready');
   });
 
   it('keeps the skeleton visible until a regular image finishes loading', () => {

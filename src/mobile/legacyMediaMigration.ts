@@ -14,7 +14,8 @@ export interface LegacyMediaMigrationResult {
   completedAt?: number;
 }
 
-const isDataUri = (value: string | undefined): value is string => Boolean(value?.startsWith('data:'));
+const isDataUri = (value: string | undefined): value is string =>
+  Boolean(value?.startsWith('data:'));
 
 const getMimeType = (dataUri: string, fallback: string): string => {
   const match = /^data:([^;,]+)/.exec(dataUri);
@@ -76,7 +77,11 @@ export const migrateLegacyDataUriMedia = async (): Promise<LegacyMediaMigrationR
   }
 
   if (snapshot.userProfile) {
-    snapshot.userProfile.avatarUri = await migrateUri(snapshot.userProfile.avatarUri, 'avatar', 'image/jpeg');
+    snapshot.userProfile.avatarUri = await migrateUri(
+      snapshot.userProfile.avatarUri,
+      'avatar',
+      'image/jpeg',
+    );
   }
 
   if (migrated > 0) {

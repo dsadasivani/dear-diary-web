@@ -1,0 +1,11 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:sync-api-tests;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ''
+  flyway:
+    enabled: false
+management:
+  health:
+    defaults:
+      enabled: false

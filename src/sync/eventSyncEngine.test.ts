@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SyncDevice, SyncObjectMetadata } from '../types';
-import { buildStorageBreakdown, EventSyncEngine, isAccountWideOutboxFailure, SyncConflictError } from './eventSyncEngine';
+import {
+  buildStorageBreakdown,
+  EventSyncEngine,
+  isAccountWideOutboxFailure,
+  SyncConflictError,
+} from './eventSyncEngine';
 import { SupabaseControlPlaneError, type SupabaseControlPlaneClient } from './supabaseControlPlane';
 import type { SyncSecrets } from './syncSecrets';
-import { createRepository } from './testSupport';
+import { createRepository, MemoryDataStore } from './testSupport';
+import { PersistentOutboxRepository } from './outbox';
 import { encodeCompanionKeyPackage, wrapRootKeyForCompanion } from './companionKeyPackage';
 import { generateDeviceKeyPair } from './deviceKeys';
 import { createSyncDomainEvent, encodeSyncDomainEvent } from './domainEvents';
@@ -22,45 +28,60 @@ import {
   encodePartitionSnapshotPayload,
   parsePartitionManifestPayload,
 } from './syncPartitioning';
+import { configureSyncRuntimeFlags } from './runtimeFlags';
+import { SyncError } from './errors';
+
+configureSyncRuntimeFlags({ snapshotCreationEnabled: true, archiveHydrationEnabled: true });
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 test('storage breakdown reports unreferenced media as pending cleanup instead of active photos', () => {
-  const breakdown = buildStorageBreakdown([
-    {
-      id: 'event-file',
-      name: '/events/1.ddevent',
-      size: 100,
-      appProperties: { objectKind: 'event' },
-    },
-    {
-      id: 'live-photo',
-      name: '/media/live.ddmedia',
-      size: 200,
-      appProperties: { objectKind: 'media', mediaKind: 'image' },
-    },
-    {
-      id: 'live-photo-thumb',
-      name: '/thumbnails/live.ddthumb',
-      size: 20,
-      appProperties: { objectKind: 'thumbnail', mediaKind: 'image', sourceDriveFileId: 'live-photo' },
-    },
-    {
-      id: 'deleted-photo',
-      name: '/media/deleted.ddmedia',
-      size: 500,
-      appProperties: { objectKind: 'media', mediaKind: 'image' },
-    },
-    {
-      id: 'deleted-photo-thumb',
-      name: '/thumbnails/deleted.ddthumb',
-      size: 50,
-      appProperties: { objectKind: 'thumbnail', mediaKind: 'image', sourceDriveFileId: 'deleted-photo' },
-    },
-  ], ['live-photo', 'live-photo-thumb']);
+  const breakdown = buildStorageBreakdown(
+    [
+      {
+        id: 'event-file',
+        name: '/events/1.ddevent',
+        size: 100,
+        appProperties: { objectKind: 'event' },
+      },
+      {
+        id: 'live-photo',
+        name: '/media/live.ddmedia',
+        size: 200,
+        appProperties: { objectKind: 'media', mediaKind: 'image' },
+      },
+      {
+        id: 'live-photo-thumb',
+        name: '/thumbnails/live.ddthumb',
+        size: 20,
+        appProperties: {
+          objectKind: 'thumbnail',
+          mediaKind: 'image',
+          sourceDriveFileId: 'live-photo',
+        },
+      },
+      {
+        id: 'deleted-photo',
+        name: '/media/deleted.ddmedia',
+        size: 500,
+        appProperties: { objectKind: 'media', mediaKind: 'image' },
+      },
+      {
+        id: 'deleted-photo-thumb',
+        name: '/thumbnails/deleted.ddthumb',
+        size: 50,
+        appProperties: {
+          objectKind: 'thumbnail',
+          mediaKind: 'image',
+          sourceDriveFileId: 'deleted-photo',
+        },
+      },
+    ],
+    ['live-photo', 'live-photo-thumb'],
+  );
 
   assert.equal(breakdown.journalDataBytes, 100);
   assert.equal(breakdown.imageBytes, 220);
@@ -71,15 +92,29 @@ test('storage breakdown reports unreferenced media as pending cleanup instead of
 test('uploads and commits an encrypted event before applying it locally', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, partitionedSyncEnabled: true, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    partitionedSyncEnabled: true,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let committedInput: any;
   let partitionCursorInput: any;
@@ -88,14 +123,26 @@ test('uploads and commits an encrypted event before applying it locally', async 
     getDeviceStatus: async () => device,
     listSyncObjectsAfter: async () => [],
     updateDeviceCursor: async () => ({}),
-    updatePartitionCursor: async (input: any) => { partitionCursorInput = input; return {}; },
+    updatePartitionCursor: async (input: any) => {
+      partitionCursorInput = input;
+      return {};
+    },
     commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
       committedInput = input;
       return {
-        id: 'object-1', accountId: 'account-1', sequence: 3, driveFileId: input.driveFileId,
-        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', recordType: 'note', recordId: 'note-1',
-        baseRecordVersion: 0, recordVersion: 1,
+        id: 'object-1',
+        accountId: 'account-1',
+        sequence: 3,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: 'note',
+        recordId: 'note-1',
+        baseRecordVersion: 0,
+        recordVersion: 1,
       };
     },
   } as unknown as SupabaseControlPlaneClient;
@@ -103,19 +150,36 @@ test('uploads and commits an encrypted event before applying it locally', async 
     isOnline: () => true,
     now: () => 1,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
-    upload: async input => { uploadedBytes = input.bytes.byteLength; return { id: 'drive-1' }; },
+    upload: async (input) => {
+      uploadedBytes = input.bytes.byteLength;
+      return { id: 'drive-1' };
+    },
   });
   const note = {
-    id: 'note-1', title: 'Committed', body: 'Encrypted first.', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-1',
+    title: 'Committed',
+    body: 'Encrypted first.',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
 
   await engine.commitMutation('note', 'upsert', note.id, note);
@@ -132,15 +196,28 @@ test('uploads and commits an encrypted event before applying it locally', async 
 test('resumes an event-uploaded outbox write without reuploading the event', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let failCommit = true;
   let sequence = 2;
@@ -154,10 +231,19 @@ test('resumes an event-uploaded outbox write without reuploading the event', asy
       if (failCommit) throw new Error('metadata unavailable');
       sequence += 1;
       return {
-        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
-        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
-        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
+        id: `object-${sequence}`,
+        accountId: 'account-1',
+        sequence,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: input.recordType,
+        recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion,
+        recordVersion: input.baseRecordVersion + 1,
         affectedRecords: input.affectedRecords || [],
       };
     },
@@ -166,12 +252,21 @@ test('resumes an event-uploaded outbox write without reuploading the event', asy
     isOnline: () => true,
     now: () => currentNow,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     upload: async () => {
@@ -180,8 +275,13 @@ test('resumes an event-uploaded outbox write without reuploading the event', asy
     },
   });
   const pendingNote = {
-    id: 'note-pending', title: 'Pending', body: 'Resume me.', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-pending',
+    title: 'Pending',
+    body: 'Resume me.',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
 
   await assert.rejects(
@@ -198,8 +298,13 @@ test('resumes an event-uploaded outbox write without reuploading the event', asy
   failCommit = false;
   currentNow = failed[0].nextRetryAt!;
   const nextNote = {
-    id: 'note-next', title: 'Next', body: 'After resume.', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-next',
+    title: 'Next',
+    body: 'After resume.',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
   await engine.commitMutation('note', 'upsert', nextNote.id, nextNote);
 
@@ -212,15 +317,28 @@ test('resumes an event-uploaded outbox write without reuploading the event', asy
 test('resumes a failed outbox write that crashed before event upload completed', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let sequence = 2;
   let uploadCount = 0;
@@ -233,10 +351,19 @@ test('resumes a failed outbox write that crashed before event upload completed',
     commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
       sequence += 1;
       return {
-        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
-        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
-        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
+        id: `object-${sequence}`,
+        accountId: 'account-1',
+        sequence,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: input.recordType,
+        recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion,
+        recordVersion: input.baseRecordVersion + 1,
         affectedRecords: input.affectedRecords || [],
       };
     },
@@ -245,12 +372,21 @@ test('resumes a failed outbox write that crashed before event upload completed',
     isOnline: () => true,
     now: () => currentNow,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     upload: async () => {
@@ -263,8 +399,13 @@ test('resumes a failed outbox write that crashed before event upload completed',
     },
   });
   const pendingNote = {
-    id: 'note-upload-pending', title: 'Upload pending', body: 'Retry me.', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-upload-pending',
+    title: 'Upload pending',
+    body: 'Retry me.',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
 
   await assert.rejects(
@@ -280,8 +421,13 @@ test('resumes a failed outbox write that crashed before event upload completed',
 
   currentNow = failed[0].nextRetryAt!;
   await engine.commitMutation('note', 'upsert', 'note-after-upload-retry', {
-    id: 'note-after-upload-retry', title: 'After retry', body: '', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-after-upload-retry',
+    title: 'After retry',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   });
 
   assert.equal(uploadCount, 3);
@@ -293,15 +439,28 @@ test('resumes a failed outbox write that crashed before event upload completed',
 test('failed outbox writes wait for backoff without blocking later operations', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let currentNow = 1;
   let sequence = 2;
@@ -314,10 +473,19 @@ test('failed outbox writes wait for backoff without blocking later operations', 
     commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
       sequence += 1;
       return {
-        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
-        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
-        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
+        id: `object-${sequence}`,
+        accountId: 'account-1',
+        sequence,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: input.recordType,
+        recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion,
+        recordVersion: input.baseRecordVersion + 1,
         affectedRecords: input.affectedRecords || [],
       };
     },
@@ -326,12 +494,21 @@ test('failed outbox writes wait for backoff without blocking later operations', 
     isOnline: () => true,
     now: () => currentNow,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     upload: async () => {
@@ -346,8 +523,13 @@ test('failed outbox writes wait for backoff without blocking later operations', 
   });
 
   const delayedNote = {
-    id: 'note-delayed', title: 'Delayed', body: 'Retry after backoff.', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-delayed',
+    title: 'Delayed',
+    body: 'Retry after backoff.',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
   await assert.rejects(
     () => engine.commitMutation('note', 'upsert', delayedNote.id, delayedNote),
@@ -357,8 +539,13 @@ test('failed outbox writes wait for backoff without blocking later operations', 
   assert.equal(failed.nextRetryAt, 30_001);
 
   await engine.commitMutation('note', 'upsert', 'note-later', {
-    id: 'note-later', title: 'Later write', body: '', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-later',
+    title: 'Later write',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   });
 
   assert.equal(await repository.getNote(delayedNote.id), null);
@@ -375,16 +562,29 @@ test('failed outbox writes wait for backoff without blocking later operations', 
 test('resolves same-record dependent outbox base version after predecessor acknowledgement', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const account = (await repository.getLocalSyncAccountState())!;
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let sequence = 2;
   const committedBaseVersions: number[] = [];
@@ -396,10 +596,19 @@ test('resolves same-record dependent outbox base version after predecessor ackno
       committedBaseVersions.push(input.baseRecordVersion);
       sequence += 1;
       return {
-        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
-        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
-        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
+        id: `object-${sequence}`,
+        accountId: 'account-1',
+        sequence,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: input.recordType,
+        recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion,
+        recordVersion: input.baseRecordVersion + 1,
         affectedRecords: input.affectedRecords || [],
       };
     },
@@ -408,19 +617,33 @@ test('resolves same-record dependent outbox base version after predecessor ackno
     isOnline: () => true,
     now: () => 10,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     upload: async () => ({ id: `drive-${sequence + 1}` }),
   });
   const first = {
-    id: 'note-chain-engine', title: 'First edit', body: '', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-chain-engine',
+    title: 'First edit',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
   await repository.applyLocalMutationWithOutbox({
     operationId: 'operation-chain-engine-1',
@@ -458,16 +681,29 @@ test('resolves same-record dependent outbox base version after predecessor ackno
 test('resume isolates a poisoned outbox operation and continues unrelated writes', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const account = (await repository.getLocalSyncAccountState())!;
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let sequence = 2;
   const committedRecordIds: string[] = [];
@@ -479,10 +715,19 @@ test('resume isolates a poisoned outbox operation and continues unrelated writes
       committedRecordIds.push(input.recordId);
       sequence += 1;
       return {
-        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
-        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
-        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
+        id: `object-${sequence}`,
+        accountId: 'account-1',
+        sequence,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: input.recordType,
+        recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion,
+        recordVersion: input.baseRecordVersion + 1,
         affectedRecords: input.affectedRecords || [],
       };
     },
@@ -492,12 +737,21 @@ test('resume isolates a poisoned outbox operation and continues unrelated writes
     isOnline: () => true,
     now: () => 1,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     upload: async () => {
@@ -515,8 +769,13 @@ test('resume isolates a poisoned outbox operation and continues unrelated writes
     operation: 'upsert',
     account,
     localPayload: {
-      id: 'note-poisoned', title: 'Poisoned', body: '', isPinned: false,
-      tags: [], createdAt: 1, updatedAt: 1,
+      id: 'note-poisoned',
+      title: 'Poisoned',
+      body: '',
+      isPinned: false,
+      tags: [],
+      createdAt: 1,
+      updatedAt: 1,
     },
   });
   await repository.applyLocalMutationWithOutbox({
@@ -526,8 +785,13 @@ test('resume isolates a poisoned outbox operation and continues unrelated writes
     operation: 'upsert',
     account,
     localPayload: {
-      id: 'note-independent', title: 'Independent', body: '', isPinned: false,
-      tags: [], createdAt: 1, updatedAt: 1,
+      id: 'note-independent',
+      title: 'Independent',
+      body: '',
+      isPinned: false,
+      tags: [],
+      createdAt: 1,
+      updatedAt: 1,
     },
   });
 
@@ -541,18 +805,55 @@ test('resume isolates a poisoned outbox operation and continues unrelated writes
 });
 
 test('classifies account-wide outbox failures separately from record failures', () => {
-  assert.equal(isAccountWideOutboxFailure(new Error('Google Drive authorization is required.')), true);
-  assert.equal(isAccountWideOutboxFailure(new Error('This device is not active. Recover or pair it again.')), true);
+  assert.equal(isAccountWideOutboxFailure(new SyncError({ code: 'AUTH_EXPIRED' })), true);
+  assert.equal(isAccountWideOutboxFailure(new SyncError({ code: 'DEVICE_REVOKED' })), true);
   assert.equal(isAccountWideOutboxFailure(new Error('local media file missing')), false);
+});
+
+test('routes lifecycle work through an installed Sync V2 runtime delegate', async () => {
+  const repository = await createRepository();
+  const engine = new EventSyncEngine(repository);
+  const calls: string[] = [];
+  const delegate = {
+    async start() {
+      calls.push('start');
+    },
+    async stop() {
+      calls.push('stop');
+    },
+    async pullPending() {
+      calls.push('pull');
+    },
+    async flushPendingOutbox() {
+      calls.push('flush');
+    },
+    requestOutboxFlush(delayMs = 0) {
+      calls.push(`request:${delayMs}`);
+    },
+  };
+  engine.installRuntimeDelegate(delegate);
+  engine.startPolling();
+  await engine.pullPending();
+  await engine.flushPendingOutbox();
+  engine.requestOutboxFlush(25);
+  engine.stopPolling();
+  await Promise.resolve();
+  assert.deepEqual(calls, ['start', 'pull', 'flush', 'request:25', 'stop']);
 });
 
 test('resumes a media-uploaded outbox write without reuploading media', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const mediaId = 'media-uploaded-before-crash';
   const localUri = 'data:image/png;base64,aGVsbG8=';
@@ -583,24 +884,33 @@ test('resumes a media-uploaded outbox write without reuploading media', async ()
     operation: 'upsert',
     payload: pendingEntry,
     baseRecordVersion: 0,
-    uploadedObjects: [{
-      driveFileId: 'drive-media-uploaded',
-      objectKind: 'media',
-      sha256: 'media-sha',
-      sizeBytes: 5,
-      partitionKey: 'month:2026-07',
-      mediaId,
-      localUri,
-      reference,
-    }],
+    uploadedObjects: [
+      {
+        driveFileId: 'drive-media-uploaded',
+        objectKind: 'media',
+        sha256: 'media-sha',
+        sizeBytes: 5,
+        partitionKey: 'month:2026-07',
+        mediaId,
+        localUri,
+        reference,
+      },
+    ],
     state: 'media_uploaded',
     createdAt: 1,
     updatedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let sequence = 2;
   const uploadKinds: string[] = [];
@@ -615,9 +925,15 @@ test('resumes a media-uploaded outbox write without reuploading media', async ()
       return input.objects.map((object: any) => {
         sequence += 1;
         return {
-          id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: object.driveFileId,
-          objectKind: object.objectKind, sha256: object.sha256, sizeBytes: object.sizeBytes,
-          createdByDeviceId: 'device-1', createdAt: '',
+          id: `object-${sequence}`,
+          accountId: 'account-1',
+          sequence,
+          driveFileId: object.driveFileId,
+          objectKind: object.objectKind,
+          sha256: object.sha256,
+          sizeBytes: object.sizeBytes,
+          createdByDeviceId: 'device-1',
+          createdAt: '',
           recordType: object.objectKind === 'event' ? input.recordType : null,
           recordId: object.objectKind === 'event' ? input.recordId : null,
           baseRecordVersion: object.objectKind === 'event' ? input.baseRecordVersion : null,
@@ -632,12 +948,23 @@ test('resumes a media-uploaded outbox write without reuploading media', async ()
     commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
       sequence += 1;
       return {
-        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
-        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
-        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
-        affectedRecords: input.affectedRecords || [], partitionKey: input.partitionKey,
-        keyEpoch: input.keyEpoch, operationId: input.operationId,
+        id: `object-${sequence}`,
+        accountId: 'account-1',
+        sequence,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: input.recordType,
+        recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion,
+        recordVersion: input.baseRecordVersion + 1,
+        affectedRecords: input.affectedRecords || [],
+        partitionKey: input.partitionKey,
+        keyEpoch: input.keyEpoch,
+        operationId: input.operationId,
       };
     },
   } as unknown as SupabaseControlPlaneClient;
@@ -645,12 +972,21 @@ test('resumes a media-uploaded outbox write without reuploading media', async ()
     isOnline: () => true,
     now: () => 1,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     upload: async (input: any) => {
@@ -660,14 +996,22 @@ test('resumes a media-uploaded outbox write without reuploading media', async ()
   });
 
   await engine.commitMutation('note', 'upsert', 'note-after-media-retry', {
-    id: 'note-after-media-retry', title: 'After media retry', body: '', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-after-media-retry',
+    title: 'After media retry',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   });
 
   assert.deepEqual(batchKinds, ['media', 'event']);
   assert.deepEqual(uploadKinds, ['event', 'event']);
   assert.equal((await repository.getEntry(pendingEntry.id))?.photoUris[0], reference);
-  assert.equal((await repository.getSyncMediaPointerByMediaId(mediaId))?.driveFileId, 'drive-media-uploaded');
+  assert.equal(
+    (await repository.getSyncMediaPointerByMediaId(mediaId))?.driveFileId,
+    'drive-media-uploaded',
+  );
   assert.equal((await repository.getNote('note-after-media-retry'))?.title, 'After media retry');
   assert.equal((await repository.listSyncOutboxOperations()).length, 0);
 });
@@ -675,14 +1019,25 @@ test('resumes a media-uploaded outbox write without reuploading media', async ()
 test('resumes a committed outbox write by applying it idempotently before a new write', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const committedNote = {
-    id: 'note-committed', title: 'Committed outbox', body: 'Apply me.', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-committed',
+    title: 'Committed outbox',
+    body: 'Apply me.',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
   await repository.saveSyncOutboxOperation({
     operationId: 'outbox-committed',
@@ -699,20 +1054,40 @@ test('resumes a committed outbox write by applying it idempotently before a new 
     eventDriveFileId: 'drive-committed',
     eventSha256: 'sha',
     eventSizeBytes: 10,
-    committedObjects: [{
-      id: 'object-3', accountId: 'account-1', sequence: 3, driveFileId: 'drive-committed',
-      objectKind: 'event', sha256: 'sha', sizeBytes: 10, createdByDeviceId: 'device-1',
-      createdAt: '', recordType: 'note', recordId: committedNote.id, baseRecordVersion: 0,
-      recordVersion: 1, affectedRecords: [], partitionKey: 'month:1970-01',
-    }],
+    committedObjects: [
+      {
+        id: 'object-3',
+        accountId: 'account-1',
+        sequence: 3,
+        driveFileId: 'drive-committed',
+        objectKind: 'event',
+        sha256: 'sha',
+        sizeBytes: 10,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: 'note',
+        recordId: committedNote.id,
+        baseRecordVersion: 0,
+        recordVersion: 1,
+        affectedRecords: [],
+        partitionKey: 'month:1970-01',
+      },
+    ],
     state: 'committed',
     createdAt: 1,
     updatedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let sequence = 3;
   const controlPlane = {
@@ -722,10 +1097,19 @@ test('resumes a committed outbox write by applying it idempotently before a new 
     commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
       sequence += 1;
       return {
-        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
-        objectKind: 'event', sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', recordType: input.recordType, recordId: input.recordId,
-        baseRecordVersion: input.baseRecordVersion, recordVersion: input.baseRecordVersion + 1,
+        id: `object-${sequence}`,
+        accountId: 'account-1',
+        sequence,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: input.recordType,
+        recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion,
+        recordVersion: input.baseRecordVersion + 1,
         affectedRecords: input.affectedRecords || [],
       };
     },
@@ -734,19 +1118,34 @@ test('resumes a committed outbox write by applying it idempotently before a new 
     isOnline: () => true,
     now: () => 1,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     upload: async () => ({ id: `drive-${sequence + 1}` }),
   });
 
   await engine.commitMutation('note', 'upsert', 'note-next', {
-    id: 'note-next', title: 'Next', body: '', isPinned: false, tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-next',
+    title: 'Next',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   });
 
   assert.equal((await repository.getNote(committedNote.id))?.title, 'Committed outbox');
@@ -755,16 +1154,29 @@ test('resumes a committed outbox write by applying it idempotently before a new 
 });
 
 test('pullPending resumes a committed outbox write at startup', async () => {
-  const repository = await createRepository();
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
+  const outboxRepository = new PersistentOutboxRepository(store);
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const committedNote = {
-    id: 'note-startup-committed', title: 'Startup committed outbox', body: 'Apply on launch.',
-    isPinned: false, tags: [], createdAt: 1, updatedAt: 1,
+    id: 'note-startup-committed',
+    title: 'Startup committed outbox',
+    body: 'Apply on launch.',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
   await repository.saveSyncOutboxOperation({
     operationId: 'outbox-startup-committed',
@@ -781,46 +1193,258 @@ test('pullPending resumes a committed outbox write at startup', async () => {
     eventDriveFileId: 'drive-startup-committed',
     eventSha256: 'sha',
     eventSizeBytes: 10,
-    committedObjects: [{
-      id: 'object-3', accountId: 'account-1', sequence: 3, driveFileId: 'drive-startup-committed',
-      objectKind: 'event', sha256: 'sha', sizeBytes: 10, createdByDeviceId: 'device-1',
-      createdAt: '', recordType: 'note', recordId: committedNote.id, baseRecordVersion: 0,
-      recordVersion: 1, affectedRecords: [], partitionKey: 'month:1970-01',
-    }],
+    committedObjects: [
+      {
+        id: 'object-3',
+        accountId: 'account-1',
+        sequence: 3,
+        driveFileId: 'drive-startup-committed',
+        objectKind: 'event',
+        sha256: 'sha',
+        sizeBytes: 10,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: 'note',
+        recordId: committedNote.id,
+        baseRecordVersion: 0,
+        recordVersion: 1,
+        affectedRecords: [],
+        partitionKey: 'month:1970-01',
+      },
+    ],
     state: 'committed',
     createdAt: 1,
     updatedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const cursorUpdates: number[] = [];
   const controlPlane = {
     getDeviceStatus: async () => device,
     listSyncObjectsAfter: async () => [],
-    updateDeviceCursor: async (input: any) => { cursorUpdates.push(input.lastAppliedSequence); return {}; },
+    updateDeviceCursor: async (input: any) => {
+      cursorUpdates.push(input.lastAppliedSequence);
+      return {};
+    },
   } as unknown as SupabaseControlPlaneClient;
   const engine = new EventSyncEngine(repository, {
     isOnline: () => true,
-    now: () => 1,
+    now: () => 2,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
+    outboxRepository,
+    outboxWorkerId: 'startup-worker',
   });
 
   await engine.pullPending();
 
+  assert.equal((await outboxRepository.getById('outbox-startup-committed'))?.state, 'ACKNOWLEDGED');
   assert.equal((await repository.getNote(committedNote.id))?.title, 'Startup committed outbox');
   assert.equal((await repository.listSyncOutboxOperations()).length, 0);
   assert.ok(cursorUpdates.includes(3));
+});
+
+test('rebases a delete blocked by a conflicted write and commits the latest delete intent', async () => {
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
+  const outboxRepository = new PersistentOutboxRepository(store);
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 7,
+    linkedAt: 1,
+  });
+  await store.setItem('deardiary_sync_record_versions', JSON.stringify({ 'entry:entry-1': 7 }));
+  const staleEntry = {
+    id: 'entry-1',
+    diaryId: 'diary-default',
+    date: '2026-07-20',
+    title: 'Stale mobile edit',
+    body: '',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  await repository.saveSyncOutboxOperation({
+    operationId: 'conflicted-upsert',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    partitionKey: 'month:2026-07',
+    affectedPartitionKeys: ['month:2026-07'],
+    recordType: 'entry',
+    recordId: staleEntry.id,
+    operation: 'upsert',
+    payload: staleEntry,
+    baseRecordVersion: 3,
+    state: 'prepared',
+    localApplied: true,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await repository.saveSyncOutboxOperation({
+    operationId: 'dependent-delete',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    partitionKey: 'core',
+    affectedPartitionKeys: ['core'],
+    recordType: 'entry',
+    recordId: staleEntry.id,
+    operation: 'delete',
+    payload: null,
+    baseRecordVersion: 4,
+    dependsOnOperationId: 'conflicted-upsert',
+    state: 'prepared',
+    localApplied: true,
+    createdAt: 2,
+    updatedAt: 2,
+  });
+  await outboxRepository.enqueue({
+    operationId: 'conflicted-upsert',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    recordType: 'ENTRY',
+    recordId: staleEntry.id,
+    operationType: 'UPSERT',
+    baseRecordVersion: 3,
+    state: 'PENDING',
+    retryCount: 0,
+    nextAttemptAt: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await outboxRepository.transition('conflicted-upsert', 'PENDING', 'PREPARING');
+  await outboxRepository.transition('conflicted-upsert', 'PREPARING', 'CONFLICT', {
+    retryCount: 1,
+    lastErrorCode: 'RECORD_VERSION_CONFLICT',
+  });
+  await outboxRepository.enqueue({
+    operationId: 'dependent-delete',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    recordType: 'ENTRY',
+    recordId: staleEntry.id,
+    operationType: 'DELETE',
+    baseRecordVersion: 4,
+    state: 'PENDING',
+    retryCount: 0,
+    nextAttemptAt: 0,
+    dependencyOperationId: 'conflicted-upsert',
+    createdAt: 2,
+    updatedAt: 2,
+  });
+  const device: SyncDevice = {
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
+  };
+  let committedInput: any;
+  const controlPlane = {
+    getDeviceStatus: async () => device,
+    listSyncObjectsAfter: async () => [],
+    updateDeviceCursor: async () => ({}),
+    commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
+      committedInput = input;
+      return {
+        id: 'delete-object-8',
+        accountId: 'account-1',
+        sequence: 8,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: input.recordType,
+        recordId: input.recordId,
+        baseRecordVersion: input.baseRecordVersion,
+        recordVersion: 8,
+        affectedRecords: [],
+        partitionKey: input.partitionKey,
+      };
+    },
+  } as unknown as SupabaseControlPlaneClient;
+  let uploadedEventBytes: Uint8Array | undefined;
+  const engine = new EventSyncEngine(repository, {
+    isOnline: () => true,
+    now: () => 10,
+    loadSecrets: async () => ({
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
+    }),
+    restoreGoogleSession: async () => ({
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
+    }),
+    createControlPlane: () => controlPlane,
+    upload: async (input) => {
+      uploadedEventBytes = input.bytes;
+      return { id: 'drive-delete-8' };
+    },
+    outboxRepository,
+    outboxWorkerId: 'recovery-worker',
+  });
+
+  await engine.flushPendingOutbox();
+
+  assert.ok(uploadedEventBytes);
+  const decrypted = await decryptSyncPayload(new Uint8Array(32), uploadedEventBytes);
+  const event = JSON.parse(new TextDecoder().decode(decrypted.payload));
+  assert.equal(event.operation, 'delete');
+  assert.equal(committedInput.baseRecordVersion, 7);
+  assert.equal((await outboxRepository.getById('conflicted-upsert'))?.state, 'SUPERSEDED');
+  assert.equal((await outboxRepository.getById('dependent-delete'))?.state, 'ACKNOWLEDGED');
+  assert.equal((await repository.listSyncOutboxOperations()).length, 0);
 });
 
 test('rejects writes while offline without changing local content', async () => {
@@ -828,24 +1452,43 @@ test('rejects writes while offline without changing local content', async () => 
   const engine = new EventSyncEngine(repository, { isOnline: () => false });
   await assert.rejects(
     () => engine.commitMutation('note', 'delete', 'note-1', null),
-    /must be online/,
+    (error: unknown) => error instanceof SyncError && error.code === 'OFFLINE',
   );
   assert.equal(await repository.getNote('note-1'), null);
 });
 
 test('creates an encrypted version-aware snapshot and advances local sync metadata', async () => {
   const repository = await createRepository();
-  const note = await repository.createNote({ title: 'Checkpoint', body: '', isPinned: false, tags: [] });
+  const note = await repository.createNote({
+    title: 'Checkpoint',
+    body: '',
+    isPinned: false,
+    tags: [],
+  });
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    latestSnapshotSequence: 2, currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    latestSnapshotSequence: 2,
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const rootKey = new Uint8Array(32);
   let uploadedBytes = new Uint8Array();
@@ -854,28 +1497,52 @@ test('creates an encrypted version-aware snapshot and advances local sync metada
     listSyncObjectsAfter: async () => [],
     updateDeviceCursor: async () => ({}),
     lookupCurrentGoogleAccount: async () => ({
-      id: 'account-1', googleUserId: 'google-1', googleEmail: 'writer@example.com', createdAt: '',
-      activePrimaryDeviceId: 'device-1', currentSyncSequence: 2, currentSnapshotSequence: 2,
+      id: 'account-1',
+      googleUserId: 'google-1',
+      googleEmail: 'writer@example.com',
+      createdAt: '',
+      activePrimaryDeviceId: 'device-1',
+      currentSyncSequence: 2,
+      currentSnapshotSequence: 2,
       recoveryConfigured: true,
     }),
     commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => ({
-      id: 'snapshot-object-3', accountId: 'account-1', sequence: 3, driveFileId: input.driveFileId,
-      objectKind: 'snapshot', sha256: input.sha256, sizeBytes: input.sizeBytes,
-      createdByDeviceId: 'device-1', createdAt: '',
+      id: 'snapshot-object-3',
+      accountId: 'account-1',
+      sequence: 3,
+      driveFileId: input.driveFileId,
+      objectKind: 'snapshot',
+      sha256: input.sha256,
+      sizeBytes: input.sizeBytes,
+      createdByDeviceId: 'device-1',
+      createdAt: '',
     }),
   } as unknown as SupabaseControlPlaneClient;
   const engine = new EventSyncEngine(repository, {
     isOnline: () => true,
     now: () => 1,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: rootKey, devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: rootKey,
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: {
+        accessToken: 'supabase',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive',
     }),
     createControlPlane: () => controlPlane,
-    upload: async input => { uploadedBytes = input.bytes; return { id: 'snapshot-drive-3' }; },
+    upload: async (input) => {
+      uploadedBytes = input.bytes;
+      return { id: 'snapshot-drive-3' };
+    },
     maintenance: async () => ({
       objectsToRetire: [],
       snapshotsToRetire: [],
@@ -908,17 +1575,33 @@ test('forced snapshot refreshes partitioned restore manifest for companion pairi
     photoUris: [],
   });
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    latestSnapshotSequence: 8, currentSyncSequence: 20, keyEpoch: 4,
-    partitionedSyncEnabled: true, latestManifestDriveFileId: 'old-manifest',
-    latestManifestSequence: 12, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    latestSnapshotSequence: 8,
+    currentSyncSequence: 20,
+    keyEpoch: 4,
+    partitionedSyncEnabled: true,
+    latestManifestDriveFileId: 'old-manifest',
+    latestManifestSequence: 12,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const rootKey = crypto.getRandomValues(new Uint8Array(32));
   const uploaded = new Map<string, Uint8Array>();
@@ -937,10 +1620,18 @@ test('forced snapshot refreshes partitioned restore manifest for companion pairi
       committedInputs.push(input);
       sequence += 1;
       return {
-        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
-        objectKind: input.objectKind, sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', partitionKey: input.partitionKey,
-        affectedPartitionKeys: input.affectedPartitionKeys || [], operationId: input.operationId,
+        id: `object-${sequence}`,
+        accountId: 'account-1',
+        sequence,
+        driveFileId: input.driveFileId,
+        objectKind: input.objectKind,
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        partitionKey: input.partitionKey,
+        affectedPartitionKeys: input.affectedPartitionKeys || [],
+        operationId: input.operationId,
         keyEpoch: input.keyEpoch,
       };
     },
@@ -949,16 +1640,25 @@ test('forced snapshot refreshes partitioned restore manifest for companion pairi
     isOnline: () => true,
     now: () => Date.parse('2026-07-11T00:00:00.000Z'),
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: rootKey,
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: rootKey,
       accountRootKeys: { 4: rootKey },
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive',
     }),
     createControlPlane: () => controlPlane,
-    upload: async input => {
+    upload: async (input) => {
       uploadCount += 1;
       const id = `drive-${input.objectKind}-${uploadCount}`;
       uploaded.set(id, input.bytes);
@@ -976,36 +1676,66 @@ test('forced snapshot refreshes partitioned restore manifest for companion pairi
   const manifestObject = await engine.createSnapshot();
 
   assert.equal(manifestObject?.objectKind, 'manifest');
-  assert.ok(committedInputs.some(input => input.objectKind === 'partition_snapshot'));
+  assert.ok(committedInputs.some((input) => input.objectKind === 'partition_snapshot'));
   assert.equal(committedInputs.at(-1).objectKind, 'manifest');
   assert.match(committedInputs.at(-1).operationId, /^partition-refresh:account-1:4:/);
-  assert.equal(committedInputs.filter(input => input.objectKind === 'snapshot').length, 0);
+  assert.equal(committedInputs.filter((input) => input.objectKind === 'snapshot').length, 0);
   assert.equal(lastCursorSequence, manifestObject?.sequence);
 
-  const decryptedManifest = await decryptSyncPayload(rootKey, uploaded.get(manifestObject!.driveFileId)!);
+  const decryptedManifest = await decryptSyncPayload(
+    rootKey,
+    uploaded.get(manifestObject!.driveFileId)!,
+  );
   const parsedManifest = parsePartitionManifestPayload(decryptedManifest.payload, 'account-1');
-  const entryPartition = parsedManifest.partitions.find(partition => partition.partitionKey === 'month:2026-07');
+  const entryPartition = parsedManifest.partitions.find(
+    (partition) => partition.partitionKey === 'month:2026-07',
+  );
   assert.equal(entryPartition?.entryCount, 1);
-  assert.equal(entryPartition?.latestSnapshotDriveFileId?.startsWith('drive-partition_snapshot-'), true);
-  assert.equal((await repository.getLocalSyncAccountState())?.latestManifestDriveFileId, manifestObject?.driveFileId);
+  assert.equal(
+    entryPartition?.latestSnapshotDriveFileId?.startsWith('drive-partition_snapshot-'),
+    true,
+  );
+  assert.equal(
+    (await repository.getLocalSyncAccountState())?.latestManifestDriveFileId,
+    manifestObject?.driveFileId,
+  );
   assert.equal((await repository.getEntry(entry.id))?.title, 'Visible after repair');
 });
 
 test('commits encrypted media before its entry event and hydrates it on another runtime', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    latestSnapshotSequence: 2, currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    latestSnapshotSequence: 2,
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const rootKey = new Uint8Array(32);
-  const uploads: Array<{ kind: string; bytes: Uint8Array; id: string; appProperties?: Record<string, string> }> = [];
+  const uploads: Array<{
+    kind: string;
+    bytes: Uint8Array;
+    id: string;
+    appProperties?: Record<string, string>;
+  }> = [];
   let batchKinds: string[] = [];
   let sequence = 2;
   const controlPlane = {
@@ -1017,9 +1747,15 @@ test('commits encrypted media before its entry event and hydrates it on another 
       return input.objects.map((object: any) => {
         sequence += 1;
         return {
-          id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: object.driveFileId,
-          objectKind: object.objectKind, sha256: object.sha256, sizeBytes: object.sizeBytes,
-          createdByDeviceId: 'device-1', createdAt: '',
+          id: `object-${sequence}`,
+          accountId: 'account-1',
+          sequence,
+          driveFileId: object.driveFileId,
+          objectKind: object.objectKind,
+          sha256: object.sha256,
+          sizeBytes: object.sizeBytes,
+          createdByDeviceId: 'device-1',
+          createdAt: '',
           recordType: object.objectKind === 'event' ? input.recordType : null,
           recordId: object.objectKind === 'event' ? input.recordId : null,
           baseRecordVersion: object.objectKind === 'event' ? input.baseRecordVersion : null,
@@ -1035,17 +1771,35 @@ test('commits encrypted media before its entry event and hydrates it on another 
     isOnline: () => true,
     now: () => 1,
     loadSecrets: async () => ({
-      version: 1 as const, accountId: 'account-1', accountRootKey: rootKey, devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      version: 1 as const,
+      accountId: 'account-1',
+      accountRootKey: rootKey,
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: {
+        accessToken: 'supabase',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive',
     }),
     createControlPlane: () => controlPlane,
-    createThumbnail: async () => ({ bytes: new TextEncoder().encode('thumb'), mimeType: 'image/jpeg' }),
+    createThumbnail: async () => ({
+      bytes: new TextEncoder().encode('thumb'),
+      mimeType: 'image/jpeg',
+    }),
     upload: async (input: any) => {
       const id = `drive-${input.objectKind}-${uploads.length + 1}`;
-      uploads.push({ kind: input.objectKind, bytes: input.bytes, id, appProperties: input.appProperties });
+      uploads.push({
+        kind: input.objectKind,
+        bytes: input.bytes,
+        id,
+        appProperties: input.appProperties,
+      });
       return { id };
     },
   };
@@ -1053,14 +1807,27 @@ test('commits encrypted media before its entry event and hydrates it on another 
   const photoDataUri = 'data:image/png;base64,aGVsbG8=';
   const secondPhotoDataUri = 'data:image/png;base64,d29ybGQ=';
   const entry = {
-    id: 'entry-media', diaryId: 'diary-default', date: '2026-07-06', title: 'Photo', body: '',
-    moodName: 'Calm', moodEmoji: '', tags: [], photoUris: [photoDataUri, secondPhotoDataUri], photoCount: 2,
-    wordCount: 0, createdAt: 1, updatedAt: 1,
+    id: 'entry-media',
+    diaryId: 'diary-default',
+    date: '2026-07-06',
+    title: 'Photo',
+    body: '',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [photoDataUri, secondPhotoDataUri],
+    photoCount: 2,
+    wordCount: 0,
+    createdAt: 1,
+    updatedAt: 1,
   };
 
   await engine.commitMutation('entry', 'upsert', entry.id, entry);
 
-  assert.deepEqual(uploads.map(upload => upload.kind), ['media', 'thumbnail', 'media', 'thumbnail', 'event']);
+  assert.deepEqual(
+    uploads.map((upload) => upload.kind),
+    ['media', 'thumbnail', 'media', 'thumbnail', 'event'],
+  );
   assert.equal(uploads[0].appProperties?.mediaKind, 'image');
   assert.equal(uploads[1].appProperties?.mediaKind, 'image');
   assert.deepEqual(batchKinds, ['media', 'thumbnail', 'media', 'thumbnail', 'event']);
@@ -1071,43 +1838,71 @@ test('commits encrypted media before its entry event and hydrates it on another 
   assert.equal(parsedReference?.driveFileId, 'drive-media-1');
   assert.equal(parseSyncMediaReference(stored?.photoUris[1])?.driveFileId, 'drive-media-3');
   const decryptedMedia = await decryptSyncPayload(rootKey, uploads[0].bytes);
-  assert.equal(new TextDecoder().decode(decodeSyncMediaPayload(decryptedMedia.payload).bytes), 'hello');
+  assert.equal(
+    new TextDecoder().decode(decodeSyncMediaPayload(decryptedMedia.payload).bytes),
+    'hello',
+  );
   const decryptedThumbnail = await decryptSyncPayload(rootKey, uploads[1].bytes);
   assert.equal(decryptedThumbnail.objectKind, 'thumbnail');
-  assert.equal(new TextDecoder().decode(decodeSyncThumbnailPayload(decryptedThumbnail.payload).bytes), 'thumb');
+  assert.equal(
+    new TextDecoder().decode(decodeSyncThumbnailPayload(decryptedThumbnail.payload).bytes),
+    'thumb',
+  );
   const decryptedSecondMedia = await decryptSyncPayload(rootKey, uploads[2].bytes);
-  assert.equal(new TextDecoder().decode(decodeSyncMediaPayload(decryptedSecondMedia.payload).bytes), 'world');
+  assert.equal(
+    new TextDecoder().decode(decodeSyncMediaPayload(decryptedSecondMedia.payload).bytes),
+    'world',
+  );
 
   const pointer = await repository.getSyncMediaPointerByDriveFileId('drive-media-1');
   assert.equal(pointer?.sequence, 3);
   assert.equal(pointer?.thumbnailDriveFileId, 'drive-thumbnail-2');
-  await repository.saveSyncMediaPointer({ ...pointer!, localUri: 'http://localhost/_capacitor_file_/photo.jpg' });
+  await repository.saveSyncMediaPointer({
+    ...pointer!,
+    localUri: 'http://localhost/_capacitor_file_/photo.jpg',
+  });
   const secondPointer = await repository.getSyncMediaPointerByDriveFileId('drive-media-3');
   assert.equal(secondPointer?.sequence, 5);
   assert.equal(secondPointer?.thumbnailDriveFileId, 'drive-thumbnail-4');
   await repository.saveSyncMediaPointer({ ...secondPointer!, localUri: undefined });
   const freshEngine = new EventSyncEngine(repository, {
     ...dependencies,
-    download: async (_session, fileId) => uploads.find(upload => upload.id === fileId)!.bytes,
+    download: async (_session, fileId) => uploads.find((upload) => upload.id === fileId)!.bytes,
   });
   const hydrated = await freshEngine.hydrateEntries([stored!]);
   assert.equal(hydrated[0].photoUris[0], photoDataUri);
   assert.equal(hydrated[0].photoUris[1], secondPhotoDataUri);
-  assert.equal((await repository.getSyncMediaPointerByDriveFileId('drive-media-1'))?.localUri, photoDataUri);
+  assert.equal(
+    (await repository.getSyncMediaPointerByDriveFileId('drive-media-1'))?.localUri,
+    photoDataUri,
+  );
 });
 
 test('preserves a stale note edit as a recovered copy after pulling the winner', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let commitAttempt = 0;
   const controlPlane = {
@@ -1117,13 +1912,22 @@ test('preserves a stale note edit as a recovered copy after pulling the winner',
     commitSyncObject: async (input: any): Promise<SyncObjectMetadata> => {
       commitAttempt += 1;
       if (commitAttempt === 1) {
-        throw new SupabaseControlPlaneError('stale_record_version', 409, {});
+        throw new SupabaseControlPlaneError('conflict', 409, { code: 'stale_record_version' });
       }
       return {
-        id: 'recovered-object', accountId: 'account-1', sequence: 3,
-        driveFileId: input.driveFileId, objectKind: 'event', sha256: input.sha256,
-        sizeBytes: input.sizeBytes, createdByDeviceId: 'device-1', createdAt: '',
-        recordType: 'note', recordId: input.recordId, baseRecordVersion: 0, recordVersion: 1,
+        id: 'recovered-object',
+        accountId: 'account-1',
+        sequence: 3,
+        driveFileId: input.driveFileId,
+        objectKind: 'event',
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        recordType: 'note',
+        recordId: input.recordId,
+        baseRecordVersion: 0,
+        recordVersion: 1,
       };
     },
   } as unknown as SupabaseControlPlaneClient;
@@ -1131,19 +1935,33 @@ test('preserves a stale note edit as a recovered copy after pulling the winner',
     isOnline: () => true,
     now: () => 10,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive',
     }),
     createControlPlane: () => controlPlane,
     upload: async () => ({ id: `drive-${commitAttempt + 1}` }),
   });
   const staleNote = {
-    id: 'note-1', title: 'My edit', body: 'Keep this', isPinned: false,
-    tags: [], createdAt: 1, updatedAt: 2,
+    id: 'note-1',
+    title: 'My edit',
+    body: 'Keep this',
+    isPinned: false,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 2,
   };
 
   await assert.rejects(
@@ -1160,34 +1978,56 @@ test('preserves a stale note edit as a recovered copy after pulling the winner',
 test('preserves local-first outbox conflicts and queues a recovered copy', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const controlPlane = {
     getDeviceStatus: async () => device,
     listSyncObjectsAfter: async () => [],
     updateDeviceCursor: async () => ({}),
     commitSyncObject: async () => {
-      throw new SupabaseControlPlaneError('stale_record_version', 409, {});
+      throw new SupabaseControlPlaneError('conflict', 409, { code: 'stale_record_version' });
     },
   } as unknown as SupabaseControlPlaneClient;
   const engine = new EventSyncEngine(repository, {
     isOnline: () => true,
     now: () => 10,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive',
     }),
     createControlPlane: () => controlPlane,
     upload: async () => ({ id: 'drive-conflict' }),
@@ -1215,8 +2055,12 @@ test('preserves local-first outbox conflicts and queues a recovered copy', async
   await engine.flushPendingOutbox();
 
   const operations = await repository.listSyncOutboxOperations();
-  const failedOriginal = operations.find(operation => operation.operationId === 'operation-local-conflict');
-  const recovered = operations.find(operation => operation.recordId.startsWith('note-recovered-'));
+  const failedOriginal = operations.find(
+    (operation) => operation.operationId === 'operation-local-conflict',
+  );
+  const recovered = operations.find((operation) =>
+    operation.recordId.startsWith('note-recovered-'),
+  );
   const notes = await repository.listNotes();
 
   assert.equal(failedOriginal?.state, 'conflict_preserved');
@@ -1226,8 +2070,8 @@ test('preserves local-first outbox conflicts and queues a recovered copy', async
   assert.equal(recovered?.state, 'prepared');
   assert.equal(recovered?.localApplied, true);
   assert.equal(notes.length, 2);
-  assert.ok(notes.some(stored => stored.id === note.id && stored.title === 'Local edit'));
-  assert.ok(notes.some(stored => stored.title === 'Local edit (Recovered copy)'));
+  assert.ok(notes.some((stored) => stored.id === note.id && stored.title === 'Local edit'));
+  assert.ok(notes.some((stored) => stored.title === 'Local edit (Recovered copy)'));
   const status = await repository.getSyncStatusSummary();
   assert.equal(status.failedOperationCount, 0);
   assert.equal(status.pendingOutboxCount, 1);
@@ -1247,15 +2091,29 @@ test('primary devices lazily migrate to partitioned sync when no manifest exists
     photoUris: [],
   });
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    latestSnapshotSequence: 2, currentSyncSequence: 2, linkedAt: 1,
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    latestSnapshotSequence: 2,
+    currentSyncSequence: 2,
+    linkedAt: 1,
   });
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const committedKinds: string[] = [];
   let sequence = 2;
@@ -1273,9 +2131,16 @@ test('primary devices lazily migrate to partitioned sync when no manifest exists
       committedKinds.push(input.objectKind);
       sequence += 1;
       return {
-        id: `object-${sequence}`, accountId: 'account-1', sequence, driveFileId: input.driveFileId,
-        objectKind: input.objectKind, sha256: input.sha256, sizeBytes: input.sizeBytes,
-        createdByDeviceId: 'device-1', createdAt: '', partitionKey: input.partitionKey,
+        id: `object-${sequence}`,
+        accountId: 'account-1',
+        sequence,
+        driveFileId: input.driveFileId,
+        objectKind: input.objectKind,
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
+        partitionKey: input.partitionKey,
       };
     },
   } as unknown as SupabaseControlPlaneClient;
@@ -1283,15 +2148,24 @@ test('primary devices lazily migrate to partitioned sync when no manifest exists
     isOnline: () => true,
     now: () => 1,
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32),
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
       devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
-    upload: async input => ({ id: `drive-${input.objectKind}-${committedKinds.length + 1}` }),
+    upload: async (input) => ({ id: `drive-${input.objectKind}-${committedKinds.length + 1}` }),
   });
 
   assert.equal(await engine.ensurePartitionedSync(), true);
@@ -1304,50 +2178,105 @@ test('primary devices lazily migrate to partitioned sync when no manifest exists
 test('partitioned sync pulls hydrated archive partitions by partition cursor', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 50, partitionedSyncEnabled: true, latestManifestDriveFileId: 'manifest-1',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 50,
+    partitionedSyncEnabled: true,
+    latestManifestDriveFileId: 'manifest-1',
     linkedAt: 1,
   });
   await repository.markPartitionHydrated('month:2026-07', 4);
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const rootKey = new Uint8Array(32);
-  const note = { id: 'note-partition', title: 'From archive pull', body: '', isPinned: false, tags: [], createdAt: Date.parse('2026-07-04T00:00:00.000Z'), updatedAt: 1 };
+  const note = {
+    id: 'note-partition',
+    title: 'From archive pull',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: Date.parse('2026-07-04T00:00:00.000Z'),
+    updatedAt: 1,
+  };
   const event = createSyncDomainEvent({
-    accountId: 'account-1', deviceId: 'device-2', recordType: 'note', operation: 'upsert',
-    recordId: note.id, baseRecordVersion: 0, payload: note,
+    accountId: 'account-1',
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: note.id,
+    baseRecordVersion: 0,
+    payload: note,
   });
   const encrypted = await encryptSyncPayload(rootKey, 'event', encodeSyncDomainEvent(event));
   let partitionCursorUpdated = 0;
   const controlPlane = {
     getDeviceStatus: async () => device,
-    listPartitionObjectsAfter: async (_deviceId: string, partitionKey: string, afterSequence: number) => (
+    listPartitionObjectsAfter: async (
+      _deviceId: string,
+      partitionKey: string,
+      afterSequence: number,
+    ) =>
       partitionKey === 'month:2026-07' && afterSequence === 4
-        ? [{
-            id: 'object-5', accountId: 'account-1', sequence: 5, driveFileId: 'drive-event-5',
-            objectKind: 'event', sha256: encrypted.sha256, sizeBytes: encrypted.bytes.byteLength,
-            createdByDeviceId: 'device-2', createdAt: '', recordType: 'note', recordId: note.id,
-            baseRecordVersion: 0, recordVersion: 1, partitionKey,
-          }]
-        : []
-    ),
-    updatePartitionCursor: async (input: any) => { partitionCursorUpdated = input.lastAppliedSequence; return {}; },
+        ? [
+            {
+              id: 'object-5',
+              accountId: 'account-1',
+              sequence: 5,
+              driveFileId: 'drive-event-5',
+              objectKind: 'event',
+              sha256: encrypted.sha256,
+              sizeBytes: encrypted.bytes.byteLength,
+              createdByDeviceId: 'device-2',
+              createdAt: '',
+              recordType: 'note',
+              recordId: note.id,
+              baseRecordVersion: 0,
+              recordVersion: 1,
+              partitionKey,
+            },
+          ]
+        : [],
+    updatePartitionCursor: async (input: any) => {
+      partitionCursorUpdated = input.lastAppliedSequence;
+      return {};
+    },
     updateDeviceCursor: async () => ({}),
   } as unknown as SupabaseControlPlaneClient;
   const engine = new EventSyncEngine(repository, {
     isOnline: () => true,
     now: () => Date.parse('2026-07-06T00:00:00.000Z'),
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: rootKey, devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: rootKey,
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     download: async () => encrypted.bytes,
@@ -1370,53 +2299,109 @@ test('partitioned sync pulls hydrated archive partitions by partition cursor', a
 test('partitioned sync repairs an untracked recent month before pulling companion events', async () => {
   const repository = await createRepository();
   await repository.createEntry({
-    diaryId: 'diary-default', date: '2026-07-05', title: 'From phone', body: '',
-    moodName: 'Calm', moodEmoji: '', tags: [], photoUris: [],
+    diaryId: 'diary-default',
+    date: '2026-07-05',
+    title: 'From phone',
+    body: '',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
   });
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 3, partitionedSyncEnabled: true, latestManifestDriveFileId: 'manifest-1',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 3,
+    partitionedSyncEnabled: true,
+    latestManifestDriveFileId: 'manifest-1',
     linkedAt: 1,
   });
   await repository.markPartitionHydrated('core', 2);
 
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const rootKey = new Uint8Array(32);
   const companionEntry = {
-    id: 'entry-from-web', diaryId: 'diary-default', date: '2026-07-06', title: 'From web', body: '',
-    moodName: 'Calm', moodEmoji: '', tags: [], photoUris: [], photoCount: 0, wordCount: 0,
-    createdAt: 4, updatedAt: 4,
+    id: 'entry-from-web',
+    diaryId: 'diary-default',
+    date: '2026-07-06',
+    title: 'From web',
+    body: '',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+    photoCount: 0,
+    wordCount: 0,
+    createdAt: 4,
+    updatedAt: 4,
   };
   const event = createSyncDomainEvent({
-    accountId: 'account-1', deviceId: 'device-2', recordType: 'entry', operation: 'upsert',
-    recordId: companionEntry.id, baseRecordVersion: 0, payload: companionEntry,
+    accountId: 'account-1',
+    deviceId: 'device-2',
+    recordType: 'entry',
+    operation: 'upsert',
+    recordId: companionEntry.id,
+    baseRecordVersion: 0,
+    payload: companionEntry,
   });
   const encrypted = await encryptSyncPayload(rootKey, 'event', encodeSyncDomainEvent(event));
   const partitionCursorUpdates: number[] = [];
   const controlPlane = {
     getDeviceStatus: async () => device,
-    listPartitionHeads: async () => [{
-      accountId: 'account-1', partitionKey: 'month:2026-07', latestSnapshotSequence: 0,
-      latestEventSequence: 4, updatedAt: '',
-    }],
-    listPartitionObjectsAfter: async (_deviceId: string, partitionKey: string, afterSequence: number) => (
+    listPartitionHeads: async () => [
+      {
+        accountId: 'account-1',
+        partitionKey: 'month:2026-07',
+        latestSnapshotSequence: 0,
+        latestEventSequence: 4,
+        updatedAt: '',
+      },
+    ],
+    listPartitionObjectsAfter: async (
+      _deviceId: string,
+      partitionKey: string,
+      afterSequence: number,
+    ) =>
       partitionKey === 'month:2026-07' && afterSequence === 3
-        ? [{
-            id: 'object-4', accountId: 'account-1', sequence: 4, driveFileId: 'drive-event-4',
-            objectKind: 'event', sha256: encrypted.sha256, sizeBytes: encrypted.bytes.byteLength,
-            createdByDeviceId: 'device-2', createdAt: '', recordType: 'entry', recordId: companionEntry.id,
-            baseRecordVersion: 0, recordVersion: 1, partitionKey,
-          }]
-        : []
-    ),
+        ? [
+            {
+              id: 'object-4',
+              accountId: 'account-1',
+              sequence: 4,
+              driveFileId: 'drive-event-4',
+              objectKind: 'event',
+              sha256: encrypted.sha256,
+              sizeBytes: encrypted.bytes.byteLength,
+              createdByDeviceId: 'device-2',
+              createdAt: '',
+              recordType: 'entry',
+              recordId: companionEntry.id,
+              baseRecordVersion: 0,
+              recordVersion: 1,
+              partitionKey,
+            },
+          ]
+        : [],
     updatePartitionCursor: async (input: any) => {
-      if (input.partitionKey === 'month:2026-07') partitionCursorUpdates.push(input.lastAppliedSequence);
+      if (input.partitionKey === 'month:2026-07')
+        partitionCursorUpdates.push(input.lastAppliedSequence);
       return {};
     },
     updateDeviceCursor: async () => ({}),
@@ -1425,16 +2410,30 @@ test('partitioned sync repairs an untracked recent month before pulling companio
     isOnline: () => true,
     now: () => Date.parse('2026-07-06T00:00:00.000Z'),
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: rootKey, devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: rootKey,
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     download: async () => encrypted.bytes,
     maintenance: async () => ({
-      objectsToRetire: [], snapshotsToRetire: [], eventsToRetire: [], mediaToRetire: [], driveFilesToDelete: [],
+      objectsToRetire: [],
+      snapshotsToRetire: [],
+      eventsToRetire: [],
+      mediaToRetire: [],
+      driveFilesToDelete: [],
     }),
   });
 
@@ -1442,71 +2441,131 @@ test('partitioned sync repairs an untracked recent month before pulling companio
 
   assert.equal((await repository.getEntry(companionEntry.id))?.title, 'From web');
   assert.deepEqual(partitionCursorUpdates, [3, 4]);
-  assert.equal((await repository.getPartitionHydrationState('month:2026-07')).lastAppliedSequence, 4);
+  assert.equal(
+    (await repository.getPartitionHydrationState('month:2026-07')).lastAppliedSequence,
+    4,
+  );
 });
 
 test('partitioned companions process new epoch key packages before partition events', async () => {
   const repository = await createRepository();
   const deviceKeys = await generateDeviceKeyPair();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'web_companion',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: deviceKeys.publicKey,
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 10, keyEpoch: 1, partitionedSyncEnabled: true, latestManifestDriveFileId: 'manifest-1',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'web_companion',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: deviceKeys.publicKey,
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 10,
+    keyEpoch: 1,
+    partitionedSyncEnabled: true,
+    latestManifestDriveFileId: 'manifest-1',
     linkedAt: 1,
   });
   await repository.markPartitionHydrated('month:2026-07', 10);
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'web_companion', publicKey: deviceKeys.publicKey,
-    displayName: 'Browser', platform: 'web', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'web_companion',
+    publicKey: deviceKeys.publicKey,
+    displayName: 'Browser',
+    platform: 'web',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const epochOneRootKey = new Uint8Array(32);
   const epochTwoRootKey = new Uint8Array(32).fill(7);
-  const keyPackageBytes = encodeCompanionKeyPackage(await wrapRootKeyForCompanion(
-    epochTwoRootKey,
-    'account-1',
-    deviceKeys.publicKey,
-    { keyEpoch: 2 },
-  ));
+  const keyPackageBytes = encodeCompanionKeyPackage(
+    await wrapRootKeyForCompanion(epochTwoRootKey, 'account-1', deviceKeys.publicKey, {
+      keyEpoch: 2,
+    }),
+  );
   const note = {
-    id: 'note-epoch-2', title: 'After rotation', body: '', isPinned: false, tags: [],
-    createdAt: Date.parse('2026-07-04T00:00:00.000Z'), updatedAt: 1,
+    id: 'note-epoch-2',
+    title: 'After rotation',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: Date.parse('2026-07-04T00:00:00.000Z'),
+    updatedAt: 1,
   };
   const event = createSyncDomainEvent({
-    accountId: 'account-1', deviceId: 'device-2', recordType: 'note', operation: 'upsert',
-    recordId: note.id, baseRecordVersion: 0, payload: note,
+    accountId: 'account-1',
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: note.id,
+    baseRecordVersion: 0,
+    payload: note,
   });
-  const encryptedEvent = await encryptSyncPayload(epochTwoRootKey, 'event', encodeSyncDomainEvent(event), { keyEpoch: 2 });
+  const encryptedEvent = await encryptSyncPayload(
+    epochTwoRootKey,
+    'event',
+    encodeSyncDomainEvent(event),
+    { keyEpoch: 2 },
+  );
   let savedSecrets: SyncSecrets = {
     version: 1 as const,
     accountId: 'account-1',
     accountRootKey: epochOneRootKey,
     accountRootKeys: { 1: epochOneRootKey },
     devicePrivateKeyJwk: deviceKeys.privateKeyJwk,
-    supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+    supabaseSession: {
+      accessToken: 'supabase-token',
+      refreshToken: 'refresh',
+      expiresAt: 2_000_000_000,
+    },
   };
   const controlPlane = {
     getDeviceStatus: async () => device,
-    listSyncObjectsAfter: async (_deviceId: string, afterSequence: number) => (
+    listSyncObjectsAfter: async (_deviceId: string, afterSequence: number) =>
       afterSequence === 10
-        ? [{
-            id: 'key-package-11', accountId: 'account-1', sequence: 11, driveFileId: 'drive-key-package-11',
-            objectKind: 'key_package', sha256: await sha256Hex(keyPackageBytes), sizeBytes: keyPackageBytes.byteLength,
-            createdByDeviceId: 'device-primary', createdAt: '', keyEpoch: 2,
-          }]
-        : []
-    ),
-    listPartitionObjectsAfter: async (_deviceId: string, partitionKey: string, afterSequence: number) => (
+        ? [
+            {
+              id: 'key-package-11',
+              accountId: 'account-1',
+              sequence: 11,
+              driveFileId: 'drive-key-package-11',
+              objectKind: 'key_package',
+              sha256: await sha256Hex(keyPackageBytes),
+              sizeBytes: keyPackageBytes.byteLength,
+              createdByDeviceId: 'device-primary',
+              createdAt: '',
+              keyEpoch: 2,
+            },
+          ]
+        : [],
+    listPartitionObjectsAfter: async (
+      _deviceId: string,
+      partitionKey: string,
+      afterSequence: number,
+    ) =>
       partitionKey === 'month:2026-07' && afterSequence === 10
-        ? [{
-            id: 'object-12', accountId: 'account-1', sequence: 12, driveFileId: 'drive-event-12',
-            objectKind: 'event', sha256: encryptedEvent.sha256, sizeBytes: encryptedEvent.bytes.byteLength,
-            createdByDeviceId: 'device-2', createdAt: '', recordType: 'note', recordId: note.id,
-            baseRecordVersion: 0, recordVersion: 1, partitionKey, keyEpoch: 2,
-          }]
-        : []
-    ),
+        ? [
+            {
+              id: 'object-12',
+              accountId: 'account-1',
+              sequence: 12,
+              driveFileId: 'drive-event-12',
+              objectKind: 'event',
+              sha256: encryptedEvent.sha256,
+              sizeBytes: encryptedEvent.bytes.byteLength,
+              createdByDeviceId: 'device-2',
+              createdAt: '',
+              recordType: 'note',
+              recordId: note.id,
+              baseRecordVersion: 0,
+              recordVersion: 1,
+              partitionKey,
+              keyEpoch: 2,
+            },
+          ]
+        : [],
     updatePartitionCursor: async () => ({}),
     updateDeviceCursor: async () => ({}),
   } as unknown as SupabaseControlPlaneClient;
@@ -1514,12 +2573,18 @@ test('partitioned companions process new epoch key packages before partition eve
     isOnline: () => true,
     now: () => Date.parse('2026-07-06T00:00:00.000Z'),
     loadSecrets: async () => savedSecrets,
-    saveSecrets: async secrets => { savedSecrets = secrets; },
+    saveSecrets: async (secrets) => {
+      savedSecrets = secrets;
+    },
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
-    download: async (_session, fileId) => (fileId === 'drive-key-package-11' ? keyPackageBytes : encryptedEvent.bytes),
+    download: async (_session, fileId) =>
+      fileId === 'drive-key-package-11' ? keyPackageBytes : encryptedEvent.bytes,
     maintenance: async () => ({
       objectsToRetire: [],
       snapshotsToRetire: [],
@@ -1534,16 +2599,26 @@ test('partitioned companions process new epoch key packages before partition eve
   assert.deepEqual(savedSecrets.accountRootKeys?.[2], epochTwoRootKey);
   assert.equal((await repository.getLocalSyncAccountState())?.keyEpoch, 2);
   assert.equal((await repository.getNote(note.id))?.title, 'After rotation');
-  assert.equal((await repository.getPartitionHydrationState('month:2026-07')).lastAppliedSequence, 12);
+  assert.equal(
+    (await repository.getPartitionHydrationState('month:2026-07')).lastAppliedSequence,
+    12,
+  );
 });
 
 test('background archive hydration imports one available month when policy allows', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 20, partitionedSyncEnabled: true, latestManifestDriveFileId: 'drive-manifest',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 20,
+    partitionedSyncEnabled: true,
+    latestManifestDriveFileId: 'drive-manifest',
     linkedAt: 1,
   });
   await repository.markPartitionAvailable('month:2021-03', 6);
@@ -1583,53 +2658,86 @@ test('background archive hydration imports one available month when policy allow
     encodePartitionManifestPayload(manifest),
   );
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   let partitionCursorUpdated = 0;
   const controlPlane = {
     getDeviceStatus: async () => device,
     getLatestRestoreManifest: async () => ({
       manifestObject: {
-        id: 'object-manifest', accountId: 'account-1', sequence: 21, driveFileId: 'drive-manifest',
-        objectKind: 'manifest', sha256: encryptedManifest.sha256, sizeBytes: encryptedManifest.bytes.byteLength,
-        createdByDeviceId: 'device-1', createdAt: '',
+        id: 'object-manifest',
+        accountId: 'account-1',
+        sequence: 21,
+        driveFileId: 'drive-manifest',
+        objectKind: 'manifest',
+        sha256: encryptedManifest.sha256,
+        sizeBytes: encryptedManifest.bytes.byteLength,
+        createdByDeviceId: 'device-1',
+        createdAt: '',
       },
       coreSnapshotObject: null,
       currentSyncSequence: 21,
       keyEpoch: 1,
     }),
-    getPartitionRestoreBundle: async (_deviceId: string, partitionKeys: string[]) => (
+    getPartitionRestoreBundle: async (_deviceId: string, partitionKeys: string[]) =>
       partitionKeys.includes('month:2021-03')
-        ? [{
-            partitionKey: 'month:2021-03',
-            snapshotObject: {
-              id: 'object-partition', accountId: 'account-1', sequence: 6, driveFileId: 'drive-partition-old',
-              objectKind: 'partition_snapshot', sha256: encryptedPartition.sha256, sizeBytes: encryptedPartition.bytes.byteLength,
-              createdByDeviceId: 'device-1', createdAt: '', partitionKey: 'month:2021-03',
+        ? [
+            {
+              partitionKey: 'month:2021-03',
+              snapshotObject: {
+                id: 'object-partition',
+                accountId: 'account-1',
+                sequence: 6,
+                driveFileId: 'drive-partition-old',
+                objectKind: 'partition_snapshot',
+                sha256: encryptedPartition.sha256,
+                sizeBytes: encryptedPartition.bytes.byteLength,
+                createdByDeviceId: 'device-1',
+                createdAt: '',
+                partitionKey: 'month:2021-03',
+              },
+              tailObjects: [],
             },
-            tailObjects: [],
-          }]
-        : []
-    ),
-    updatePartitionCursor: async (input: any) => { partitionCursorUpdated = input.lastAppliedSequence; return {}; },
+          ]
+        : [],
+    updatePartitionCursor: async (input: any) => {
+      partitionCursorUpdated = input.lastAppliedSequence;
+      return {};
+    },
     updateDeviceCursor: async () => ({}),
   } as unknown as SupabaseControlPlaneClient;
   const engine = new EventSyncEngine(repository, {
     isOnline: () => true,
     now: () => Date.parse('2026-07-06T00:00:00.000Z'),
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: rootKey, devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: rootKey,
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
-    download: async (_session, fileId) => (
-      fileId === 'drive-manifest' ? encryptedManifest.bytes : encryptedPartition.bytes
-    ),
+    download: async (_session, fileId) =>
+      fileId === 'drive-manifest' ? encryptedManifest.bytes : encryptedPartition.bytes,
     getArchiveHydrationPolicyInput: () => ({
       isOnline: true,
       isWifi: true,
@@ -1649,10 +2757,17 @@ test('background archive hydration imports one available month when policy allow
 test('background archive hydration skips available months when policy blocks', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 20, partitionedSyncEnabled: true, latestManifestDriveFileId: 'drive-manifest',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 20,
+    partitionedSyncEnabled: true,
+    latestManifestDriveFileId: 'drive-manifest',
     linkedAt: 1,
   });
   await repository.markPartitionAvailable('month:2021-03', 6);
@@ -1682,10 +2797,17 @@ test('background archive hydration skips available months when policy blocks', a
 test('background archive hydration backs off failed months until retry time', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 20, partitionedSyncEnabled: true, latestManifestDriveFileId: 'drive-manifest',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 20,
+    partitionedSyncEnabled: true,
+    latestManifestDriveFileId: 'drive-manifest',
     linkedAt: 1,
   });
   await repository.markPartitionAvailable('month:2021-03', 6);
@@ -1719,17 +2841,31 @@ test('background archive hydration backs off failed months until retry time', as
 test('background archive hydration records a failed month only once', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
-    accountId: 'account-1', deviceId: 'device-1', deviceRole: 'primary_mobile',
-    googleUserId: 'google-1', googleEmail: 'writer@example.com', devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1', latestSnapshotDriveFileId: 'snapshot-1',
-    currentSyncSequence: 20, partitionedSyncEnabled: true, latestManifestDriveFileId: 'drive-manifest',
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    recoveryKeyDriveFileId: 'key-1',
+    latestSnapshotDriveFileId: 'snapshot-1',
+    currentSyncSequence: 20,
+    partitionedSyncEnabled: true,
+    latestManifestDriveFileId: 'drive-manifest',
     linkedAt: 1,
   });
   await repository.markPartitionAvailable('month:2021-03', 6);
   const device: SyncDevice = {
-    id: 'device-1', accountId: 'account-1', role: 'primary_mobile', publicKey: '{}',
-    displayName: 'Phone', platform: 'android', createdAt: '', lastSeenAt: '',
-    revokedAt: null, replacedByDeviceId: null,
+    id: 'device-1',
+    accountId: 'account-1',
+    role: 'primary_mobile',
+    publicKey: '{}',
+    displayName: 'Phone',
+    platform: 'android',
+    createdAt: '',
+    lastSeenAt: '',
+    revokedAt: null,
+    replacedByDeviceId: null,
   };
   const controlPlane = {
     getDeviceStatus: async () => device,
@@ -1744,11 +2880,21 @@ test('background archive hydration records a failed month only once', async () =
     isOnline: () => true,
     now: () => Date.parse('2026-07-06T00:00:00.000Z'),
     loadSecrets: async () => ({
-      version: 1, accountId: 'account-1', accountRootKey: new Uint8Array(32), devicePrivateKeyJwk: '{}',
-      supabaseSession: { accessToken: 'supabase-token', refreshToken: 'refresh', expiresAt: 2_000_000_000 },
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey: new Uint8Array(32),
+      devicePrivateKeyJwk: '{}',
+      supabaseSession: {
+        accessToken: 'supabase-token',
+        refreshToken: 'refresh',
+        expiresAt: 2_000_000_000,
+      },
     }),
     restoreGoogleSession: async () => ({
-      userId: 'google-1', email: 'writer@example.com', displayName: null, accessToken: 'drive-token',
+      userId: 'google-1',
+      email: 'writer@example.com',
+      displayName: null,
+      accessToken: 'drive-token',
     }),
     createControlPlane: () => controlPlane,
     getArchiveHydrationPolicyInput: () => ({

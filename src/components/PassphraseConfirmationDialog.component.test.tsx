@@ -4,18 +4,19 @@ import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import PassphraseConfirmationDialog from './PassphraseConfirmationDialog';
 
-const renderDialog = (props: Partial<ComponentProps<typeof PassphraseConfirmationDialog>> = {}) => render(
-  <PassphraseConfirmationDialog
-    open
-    title="Revoke companion device"
-    description="Confirm the destructive action."
-    confirmLabel="Revoke device"
-    loading={false}
-    onCancel={vi.fn()}
-    onConfirm={vi.fn()}
-    {...props}
-  />,
-);
+const renderDialog = (props: Partial<ComponentProps<typeof PassphraseConfirmationDialog>> = {}) =>
+  render(
+    <PassphraseConfirmationDialog
+      open
+      title="Revoke companion device"
+      description="Confirm the destructive action."
+      confirmLabel="Revoke device"
+      loading={false}
+      onCancel={vi.fn()}
+      onConfirm={vi.fn()}
+      {...props}
+    />,
+  );
 
 describe('PassphraseConfirmationDialog', () => {
   it('masks the passphrase and confirms without logging or exposing it', async () => {

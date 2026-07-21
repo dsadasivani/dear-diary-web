@@ -39,9 +39,8 @@ export interface CreateSyncDomainEventInput {
   affectedRecords?: Array<Omit<SyncAffectedRecordVersion, 'recordVersion'>>;
 }
 
-export const syncRecordKey = (recordType: SyncRecordType, recordId: string): string => (
-  `${recordType}:${recordId}`
-);
+export const syncRecordKey = (recordType: SyncRecordType, recordId: string): string =>
+  `${recordType}:${recordId}`;
 
 export const createSyncDomainEvent = (input: CreateSyncDomainEventInput): SyncDomainEvent => {
   if (!input.accountId || !input.deviceId || !input.recordId) {
@@ -50,14 +49,21 @@ export const createSyncDomainEvent = (input: CreateSyncDomainEventInput): SyncDo
   if (!Number.isInteger(input.baseRecordVersion) || input.baseRecordVersion < 0) {
     throw new Error('Sync event base record version must be a non-negative integer.');
   }
-  if (input.operation === 'upsert' && !payloadMatchesRecord(input.recordType, input.recordId, input.payload)) {
+  if (
+    input.operation === 'upsert' &&
+    !payloadMatchesRecord(input.recordType, input.recordId, input.payload)
+  ) {
     throw new Error('Sync upsert payload must match the event record ID.');
   }
   if (input.operation === 'delete' && input.payload !== null) {
     throw new Error('Sync delete events cannot contain a record payload.');
   }
-  const affectedRecords = (input.affectedRecords || []).map(record => {
-    if (!record.recordId || !Number.isInteger(record.baseRecordVersion) || record.baseRecordVersion < 0) {
+  const affectedRecords = (input.affectedRecords || []).map((record) => {
+    if (
+      !record.recordId ||
+      !Number.isInteger(record.baseRecordVersion) ||
+      record.baseRecordVersion < 0
+    ) {
       throw new Error('Affected sync record version is invalid.');
     }
     return { ...record, recordVersion: record.baseRecordVersion + 1 };
@@ -79,9 +85,8 @@ export const createSyncDomainEvent = (input: CreateSyncDomainEventInput): SyncDo
   } as SyncDomainEvent;
 };
 
-export const encodeSyncDomainEvent = (event: SyncDomainEvent): Uint8Array => (
-  encoder.encode(JSON.stringify(event))
-);
+export const encodeSyncDomainEvent = (event: SyncDomainEvent): Uint8Array =>
+  encoder.encode(JSON.stringify(event));
 
 export const decodeSyncDomainEvent = (bytes: Uint8Array): SyncDomainEvent => {
   const event = JSON.parse(decoder.decode(bytes)) as SyncDomainEvent;
@@ -99,7 +104,10 @@ export const decodeSyncDomainEvent = (bytes: Uint8Array): SyncDomainEvent => {
   ) {
     throw new Error('Encrypted sync event is invalid or unsupported.');
   }
-  if (event.operation === 'upsert' && !payloadMatchesRecord(event.recordType, event.recordId, event.payload)) {
+  if (
+    event.operation === 'upsert' &&
+    !payloadMatchesRecord(event.recordType, event.recordId, event.payload)
+  ) {
     throw new Error('Encrypted sync event payload does not match its record ID.');
   }
   if (event.operation === 'delete' && event.payload !== null) {
@@ -110,7 +118,8 @@ export const decodeSyncDomainEvent = (bytes: Uint8Array): SyncDomainEvent => {
       !affected.recordId ||
       !['diary', 'entry', 'note', 'settings', 'profile'].includes(affected.recordType) ||
       affected.recordVersion !== affected.baseRecordVersion + 1
-    ) throw new Error('Encrypted sync event affected-record metadata is invalid.');
+    )
+      throw new Error('Encrypted sync event affected-record metadata is invalid.');
   }
   return event;
 };

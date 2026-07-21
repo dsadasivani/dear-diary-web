@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { sanitizeRichTextHtml } from '../domain/richTextSanitizer';
+import { insertHtmlAtSelection, insertTextAtSelection } from '../utils/richTextSelection';
 
 interface RichTextEditorProps {
   html: string;
@@ -7,9 +8,19 @@ interface RichTextEditorProps {
   onFocus?: () => void;
   placeholder?: string;
   className?: string;
+  testId?: string;
+  autoFocus?: boolean;
 }
 
-export default function RichTextEditor({ html, onChange, onFocus, placeholder, className }: RichTextEditorProps) {
+export default function RichTextEditor({
+  html,
+  onChange,
+  onFocus,
+  placeholder,
+  className,
+  testId,
+  autoFocus = false,
+}: RichTextEditorProps) {
   const contentEditableRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -18,6 +29,12 @@ export default function RichTextEditor({ html, onChange, onFocus, placeholder, c
       contentEditableRef.current.innerHTML = sanitized;
     }
   }, [html]);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    const frame = window.requestAnimationFrame(() => contentEditableRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [autoFocus]);
 
   const handleInput = (e: React.FormEvent<HTMLDivElement>) => {
     onChange(sanitizeRichTextHtml(e.currentTarget.innerHTML));
@@ -29,11 +46,8 @@ export default function RichTextEditor({ html, onChange, onFocus, placeholder, c
     const textContent = e.clipboardData.getData('text/plain');
     const pasted = htmlContent || textContent;
     if (!pasted) return;
-    document.execCommand(
-      htmlContent ? 'insertHTML' : 'insertText',
-      false,
-      htmlContent ? sanitizeRichTextHtml(htmlContent) : textContent,
-    );
+    if (htmlContent) insertHtmlAtSelection(sanitizeRichTextHtml(htmlContent));
+    else insertTextAtSelection(textContent);
   };
 
   return (
@@ -45,6 +59,7 @@ export default function RichTextEditor({ html, onChange, onFocus, placeholder, c
       onFocus={onFocus}
       className={`focus:outline-none focus:ring-0 empty:before:content-[attr(data-placeholder)] empty:before:text-brand-plum/40 ${className}`}
       data-placeholder={placeholder}
+      data-testid={testId}
       suppressContentEditableWarning
     />
   );

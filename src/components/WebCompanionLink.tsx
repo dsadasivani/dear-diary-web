@@ -3,25 +3,18 @@ import { BookOpen, Check, Clipboard, Cloud, LoaderCircle, ShieldCheck } from 'lu
 import { diaryRepository } from '../repositories';
 import type { LocalSyncAccountState } from '../types';
 import {
-  completeCompanionPairing,
-  createCompanionPairingRequest,
-  type PendingCompanionPairing,
-} from '../sync/companionPairing';
-import { createConfiguredSupabaseControlPlaneClient } from '../sync/config';
-import {
-  clearPendingPairingSecret,
-  loadPendingPairingSecret,
-  savePendingPairingSecret,
-} from '../sync/syncSecrets';
+  completeSyncV2CompanionPairing,
+  getPendingSyncV2CompanionPairing,
+  requestSyncV2CompanionPairing,
+} from '../sync/v2/v2CompanionPairing';
 import {
   restoreWebGoogleSyncSession,
-  signOutWebGoogleSync,
   startWebGoogleSyncSignIn,
   type WebGoogleSyncSession,
 } from '../sync/webGoogleAuth';
 
 interface PendingWebCompanion {
-  pairing: PendingCompanionPairing;
+  pairing: Awaited<ReturnType<typeof requestSyncV2CompanionPairing>>;
   auth: WebGoogleSyncSession;
 }
 
@@ -30,7 +23,7 @@ interface WebCompanionLinkProps {
 }
 
 let pairingInitializationPromise: Promise<PendingWebCompanion | null> | null = null;
-let pairingCompletionPromise: ReturnType<typeof completeCompanionPairing> | null = null;
+let pairingCompletionPromise: ReturnType<typeof completeSyncV2CompanionPairing> | null = null;
 const APPROVAL_POLL_INTERVAL_MS = 1_000;
 
 const initializePairing = (): Promise<PendingWebCompanion | null> => {
@@ -38,39 +31,20 @@ const initializePairing = (): Promise<PendingWebCompanion | null> => {
     pairingInitializationPromise = (async () => {
       const auth = await restoreWebGoogleSyncSession();
       if (!auth) return null;
-      const controlPlane = createConfiguredSupabaseControlPlaneClient(auth.supabaseSession.accessToken);
-      if (!await controlPlane.lookupCurrentGoogleAccount()) {
-        await signOutWebGoogleSync();
-        throw new Error('No Dear Diary account exists for this Google account. Create it on mobile first.');
+      const stored = await getPendingSyncV2CompanionPairing(auth).catch(() => null);
+      if (stored && new Date(stored.pairing.expiresAt).getTime() > Date.now()) {
+        return {
+          pairing: {
+            pairingId: stored.pairing.pairingId,
+            requestedDeviceId: stored.requestedDeviceId,
+            pairingCode: stored.pairingCode,
+            expiresAt: stored.pairing.expiresAt,
+          },
+          auth,
+        };
       }
-      const stored = await loadPendingPairingSecret<PendingWebCompanion>();
-      if (stored) {
-        try {
-          const details = await controlPlane.getPairingSession(stored.pairing.session.id);
-          const expiresAt = new Date(details.session.expiresAt).getTime();
-          if (!details.session.approvedAt && expiresAt > Date.now()) {
-            return {
-              pairing: {
-                ...stored.pairing,
-                session: details.session,
-              },
-              auth,
-            };
-          }
-        } catch {
-          // Stale local pairing state is replaced below with a fresh request.
-        }
-        await clearPendingPairingSecret();
-      }
-      const pairing = await createCompanionPairingRequest({
-        controlPlane,
-        displayName: navigator.userAgentData?.platform || navigator.platform || 'Web browser',
-        platform: 'web',
-      });
-      const next = { pairing, auth };
-      await savePendingPairingSecret(next);
-      return next;
-    })().catch(error => {
+      return { pairing: await requestSyncV2CompanionPairing(auth), auth };
+    })().catch((error) => {
       pairingInitializationPromise = null;
       throw error;
     });
@@ -93,15 +67,24 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       try {
         const initialized = await initializePairing();
         if (!initialized) {
-          if (active) setStatus('Sign in with the Google account already linked on your primary mobile.');
+          if (active)
+            setStatus('Sign in with the Google account already linked on your primary mobile.');
           return;
         }
-        if (active) { setContext(initialized); setStatus('Waiting for approval from your primary mobile.'); }
+        if (active) {
+          setContext(initialized);
+          setStatus('Waiting for approval from your primary mobile.');
+        }
       } catch (linkError: any) {
-        if (active) { setError(linkError?.message || 'Could not start companion pairing.'); setStatus(''); }
+        if (active) {
+          setError(linkError?.message || 'Could not start companion pairing.');
+          setStatus('');
+        }
       }
     })();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -112,18 +95,22 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       completingRef.current = true;
       try {
         const existingLinkedState = await diaryRepository.getLocalSyncAccountState();
-        if (existingLinkedState) {
-          await clearPendingPairingSecret();
+        if (existingLinkedState?.syncProtocolVersion === 2) {
           pairingInitializationPromise = null;
           setIsRestoring(true);
           setStatus('Companion approved. Opening your encrypted diary...');
           await onLinked(existingLinkedState);
           return;
         }
-        const controlPlane = createConfiguredSupabaseControlPlaneClient(context.auth.supabaseSession.accessToken);
-        const details = await controlPlane.getPairingSession(context.pairing.session.id);
-        if (!details.session.approvedAt) {
-          if (new Date(details.session.expiresAt).getTime() <= Date.now()) throw new Error('Pairing request expired.');
+        const details = await getPendingSyncV2CompanionPairing(context.auth);
+        if (
+          !details ||
+          details.pairing.status === 'EXPIRED' ||
+          details.pairing.status === 'REJECTED'
+        ) {
+          throw new Error('Pairing request expired.');
+        }
+        if (details.pairing.status === 'REQUESTED') {
           return;
         }
         if (active) {
@@ -131,17 +118,12 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           setStatus('Companion approved. Restoring your encrypted diary...');
         }
         if (!pairingCompletionPromise) {
-          pairingCompletionPromise = completeCompanionPairing({
-            pending: context.pairing,
-            repository: diaryRepository,
-            controlPlane,
-            googleSession: context.auth.googleSession,
-            supabaseSession: context.auth.supabaseSession,
-          }).finally(() => { pairingCompletionPromise = null; });
+          pairingCompletionPromise = completeSyncV2CompanionPairing(context.auth).finally(() => {
+            pairingCompletionPromise = null;
+          });
         }
         const linked = await pairingCompletionPromise;
         if (linked && active) {
-          await clearPendingPairingSecret();
           pairingInitializationPromise = null;
           setIsRestoring(true);
           setStatus('Companion approved. Opening your encrypted diary...');
@@ -149,13 +131,15 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
         }
       } catch (approvalError: any) {
         if (approvalError?.message?.includes('expired')) {
-          await clearPendingPairingSecret();
           pairingInitializationPromise = null;
-          if (active) { setContext(null); setIsRestoring(false); setStatus('Pairing expired. Sign in to start a new request.'); }
+          if (active) {
+            setContext(null);
+            setIsRestoring(false);
+            setStatus('Pairing expired. Sign in to start a new request.');
+          }
         } else if (active) {
           const linkedState = await diaryRepository.getLocalSyncAccountState().catch(() => null);
           if (linkedState) {
-            await clearPendingPairingSecret();
             pairingInitializationPromise = null;
             setIsRestoring(true);
             setStatus('Companion approved. Opening your encrypted diary...');
@@ -171,20 +155,31 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
     };
     void checkApproval();
     const timer = setInterval(() => void checkApproval(), APPROVAL_POLL_INTERVAL_MS);
-    return () => { active = false; clearInterval(timer); };
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
   }, [context, onLinked]);
 
-  const pairingPayload = useMemo(() => context ? JSON.stringify({
-    version: 1,
-    sessionId: context.pairing.session.id,
-    pairingCode: context.pairing.pairingCode,
-  }) : '', [context]);
+  const pairingPayload = useMemo(
+    () =>
+      context
+        ? JSON.stringify({
+            version: 2,
+            protocolVersion: 2,
+            sessionId: context.pairing.pairingId,
+            pairingCode: context.pairing.pairingCode,
+          })
+        : '',
+    [context],
+  );
 
   const beginSignIn = async () => {
     setIsStarting(true);
     setError('');
-    try { await startWebGoogleSyncSignIn(); }
-    catch (signInError: any) {
+    try {
+      await startWebGoogleSyncSignIn();
+    } catch (signInError: any) {
       setError(signInError?.message || 'Google sign-in could not start.');
       setIsStarting(false);
     }
@@ -205,7 +200,9 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           </div>
           <div>
             <h1 className="font-serif-diary text-3xl font-bold text-brand-plum">Dear Diary</h1>
-            <p className="mt-1 text-xs text-brand-text-muted">Link this browser as a trusted companion.</p>
+            <p className="mt-1 text-xs text-brand-text-muted">
+              Link this browser as a trusted companion.
+            </p>
           </div>
         </header>
 
@@ -217,7 +214,11 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
               disabled={isStarting}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-sage px-4 py-3 text-xs font-bold text-white disabled:opacity-50"
             >
-              {isStarting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
+              {isStarting ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <Cloud className="h-4 w-4" />
+              )}
               <span>{isStarting ? 'Opening Google...' : 'Continue with Google'}</span>
             </button>
           ) : isRestoring ? (
@@ -228,8 +229,10 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           ) : (
             <div className="flex flex-col items-center gap-5 text-center">
               <div>
-                <p className="text-[10px] font-bold uppercase text-brand-sage">Pairing Code</p>
-                <p className="mt-2 font-mono text-4xl font-bold text-brand-plum">{context.pairing.pairingCode}</p>
+                <p className="text-xs font-bold uppercase text-brand-sage">Pairing Code</p>
+                <p className="mt-2 font-mono text-4xl font-bold text-brand-plum">
+                  {context.pairing.pairingCode}
+                </p>
               </div>
               <button
                 type="button"
@@ -245,13 +248,21 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
               </div>
             </div>
           )}
-          {!context && status && <p className="mt-3 text-center text-xs text-brand-text-muted">{status}</p>}
-          {error && <p className="mt-3 text-center text-xs font-semibold text-red-600">{error}</p>}
+          {!context && status && (
+            <p className="mt-3 text-center text-xs text-brand-text-muted">{status}</p>
+          )}
+          {error && (
+            <p className="mt-3 text-center text-xs font-semibold text-red-700 dark:text-red-300">
+              {error}
+            </p>
+          )}
         </section>
 
-        <div className="flex items-start gap-2 text-[11px] leading-relaxed text-brand-text-muted">
+        <div className="flex items-start gap-2 text-xs leading-relaxed text-brand-text-muted">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand-sage" />
-          <p>Your primary mobile must approve this code before encrypted diary keys are released.</p>
+          <p>
+            Your primary mobile must approve this code before encrypted diary keys are released.
+          </p>
         </div>
       </div>
     </main>

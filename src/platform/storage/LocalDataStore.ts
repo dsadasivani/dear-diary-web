@@ -1,4 +1,5 @@
 import type { Entry, Note, SyncOutboxOperation } from '../../types';
+import type { SyncOutboxOperationV2 } from '../../sync/outbox/SyncOutboxOperationV2';
 
 export interface LocalQueryPageOptions {
   limit?: number;
@@ -41,6 +42,28 @@ export interface LocalNoteQueryOptions extends LocalQueryPageOptions {
   tags?: string[];
 }
 
+export type LocalEntryProjection = Pick<
+  Entry,
+  | 'id'
+  | 'diaryId'
+  | 'date'
+  | 'time'
+  | 'title'
+  | 'moodName'
+  | 'moodEmoji'
+  | 'tags'
+  | 'photoUris'
+  | 'photoCount'
+  | 'wordCount'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+export type LocalNoteProjection = Pick<
+  Note,
+  'id' | 'title' | 'isPinned' | 'tags' | 'createdAt' | 'updatedAt'
+>;
+
 export interface LocalDataStore {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
@@ -59,7 +82,14 @@ export interface LocalDataStore {
     records: LocalStructuredRecordMutation[];
     items?: Record<string, string>;
     outboxOperation: SyncOutboxOperation;
+    outboxV2Operation: SyncOutboxOperationV2;
   }): Promise<void>;
   queryEntries?(options: LocalEntryQueryOptions): Promise<LocalQueryPageResult<Entry> | undefined>;
   queryNotes?(options: LocalNoteQueryOptions): Promise<LocalQueryPageResult<Note> | undefined>;
+  queryEntryProjections?(
+    options: LocalEntryQueryOptions,
+  ): Promise<LocalQueryPageResult<LocalEntryProjection> | undefined>;
+  queryNoteProjections?(
+    options: LocalNoteQueryOptions,
+  ): Promise<LocalQueryPageResult<LocalNoteProjection> | undefined>;
 }

@@ -1,384 +1,496 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, Trash2, Check, Lock, ShieldAlert, Smile, Palette, Save, ShieldCheck } from 'lucide-react';
-import { Diary } from '../types';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, ImagePlus, Lock, RotateCcw, Save, Trash2 } from 'lucide-react';
+import type { Diary, Entry, ResponsiveLayout, SecurityConfig } from '../types';
 import { PREDEFINED_COLORS } from '../domain/journalCatalog';
+import { verifyPin } from '../domain/security';
+import { persistOptimizedImageFile } from '../mobile/mediaStorage';
 import { diaryRepository } from '../repositories';
+import JournalCover from './JournalCover';
+import { AppButton, AppDialog, IconButton, StatusNotice } from './UiPrimitives';
 
 interface DiarySettingsScreenProps {
   diary: Diary;
+  layout?: ResponsiveLayout;
+  security: SecurityConfig;
   onBack: () => void;
   onRefreshDiaries: () => void | Promise<void>;
 }
 
-const EMOJI_OPTIONS = ['📔', '✈️', '💼', '🌙', '🎨', '🌿', '☕', '🏠', '🔑', '📝', '🌸', '✨'];
-const FOIL_ICON_OPTIONS = ['⭐', '👑', '🕊️', '🍀', '🗝️', '💎', '🌙', '☀️', '🌸', '✨', '🔥', '🦁', '🦉', '🪐', '🐚', '🛡️'];
+type SettingsSection = 'general' | 'appearance' | 'danger';
+
+const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
+  { id: 'general', label: 'General' },
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'danger', label: 'Delete journal' },
+];
+
+const EMOJIS = ['📔', '✈️', '💼', '🌙', '🎨', '🌿', '☕', '🏠', '🔑', '📝', '🌸', '✨'];
+const FOILS = ['⭐', '👑', '🕊️', '🍀', '🗝️', '💎', '🌙', '☀️', '🌸', '✨'];
 
 export default function DiarySettingsScreen({
   diary,
+  layout = 'mobile',
+  security,
   onBack,
-  onRefreshDiaries
+  onRefreshDiaries,
 }: DiarySettingsScreenProps) {
-  const [diaryName, setDiaryName] = useState<string>(diary.name);
-  const [selectedEmoji, setSelectedEmoji] = useState<string>(diary.emoji);
-  const [selectedColor, setSelectedColor] = useState<string>(diary.color);
-  const [isLocked, setIsLocked] = useState<boolean>(diary.isLocked);
-  const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'look' | 'settings'>('look');
+  const original = useMemo(
+    () => ({
+      name: diary.name,
+      emoji: diary.emoji,
+      color: diary.color,
+      isLocked: diary.isLocked,
+      coverImage: diary.coverImage,
+      foilIcons: diary.foilIcons || [],
+    }),
+    [diary],
+  );
+  const [draft, setDraft] = useState(original);
+  const [appearanceOpen, setAppearanceOpen] = useState(layout !== 'mobile');
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [activeSection, setActiveSection] = useState<SettingsSection>('general');
+  const [counts, setCounts] = useState({ entries: 0, photos: 0, audio: 0 });
+  const [pin, setPin] = useState('');
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const coverInput = useRef<HTMLInputElement>(null);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(original);
+  const requiresDeletePin = diary.isLocked || counts.entries > 0;
+  const deleteNameMatches = deleteConfirmation === diary.name;
+  const closeDeleteDialog = useCallback(() => setDeleteOpen(false), []);
 
-  // Cover decoration states
-  const [selectedFoilIcons, setSelectedFoilIcons] = useState<string[]>(diary.foilIcons || []);
-
-  const handleSave = async () => {
-    if (!diaryName.trim()) return;
-
-    const updated: Diary = {
-      ...diary,
-      name: diaryName,
-      emoji: selectedEmoji,
-      color: selectedColor,
-      isLocked,
-      foilIcons: selectedFoilIcons
-    };
-
-    await diaryRepository.updateDiary(updated);
+  const requestBack = () => (dirty ? setLeaveOpen(true) : onBack());
+  const save = async () => {
+    if (!draft.name.trim() || !dirty) return;
+    setBusy(true);
+    await diaryRepository.updateDiary({ ...diary, ...draft, name: draft.name.trim() });
     await onRefreshDiaries();
+    setBusy(false);
     onBack();
   };
 
-  const handleDelete = async () => {
+  const openDelete = async () => {
+    setBusy(true);
+    let cursor: string | undefined;
+    let entries = 0,
+      photos = 0,
+      audio = 0;
+    do {
+      const page = await diaryRepository.listEntriesByDiary(diary.id, {
+        cursor,
+        limit: 200,
+        includeBody: true,
+      });
+      for (const item of page.items as Entry[]) {
+        entries += 1;
+        photos += item.photoUris?.length || item.photoCount || 0;
+        audio +=
+          (item.audioUri ? 1 : 0) +
+          (item.blocks?.filter((block) => Boolean(block.audioUri)).length || 0);
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    setCounts({ entries, photos, audio });
+    setPin('');
+    setDeleteConfirmation('');
+    setError('');
+    setDeleteOpen(true);
+    setBusy(false);
+  };
+
+  const remove = async () => {
+    if (!deleteNameMatches) {
+      setError(`Type “${diary.name}” exactly to confirm deletion.`);
+      return;
+    }
+    if (requiresDeletePin && !verifyPin(security, pin)) {
+      setError('Incorrect app PIN.');
+      return;
+    }
+    setBusy(true);
     await diaryRepository.deleteDiary(diary.id);
     await onRefreshDiaries();
     onBack();
   };
 
-  const handleFoilIconToggle = (icon: string) => {
-    if (selectedFoilIcons.includes(icon)) {
-      setSelectedFoilIcons(prev => prev.filter(i => i !== icon));
-    } else {
-      if (selectedFoilIcons.length >= 4) {
-        return; // Max 4 foil icons
-      }
-      setSelectedFoilIcons(prev => [...prev, icon]);
+  const chooseCover = async (file?: File) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const coverImage = await persistOptimizedImageFile(file, 'cover');
+      setDraft((current) => ({ ...current, coverImage }));
+    } catch (cause: any) {
+      setError(cause?.message || 'Cover image could not be saved.');
+    } finally {
+      setBusy(false);
     }
   };
 
-  return (
-    <div className="flex flex-col gap-6 font-sans">
-      {/* Header */}
-      <header className="flex justify-between items-center bg-brand-bg/95 backdrop-blur-md sticky top-0 py-3 z-30 border-b border-brand-rose-light/40">
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={onBack}
-            className="p-2 text-brand-plum hover:bg-brand-blush-light rounded-full transition-all"
+  const selectSection = (section: SettingsSection) => {
+    setActiveSection(section);
+    if (section === 'appearance') setAppearanceOpen(true);
+  };
+
+  const sectionNavigation = (vertical: boolean) => (
+    <nav
+      aria-label="Journal settings sections"
+      className={vertical ? 'sticky top-24 h-fit' : 'overflow-x-auto pb-1'}
+    >
+      <p
+        className={
+          vertical
+            ? 'mb-2 px-3 text-xs font-bold uppercase tracking-[0.16em] text-brand-text-muted'
+            : 'sr-only'
+        }
+      >
+        Settings sections
+      </p>
+      <div className={vertical ? 'space-y-1' : 'flex min-w-max gap-2'}>
+        {SETTINGS_SECTIONS.map((section) => (
+          <a
+            key={section.id}
+            href={`#journal-settings-${section.id}`}
+            aria-current={activeSection === section.id ? 'location' : undefined}
+            onClick={() => selectSection(section.id)}
+            className={`${vertical ? 'flex w-full px-3 py-2.5 text-left' : 'inline-flex min-h-11 items-center px-4 py-2'} rounded-xl text-sm font-bold transition-colors ${activeSection === section.id ? (section.id === 'danger' ? 'bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-200' : 'bg-brand-sage-light text-brand-text') : 'text-brand-text-muted hover:bg-brand-card-bg hover:text-brand-text'}`}
           >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <h1 className="font-serif-diary text-xl font-bold text-brand-plum">Diary Settings</h1>
+            {section.label}
+          </a>
+        ))}
+      </div>
+    </nav>
+  );
+
+  const previewDiary: Diary = { ...diary, ...draft };
+  return (
+    <div className="mx-auto w-full max-w-6xl space-y-5 pb-12">
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-brand-border bg-brand-bg/95 py-3 backdrop-blur">
+        <div className="flex items-center gap-3">
+          <IconButton label="Back from journal settings" onClick={requestBack}>
+            <ArrowLeft className="h-5 w-5" />
+          </IconButton>
+          <div>
+            <h1 className="font-serif-diary text-2xl font-semibold">Journal Settings</h1>
+            {dirty && (
+              <p role="status" className="text-xs font-bold text-amber-700">
+                Unsaved changes
+              </p>
+            )}
+          </div>
         </div>
-        <button 
-          onClick={handleSave}
-          disabled={!diaryName.trim()}
-          className="p-2 text-brand-pink hover:text-brand-pink-dark font-bold text-sm flex items-center gap-1 transition-colors"
+        <AppButton
+          tone="primary"
+          onClick={() => void save()}
+          disabled={!dirty || !draft.name.trim() || busy}
         >
-          <Save className="w-4 h-4" />
+          <Save className="h-4 w-4" />
           Save
-        </button>
+        </AppButton>
       </header>
 
-      {/* Main Form content */}
-      <div className="flex flex-col gap-6">
-        
-        {/* Real-time Cover Preview Card */}
-        <div className="flex flex-col items-center py-4 select-none bg-brand-card-bg/40 p-4 rounded-3xl border border-brand-border/40">
-          <motion.div 
-            animate={{ backgroundColor: selectedColor }}
-            className="w-40 aspect-[3/4.2] rounded-3xl shadow-xl relative border border-black/10 flex flex-col justify-between p-4 overflow-hidden"
+      {layout !== 'desktop' && sectionNavigation(false)}
+      <div
+        className={
+          layout === 'mobile'
+            ? 'space-y-5'
+            : layout === 'desktop'
+              ? 'grid grid-cols-[168px_minmax(0,1fr)_280px] items-start gap-6'
+              : 'grid grid-cols-[minmax(0,1fr)_280px] items-start gap-6'
+        }
+      >
+        {layout === 'desktop' && sectionNavigation(true)}
+        <div className="space-y-5">
+          <section
+            id="journal-settings-general"
+            aria-labelledby="journal-settings-general-title"
+            className="surface-elevated scroll-mt-28 space-y-4 p-5"
           >
-            <div className="absolute left-0 top-0 bottom-0 w-3 bg-gradient-to-r from-black/25 via-black/5 to-transparent z-10" />
-            <div className="absolute left-2.5 top-0 bottom-0 w-[1px] bg-white/25 z-15" />
-
-            <div className="flex justify-between items-start relative z-10">
-              <span className="w-8 h-8 rounded-xl bg-white/95 flex items-center justify-center text-base shadow-sm text-brand-plum">
-                {selectedEmoji}
-              </span>
-              {isLocked && (
-                <span className="p-1 bg-black/15 rounded-lg text-white">
-                  <Lock className="w-3.5 h-3.5" />
-                </span>
-              )}
-            </div>
-
-            {/* Foil stamps preview inside preview cover */}
-            {selectedFoilIcons.length > 0 && (
-              <div className="flex flex-wrap gap-1 bg-yellow-500/20 backdrop-blur-md border border-yellow-500/40 px-1.5 py-1 rounded-lg max-w-max self-start relative z-10 mt-1">
-                {selectedFoilIcons.map((icon, idx) => (
-                  <span key={idx} className="text-[10px] filter drop-shadow-[0_1px_1px_rgba(234,179,8,0.95)]">{icon}</span>
-                ))}
-              </div>
-            )}
-
-            <div className="bg-white/95 dark:bg-brand-card-bg/95 p-2.5 rounded-xl shadow-md border border-brand-border/20 relative z-10">
-              <h3 className="font-serif-diary font-bold text-xs leading-none text-brand-plum truncate">
-                {diaryName || 'Untitled book'}
-              </h3>
-              <p className="text-[7px] font-bold text-brand-pink-dark uppercase tracking-widest mt-1">
-                Custom Bound Cover
-              </p>
-            </div>
-          </motion.div>
-          <p className="text-[10px] text-brand-text-muted font-bold uppercase tracking-wider mt-3">Live Cover Preview</p>
-        </div>
-        
-        {/* Tab Navigation */}
-        <div className="flex bg-brand-bg/50 dark:bg-brand-card-bg/40 p-1.5 rounded-2xl border border-brand-border/60 dark:border-white/5 shadow-inner gap-1 overflow-x-auto no-scrollbar scroll-smooth">
-          {[
-            { 
-              id: 'look' as const, 
-              label: 'Design & Aesthetics', 
-              icon: Palette,
-              activeBg: 'bg-brand-pink',
-              activeShadow: 'shadow-[0_4px_12px_rgba(181,66,97,0.25)]',
-              colorClass: 'text-brand-pink'
-            },
-            { 
-              id: 'settings' as const, 
-              label: 'Identity & Security', 
-              icon: ShieldCheck,
-              activeBg: 'bg-brand-sage',
-              activeShadow: 'shadow-[0_4px_12px_rgba(69,98,80,0.25)]',
-              colorClass: 'text-brand-sage'
-            },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className="relative flex-1 py-2 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center cursor-pointer select-none group active:scale-[0.98]"
-              >
-                {isActive && (
-                  <motion.div
-                    layoutId="diarySettingsActiveTab"
-                    className={`absolute inset-0 ${tab.activeBg} rounded-xl ${tab.activeShadow}`}
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
-                <span className={`relative z-10 flex items-center justify-center gap-1.5 transition-all duration-300 ${
-                  isActive 
-                    ? 'text-white scale-[1.03] tracking-wide' 
-                    : 'text-brand-text-muted dark:text-brand-text-muted/80 group-hover:text-brand-plum dark:group-hover:text-brand-text'
-                }`}>
-                  <Icon className={`w-3.5 h-3.5 shrink-0 transition-all duration-300 ${
-                    isActive 
-                      ? 'scale-110 text-white' 
-                      : `${tab.colorClass} opacity-75 group-hover:opacity-100 group-hover:scale-110`
-                  }`} />
-                  <span>{tab.label}</span>
-                </span>
-
-                {/* Subtle hover background capsule for interactive tactile feel */}
-                {!isActive && (
-                  <div className="absolute inset-0 rounded-xl bg-brand-blush-light/0 dark:bg-white/0 group-hover:bg-brand-blush-light/40 dark:group-hover:bg-white/5 transition-colors duration-200 -z-0 pointer-events-none" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        <AnimatePresence mode="wait">
-          {activeTab === 'look' ? (
-            <motion.div
-              key="look"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.15 }}
-              className="flex flex-col gap-6"
+            <h2
+              id="journal-settings-general-title"
+              className="font-serif-diary text-xl font-semibold"
             >
-              {/* Color Palette Selector Card */}
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                <label className="text-xs font-bold text-brand-sage uppercase tracking-wider flex items-center gap-1">
-                  <Palette className="w-4 h-4 text-brand-sage" />
-                  Cover theme color
-                </label>
-                <div className="grid grid-cols-6 gap-3">
-                  {PREDEFINED_COLORS.map(color => (
-                    <button
-                      key={color.hex}
-                      type="button"
-                      onClick={() => setSelectedColor(color.hex)}
-                      className="aspect-square rounded-xl relative flex items-center justify-center shadow-sm transition-transform hover:scale-105"
-                      style={{ backgroundColor: color.hex }}
-                    >
-                      {selectedColor === color.hex && (
-                        <Check className="w-5 h-5 text-white stroke-[3px]" />
-                      )}
-                    </button>
-                  ))}
+              Name and privacy
+            </h2>
+            <label className="block text-sm font-bold">
+              Journal name
+              <input
+                value={draft.name}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, name: event.target.value }))
+                }
+                className="mt-2 w-full rounded-xl border border-brand-border bg-brand-card-bg px-4 py-3 text-base"
+              />
+            </label>
+            <label className="flex min-h-11 items-center gap-3 text-sm font-bold">
+              <input
+                type="checkbox"
+                checked={draft.isLocked}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, isLocked: event.target.checked }))
+                }
+                className="h-5 w-5"
+              />
+              <Lock className="h-4 w-4" />
+              Require unlock before opening
+            </label>
+          </section>
+          <section
+            id="journal-settings-appearance"
+            aria-labelledby="journal-settings-appearance-title"
+            className="surface-elevated scroll-mt-28 p-5"
+          >
+            <button
+              type="button"
+              aria-expanded={appearanceOpen}
+              aria-controls="journal-settings-appearance-content"
+              onClick={() => {
+                setAppearanceOpen((value) => !value);
+                setActiveSection('appearance');
+              }}
+              className="flex w-full items-center justify-between text-left"
+            >
+              <span>
+                <span
+                  id="journal-settings-appearance-title"
+                  className="block font-serif-diary text-xl font-semibold"
+                >
+                  Appearance
+                </span>
+                <span className="text-xs text-brand-text-muted">Cover, color, emoji, and foil</span>
+              </span>
+              <span>{appearanceOpen ? 'Hide' : 'Edit'}</span>
+            </button>
+            {appearanceOpen && (
+              <div id="journal-settings-appearance-content" className="mt-5 space-y-5">
+                {layout === 'mobile' && <JournalCover diary={previewDiary} variant="preview" />}
+                <div>
+                  <p className="mb-2 text-sm font-bold">Cover image</p>
+                  <input
+                    ref={coverInput}
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={(event) => void chooseCover(event.target.files?.[0])}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <AppButton onClick={() => coverInput.current?.click()}>
+                      <ImagePlus className="h-4 w-4" />
+                      {draft.coverImage ? 'Change image' : 'Choose image'}
+                    </AppButton>
+                    {draft.coverImage && (
+                      <AppButton
+                        tone="quiet"
+                        onClick={() =>
+                          setDraft((current) => ({ ...current, coverImage: undefined }))
+                        }
+                      >
+                        Remove image
+                      </AppButton>
+                    )}
+                  </div>
                 </div>
-              </div>
-
-              {/* Emoji Selector Card */}
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                <label className="text-xs font-bold text-brand-sage uppercase tracking-wider flex items-center gap-1">
-                  <Smile className="w-4 h-4 text-brand-sage" />
-                  Cover Icon Emoji
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {EMOJI_OPTIONS.map(emoji => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => setSelectedEmoji(emoji)}
-                      className={`w-11 h-11 text-xl flex items-center justify-center rounded-xl transition-all ${
-                        selectedEmoji === emoji 
-                          ? 'bg-brand-sage-light dark:bg-brand-sage-light/10 text-brand-sage-dark border-2 border-brand-sage scale-110' 
-                          : 'bg-brand-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10'
-                      }`}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Embossed Foil Seals selector card */}
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                    Embossed Foil Stamps ({selectedFoilIcons.length}/4)
-                  </label>
-                  {selectedFoilIcons.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedFoilIcons([])}
-                      className="text-[10px] font-extrabold text-brand-pink-dark uppercase tracking-widest hover:underline"
-                    >
-                      Reset Stamps
-                    </button>
-                  )}
-                </div>
-                
-                <div className="grid grid-cols-6 gap-2">
-                  {FOIL_ICON_OPTIONS.map(icon => {
-                    const isSelected = selectedFoilIcons.includes(icon);
-                    return (
+                <div>
+                  <p className="mb-2 text-sm font-bold">Color</p>
+                  <div className="flex flex-wrap gap-2">
+                    {PREDEFINED_COLORS.map((color) => (
                       <button
-                        key={icon}
                         type="button"
-                        onClick={() => handleFoilIconToggle(icon)}
-                        className={`aspect-square text-lg flex items-center justify-center rounded-xl relative transition-all ${
-                          isSelected 
-                            ? 'bg-yellow-500/20 text-yellow-600 border-2 border-yellow-500 scale-110 shadow-sm' 
-                            : 'bg-brand-bg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 text-brand-plum'
-                        }`}
+                        key={color.hex}
+                        aria-label={color.name}
+                        aria-pressed={draft.color === color.hex}
+                        onClick={() => setDraft((current) => ({ ...current, color: color.hex }))}
+                        className="h-11 w-11 rounded-full border-4"
+                        style={{
+                          backgroundColor: color.hex,
+                          borderColor: draft.color === color.hex ? '#111' : 'transparent',
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-sm font-bold">Symbol</p>
+                  <div className="flex flex-wrap gap-2">
+                    {EMOJIS.map((emoji) => (
+                      <button
+                        type="button"
+                        key={emoji}
+                        aria-label={`Use ${emoji}`}
+                        aria-pressed={draft.emoji === emoji}
+                        onClick={() => setDraft((current) => ({ ...current, emoji }))}
+                        className={`rounded-xl border text-xl ${draft.emoji === emoji ? 'border-brand-sage bg-brand-sage-light' : 'border-brand-border'}`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-sm font-bold">Foil details (up to four)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {FOILS.map((icon) => (
+                      <button
+                        type="button"
+                        key={icon}
+                        aria-pressed={draft.foilIcons.includes(icon)}
+                        onClick={() =>
+                          setDraft((current) => ({
+                            ...current,
+                            foilIcons: current.foilIcons.includes(icon)
+                              ? current.foilIcons.filter((item) => item !== icon)
+                              : current.foilIcons.length < 4
+                                ? [...current.foilIcons, icon]
+                                : current.foilIcons,
+                          }))
+                        }
+                        className={`rounded-xl border text-lg ${draft.foilIcons.includes(icon) ? 'border-brand-sage bg-brand-sage-light' : 'border-brand-border'}`}
                       >
                         {icon}
-                        {isSelected && (
-                          <div className="absolute top-0.5 right-0.5 w-2.5 h-2.5 bg-yellow-500 rounded-full flex items-center justify-center">
-                            <Check className="w-1.5 h-1.5 text-white stroke-[5px]" />
-                          </div>
-                        )}
                       </button>
-                    );
-                  })}
+                    ))}
+                  </div>
                 </div>
+                <AppButton
+                  onClick={() =>
+                    setDraft((current) => ({
+                      ...current,
+                      emoji: '📔',
+                      color: PREDEFINED_COLORS[0].hex,
+                      coverImage: undefined,
+                      foilIcons: [],
+                    }))
+                  }
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  Restore appearance defaults
+                </AppButton>
               </div>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="settings"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.15 }}
-              className="flex flex-col gap-6"
+            )}
+          </section>
+          <section
+            id="journal-settings-danger"
+            aria-labelledby="journal-settings-danger-title"
+            className="scroll-mt-28 rounded-2xl border border-red-300 bg-red-50/70 p-5 dark:bg-red-950/20"
+          >
+            <h2
+              id="journal-settings-danger-title"
+              className="font-serif-diary text-xl font-semibold text-red-800 dark:text-red-200"
             >
-              {/* Name Input Card */}
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-brand-sage uppercase tracking-wider">Diary Title</label>
-                  <input 
-                    type="text" 
-                    value={diaryName}
-                    onChange={(e) => setDiaryName(e.target.value)}
-                    placeholder="Diary Name"
-                    className="w-full bg-transparent border-b border-brand-border py-2 text-base text-brand-plum font-serif-diary focus:outline-none focus:border-brand-pink transition-colors"
-                  />
-                </div>
-              </div>
-
-              {/* Private diary lock card */}
-              <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
-                    <Lock className="w-4 h-4" />
-                  </span>
-                  <div>
-                    <h3 className="text-sm font-bold text-brand-plum">Private Diary Lock</h3>
-                    <p className="text-[11px] text-brand-sage mt-0.5">Require your app PIN to open this diary</p>
-                  </div>
-                </div>
-
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={isLocked}
-                    onChange={(e) => setIsLocked(e.target.checked)}
-                    className="sr-only peer" 
-                  />
-                  <div className="w-11 h-6 bg-brand-sage-light/50 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-brand-sage-light after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-sage" />
-                </label>
-              </div>
-
-              {/* Delete Diary Zone */}
-              <div className="bg-red-50/50 p-5 rounded-3xl border border-red-100 flex flex-col gap-4 mt-4">
-                <div className="flex items-center gap-3 text-red-700">
-                  <ShieldAlert className="w-5 h-5" />
-                  <h3 className="text-sm font-bold">Danger Zone</h3>
-                </div>
-                <p className="text-xs text-red-600/90 leading-relaxed">
-                  Deleting this diary is permanent. It will cascade and delete all associated journal entries, logs, and photo databases records.
-                </p>
-
-                {!showConfirmDelete ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirmDelete(true)}
-                    className="py-2.5 rounded-full bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Delete Diary
-                  </button>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    <p className="text-xs font-bold text-red-700 text-center">Are you absolutely sure?</p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirmDelete(false)}
-                        className="flex-1 py-2 bg-brand-card-bg border border-red-200 text-red-700 rounded-full text-xs font-bold"
-                      >
-                        No, cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleDelete}
-                        className="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white rounded-full text-xs font-bold transition-colors"
-                      >
-                        Yes, delete
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
+              Delete journal
+            </h2>
+            <p className="mt-2 text-sm text-red-700 dark:text-red-200">
+              Deletes this journal and its downloaded entries and media from this device. If Sync is
+              connected, deletion is also synchronized.
+            </p>
+            <AppButton
+              className="mt-4"
+              tone="danger"
+              onClick={() => {
+                setActiveSection('danger');
+                void openDelete();
+              }}
+              disabled={busy}
+            >
+              <Trash2 className="h-4 w-4" />
+              Review deletion
+            </AppButton>
+          </section>
+          {error && (
+            <StatusNotice tone="danger" role="alert">
+              {error}
+            </StatusNotice>
           )}
-        </AnimatePresence>
+        </div>
+        {layout !== 'mobile' && (
+          <aside className="sticky top-24 h-fit">
+            <JournalCover diary={previewDiary} variant="preview" />
+            <p className="mt-3 text-center text-xs text-brand-text-muted">
+              Preview updates before you save.
+            </p>
+          </aside>
+        )}
       </div>
+
+      <AppDialog
+        open={leaveOpen}
+        title="Discard unsaved changes?"
+        description="Your journal settings have changed."
+        onClose={() => setLeaveOpen(false)}
+        footer={
+          <>
+            <AppButton onClick={() => setLeaveOpen(false)}>Keep editing</AppButton>
+            <AppButton tone="danger" onClick={onBack}>
+              Discard changes
+            </AppButton>
+          </>
+        }
+      >
+        <p className="text-sm text-brand-text-muted">
+          Save first if you want to keep the new name, lock, or appearance.
+        </p>
+      </AppDialog>
+      <AppDialog
+        open={deleteOpen}
+        title={`Delete ${diary.name}?`}
+        description="Review exactly what will be removed before continuing."
+        onClose={closeDeleteDialog}
+        footer={
+          <>
+            <AppButton onClick={closeDeleteDialog}>Cancel</AppButton>
+            <AppButton
+              tone="danger"
+              data-testid="confirm-delete-journal-button"
+              onClick={() => void remove()}
+              disabled={busy || !deleteNameMatches || (requiresDeletePin && !pin)}
+            >
+              Delete journal
+            </AppButton>
+          </>
+        }
+      >
+        <StatusNotice tone="warning">
+          {counts.entries} entries · {counts.photos} photos · {counts.audio} audio recordings
+        </StatusNotice>
+        <label className="mt-4 block text-sm font-bold" htmlFor="delete-journal-name-confirmation">
+          Type <strong>{diary.name}</strong> to confirm
+          <input
+            id="delete-journal-name-confirmation"
+            data-testid="delete-journal-name-confirmation"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            value={deleteConfirmation}
+            onChange={(event) => {
+              setDeleteConfirmation(event.target.value);
+              setError('');
+            }}
+            className="mt-2 w-full rounded-xl border border-brand-border bg-brand-card-bg px-4 py-3"
+          />
+        </label>
+        {requiresDeletePin && (
+          <label className="mt-4 block text-sm font-bold">
+            App PIN
+            <input
+              type="password"
+              inputMode="numeric"
+              autoComplete="current-password"
+              value={pin}
+              onChange={(event) => {
+                setPin(event.target.value);
+                setError('');
+              }}
+              className="mt-2 w-full rounded-xl border border-brand-border bg-brand-card-bg px-4 py-3"
+            />
+          </label>
+        )}
+        {error && (
+          <StatusNotice className="mt-3" tone="danger" role="alert">
+            {error}
+          </StatusNotice>
+        )}
+      </AppDialog>
     </div>
   );
 }

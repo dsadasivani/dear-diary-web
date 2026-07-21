@@ -1,12 +1,12 @@
 import type { AppSettings } from '../types';
+import { applyAccentThemePreference, getLocalAccentThemePreference } from './accentPreference';
 
 export type AppTheme = NonNullable<AppSettings['theme']>;
 
 const THEME_STORAGE_KEY = 'deardiary_theme';
 
-export const normalizeTheme = (theme?: string | null, fallback: AppTheme = 'light'): AppTheme => (
-  theme === 'dark' || theme === 'light' ? theme : fallback
-);
+export const normalizeTheme = (theme?: string | null, fallback: AppTheme = 'light'): AppTheme =>
+  theme === 'dark' || theme === 'light' ? theme : fallback;
 
 export const getLocalThemePreference = (fallback: AppTheme = 'light'): AppTheme => {
   if (typeof window === 'undefined') return fallback;
@@ -20,6 +20,7 @@ export const getLocalThemePreference = (fallback: AppTheme = 'light'): AppTheme 
 export const applyThemePreference = (theme: AppTheme): void => {
   if (typeof document === 'undefined') return;
   document.documentElement.classList.toggle('dark', theme === 'dark');
+  applyAccentThemePreference(getLocalAccentThemePreference());
 };
 
 export const setLocalThemePreference = (theme: AppTheme): void => {

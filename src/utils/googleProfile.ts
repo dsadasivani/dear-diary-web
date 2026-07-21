@@ -13,9 +13,11 @@ const isUntouchedName = (profile: UserProfile): boolean => {
 
 export const hasUntouchedAvatar = (profile: UserProfile): boolean => {
   const defaults = createDefaultUserProfile();
-  return !profile.avatarUri
-    && profile.avatarEmoji === defaults.avatarEmoji
-    && profile.avatarColor === defaults.avatarColor;
+  return (
+    !profile.avatarUri &&
+    profile.avatarEmoji === defaults.avatarEmoji &&
+    profile.avatarColor === defaults.avatarColor
+  );
 };
 
 export const mergeGoogleProfile = (
@@ -25,12 +27,11 @@ export const mergeGoogleProfile = (
 ): UserProfile => {
   const updated: UserProfile = {
     ...profile,
-    name: isUntouchedName(profile) && session.displayName?.trim()
-      ? session.displayName.trim()
-      : profile.name,
-    email: !profile.email.trim() && session.email?.trim()
-      ? session.email.trim()
-      : profile.email,
+    name:
+      isUntouchedName(profile) && session.displayName?.trim()
+        ? session.displayName.trim()
+        : profile.name,
+    email: !profile.email.trim() && session.email?.trim() ? session.email.trim() : profile.email,
   };
   if (hasUntouchedAvatar(profile) && cachedAvatarUri) {
     updated.avatarUri = cachedAvatarUri;

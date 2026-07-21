@@ -3,8 +3,12 @@ import test from 'node:test';
 import { DEFAULT_SECURITY_CONFIG } from '../repositories/defaults';
 import {
   bindGoogleRecoveryAccount,
+  createInitialPin,
   createInitialPinWithRecovery,
+  getRecoveryQuestionText,
+  hasRecoveryQuestion,
   resetPinAfterVerifiedRecovery,
+  requiresRecoveryQuestionForDevice,
   unlockWithPin,
   updatePinWithCurrentPin,
   verifyPin,
@@ -13,12 +17,7 @@ import {
 
 test('creates a PIN and verifies PIN and recovery answer without mutating its input', () => {
   const original = { ...DEFAULT_SECURITY_CONFIG };
-  const configured = createInitialPinWithRecovery(
-    original,
-    '1234',
-    'first-pet',
-    '  Sunday  ',
-  );
+  const configured = createInitialPinWithRecovery(original, '1234', 'first-pet', '  Sunday  ');
 
   assert.equal(original.isPinCreated, false);
   assert.equal(verifyPin(configured, '1234'), true);
@@ -26,6 +25,26 @@ test('creates a PIN and verifies PIN and recovery answer without mutating its in
   assert.equal(verifyRecoveryAnswer(configured, 'sunday'), true);
   assert.equal(unlockWithPin(configured, '4321'), null);
   assert.equal(unlockWithPin(configured, '1234')?.isLocked, false);
+});
+
+test('can create a local PIN before encrypted-account recovery is selected', () => {
+  const configured = createInitialPin(DEFAULT_SECURITY_CONFIG, '1234');
+  assert.equal(verifyPin(configured, '1234'), true);
+  assert.equal(configured.recoveryQuestionId, undefined);
+});
+
+test('requires displayable question text before offering security-question recovery', () => {
+  const incomplete = {
+    ...DEFAULT_SECURITY_CONFIG,
+    isPinCreated: true,
+    recoveryQuestionId: 'missing-question',
+    recoveryAnswerHash: 'answer-hash',
+    recoveryAnswerSalt: 'answer-salt',
+    recoveryAnswerIterations: 120_000,
+  };
+
+  assert.equal(hasRecoveryQuestion(incomplete), false);
+  assert.equal(getRecoveryQuestionText(incomplete), 'Recovery question unavailable');
 });
 
 test('changes and recovers a PIN while preserving recovery metadata', () => {
@@ -58,4 +77,28 @@ test('keeps Google recovery binding pinned to the first linked account', () => {
   });
   assert.equal(mismatch.ok, false);
   assert.match(mismatch.error || '', /writer@example\.com/);
+});
+
+test('does not require mobile recovery-question onboarding on a paired web companion', () => {
+  const withoutRecovery = {
+    ...DEFAULT_SECURITY_CONFIG,
+    isPinCreated: true,
+    pinHash: 'hash',
+    pinSalt: 'salt',
+    pinLength: 4 as const,
+  };
+
+  assert.equal(requiresRecoveryQuestionForDevice(withoutRecovery, 'web_companion'), false);
+  assert.equal(requiresRecoveryQuestionForDevice(withoutRecovery, 'primary_mobile'), true);
+  assert.equal(requiresRecoveryQuestionForDevice(withoutRecovery), true);
+  assert.equal(
+    requiresRecoveryQuestionForDevice(
+      {
+        ...withoutRecovery,
+        linkedGoogleUserId: 'google-user-1',
+      },
+      'primary_mobile',
+    ),
+    false,
+  );
 });

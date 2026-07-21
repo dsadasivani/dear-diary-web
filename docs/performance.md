@@ -1,65 +1,62 @@
-# Dear Diary Performance Measurements
+# Performance measurement
 
-Dear Diary exposes lightweight development-only performance measurements through `measureAsync` and `measureSync` in `src/utils/performance.ts`.
+Dear Diary exposes development measurements through `measureAsync` and `measureSync` in `src/utils/performance.ts`. Production builds disable local measurement collection by default.
 
 ## Privacy
 
-Measurement metadata is redacted before it is recorded. Do not pass diary text, note text, titles, recovery material, tokens, keys, PINs, passphrases, media bytes, or raw media URIs. Metadata should be limited to counts, operation names, record types, booleans, and non-sensitive timing context.
+Measurement metadata is redacted before recording or export. Never pass journal or note text, titles, recovery material, tokens, keys, PINs, passphrases, media bytes, or raw media URIs. Limit metadata to counts, operation names, record types, booleans, and non-sensitive timing context.
 
-Production builds disable measurement collection by default.
+## Browser measurements
 
-## Collecting Timings
-
-1. Run the app in development.
-2. Exercise the workflow being measured.
-3. In the browser console, inspect:
+Run the application in development, exercise the workflow, and inspect:
 
 ```js
-window.dearDiaryPerformance.aggregates()
-window.dearDiaryPerformance.samples()
+window.dearDiaryPerformance.aggregates();
+window.dearDiaryPerformance.samples();
 ```
 
-Use `window.dearDiaryPerformance.reset()` between scenarios.
-
-To disable local collection in development:
+Reset between scenarios:
 
 ```js
-localStorage.setItem('deardiary_perf', 'off')
+window.dearDiaryPerformance.reset();
 ```
 
-Remove that flag or set any other value to enable collection again.
+Disable local development collection with:
 
-## Seed Fixture
+```js
+localStorage.setItem('deardiary_perf', 'off');
+```
 
-Generate a realistic scale fixture:
+Remove the flag or set another value to enable collection again.
+
+## Repeatable fixtures
+
+Generate the default benchmark fixture:
 
 ```bash
 npm run benchmark:seed
+npm run benchmark:run
 ```
 
-The default output is `benchmarks/dear-diary-seed.json` and contains:
-
-- 100 diaries
-- 10,000 entries with timeline blocks, tags, moods, and media references
-- 10,000 notes
-- Pending sync outbox operations
-
-Override counts or output when needed:
+The generated file is ignored. Override fixture sizes when needed:
 
 ```bash
 npm run benchmark:seed -- --entries 20000 --notes 20000 --output benchmarks/large.json
 ```
 
-## Baseline And Final Report
+Use `npm run benchmark:production-scale` for the repository's larger standardized fixture.
 
-Capture p50/p95 timings for:
+## What to measure
 
-- bootstrap, repository initialization, PIN unlock
-- local entry/note/diary create, update, delete
-- SQLite bridge and transaction timings
-- repository queries and screen-level targeted loads
-- sync outbox flush, Supabase pull, Drive upload/download
-- media encryption and thumbnail generation
-- editor save-to-navigation and screen mount/render timing
+Capture p50 and p95 timings for:
 
-Record baseline numbers before a refactor in `docs/testing/BASELINE.md` or a dated performance report, then record final numbers with the same fixture and device profile. The current local-first 10k baseline is recorded in `docs/benchmarks/local-first-10k-baseline-2026-07-11.md`.
+- bootstrap, repository initialization, and PIN unlock;
+- entry, note, and diary create/update/delete paths;
+- SQLite bridge calls and transactions;
+- repository queries and screen-level targeted loads;
+- outbox preparation, upload, commit, acknowledgement, and remote pull;
+- object upload/download, encryption, decryption, and hash verification;
+- media reads, image optimization, cache behavior, and thumbnail generation;
+- editor save-to-navigation and screen mount/render timing.
+
+Compare baseline and final results with the same commit configuration, fixture, runtime, hardware or device profile, power mode, and warm/cold-cache state. Store run-specific reports in CI artifacts or the relevant change record rather than committing dated results to the source tree.

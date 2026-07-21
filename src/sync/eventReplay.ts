@@ -1,5 +1,10 @@
 import type { DiaryRepository } from '../repositories';
-import type { GoogleAccountSession, LocalSyncAccountState, SyncMediaPointer, SyncObjectMetadata } from '../types';
+import type {
+  GoogleAccountSession,
+  LocalSyncAccountState,
+  SyncMediaPointer,
+  SyncObjectMetadata,
+} from '../types';
 import { decodeSyncDomainEvent } from './domainEvents';
 import { downloadDriveSyncObject } from './driveSyncObjects';
 import { decryptSyncPayloadWithKnownKeys } from './encryptedSyncObject';
@@ -11,7 +16,7 @@ export type SyncObjectDownloader = (
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 export const downloadVerifiedSyncObject = async (
@@ -20,7 +25,7 @@ export const downloadVerifiedSyncObject = async (
   download: SyncObjectDownloader = downloadDriveSyncObject,
 ): Promise<Uint8Array> => {
   const bytes = await download(session, object.driveFileId);
-  if (await sha256Hex(bytes) !== object.sha256) {
+  if ((await sha256Hex(bytes)) !== object.sha256) {
     throw new Error(`Synced ${object.objectKind.replace('_', ' ')} failed integrity verification.`);
   }
   return bytes;
@@ -52,7 +57,8 @@ export const replaySyncObjects = async ({
   const ordered = [...objects].sort((left, right) => left.sequence - right.sequence);
   for (const object of ordered) {
     if (!allowHistorical && object.sequence <= state.currentSyncSequence) continue;
-    if (object.accountId !== state.accountId) throw new Error('Sync metadata belongs to another account.');
+    if (object.accountId !== state.accountId)
+      throw new Error('Sync metadata belongs to another account.');
 
     if (object.objectKind === 'event') {
       const encrypted = await downloadVerifiedSyncObject(googleSession, object, download);
@@ -62,7 +68,8 @@ export const replaySyncObjects = async ({
         accountRootKeys,
         object.keyEpoch,
       );
-      if (decrypted.objectKind !== 'event') throw new Error('Sync object metadata does not match its encrypted payload.');
+      if (decrypted.objectKind !== 'event')
+        throw new Error('Sync object metadata does not match its encrypted payload.');
       const event = decodeSyncDomainEvent(decrypted.payload);
       if (
         event.accountId !== state.accountId ||
@@ -73,8 +80,12 @@ export const replaySyncObjects = async ({
       ) {
         throw new Error('Encrypted sync event does not match its control-plane metadata.');
       }
-      if (JSON.stringify(event.affectedRecords || []) !== JSON.stringify(object.affectedRecords || [])) {
-        throw new Error('Encrypted sync event affected records do not match control-plane metadata.');
+      if (
+        JSON.stringify(event.affectedRecords || []) !== JSON.stringify(object.affectedRecords || [])
+      ) {
+        throw new Error(
+          'Encrypted sync event affected records do not match control-plane metadata.',
+        );
       }
       await repository.applySyncEvent(event, object.sequence, { allowHistorical });
       lastMediaPointer = null;

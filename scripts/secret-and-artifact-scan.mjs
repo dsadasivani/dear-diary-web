@@ -13,8 +13,10 @@ const forbiddenPatterns = [
   /\.(?:db|db-wal|db-shm|sqlite|sqlite-wal|sqlite-shm|sqlite3|sqlite3-wal|sqlite3-shm)$/i,
 ];
 
-const allowed = new Set(['.env.example']);
-const violations = tracked.filter(file => !allowed.has(file) && forbiddenPatterns.some(pattern => pattern.test(file)));
+const allowed = new Set(['.env.example', '.env.development', '.env.staging', '.env.production']);
+const violations = tracked.filter(
+  (file) => !allowed.has(file) && forbiddenPatterns.some((pattern) => pattern.test(file)),
+);
 
 if (violations.length > 0) {
   console.error('Tracked secret or generated data artifacts found:');

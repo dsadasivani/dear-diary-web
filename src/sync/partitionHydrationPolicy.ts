@@ -9,7 +9,13 @@ export interface ArchiveHydrationPolicyInput {
 
 export interface ArchiveHydrationDecision {
   allowed: boolean;
-  reason: 'allowed' | 'offline' | 'mobile_data_blocked' | 'battery_saver' | 'storage_pressure';
+  reason:
+    | 'allowed'
+    | 'offline'
+    | 'mobile_data_blocked'
+    | 'battery_saver'
+    | 'storage_pressure'
+    | 'disabled_by_runtime_flag';
 }
 
 export const shouldBackgroundHydrateArchive = ({

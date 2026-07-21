@@ -41,7 +41,7 @@ export class MobileFileStorageService implements FileStorageService {
 
   async list(path: string): Promise<StoredFileEntry[]> {
     const result = await Filesystem.readdir({ path, directory: Directory.Data });
-    return result.files.map(file => ({
+    return result.files.map((file) => ({
       name: file.name,
       path: `${path.replace(/\/$/, '')}/${file.name}`,
       modifiedAt: file.mtime,

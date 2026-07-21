@@ -5,7 +5,9 @@ import { WebLocalDataStore } from './webLocalDataStore';
 
 export type {
   LocalDataStore,
+  LocalEntryProjection,
   LocalEntryQueryOptions,
+  LocalNoteProjection,
   LocalNoteQueryOptions,
   LocalQueryPageOptions,
   LocalQueryPageResult,

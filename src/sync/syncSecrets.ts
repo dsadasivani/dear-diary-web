@@ -10,8 +10,13 @@ import {
 const SECURE_STORAGE_PREFIX = 'deardiary_';
 const SYNC_SECRETS_KEY = 'multi_device_sync_secrets_v1';
 const PENDING_PAIRING_KEY = 'pending_companion_pairing_v1';
+const PENDING_V2_PAIRING_KEY = 'pending_companion_pairing_v2';
+const PENDING_V2_PAIRING_APPROVAL_KEY = 'pending_companion_pairing_approval_v2';
+const PENDING_V2_DEVICE_KEY_ROTATION_KEY = 'pending_device_key_rotation_v2';
 const PENDING_DEVICE_KEY_ROTATION_KEY = 'pending_device_key_rotation_v1';
 const PENDING_PRIMARY_RECOVERY_KEY = 'pending_primary_recovery_v1';
+const PENDING_PRIMARY_ACCOUNT_SETUP_KEY = 'pending_primary_account_setup_v2';
+const PENDING_PRIMARY_ACCOUNT_RECOVERY_KEY = 'pending_primary_account_recovery_v2';
 
 export interface SyncSecrets {
   version: 1;
@@ -36,17 +41,18 @@ export interface SyncSecretStorage {
 
 const bytesToBase64 = (bytes: Uint8Array): string => {
   let binary = '';
-  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
   return typeof btoa === 'function'
     ? btoa(binary)
     : Buffer.from(binary, 'binary').toString('base64');
 };
 
 const base64ToBytes = (value: string): Uint8Array => {
-  const binary = typeof atob === 'function'
-    ? atob(value)
-    : Buffer.from(value, 'base64').toString('binary');
-  return Uint8Array.from(binary, character => character.charCodeAt(0));
+  const binary =
+    typeof atob === 'function' ? atob(value) : Buffer.from(value, 'base64').toString('binary');
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 };
 
 const capacitorSecretStorage: SyncSecretStorage = {
@@ -67,9 +73,8 @@ const capacitorSecretStorage: SyncSecretStorage = {
 const encryptedWebStorage = new WebEncryptedKeyValueStore(SYNC_SECRET_STORE);
 const webSecretStorage: SyncSecretStorage = encryptedWebStorage;
 
-const defaultSecretStorage = (): SyncSecretStorage => (
-  isNativePlatform() ? capacitorSecretStorage : webSecretStorage
-);
+const defaultSecretStorage = (): SyncSecretStorage =>
+  isNativePlatform() ? capacitorSecretStorage : webSecretStorage;
 
 export const encodeSyncSecretBytes = bytesToBase64;
 export const decodeSyncSecretBytes = base64ToBytes;
@@ -82,7 +87,11 @@ export const saveSyncSecrets = async (
     throw new Error(`Account root key must be ${ACCOUNT_ROOT_KEY_BYTES} bytes.`);
   }
   Object.entries(secrets.accountRootKeys || {}).forEach(([epoch, key]) => {
-    if (!Number.isInteger(Number(epoch)) || Number(epoch) < 1 || key.byteLength !== ACCOUNT_ROOT_KEY_BYTES) {
+    if (
+      !Number.isInteger(Number(epoch)) ||
+      Number(epoch) < 1 ||
+      key.byteLength !== ACCOUNT_ROOT_KEY_BYTES
+    ) {
       throw new Error('Epoch root key metadata is invalid.');
     }
   });
@@ -90,7 +99,10 @@ export const saveSyncSecrets = async (
     ...secrets,
     accountRootKey: bytesToBase64(secrets.accountRootKey),
     accountRootKeys: Object.fromEntries(
-      Object.entries(secrets.accountRootKeys || {}).map(([epoch, key]) => [epoch, bytesToBase64(key)]),
+      Object.entries(secrets.accountRootKeys || {}).map(([epoch, key]) => [
+        epoch,
+        bytesToBase64(key),
+      ]),
     ),
   };
   await storage.setItem(SYNC_SECRETS_KEY, JSON.stringify(stored));
@@ -104,14 +116,22 @@ export const loadSyncSecrets = async (
   try {
     const stored = JSON.parse(value) as StoredSyncSecrets;
     const accountRootKey = base64ToBytes(stored.accountRootKey);
-    if (stored.version !== 1 || !stored.accountId || accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) {
+    if (
+      stored.version !== 1 ||
+      !stored.accountId ||
+      accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES
+    ) {
       return null;
     }
     const accountRootKeys = Object.fromEntries(
-      Object.entries(stored.accountRootKeys || {}).map(([epoch, key]) => [Number(epoch), base64ToBytes(key)]),
+      Object.entries(stored.accountRootKeys || {}).map(([epoch, key]) => [
+        Number(epoch),
+        base64ToBytes(key),
+      ]),
     );
-    Object.values(accountRootKeys).forEach(key => {
-      if (key.byteLength !== ACCOUNT_ROOT_KEY_BYTES) throw new Error('Stored epoch key length is invalid.');
+    Object.values(accountRootKeys).forEach((key) => {
+      if (key.byteLength !== ACCOUNT_ROOT_KEY_BYTES)
+        throw new Error('Stored epoch key length is invalid.');
     });
     return { ...stored, accountRootKey, accountRootKeys };
   } catch {
@@ -132,7 +152,11 @@ export const withAccountRootKeyForEpoch = (
   keyEpoch: number,
   accountRootKey: Uint8Array,
 ): SyncSecrets => {
-  if (!Number.isInteger(keyEpoch) || keyEpoch < 1 || accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES) {
+  if (
+    !Number.isInteger(keyEpoch) ||
+    keyEpoch < 1 ||
+    accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES
+  ) {
     throw new Error('Epoch root key metadata is invalid.');
   }
   return {
@@ -156,11 +180,69 @@ export const savePendingPairingSecret = async <T>(value: T): Promise<void> => {
 export const loadPendingPairingSecret = async <T>(): Promise<T | null> => {
   const value = await defaultSecretStorage().getItem(PENDING_PAIRING_KEY);
   if (!value) return null;
-  try { return JSON.parse(value) as T; } catch { return null; }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
 };
 
 export const clearPendingPairingSecret = async (): Promise<void> => {
   await defaultSecretStorage().removeItem(PENDING_PAIRING_KEY);
+};
+
+export const savePendingV2PairingSecret = async <T>(value: T): Promise<void> => {
+  await defaultSecretStorage().setItem(PENDING_V2_PAIRING_KEY, JSON.stringify(value));
+};
+
+export const loadPendingV2PairingSecret = async <T>(): Promise<T | null> => {
+  const value = await defaultSecretStorage().getItem(PENDING_V2_PAIRING_KEY);
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+};
+
+export const clearPendingV2PairingSecret = async (): Promise<void> => {
+  await defaultSecretStorage().removeItem(PENDING_V2_PAIRING_KEY);
+};
+
+export const savePendingV2PairingApprovalSecret = async <T>(value: T): Promise<void> => {
+  await defaultSecretStorage().setItem(PENDING_V2_PAIRING_APPROVAL_KEY, JSON.stringify(value));
+};
+
+export const loadPendingV2PairingApprovalSecret = async <T>(): Promise<T | null> => {
+  const value = await defaultSecretStorage().getItem(PENDING_V2_PAIRING_APPROVAL_KEY);
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+};
+
+export const clearPendingV2PairingApprovalSecret = async (): Promise<void> => {
+  await defaultSecretStorage().removeItem(PENDING_V2_PAIRING_APPROVAL_KEY);
+};
+
+export const savePendingV2DeviceKeyRotationSecret = async <T>(value: T): Promise<void> => {
+  await defaultSecretStorage().setItem(PENDING_V2_DEVICE_KEY_ROTATION_KEY, JSON.stringify(value));
+};
+
+export const loadPendingV2DeviceKeyRotationSecret = async <T>(): Promise<T | null> => {
+  const value = await defaultSecretStorage().getItem(PENDING_V2_DEVICE_KEY_ROTATION_KEY);
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+};
+
+export const clearPendingV2DeviceKeyRotationSecret = async (): Promise<void> => {
+  await defaultSecretStorage().removeItem(PENDING_V2_DEVICE_KEY_ROTATION_KEY);
 };
 
 export const savePendingDeviceKeyRotationSecret = async <T>(
@@ -175,7 +257,11 @@ export const loadPendingDeviceKeyRotationSecret = async <T>(
 ): Promise<T | null> => {
   const value = await storage.getItem(PENDING_DEVICE_KEY_ROTATION_KEY);
   if (!value) return null;
-  try { return JSON.parse(value) as T; } catch { return null; }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
 };
 
 export const clearPendingDeviceKeyRotationSecret = async (
@@ -196,11 +282,51 @@ export const loadPendingPrimaryRecoverySecret = async <T>(
 ): Promise<T | null> => {
   const value = await storage.getItem(PENDING_PRIMARY_RECOVERY_KEY);
   if (!value) return null;
-  try { return JSON.parse(value) as T; } catch { return null; }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
 };
 
 export const clearPendingPrimaryRecoverySecret = async (
   storage: SyncSecretStorage = defaultSecretStorage(),
 ): Promise<void> => {
   await storage.removeItem(PENDING_PRIMARY_RECOVERY_KEY);
+};
+
+export const savePendingPrimaryAccountSetupSecret = async <T>(value: T): Promise<void> => {
+  await defaultSecretStorage().setItem(PENDING_PRIMARY_ACCOUNT_SETUP_KEY, JSON.stringify(value));
+};
+
+export const loadPendingPrimaryAccountSetupSecret = async <T>(): Promise<T | null> => {
+  const value = await defaultSecretStorage().getItem(PENDING_PRIMARY_ACCOUNT_SETUP_KEY);
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+};
+
+export const clearPendingPrimaryAccountSetupSecret = async (): Promise<void> => {
+  await defaultSecretStorage().removeItem(PENDING_PRIMARY_ACCOUNT_SETUP_KEY);
+};
+
+export const savePendingPrimaryAccountRecoverySecret = async <T>(value: T): Promise<void> => {
+  await defaultSecretStorage().setItem(PENDING_PRIMARY_ACCOUNT_RECOVERY_KEY, JSON.stringify(value));
+};
+
+export const loadPendingPrimaryAccountRecoverySecret = async <T>(): Promise<T | null> => {
+  const value = await defaultSecretStorage().getItem(PENDING_PRIMARY_ACCOUNT_RECOVERY_KEY);
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+};
+
+export const clearPendingPrimaryAccountRecoverySecret = async (): Promise<void> => {
+  await defaultSecretStorage().removeItem(PENDING_PRIMARY_ACCOUNT_RECOVERY_KEY);
 };

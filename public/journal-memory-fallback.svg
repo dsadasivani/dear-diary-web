@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title description">
+  <title id="title">Abstract memory gradient</title>
+  <desc id="description">A soft violet, coral, and teal atmospheric background.</desc>
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ECE9FF"/>
+      <stop offset="0.52" stop-color="#FFE8EE"/>
+      <stop offset="1" stop-color="#DDF8F3"/>
+    </linearGradient>
+    <radialGradient id="light" cx="0.2" cy="0.15" r="0.72">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.86"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#base)"/>
+  <rect width="1200" height="800" fill="url(#light)"/>
+  <circle cx="980" cy="180" r="180" fill="#6C5CE7" opacity="0.1"/>
+  <circle cx="180" cy="670" r="220" fill="#18BFA9" opacity="0.1"/>
+</svg>

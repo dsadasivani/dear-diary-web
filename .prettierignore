@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+benchmarks/
+playwright-report/
+test-results/
+.local/
+.env*
+android/.gradle/
+android/app/build/
+android/app/src/main/assets/
+android/build/
+backend/sync-api/.gradle/
+backend/sync-api/build/

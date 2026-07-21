@@ -2,6 +2,9 @@ import { localDataStore } from '../platform/storage';
 import { LocalDiaryRepository } from './localDiaryRepository';
 import { EventSyncEngine } from '../sync/eventSyncEngine';
 import { createSyncingDiaryRepository } from './syncingDiaryRepository';
+import { PersistentOutboxRepository } from '../sync/outbox';
+import { SyncV2ApplicationLifecycle } from '../sync/v2/SyncV2ApplicationLifecycle';
+import { createRepositoryCapabilities } from './capabilities';
 
 export type {
   AcknowledgeLocalMutationInput,
@@ -33,7 +36,31 @@ export type {
   TypedRepositoryChangeListener,
   WritingHeatmapRow,
 } from './DiaryRepository';
+export type {
+  BackupRepository,
+  DiaryReader,
+  DiaryWriter,
+  EntryReader,
+  EntryWriter,
+  NotesRepository,
+  RepositoryCapabilities,
+  SearchRepository,
+  SecurityRepository,
+  SettingsRepository,
+  StatisticsRepository,
+  SyncRepository,
+} from './capabilities';
 
 export const localDiaryRepository = new LocalDiaryRepository(localDataStore);
-export const eventSyncEngine = new EventSyncEngine(localDiaryRepository);
+export const outboxV2Repository = new PersistentOutboxRepository(localDataStore);
+export const eventSyncEngine = new EventSyncEngine(localDiaryRepository, {
+  outboxRepository: outboxV2Repository,
+});
 export const diaryRepository = createSyncingDiaryRepository(localDiaryRepository, eventSyncEngine);
+export const repositoryCapabilities = createRepositoryCapabilities(diaryRepository);
+export const syncV2Application = new SyncV2ApplicationLifecycle(
+  localDataStore,
+  localDiaryRepository,
+  outboxV2Repository,
+  eventSyncEngine,
+);

@@ -1,244 +1,110 @@
 # Dear Diary
 
-Dear Diary is a private journaling app for Android and linked web companions. It keeps readable journal content on trusted devices, uses a local PIN for day-to-day access, and can sync encrypted diary data across devices through Supabase metadata plus encrypted Google Drive `appDataFolder` objects.
+Dear Diary is a private, local-first journaling application for Android and linked web companions. Android is the primary standalone target. A browser without a local sync account opens the companion-link flow and must be approved from a primary Android device.
 
-Android is the primary standalone target. The web app currently opens as a companion-link surface when no encrypted sync account is stored locally; create or recover the primary account on Android first, then approve the browser from the primary device.
+Journal plaintext stays on trusted devices. The current Sync V2 path encrypts payloads on the client, uses Supabase Auth for identity, stores synchronization metadata in the Spring Boot sync service and PostgreSQL, and stores encrypted objects in an S3-compatible object store.
 
-## Contents
+## Features
 
-- [Current Functionality](#current-functionality)
-- [Core Flows](#core-flows)
-- [Architecture](#architecture)
-- [Performance and Local-First Data Flow](#performance-and-local-first-data-flow)
-- [Storage and Privacy](#storage-and-privacy)
-- [Encrypted Sync](#encrypted-sync)
-- [Local Development](#local-development)
-- [Android Development](#android-development)
-- [Environment Variables](#environment-variables)
-- [Testing](#testing)
-- [Project Structure](#project-structure)
-- [Known Limitations](#known-limitations)
+- Multiple journals with custom covers, colors, icons, and optional session-level locks.
+- Rich-text entries, timeline blocks, moods, tags, photos, audio notes, and dictation.
+- Quick notes with pinning, tags, rich text, and conversion to journal entries.
+- Search, calendar and table-of-contents views, writing streaks, mood trends, tag usage, and a writing heatmap.
+- A local PIN, recovery question, Android biometric unlock, automatic privacy locking, and diary-level access controls.
+- Encrypted, local-first multi-device sync with durable outbox operations, companion pairing, recovery, key rotation, conflict preservation, and encrypted snapshots.
+- Encrypted IndexedDB storage on the web and SQLCipher-backed SQLite plus app-private media files on Android.
 
-## Current Functionality
-
-### Journals and Entries
-
-- Create multiple diaries with name, emoji, color, cover image, decorative icons, and optional diary lock.
-- Create, edit, and delete dated entries with title, time, rich text, mood, tags, photos, and voice notes.
-- Use single-entry writing or a timeline-style entry made from ordered time-stamped blocks.
-- Format rich text with headings, emphasis, quotes, lists, and font controls.
-- Use local reflection suggestions for mood, tags, and a short empathetic response. This is heuristic and local; journal text is not sent to an AI service.
-- Record audio notes and dictate text when the platform microphone and speech services allow it.
-
-### Reading, Search, and Reflections
-
-- Browse entries newest-first with page navigation and swipe gestures. Common entry and note page queries use storage-backed filtering/paging where available.
-- Open diary entries from table of contents or calendar views.
-- Search entries and notes by title/body, tags, date range, mood, and photo presence.
-- Keep locked-diary content out of Home, Search, and Reflections until that diary is unlocked for the current app session.
-- View streaks, entry counts, mood distribution, tag usage, 30-day writing heatmap, photo memories, and year/month mood calendars.
-- Restore older encrypted archive months on demand from diary calendar/search flows when a linked account has partitioned archive data that is not downloaded locally yet.
-
-### Notes and Home
-
-- Capture quick notes, pin them, tag them, edit them with rich text, and convert them into diary entries.
-- Use the Home screen for greeting/profile context, daily word goal, writing streak, recent diaries, common tags, rotating prompts, and Quick Jot.
-
-### Security and Settings
-
-The Settings screen has four tabs:
-
-| Tab | Current capabilities |
-| --- | --- |
-| Profile | Reconnect encrypted sync, approve pending web companions, revoke linked companions, and edit profile/avatar/daily target. |
-| Security | Change the 4- or 8-digit app PIN, update the recovery question, inspect Google recovery identity, rotate the encrypted account recovery passphrase, and enable Android biometric unlock when available. |
-| Backup | Inspect encrypted cloud storage usage, sync queue counts, failed/conflict state, network state, last cloud save time, recovery readiness, manually retry encrypted sync, and reset local journal content while keeping local security/account configuration. |
-| Customize | Configure Android reminder preference/time, switch light/dark theme, and manage custom tags and moods. |
-
-The old Settings controls for manual Drive backup scheduling and "Back up now" are no longer exposed in the React UI. The active cloud path is encrypted multi-device sync. Portable backup bundle utilities remain in code and tests, but the current user-facing Settings screen does not provide a manual local export/import flow.
-
-## Core Flows
-
-### First Android Launch
-
-1. The bootstrap layer opens local storage, migrates legacy native media when needed, starts media cleanup, and loads settings/security/profile/sync state.
-2. The user creates a 4- or 8-digit app PIN.
-3. A local recovery question is required.
-4. The user signs in with Google and creates or recovers an encrypted account using a recovery passphrase.
-5. New accounts upload a recovery key package and initial encrypted snapshot. Existing accounts use the recovery passphrase to recover the account root key and perform two-phase primary recovery.
-6. After setup, the app opens locked and starts normal local-first operation with encrypted sync available.
-
-### Web Companion Link
-
-1. The browser asks the user to continue with the Google account already linked to the primary mobile account.
-2. The browser creates a companion pairing request and displays an 8-digit code.
-3. The primary mobile device approves the code in Settings > Profile > Companion Devices.
-4. The browser receives an encrypted key package, restores the encrypted diary state, and then opens as a linked companion.
-
-### Unlocking and Relocking
-
-- Every app mount starts locked.
-- Unlock uses the app PIN, or Android biometric unlock when enabled.
-- The navigation-bar lock button ends the authenticated session and clears diary-level unlocks.
-- On native app resume, Dear Diary locks after being in the background for the configured privacy interval, currently five minutes.
-
-### Forgotten PIN
-
-- The lock screen can reset the PIN with the local recovery answer.
-- A linked Google account can also verify recovery identity when available.
-- Resetting the PIN disables enrolled biometric/passkey state; it can be enrolled again from Settings.
-
-### Locked Diaries
-
-- A locked diary uses the same app PIN or enabled biometric identity.
-- Unlock is session-local; relocking the app forgets unlocked diary IDs.
-- Diary locks are application access controls. They do not create a separate encrypted database or a separate diary-specific PIN.
-
-### Companion Revocation
-
-Only the primary mobile device can revoke a linked companion. Revocation requires the recovery passphrase because the primary rotates the encrypted account key epoch, writes a new recovery package, distributes key packages to remaining active companions, and only then finalizes revocation. A local PIN or biometric check proves local presence, but it does not prove the user can preserve account recovery after the key rotation.
+The app includes portable backup and legacy sync utilities for compatibility and migration, but the current Settings UI centers on encrypted account sync rather than manual Drive backup scheduling or local import/export.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    UI[React screens] --> APP[App navigation and auth session]
+    UI[React screens] --> APP[App state and navigation]
     APP --> REPO[DiaryRepository]
     REPO --> STORE{Platform storage}
-    STORE -->|Web companion| IDB[Encrypted IndexedDB]
-    STORE -->|Android| SQL[Encrypted SQLite / SQLCipher]
-    UI --> MEDIA[File/audio/security services]
-    MEDIA -->|Web| WEBAPI[Browser APIs]
-    MEDIA -->|Android| NATIVE[Capacitor plugins and app-private files]
-    REPO --> SYNC[EventSyncEngine]
-    SYNC --> SUPA[Supabase control plane]
-    SYNC --> DRIVE[Google Drive appDataFolder encrypted objects]
+    STORE -->|Web| IDB[Encrypted IndexedDB]
+    STORE -->|Android| SQL[SQLCipher SQLite]
+    REPO --> OUTBOX[Durable local outbox]
+    OUTBOX --> SYNC[Sync V2 client]
+    SYNC --> API[Spring Boot sync API]
+    API --> PG[PostgreSQL metadata]
+    SYNC --> OBJECTS[S3-compatible encrypted objects]
+    UI --> PLATFORM[Filesystem, audio, biometrics, reminders]
 ```
 
-`App.tsx` owns in-memory navigation instead of React Router. Top-level tabs are Home, Diaries, Notes, Search, Reflections, and Settings. Nested screens include diary detail, diary settings, entry editor, app settings, and lock state.
+`src/App.tsx` owns navigation and application-level state; the project does not use a client router. The primary destinations are Today, Diaries, Notes, Insights, Search, and Settings.
 
-All application writes go through the async `DiaryRepository`. Local writes are serialized to avoid overlapping update loss. When encrypted sync is configured, `syncingDiaryRepository` applies normal diary, entry, note, settings, and profile changes locally first, enqueues a durable sync outbox operation in the same local batch, emits typed repository change events, returns to the UI, and then requests background sync.
+All journal mutations go through the asynchronous `DiaryRepository`. A synced write updates encrypted local storage and its durable outbox record before returning to the UI. Network upload, remote pull, acknowledgement, snapshots, and archive hydration run afterward. Repository change events and targeted queries keep screens current without reloading the entire data set after normal navigation.
 
-`App.tsx` still owns global auth/navigation/theme/toast/sync state, but normal navigation no longer triggers a full repository reload. Screens use targeted repository queries and typed change events to patch or requery the affected diary, entry, note, or settings data.
+The Express host is intentionally small. In development it mounts Vite middleware; in production it serves `dist` with an SPA fallback. `GET /api/health` is the only application API on that host. The separate Spring Boot service under `backend/sync-api` owns Sync V2 endpoints.
 
-The Express server is intentionally small:
+For details, see:
 
-- `npm run dev` starts Express with Vite middleware.
-- Production serves the built `dist` directory with SPA fallback.
-- `GET /api/health` returns `{ "status": "ok", "offline": true }`.
-- There are no journal CRUD, auth, AI, or backup APIs on the server.
+- [Sync architecture and compatibility](docs/sync-and-supabase.md)
+- [Local Sync V2 environment](docs/local-sync-v2.md)
+- [Android and Capacitor](docs/mobile-capacitor.md)
+- [Performance measurement](docs/performance.md)
+- [Production sync operations](docs/production-operations.md)
+- [Testing](docs/testing.md)
 
-## Performance and Local-First Data Flow
+## Local development
 
-Dear Diary is being refactored toward local-first performance while preserving the existing encrypted sync and recovery model.
-
-Current local-first behavior:
-
-- Normal synced writes commit to encrypted local storage plus a durable outbox row before returning to the UI.
-- Cloud work runs in background flush/pull/ack flows. Local save paths do not wait for Supabase, Google Drive, remote pulls, snapshot compaction, media upload, or online checks.
-- Successful remote acknowledgement updates local record versions, cursors, media pointers, and sync status without rewriting the already-applied user record.
-- Conflict recovery preserves the original outbox payload, pulls the latest remote state, creates recovered entry/note copies when needed, queues those copies as local-first operations, and surfaces non-blocking warnings.
-- Entry lists no longer eagerly hydrate every encrypted sync media reference. `SyncedImage` and rendered audio controls resolve media lazily, dedupe in-flight work, and use bounded memory caches.
-
-Structured local storage:
-
-- Android mirrors diary, entry, block, note, media, settings/profile, sync account, record version, media pointer, partition hydration, and outbox data into typed encrypted SQLite tables. Common diary/entry/note reads and simple entry/note page queries can use SQL rows instead of rebuilding whole arrays.
-- Web writes diaries, entries, notes, settings/profile/security metadata, sync account metadata, record versions, media pointers, partition hydration state, and outbox rows into dedicated encrypted IndexedDB record stores. Compatibility key-value rows are still written for rollback/import/export, but structured stores are preferred once ready.
-- Full-text/tag entry and note search still materializes local encrypted records so sanitizer-aware plain-text matching remains unchanged.
-
-Development-only instrumentation is available through `measureAsync` and `measureSync`. In a development browser session, inspect:
-
-```js
-window.dearDiaryPerformance.aggregates()
-window.dearDiaryPerformance.samples()
-```
-
-Use `window.dearDiaryPerformance.reset()` between scenarios. Measurement metadata must stay redacted: never pass diary body text, note text, titles, tokens, keys, PINs, passphrases, recovery answers, raw media bytes, or raw media URIs.
-
-Generate benchmark-scale local data with:
-
-```bash
-npm run benchmark:seed
-```
-
-See [docs/performance.md](docs/performance.md) and [docs/local-first-performance.md](docs/local-first-performance.md) for measurement workflow, current implementation notes, rollback notes, and remaining risks.
-
-## Storage and Privacy
-
-| Concern | Web companion | Android |
-| --- | --- | --- |
-| Journal/settings/security records | Encrypted IndexedDB with record-level repository stores | Encrypted SQLite / SQLCipher with typed repository tables |
-| Photos, covers, audio | Browser storage/data references | App-private files under Capacitor `Directory.Data` |
-| SQLite secret | Not applicable | Random secret in OS-backed Capacitor Secure Storage |
-| Legacy Preferences | Not applicable | Migration input only; SQLite is authoritative after migration |
-| UI-only diary layout | `localStorage` | Mirrored through Preferences, then hydrated into `localStorage` |
-
-PINs are stored as salted SHA-256 hashes. Recovery answers are normalized, salted, and stored with PBKDF2 using 120,000 iterations. Rich text is sanitized before persistence, import, sync replay, and display.
-
-Clearing browser site data or Android app storage deletes local diary data and security material. Android clear storage or uninstall is destructive unless the encrypted account can be recovered from cloud sync or another trusted device.
-
-## Encrypted Sync
-
-Encrypted sync uses:
-
-- Supabase for account/device metadata, cursors, object hashes, and Drive file pointers.
-- Google Drive `appDataFolder` for encrypted events, media, thumbnails, snapshots, partition snapshots, manifests, and key packages.
-- Client-side account root keys; plaintext journal data is not stored in Supabase or Google Drive by application code.
-
-Important sync behavior:
-
-- User writes are staged locally first with durable outbox operations, then uploaded as encrypted events and media by background sync.
-- Background fallback polling runs periodically, while local saves, reconnect, unlock, realtime, and manual retry request immediate/coalesced outbox flushes.
-- Drive object bytes are checked against Supabase SHA-256 metadata before decrypting/applying.
-- Latest-first restore loads core data and recent months first, then marks older monthly partitions as available for on-demand hydration.
-- Primary mobile recovery and companion revocation are two-phase flows so old devices are not revoked until restore/package distribution succeeds.
-- See [docs/sync-and-supabase.md](docs/sync-and-supabase.md) for the operational runbook.
-
-Google Drive integration uses the scope:
-
-```text
-https://www.googleapis.com/auth/drive.appdata
-```
-
-## Local Development
-
-Prerequisites:
+### Prerequisites
 
 - Node.js and npm compatible with the checked-in lockfile.
 - A modern browser.
-- Docker only when running Supabase integration tests.
-- Android Studio/JDK only when building or testing Android.
+- Docker for Supabase integration tests and the complete local Sync V2 stack.
+- Java 21 for the Sync V2 backend.
+- Android Studio and a compatible JDK for Android builds and checks.
 
-Install and run:
+Install dependencies and start the web host:
 
 ```bash
 npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. On Windows systems that block `npm.ps1`, use `npm.cmd` and `npx.cmd`.
 
-Useful commands:
+To start PostgreSQL, MinIO, the Sync V2 backend, and the web host together on Windows:
 
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Start Express with Vite middleware. |
-| `npm run lint` | Run TypeScript checks with unused-code guardrails. |
-| `npm run test:storage` | Run repository, domain, security, sync, and backup utility tests. |
-| `npm run test:component` | Run Vitest component tests. |
-| `npm run test:server` | Run Express server tests. |
-| `npm run test:supabase` | Run Docker-backed Supabase/RPC integration tests. |
-| `npm run test:e2e` | Run Playwright end-to-end tests. |
-| `npm run scan:secrets` | Scan for committed secrets/generated artifacts. |
-| `npm run benchmark:seed` | Generate a large local benchmark fixture for timing captures. |
-| `npm run build` | Build the Vite client and bundled Node server. |
-| `npm run start` | Start `dist/server.cjs`; set `NODE_ENV=production` for static serving. |
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-local-sync-v2.ps1
+```
 
-## Android Development
+See [docs/local-sync-v2.md](docs/local-sync-v2.md) for endpoints, emulator networking, and reset commands.
 
-The Android project is already present; do not run `cap add android` for a normal checkout.
+## Common commands
 
-Common workflow:
+| Command                               | Purpose                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------ |
+| `npm run dev`                         | Start Express with Vite middleware.                                            |
+| `npm run format`                      | Format supported source, configuration, and documentation files with Prettier. |
+| `npm run format:check`                | Verify formatting without changing files.                                      |
+| `npm run lint`                        | Run TypeScript checks, including unused locals and parameters.                 |
+| `npm run test:unit`                   | Run the core TypeScript unit suites.                                           |
+| `npm run test:component`              | Run Vitest component tests.                                                    |
+| `npm run test:server`                 | Run Express host tests.                                                        |
+| `npm run backend:test`                | Run the Spring Boot backend test suite.                                        |
+| `npm run backend:bootRun:development` | Start the backend with the development Spring profile.                         |
+| `npm run backend:bootRun:staging`     | Start the backend with the staging Spring profile.                             |
+| `npm run backend:bootRun:production`  | Start the backend with the production Spring profile.                          |
+| `npm run test:supabase`               | Run Docker-backed compatibility migrations and RPC tests.                      |
+| `npm run test:e2e`                    | Run Playwright end-to-end tests.                                               |
+| `npm run test:accessibility`          | Run the accessibility-tagged Playwright checks.                                |
+| `npm run test:ops`                    | Validate dashboards and alert configuration.                                   |
+| `npm run scan:secrets`                | Check for secrets and generated artifacts.                                     |
+| `npm run build`                       | Build the web client and bundled Express host.                                 |
+| `npm run build:staging`               | Build the staging web client and bundled Express host.                         |
+| `npm run build:web:staging`           | Build only the staging web companion.                                          |
+| `npm run build:web:production`        | Build only the production web companion.                                       |
+
+The all-in-one `npm run test:all` command also requires Docker, Playwright browsers, and the Android toolchain. Use the focused commands while developing and the complete command in a fully provisioned release environment.
+
+## Android development
+
+The Android project is checked in; a normal checkout should not run `cap add android`.
 
 ```bash
 npm ci
@@ -246,136 +112,76 @@ npm run mobile:sync
 npm run android:studio
 ```
 
-Run on a connected target:
+Useful Android checks and release tasks:
 
 ```bash
-npm run android
-```
-
-Create a debug APK from PowerShell:
-
-```powershell
-npm run mobile:sync
-Set-Location android
-.\gradlew.bat assembleDebug
-```
-
-Native debug inspection is disabled by default. For local inspection only:
-
-```powershell
-$env:CAPACITOR_WEBVIEW_DEBUG='true'
-npm run mobile:sync
-```
-
-Release helpers:
-
-```bash
-npm run assets:generate
-npm run android:lint
 npm run android:test
+npm run android:lint
 npm run android:release
 npm run android:bundle
 ```
 
-## Environment Variables
+Native WebView inspection is disabled by default. For a local debug build only, set `CAPACITOR_WEBVIEW_DEBUG=true` before running `npm run mobile:sync`.
 
-Copy `.env.example` to `.env` for Google/Supabase-backed sync. Vite only exposes `VITE_` variables to client code.
+## Configuration
 
-| Variable | Required for | Notes |
-| --- | --- | --- |
-| `VITE_GOOGLE_WEB_CLIENT_ID` | Google sign-in and Drive `appDataFolder` access | Use the OAuth Web application client ID, not the Android client ID. |
-| `VITE_SUPABASE_URL` | Encrypted sync | Supabase project URL. Apply `docs/supabase/001` through `docs/supabase/017` first. |
-| `VITE_SUPABASE_ANON_KEY` | Encrypted sync | Supabase anon key. |
-| `VITE_ENABLE_MD_FLOW_HOOKS` | Manual MD-021/MD-022 force-stop testing only | Never enable in release builds. |
-| `VITE_APP_VERSION` | Optional | Version recorded in backup/sync metadata where used. |
-| `CAPACITOR_WEBVIEW_DEBUG` | Optional Android build-time setting | Enables Android WebView inspection when exactly `true`. |
-| `CAPACITOR_BRIDGE_LOGGING` | Optional Android build-time setting | Enables verbose bridge logging; keep off for sync/recovery tests. |
-| `CAPACITOR_DEBUG` | Optional legacy build-time setting | Also enables WebView inspection when exactly `true`; prefer `CAPACITOR_WEBVIEW_DEBUG`. |
-| `DISABLE_HMR` | Optional development setting | Disables Vite HMR/file watching when exactly `true`. |
-| `NODE_ENV` | Production server | Set to `production` when serving built assets through `npm run start`. |
+The frontend uses Vite modes with safe tracked defaults:
 
-Never commit `.env`; the repository ignores `.env*` files except `.env.example`.
+- `.env.development` for local development
+- `.env.staging` for the AWS staging environment
+- `.env.production` for production
 
-## Testing
+Put credentials and developer-specific overrides in ignored `.env.local` or `.env.<environment>.local` files.
+Amplify build variables override tracked defaults. Vite exposes only variables prefixed with `VITE_` to
+browser code; such values must never be treated as secrets.
 
-Recommended local validation:
+The main client settings are:
 
-```bash
-npm run lint
-npm run test:storage
-npm run test:component
-npm run test:server
-npm run scan:secrets
-npm run build
-```
+- `VITE_GOOGLE_WEB_CLIENT_ID` for Google identity and legacy Drive compatibility flows.
+- `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth and the V1 compatibility control plane.
+- `VITE_SYNC_V2_API_URL` for the Spring Boot Sync V2 service.
+- `VITE_TELEMETRY_ENDPOINT` and `VITE_CRASH_REPORT_ENDPOINT` for optional privacy-safe reporting.
 
-Additional suites:
+Backend database, JWT, object-store, notification, garbage-collection, tracing, and CORS settings are documented
+inline in [.env.example](.env.example). Select `development`, `staging`, or `production` with
+`SPRING_PROFILES_ACTIVE`. Environment variables and SSM-injected secrets take precedence over the corresponding
+Spring profile. Production release builds validate required frontend configuration and fail closed when it is
+incomplete.
 
-- `npm run test:supabase` requires Docker and applies every SQL migration in `docs/supabase` in numeric order.
-- `npm run test:e2e` and `npm run test:accessibility` require Playwright browser setup.
-- `npm run android:test` and `npm run android:lint` require the Android toolchain.
-- `npm run benchmark:seed` creates `benchmarks/dear-diary-seed.json` by default for repeatable performance captures.
+Never commit `.env.local`, `.env.<environment>.local`, or credentials. Only the documented safe mode files and
+`.env.example` are allowed by the repository secret scan.
 
-The automated suite covers repository semantics, local-first mutation/outbox atomicity, storage-backed query behavior, security hashing/recovery, rich-text sanitization, encrypted sync events, snapshots, partitioned restore, companion pairing, key rotation/revocation, media handling, backup utility validation, component behavior, and server API boundaries.
+## Storage and security
 
-Physical-device QA remains necessary for Google consent, Android biometrics, microphone behavior, notification permission, SQLite/legacy-media migration, app background privacy lock, Android clear-storage recovery, and real multi-device sync conflict/recovery scenarios.
+| Concern                      | Web companion                                | Android                                     |
+| ---------------------------- | -------------------------------------------- | ------------------------------------------- |
+| Journal and settings records | Encrypted IndexedDB                          | SQLCipher-backed SQLite                     |
+| Photos, covers, and audio    | Encrypted browser records or data references | App-private Capacitor files                 |
+| Database secret              | Browser-origin storage boundary              | Random key held in OS-backed secure storage |
+| UI-only display preference   | `localStorage`                               | Preferences mirrored into `localStorage`    |
 
-## Project Structure
+Rich text is sanitized before persistence, import, replay, editing, and display. PINs are stored as salted SHA-256 hashes. Recovery answers are normalized, salted, and derived with PBKDF2. Sync object hashes are verified before decryption and application.
 
-```text
-.
-|-- src/
-|   |-- AppBootstrap.tsx              # storage/migration startup gate and web companion routing
-|   |-- App.tsx                       # auth session, navigation, lock state, sync resume
-|   |-- components/                   # lock, home, diary, editor, notes, search, stats, settings
-|   |-- domain/                       # security, catalog, rich-text, locks, merge/storage calculations
-|   |-- repositories/                 # async repository, syncing wrapper, defaults
-|   |-- sync/                         # encrypted sync, Supabase control plane, pairing, recovery, key rotation
-|   |-- platform/
-|   |   |-- storage/                  # encrypted IndexedDB, Preferences migration, encrypted SQLite
-|   |   |-- filesystem/               # web/native file storage
-|   |   |-- audio/                    # recording abstractions
-|   |   |-- security/                 # native biometric / WebAuthn abstractions
-|   |   `-- drive/                    # Capacitor bridge type for native Drive plugin
-|   |-- mobile/                       # Capacitor bootstrap, reminders, media persistence/cleanup
-|   `-- utils/                        # backup bundle utilities, Google auth/profile, WebAuthn helpers
-|-- android/                          # Android Studio project and native Drive/biometric/storage integration
-|-- docs/
-|   |-- performance.md               # performance measurement and benchmark fixture workflow
-|   |-- local-first-performance.md   # current local-first refactor notes and remaining risks
-|   |-- mobile-capacitor.md           # native implementation notes
-|   |-- sync-and-supabase.md          # encrypted sync runbook
-|   `-- supabase/                     # ordered SQL migrations 001-017
-|-- server.ts                         # Express/Vite development and static production server
-|-- vite.config.ts                    # Vite, React, Tailwind, alias, HMR config
-|-- capacitor.config.ts               # Capacitor app/native settings
-`-- package.json                      # scripts and dependencies
-```
+Clearing browser site data or Android app storage removes local journal data and local security material. Recovery then depends on a valid encrypted sync account or another trusted device. Android OS backup and device transfer are disabled to avoid restoring an encrypted database without its key.
 
-Important entry points:
+## Project structure
 
-- `src/main.tsx` renders React and starts Capacitor bootstrap behavior.
-- `src/AppBootstrap.tsx` prevents the UI from opening before local state is usable.
-- `src/repositories/localDiaryRepository.ts` owns local CRUD, snapshots, migrations, and reset behavior.
-- `src/repositories/syncingDiaryRepository.ts` wraps normal writes with local-first durable outbox behavior.
-- `src/sync/eventSyncEngine.ts` owns encrypted event upload, pull, restore, archive hydration, and maintenance.
-- `src/sync/accountBootstrap.ts` owns encrypted account creation and primary mobile recovery.
-- `src/components/CompanionApprovalPanel.tsx` owns companion approval and revocation UI.
-- `src/platform/storage/nativeSQLiteDataStore.ts` owns native encrypted SQLite schema and Preferences migration.
-- `src/platform/storage/webLocalDataStore.ts` owns encrypted IndexedDB record stores and web compatibility rows.
-- `src/utils/performance.ts` owns redacted development timing instrumentation.
+| Path               | Responsibility                                                                |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `src/components`   | Screens and reusable UI.                                                      |
+| `src/domain`       | Pure application and security rules.                                          |
+| `src/repositories` | Local-first repository abstraction and implementations.                       |
+| `src/platform`     | Storage, security, filesystem, audio, and platform adapters.                  |
+| `src/mobile`       | Capacitor bootstrap, native media, reminders, and deep links.                 |
+| `src/sync`         | Encryption, V1 compatibility, outbox, recovery, and Sync V2 client logic.     |
+| `backend/sync-api` | Spring Boot Sync V2 API and Flyway migrations.                                |
+| `android`          | Native Android shell and Drive bridge.                                        |
+| `tests/e2e`        | Playwright application and accessibility tests.                               |
+| `docs`             | Maintained architecture, operations, mobile, performance, and testing guides. |
+| `ops`              | Prometheus alerts and Grafana dashboards.                                     |
 
-## Known Limitations
+## Release limitations
 
-- Android is the complete primary native target. The repository has Capacitor iOS dependencies/scripts, but no committed `ios/` native project and no iOS-specific Drive background scheduler.
-- Web is currently a linked companion experience. A standalone web-only first-run diary is not the active flow.
-- The Settings UI currently exposes encrypted sync status and recovery readiness, not manual Drive backup scheduling/export controls.
-- Legacy Android Drive backup worker/plugin code still exists, but the current React app path uses encrypted event sync as the user-facing cloud feature.
-- Web storage is protected by browser-origin encrypted storage, not by a hardware-backed OS secret.
-- Compatibility key-value rows are still written for rollback/import/export while record-level storage continues to mature.
-- Native write-side mutation logic still serializes collection payloads before mirroring into typed SQL tables; a fully native CRUD repository is remaining work.
-- Full-text/tag search still scans local encrypted records in memory to preserve sanitizer-aware matching.
-- Diary cover images still hydrate eagerly in book-cover backgrounds; visible-image lazy loading is already used for entry/media images.
-- Browser speech recognition varies by browser and may depend on browser-provided services. Android dictation requires an installed speech-recognition service.
-- Media cleanup is eventual; newly unreferenced files get a grace period to protect unsaved drafts.
-- Android Settings > Apps > Dear Diary > Clear storage is destructive. Recovery depends on another trusted synced device or successful encrypted account recovery.
+- iOS dependencies and scripts are present, but an iOS native project is not checked in and must be generated and validated on macOS.
+- Physical-device validation is still required for real OAuth and object-store environments, biometrics, permission prompts, background behavior, interrupted storage migration, low-storage handling, and production-signed Android builds.
+- Legacy V1 sync and portable backup code remain until account migration and rollback requirements allow their removal.

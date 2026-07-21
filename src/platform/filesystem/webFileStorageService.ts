@@ -13,7 +13,9 @@ export class WebFileStorageService implements FileStorageService {
     return path.startsWith('data:') ? path : null;
   }
 
-  async list(_path: string): Promise<StoredFileEntry[]> { return []; }
+  async list(_path: string): Promise<StoredFileEntry[]> {
+    return [];
+  }
 
   async delete(_path: string): Promise<void> {}
 }

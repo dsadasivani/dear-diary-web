@@ -1,11 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { recordPerformanceMeasurement } from '../utils/performance';
 
-const now = (): number => (
+const now = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
-    : Date.now()
-);
+    : Date.now();
 
 export const useScreenPerformance = (screenName: string): void => {
   const startedAt = useRef(now());

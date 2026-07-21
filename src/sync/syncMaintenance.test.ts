@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SyncObjectMetadata } from '../types';
-import { ORPHAN_GRACE_PERIOD_MS, planSyncMaintenance } from './syncMaintenance';
+import {
+  ORPHAN_GRACE_PERIOD_MS,
+  performSyncMaintenance,
+  planSyncMaintenance,
+} from './syncMaintenance';
+import { resetSyncRuntimeFlags } from './runtimeFlags';
 
 const object = (
   sequence: number,
@@ -47,9 +52,18 @@ test('retains the newest snapshots and identifies only safe Drive cleanup candid
     ],
   });
 
-  assert.deepEqual(plan.snapshotsToRetire.map(item => item.sequence), [2]);
-  assert.deepEqual(plan.objectsToRetire.map(item => item.sequence), [2]);
-  assert.deepEqual(plan.driveFilesToDelete.map(item => item.id), ['file-6', 'orphan-old']);
+  assert.deepEqual(
+    plan.snapshotsToRetire.map((item) => item.sequence),
+    [2],
+  );
+  assert.deepEqual(
+    plan.objectsToRetire.map((item) => item.sequence),
+    [2],
+  );
+  assert.deepEqual(
+    plan.driveFilesToDelete.map((item) => item.id),
+    ['file-6', 'orphan-old'],
+  );
 });
 
 test('retains manifests and partition snapshots independently', () => {
@@ -71,7 +85,10 @@ test('retains manifests and partition snapshots independently', () => {
     partitionSnapshotRetentionCount: 2,
   });
 
-  assert.deepEqual(plan.snapshotsToRetire.map(item => item.sequence), [1, 4, 7]);
+  assert.deepEqual(
+    plan.snapshotsToRetire.map((item) => item.sequence),
+    [1, 4, 7],
+  );
   assert.deepEqual(plan.eventsToRetire, []);
 });
 
@@ -89,8 +106,14 @@ test('retires event tails covered by retained partition snapshots', () => {
     partitionSnapshotRetentionCount: 2,
   });
 
-  assert.deepEqual(plan.eventsToRetire.map(item => item.sequence), [1, 2, 3]);
-  assert.deepEqual(plan.objectsToRetire.map(item => item.sequence), [1, 2, 3]);
+  assert.deepEqual(
+    plan.eventsToRetire.map((item) => item.sequence),
+    [1, 2, 3],
+  );
+  assert.deepEqual(
+    plan.objectsToRetire.map((item) => item.sequence),
+    [1, 2, 3],
+  );
 });
 
 test('keeps cross-partition events until every affected partition is covered', () => {
@@ -106,7 +129,10 @@ test('keeps cross-partition events until every affected partition is covered', (
     partitionSnapshotRetentionCount: 2,
   });
 
-  assert.deepEqual(plan.eventsToRetire.map(item => item.sequence), [3]);
+  assert.deepEqual(
+    plan.eventsToRetire.map((item) => item.sequence),
+    [3],
+  );
 });
 
 test('retires old unreferenced media while keeping current media references', () => {
@@ -131,8 +157,14 @@ test('retires old unreferenced media while keeping current media references', ()
     liveDriveFileIds: ['live-media'],
   });
 
-  assert.deepEqual(plan.mediaToRetire.map(item => item.driveFileId), ['deleted-media', 'deleted-thumb']);
-  assert.deepEqual(plan.objectsToRetire.map(item => item.driveFileId), ['deleted-media', 'deleted-thumb']);
+  assert.deepEqual(
+    plan.mediaToRetire.map((item) => item.driveFileId),
+    ['deleted-media', 'deleted-thumb'],
+  );
+  assert.deepEqual(
+    plan.objectsToRetire.map((item) => item.driveFileId),
+    ['deleted-media', 'deleted-thumb'],
+  );
 });
 
 test('uses a two-hour default grace period before retiring unreferenced remote media', () => {
@@ -154,5 +186,31 @@ test('uses a two-hour default grace period before retiring unreferenced remote m
   });
 
   assert.equal(ORPHAN_GRACE_PERIOD_MS, 2 * 60 * 60 * 1000);
-  assert.deepEqual(plan.mediaToRetire.map(item => item.driveFileId), ['old-enough-media']);
+  assert.deepEqual(
+    plan.mediaToRetire.map((item) => item.driveFileId),
+    ['old-enough-media'],
+  );
+});
+
+test('remote deletion cannot run while automatic garbage collection is disabled', async () => {
+  resetSyncRuntimeFlags();
+  let cloudCallCount = 0;
+  const plan = await performSyncMaintenance({
+    controlPlane: {
+      listSyncObjectsForMaintenance: async () => {
+        cloudCallCount += 1;
+        return [];
+      },
+      retireSyncObjects: async () => {
+        cloudCallCount += 1;
+        return [];
+      },
+    } as never,
+    primaryDeviceId: 'redacted-device',
+    googleSession: { accessToken: 'not-used' } as never,
+  });
+
+  assert.equal(cloudCallCount, 0);
+  assert.deepEqual(plan.driveFilesToDelete, []);
+  assert.deepEqual(plan.objectsToRetire, []);
 });

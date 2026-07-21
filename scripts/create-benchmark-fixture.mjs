@@ -23,6 +23,8 @@ const diaryCount = numberArg('diaries', 100);
 const entryCount = numberArg('entries', 10_000);
 const noteCount = numberArg('notes', 10_000);
 const outboxCount = numberArg('outbox', 250);
+const mediaCount = numberArg('media', 10_000);
+const syncEventCount = numberArg('sync-events', 10_000);
 
 const moods = [
   ['Joyful', '😊'],
@@ -72,7 +74,8 @@ const entries = Array.from({ length: entryCount }, (_, index) => {
       id: `bench-entry-${index + 1}-block-${blockIndex + 1}`,
       time: `${String((index + blockIndex) % 24).padStart(2, '0')}:00`,
       body: `<p>Timeline block ${blockIndex + 1} for benchmark entry ${index + 1}.</p>`,
-      audioUri: blockIndex === 0 && index % 31 === 0 ? `benchmark-media://${index + 1}/audio-1` : undefined,
+      audioUri:
+        blockIndex === 0 && index % 31 === 0 ? `benchmark-media://${index + 1}/audio-1` : undefined,
     })),
   };
 });
@@ -89,35 +92,51 @@ const notes = Array.from({ length: noteCount }, (_, index) => ({
 
 const entryCounts = new Map();
 const lastUpdated = new Map();
-entries.forEach(entry => {
+entries.forEach((entry) => {
   entryCounts.set(entry.diaryId, (entryCounts.get(entry.diaryId) || 0) + 1);
   lastUpdated.set(entry.diaryId, Math.max(lastUpdated.get(entry.diaryId) || 0, entry.updatedAt));
 });
-diaries.forEach(diary => {
+diaries.forEach((diary) => {
   diary.entryCount = entryCounts.get(diary.id) || 0;
   const updatedAt = lastUpdated.get(diary.id);
   diary.lastUpdated = updatedAt ? new Date(updatedAt).toISOString() : 'No entries yet';
   diary.lastEntryUpdatedAt = updatedAt;
 });
 
-const syncOutbox = Object.fromEntries(Array.from({ length: outboxCount }, (_, index) => [
-  `bench-operation-${index + 1}`,
-  {
-    operationId: `bench-operation-${index + 1}`,
-    accountId: 'benchmark-account',
-    deviceId: 'benchmark-device',
-    partitionKey: 'month:2026-07',
-    affectedPartitionKeys: ['month:2026-07'],
-    recordType: index % 2 === 0 ? 'entry' : 'note',
-    recordId: index % 2 === 0 ? `bench-entry-${index + 1}` : `bench-note-${index + 1}`,
-    operation: 'upsert',
-    payload: index % 2 === 0 ? entries[index % entries.length] : notes[index % notes.length],
-    state: 'prepared',
-    createdAt: start + index,
-    updatedAt: start + index,
-    localApplied: true,
-  },
-]));
+const syncOutbox = Object.fromEntries(
+  Array.from({ length: outboxCount }, (_, index) => [
+    `bench-operation-${index + 1}`,
+    {
+      operationId: `bench-operation-${index + 1}`,
+      accountId: 'benchmark-account',
+      deviceId: 'benchmark-device',
+      partitionKey: 'month:2026-07',
+      affectedPartitionKeys: ['month:2026-07'],
+      recordType: index % 2 === 0 ? 'entry' : 'note',
+      recordId: index % 2 === 0 ? `bench-entry-${index + 1}` : `bench-note-${index + 1}`,
+      operation: 'upsert',
+      payload: index % 2 === 0 ? entries[index % entries.length] : notes[index % notes.length],
+      state: 'prepared',
+      createdAt: start + index,
+      updatedAt: start + index,
+      localApplied: true,
+    },
+  ]),
+);
+
+const mediaReferences = Array.from({ length: mediaCount }, (_, index) => ({
+  mediaId: `bench-media-${index + 1}`,
+  objectKey: `bench-object-${index + 1}`,
+  sizeBytes: 64 * 1024 + (index % 128) * 1024,
+}));
+
+const syncEvents = Array.from({ length: syncEventCount }, (_, index) => ({
+  sequence: index + 1,
+  eventId: `bench-event-${index + 1}`,
+  operationId: `bench-remote-operation-${index + 1}`,
+  recordId: `bench-note-${(index % Math.max(1, noteCount)) + 1}`,
+  recordVersion: Math.floor(index / Math.max(1, noteCount)) + 1,
+}));
 
 const fixture = {
   version: 1,
@@ -142,9 +161,13 @@ const fixture = {
     joinedDate: '07/2026',
   },
   syncOutbox,
+  mediaReferences,
+  syncEvents,
 };
 
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, `${JSON.stringify(fixture, null, 2)}\n`, 'utf8');
 console.log(`Wrote ${output}`);
-console.log(`Seed contains ${diaries.length} diaries, ${entries.length} entries, ${notes.length} notes, ${outboxCount} outbox operations.`);
+console.log(
+  `Seed contains ${diaries.length} diaries, ${entries.length} entries, ${notes.length} notes, ${outboxCount} outbox operations, ${mediaCount} media references, and ${syncEventCount} sync events.`,
+);

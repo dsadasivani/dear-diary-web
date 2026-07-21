@@ -1,0 +1,528 @@
+name: Deploy staging
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deployment_scope:
+        description: Component to deploy; auto detects changes against main
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - frontend
+          - backend
+          - both
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+env:
+  AWS_ACCOUNT_ID: '908027418886'
+  AWS_REGION: ap-south-1
+  AMPLIFY_APP_ID: d33b4rjnv35mrn
+  AMPLIFY_BRANCH: staging
+  STAGING_WEB_URL: https://staging.d33b4rjnv35mrn.amplifyapp.com
+
+jobs:
+  detect:
+    name: Detect deployment scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      backend: ${{ steps.changes.outputs.backend }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      base: ${{ steps.changes.outputs.base }}
+      changed-files: ${{ steps.changes.outputs.changed-files }}
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate deployment source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Automatic staging deployment is restricted to main." >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_REF" != refs/heads/feature/* ]]; then
+            echo "Manual staging deployment is restricted to feature/** branches." >&2
+            exit 1
+          fi
+
+      - name: Detect frontend and backend changes
+        id: changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          REQUESTED_SCOPE: ${{ github.event.inputs.deployment_scope || 'auto' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$REQUESTED_SCOPE" == "frontend" ]]; then
+            backend=false
+            frontend=true
+            base=manual-override
+            changed_files="Manual frontend override"
+          elif [[ "$REQUESTED_SCOPE" == "backend" ]]; then
+            backend=true
+            frontend=false
+            base=manual-override
+            changed_files="Manual backend override"
+          elif [[ "$REQUESTED_SCOPE" == "both" ]]; then
+            backend=true
+            frontend=true
+            base=manual-override
+            changed_files="Manual full deployment override"
+          else
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+              git fetch --no-tags origin main
+              base=$(git merge-base origin/main "$GITHUB_SHA")
+            else
+              base="$BEFORE_SHA"
+              if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+                base=$(git rev-list --max-parents=0 "$GITHUB_SHA")
+              fi
+            fi
+
+            mapfile -t paths < <(git diff --name-only "$base" "$GITHUB_SHA")
+            backend=false
+            frontend=false
+            for path in "${paths[@]}"; do
+              case "$path" in
+                backend/sync-api/*|ops/aws/ecs/task-definition.staging.json)
+                  backend=true
+                  ;;
+              esac
+              case "$path" in
+                src/*|public/*|index.html|package.json|package-lock.json|vite.config.ts|tsconfig.json|.env.staging|amplify.yml|customHttp.yml|scripts/validate-production-config.mjs)
+                  frontend=true
+                  ;;
+              esac
+            done
+            changed_files=$(printf '%s\n' "${paths[@]:-No changed files}")
+          fi
+
+          {
+            echo "backend=$backend"
+            echo "frontend=$frontend"
+            echo "base=$base"
+            echo "changed-files<<EOF"
+            echo "$changed_files"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Deployment scope"
+            echo
+            echo "- Source: \`$GITHUB_REF_NAME\` at \`$GITHUB_SHA\`"
+            echo "- Comparison base: \`$base\`"
+            echo "- Requested scope: \`$REQUESTED_SCOPE\`"
+            echo "- Backend: \`$backend\`"
+            echo "- Frontend: \`$frontend\`"
+            echo
+            echo '<details><summary>Changed files</summary>'
+            echo
+            echo '```text'
+            echo "$changed_files"
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require successful CI for this commit
+        if: steps.changes.outputs.backend == 'true' || steps.changes.outputs.frontend == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ci_conclusion=""
+          for attempt in {1..80}; do
+            run=$(gh api \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=1")
+            ci_status=$(jq -r '.workflow_runs[0].status // "not-found"' <<< "$run")
+            ci_conclusion=$(jq -r '.workflow_runs[0].conclusion // ""' <<< "$run")
+            echo "Waiting for CI ($attempt/80): status=$ci_status conclusion=${ci_conclusion:-pending}"
+
+            if [[ "$ci_status" == "completed" ]]; then
+              if [[ "$ci_conclusion" == "success" ]]; then
+                break
+              fi
+              echo "CI completed with conclusion $ci_conclusion; deployment is blocked." >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          if [[ "$ci_conclusion" != "success" ]]; then
+            echo "Timed out waiting for successful CI on commit $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+  backend:
+    name: Deploy backend
+    needs: detect
+    if: needs.detect.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: staging
+    env:
+      ECR_REPOSITORY: dear-diary-sync-api
+      ECS_CLUSTER: default
+      ECS_SERVICE: dear-diary-sync-staging
+      ECS_CONTAINER_NAME: Main
+      ECS_TASK_DEFINITION: ops/aws/ecs/task-definition.staging.json
+      ECS_ROLLBACK_ALARM: default/dear-diary-sync-staging/RollbackAlarm
+      STAGING_HEALTH_URL: https://de-95a19ada9bcf4598832bc6673d977727.ecs.ap-south-1.on.aws/actuator/health
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      active-task-definition: ${{ steps.backend-verification.outputs.active-task-definition }}
+      scan-critical: ${{ steps.scan.outputs.critical }}
+      scan-high: ${{ steps.scan.outputs.high }}
+      scan-medium: ${{ steps.scan.outputs.medium }}
+      scan-low: ${{ steps.scan.outputs.low }}
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$AWS_DEPLOY_ROLE_ARN" ]]; then
+            echo "Repository environment variable AWS_DEPLOY_ROLE_ARN is required." >&2
+            exit 1
+          fi
+
+      - name: Configure temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: staging-backend-${{ github.run_id }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push immutable backend image
+        id: image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tagged_image="$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+          if digest=$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$GITHUB_SHA" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null); then
+            echo "Reusing existing immutable image $tagged_image@$digest"
+          else
+            docker build \
+              --pull \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --tag "$tagged_image" \
+              backend/sync-api
+            docker push "$tagged_image"
+            digest=$(aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids "imageTag=$GITHUB_SHA" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text)
+          fi
+          if [[ -z "$digest" || "$digest" == "None" ]]; then
+            echo "ECR did not return a digest for $tagged_image." >&2
+            exit 1
+          fi
+
+          {
+            echo "tagged-image=$tagged_image"
+            echo "digest=$digest"
+            echo "image=$ECR_REGISTRY/$ECR_REPOSITORY@$digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Wait for ECR scan and enforce severity gate
+        id: scan
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_status=""
+          for attempt in {1..60}; do
+            echo "Waiting for ECR scan ($attempt/60)..."
+            if aws ecr describe-image-scan-findings \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-id "imageDigest=$IMAGE_DIGEST" \
+              --output json > scan.json 2> scan-error.txt; then
+              scan_status=$(jq -r '.imageScanStatus.status // "UNKNOWN"' scan.json)
+              if [[ "$scan_status" == "COMPLETE" ]]; then
+                break
+              fi
+              case "$scan_status" in
+                FAILED|FINDINGS_UNAVAILABLE|SCAN_ELIGIBILITY_EXPIRED|LIMIT_EXCEEDED)
+                  echo "ECR scan ended with status $scan_status." >&2
+                  exit 1
+                  ;;
+              esac
+            elif ! grep -q "ScanNotFoundException" scan-error.txt; then
+              cat scan-error.txt >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          if [[ "$scan_status" != "COMPLETE" ]]; then
+            echo "Timed out waiting for the ECR image scan." >&2
+            exit 1
+          fi
+
+          critical=$(jq -r '.imageScanFindings.findingSeverityCounts.CRITICAL // 0' scan.json)
+          high=$(jq -r '.imageScanFindings.findingSeverityCounts.HIGH // 0' scan.json)
+          medium=$(jq -r '.imageScanFindings.findingSeverityCounts.MEDIUM // 0' scan.json)
+          low=$(jq -r '.imageScanFindings.findingSeverityCounts.LOW // 0' scan.json)
+          {
+            echo "critical=$critical"
+            echo "high=$high"
+            echo "medium=$medium"
+            echo "low=$low"
+          } >> "$GITHUB_OUTPUT"
+
+          if (( critical > 0 || high > 0 )); then
+            echo "Deployment blocked: ECR found $critical critical and $high high vulnerabilities." >&2
+            exit 1
+          fi
+
+      - name: Render task definition with the scanned image digest
+        id: task-definition
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ env.ECS_TASK_DEFINITION }}
+          container-name: ${{ env.ECS_CONTAINER_NAME }}
+          image: ${{ steps.image.outputs.image }}
+
+      - name: Deploy backend to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-definition.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          wait-max-delay-seconds: 15
+
+      - name: Verify backend image, health, and rollback alarm
+        id: backend-verification
+        env:
+          EXPECTED_IMAGE: ${{ steps.image.outputs.image }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # JMESPath requires literal backticks.
+          # shellcheck disable=SC2016
+          active_task_definition=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].deployments[?status==`PRIMARY`].taskDefinition | [0]' \
+            --output text)
+          active_image=$(aws ecs describe-task-definition \
+            --task-definition "$active_task_definition" \
+            --query "taskDefinition.containerDefinitions[?name=='$ECS_CONTAINER_NAME'].image | [0]" \
+            --output text)
+          if [[ "$active_image" != "$EXPECTED_IMAGE" ]]; then
+            echo "ECS is running $active_image; expected $EXPECTED_IMAGE." >&2
+            exit 1
+          fi
+
+          health=$(curl --fail --silent --show-error \
+            --retry 12 --retry-all-errors --retry-delay 10 \
+            "$STAGING_HEALTH_URL")
+          jq -e '.status == "UP"' <<< "$health" >/dev/null
+
+          alarm_state=$(aws cloudwatch describe-alarms \
+            --alarm-names "$ECS_ROLLBACK_ALARM" \
+            --query 'MetricAlarms[0].StateValue' \
+            --output text)
+          if [[ "$alarm_state" != "OK" ]]; then
+            echo "Rollback alarm is $alarm_state; expected OK." >&2
+            exit 1
+          fi
+
+          echo "active-task-definition=$active_task_definition" >> "$GITHUB_OUTPUT"
+
+  frontend:
+    name: Deploy web
+    needs: [detect, backend]
+    if: >-
+      always() &&
+      needs.detect.result == 'success' &&
+      needs.detect.outputs.frontend == 'true' &&
+      (needs.backend.result == 'success' || needs.backend.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    permissions:
+      contents: write
+      id-token: write
+    outputs:
+      amplify-job-id: ${{ steps.amplify.outputs.job-id }}
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate deployment configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$AWS_DEPLOY_ROLE_ARN" ]]; then
+            echo "Repository environment variable AWS_DEPLOY_ROLE_ARN is required." >&2
+            exit 1
+          fi
+
+      - name: Configure temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: staging-web-${{ github.run_id }}
+
+      - name: Require GitHub-owned Amplify deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          auto_build=$(aws amplify get-branch \
+            --app-id "$AMPLIFY_APP_ID" \
+            --branch-name "$AMPLIFY_BRANCH" \
+            --query 'branch.enableAutoBuild' \
+            --output text)
+          if [[ "$auto_build" != "False" ]]; then
+            echo "Amplify auto-build must be disabled for $AMPLIFY_BRANCH." >&2
+            exit 1
+          fi
+
+      - name: Publish the selected commit to the staging source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force origin "$GITHUB_SHA:refs/heads/$AMPLIFY_BRANCH"
+
+      - name: Start Amplify staging release
+        id: amplify
+        shell: bash
+        run: |
+          set -euo pipefail
+          job_id=$(aws amplify start-job \
+            --app-id "$AMPLIFY_APP_ID" \
+            --branch-name "$AMPLIFY_BRANCH" \
+            --job-type RELEASE \
+            --commit-id "$GITHUB_SHA" \
+            --commit-message "Staging deployment $GITHUB_SHA" \
+            --query 'jobSummary.jobId' \
+            --output text)
+          echo "job-id=$job_id" >> "$GITHUB_OUTPUT"
+
+          status=""
+          for attempt in {1..90}; do
+            echo "Waiting for Amplify job $job_id ($attempt/90)..."
+            status=$(aws amplify get-job \
+              --app-id "$AMPLIFY_APP_ID" \
+              --branch-name "$AMPLIFY_BRANCH" \
+              --job-id "$job_id" \
+              --query 'job.summary.status' \
+              --output text)
+            case "$status" in
+              SUCCEED)
+                break
+                ;;
+              FAILED|CANCELLED)
+                echo "Amplify job $job_id ended with status $status." >&2
+                exit 1
+                ;;
+            esac
+            sleep 20
+          done
+          if [[ "$status" != "SUCCEED" ]]; then
+            echo "Timed out waiting for Amplify job $job_id." >&2
+            exit 1
+          fi
+
+          deployed_commit=$(aws amplify get-job \
+            --app-id "$AMPLIFY_APP_ID" \
+            --branch-name "$AMPLIFY_BRANCH" \
+            --job-id "$job_id" \
+            --query 'job.summary.commitId' \
+            --output text)
+          if [[ "$deployed_commit" != "$GITHUB_SHA" ]]; then
+            echo "Amplify deployed commit $deployed_commit; expected $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+      - name: Verify deployed web assets
+        run: node scripts/verify-web-deployment.mjs "$STAGING_WEB_URL"
+
+  summary:
+    name: Deployment summary
+    needs: [detect, backend, frontend]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write deployment summary
+        env:
+          BACKEND_REQUESTED: ${{ needs.detect.outputs.backend }}
+          FRONTEND_REQUESTED: ${{ needs.detect.outputs.frontend }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          IMAGE: ${{ needs.backend.outputs.image }}
+          ACTIVE_TASK_DEFINITION: ${{ needs.backend.outputs.active-task-definition }}
+          SCAN_CRITICAL: ${{ needs.backend.outputs.scan-critical }}
+          SCAN_HIGH: ${{ needs.backend.outputs.scan-high }}
+          SCAN_MEDIUM: ${{ needs.backend.outputs.scan-medium }}
+          SCAN_LOW: ${{ needs.backend.outputs.scan-low }}
+          AMPLIFY_JOB_ID: ${{ needs.frontend.outputs.amplify-job-id }}
+        shell: bash
+        run: |
+          {
+            echo "## Staging deployment"
+            echo
+            echo "- Source: \`$GITHUB_REF_NAME\` at \`$GITHUB_SHA\`"
+            echo "- Backend requested: \`${BACKEND_REQUESTED:-false}\`; result: \`$BACKEND_RESULT\`"
+            echo "- Frontend requested: \`${FRONTEND_REQUESTED:-false}\`; result: \`$FRONTEND_RESULT\`"
+            if [[ -n "$IMAGE" ]]; then
+              echo "- Backend image: \`$IMAGE\`"
+              echo "- ECS task definition: \`$ACTIVE_TASK_DEFINITION\`"
+              echo "- ECR findings: critical=$SCAN_CRITICAL, high=$SCAN_HIGH, medium=$SCAN_MEDIUM, low=$SCAN_LOW"
+            fi
+            if [[ -n "$AMPLIFY_JOB_ID" ]]; then
+              echo "- Amplify job: \`$AMPLIFY_JOB_ID\`"
+              echo "- Web: $STAGING_WEB_URL"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${BACKEND_REQUESTED:-false}" == "true" && "$BACKEND_RESULT" != "success" ]]; then
+            exit 1
+          fi
+          if [[ "${FRONTEND_REQUESTED:-false}" == "true" && "$FRONTEND_RESULT" != "success" ]]; then
+            exit 1
+          fi

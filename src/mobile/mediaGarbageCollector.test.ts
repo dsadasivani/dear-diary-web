@@ -12,5 +12,8 @@ test('media cleanup removes only old unreferenced app-owned files', () => {
     { name: 'sync-orphan.png', path: 'media/sync-orphan.png', modifiedAt: 1, size: 50 },
   ];
   const removable = selectOrphanedMedia(files, new Set(['audio-kept.webm']), 1_000, now);
-  assert.deepEqual(removable.map(file => file.name), ['photo-old.jpg', 'sync-orphan.png']);
+  assert.deepEqual(
+    removable.map((file) => file.name),
+    ['photo-old.jpg', 'sync-orphan.png'],
+  );
 });
