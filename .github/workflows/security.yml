@@ -29,14 +29,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [javascript-typescript, java-kotlin]
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: java-kotlin
+            build-mode: manual
     steps:
       - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-      - uses: github/codeql-action/autobuild@v3
-      - uses: github/codeql-action/analyze@v3
+          build-mode: ${{ matrix.build-mode }}
+      - uses: actions/setup-node@v4
+        if: matrix.language == 'java-kotlin'
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        if: matrix.language == 'java-kotlin'
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - name: Build Java for CodeQL
+        if: matrix.language == 'java-kotlin'
+        run: npm run backend:test
+      - uses: github/codeql-action/analyze@v4
 
   dependency-review:
     if: github.event_name == 'pull_request'
