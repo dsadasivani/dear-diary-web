@@ -49,6 +49,7 @@ import {
 } from '../e2eeKeyPackage';
 import {
   reconcileDurableOutboxes,
+  recoverDeletesBlockedByConflictedWrites,
   type OutboxRepository,
   type SyncOutboxOperationV2,
 } from '../outbox';
@@ -226,6 +227,7 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     private readonly coordinator: SyncV2RuntimeCoordinator,
     private readonly puller: RemoteEventPuller,
     private readonly processor: SyncV2OperationProcessor,
+    private readonly recoverBlockedDeletes: () => Promise<void>,
     private readonly assertAuthorized: (() => Promise<void>) | null,
     private readonly onError: (context: string, error: unknown) => void | Promise<void>,
   ) {}
@@ -273,6 +275,7 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     try {
       await this.start();
       if (!this.writesAllowed) return;
+      if (this.pullAllowed) await this.recoverBlockedDeletes();
       for (
         let count = 0;
         count < MAX_WORK_PER_FLUSH && (await this.processor.runOnce());
@@ -1462,6 +1465,13 @@ export class SyncV2ApplicationLifecycle {
       new SyncV2RuntimeCoordinator(bootstrap, pullWorker, outboxWorker),
       puller,
       processor,
+      () =>
+        recoverDeletesBlockedByConflictedWrites({
+          accountId: account.accountId,
+          repository: this.repository,
+          outbox: this.outbox,
+          pullLatest: () => puller.pull().then(() => undefined),
+        }).then(() => undefined),
       assertAuthorized,
       (context, error) => this.handleRuntimeError(context, error),
     );

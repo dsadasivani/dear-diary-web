@@ -75,6 +75,7 @@ import {
 import { RemotePullService } from './RemotePullService';
 import {
   pendingOutboxV2FromLegacy,
+  recoverDeletesBlockedByConflictedWrites,
   scheduleOutboxFailure,
   type OutboxRepository,
   type SyncOutboxOperationV2,
@@ -1990,7 +1991,12 @@ export class EventSyncEngine {
   ): Promise<void> {
     const outboxRepository = this.outboxRepository!;
     await this.mirrorLegacyOutboxOperations(runtime.state.accountId, outboxRepository);
-    await this.recoverDeletesBlockedByConflictedWrites(runtime, outboxRepository);
+    await recoverDeletesBlockedByConflictedWrites({
+      accountId: runtime.state.accountId,
+      repository: this.repository,
+      outbox: outboxRepository,
+      pullLatest: () => this.pullWithRuntime(runtime),
+    });
     while (true) {
       let claimed = await outboxRepository.claimNextRunnable({
         accountId: runtime.state.accountId,
@@ -2047,60 +2053,6 @@ export class EventSyncEngine {
         }
         if (isAccountWideOutboxFailure(error)) throw error;
       }
-    }
-  }
-
-  private async recoverDeletesBlockedByConflictedWrites(
-    runtime: Awaited<ReturnType<EventSyncEngine['openRuntime']>>,
-    outboxRepository: OutboxRepository,
-  ): Promise<void> {
-    const v2Operations = await outboxRepository.listByAccount(runtime.state.accountId);
-    const operationsById = new Map(
-      v2Operations.map((operation) => [operation.operationId, operation]),
-    );
-    const blockedDeletes = v2Operations.filter((operation) => {
-      if (operation.state !== 'PENDING' || operation.operationType !== 'DELETE') return false;
-      const dependency = operation.dependencyOperationId
-        ? operationsById.get(operation.dependencyOperationId)
-        : undefined;
-      return (
-        dependency?.state === 'CONFLICT' &&
-        dependency.accountId === operation.accountId &&
-        dependency.recordType === operation.recordType &&
-        dependency.recordId === operation.recordId
-      );
-    });
-    if (blockedDeletes.length === 0) return;
-
-    await this.pullWithRuntime(runtime);
-    for (const blockedDelete of blockedDeletes) {
-      const dependencyOperationId = blockedDelete.dependencyOperationId!;
-      const legacyOperations = await this.repository.listSyncOutboxOperations();
-      const legacyDelete = legacyOperations.find(
-        (operation) => operation.operationId === blockedDelete.operationId,
-      );
-      if (!legacyDelete || legacyDelete.operation !== 'delete' || !legacyDelete.localApplied) {
-        continue;
-      }
-      const baseRecordVersion = await this.repository.getSyncRecordVersion(
-        legacyDelete.recordType,
-        legacyDelete.recordId,
-      );
-      await this.repository.saveSyncOutboxOperation({
-        ...legacyDelete,
-        baseRecordVersion,
-        dependsOnOperationId: undefined,
-        error: undefined,
-        retryCount: undefined,
-        lastErrorAt: undefined,
-        nextRetryAt: undefined,
-      });
-      await outboxRepository.supersedeConflictAndRebaseDependentDelete(
-        blockedDelete.operationId,
-        dependencyOperationId,
-        baseRecordVersion,
-      );
-      await this.repository.removeSyncOutboxOperation(dependencyOperationId);
     }
   }
 
