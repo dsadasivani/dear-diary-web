@@ -67,7 +67,6 @@ export interface SecurityConfig {
   linkedGoogleUserId?: string; // Locally bound Google account for backup and PIN reset
   linkedGoogleEmail?: string | null; // Email for the locally bound Google account
   linkedGoogleBoundAt?: number; // Timestamp when the Google account was locally bound
-  linkedGoogleUid?: string; // Legacy Firebase UID field, migrated to linkedGoogleUserId
 }
 
 export interface Mood {

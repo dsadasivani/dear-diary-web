@@ -550,8 +550,7 @@ export default function LockScreen({
   };
 
   const completeGoogleResetVerification = async (credential: GoogleAccountSession) => {
-    const linkedGoogleUserId = security.linkedGoogleUserId || security.linkedGoogleUid;
-    if (credential.userId !== linkedGoogleUserId) {
+    if (credential.userId !== security.linkedGoogleUserId) {
       await signOutGoogleAuth();
       fail(`Use ${security.linkedGoogleEmail || 'the linked Google account'} to reset this PIN.`);
       return;
@@ -562,7 +561,7 @@ export default function LockScreen({
   };
 
   const handleVerifyGoogleReset = async () => {
-    if (!security.linkedGoogleUserId && !security.linkedGoogleUid) return;
+    if (!security.linkedGoogleUserId) return;
     setIsResetting(true);
     setError('');
     setSuccessMsg('Opening Google verification...');
@@ -700,7 +699,7 @@ export default function LockScreen({
     setupStep !== 'complete' &&
     (requiresRecoverySetup || setupStep === 'recovery');
   const hasSecurityQuestionRecovery = hasRecoveryQuestion(security);
-  const hasGoogleRecovery = Boolean(security.linkedGoogleUserId || security.linkedGoogleUid);
+  const hasGoogleRecovery = Boolean(security.linkedGoogleUserId);
   const hasAvailablePinRecovery = hasSecurityQuestionRecovery || hasGoogleRecovery;
   const visiblePinLength = security.isPinCreated
     ? security.pinLength || (pin.length > 4 ? 8 : 4)

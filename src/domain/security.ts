@@ -17,13 +17,7 @@ const RECOVERY_ANSWER_ITERATIONS = 120_000;
 
 export const normalizeSecurityConfig = (
   config?: Partial<SecurityConfig> | null,
-): SecurityConfig => {
-  const normalized = { ...DEFAULT_SECURITY_CONFIG, ...(config || {}) };
-  if (!normalized.linkedGoogleUserId && normalized.linkedGoogleUid) {
-    normalized.linkedGoogleUserId = normalized.linkedGoogleUid;
-  }
-  return normalized;
-};
+): SecurityConfig => ({ ...DEFAULT_SECURITY_CONFIG, ...(config || {}) });
 
 export const isValidPin = (pin: string, pinLength?: PinLength): boolean =>
   pinLength ? new RegExp(`^\\d{${pinLength}}$`).test(pin) : /^(\d{4}|\d{8})$/.test(pin);
@@ -115,7 +109,6 @@ export const requiresRecoveryQuestionForDevice = (
   config.isPinCreated &&
   !hasRecoveryQuestion(config) &&
   !config.linkedGoogleUserId &&
-  !config.linkedGoogleUid &&
   deviceRole !== 'web_companion';
 
 export const verifyPin = (config: SecurityConfig, pin: string): boolean =>
@@ -211,7 +204,7 @@ export const bindGoogleRecoveryAccount = (
   config: SecurityConfig,
   user: Pick<GoogleAccountSession, 'userId' | 'email'>,
 ): { ok: boolean; config: SecurityConfig; error?: string } => {
-  const linkedUserId = config.linkedGoogleUserId || config.linkedGoogleUid;
+  const linkedUserId = config.linkedGoogleUserId;
   if (linkedUserId && linkedUserId !== user.userId) {
     return {
       ok: false,
@@ -225,7 +218,6 @@ export const bindGoogleRecoveryAccount = (
     config: {
       ...config,
       linkedGoogleUserId: linkedUserId || user.userId,
-      linkedGoogleUid: undefined,
       linkedGoogleEmail: config.linkedGoogleEmail || user.email,
       linkedGoogleBoundAt: config.linkedGoogleBoundAt || Date.now(),
     },
