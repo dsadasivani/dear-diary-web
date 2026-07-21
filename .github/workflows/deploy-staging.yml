@@ -3,14 +3,19 @@ name: Deploy staging
 on:
   push:
     branches:
-      - feature/aws-deployment
+      - main
   workflow_dispatch:
     inputs:
-      deploy_frontend:
-        description: Deploy the web companion after the backend is healthy
+      deployment_scope:
+        description: Component to deploy; auto detects changes against main
         required: true
-        default: false
-        type: boolean
+        default: auto
+        type: choice
+        options:
+          - auto
+          - frontend
+          - backend
+          - both
 
 concurrency:
   group: deploy-staging
@@ -21,51 +26,126 @@ permissions:
   contents: read
   id-token: write
 
-jobs:
-  deploy:
-    name: Backend, then web
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.head_commit.message, '[deploy-staging]') ||
-      contains(github.event.head_commit.message, '[deploy-staging-web]')
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: staging
-    env:
-      AWS_ACCOUNT_ID: '908027418886'
-      AWS_REGION: ap-south-1
-      ECR_REPOSITORY: dear-diary-sync-api
-      ECS_CLUSTER: default
-      ECS_SERVICE: dear-diary-sync-staging
-      ECS_CONTAINER_NAME: Main
-      ECS_TASK_DEFINITION: ops/aws/ecs/task-definition.staging.json
-      ECS_ROLLBACK_ALARM: default/dear-diary-sync-staging/RollbackAlarm
-      STAGING_HEALTH_URL: https://de-95a19ada9bcf4598832bc6673d977727.ecs.ap-south-1.on.aws/actuator/health
-      AMPLIFY_APP_ID: d33b4rjnv35mrn
-      AMPLIFY_BRANCH: feature/aws-deployment
-      STAGING_WEB_URL: https://feature-aws-deployment.d33b4rjnv35mrn.amplifyapp.com
+env:
+  AWS_ACCOUNT_ID: '908027418886'
+  AWS_REGION: ap-south-1
+  AMPLIFY_APP_ID: d33b4rjnv35mrn
+  AMPLIFY_BRANCH: staging
+  STAGING_WEB_URL: https://staging.d33b4rjnv35mrn.amplifyapp.com
 
+jobs:
+  detect:
+    name: Detect deployment scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      backend: ${{ steps.changes.outputs.backend }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      base: ${{ steps.changes.outputs.base }}
+      changed-files: ${{ steps.changes.outputs.changed-files }}
     steps:
       - name: Check out the requested commit
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Validate deployment configuration
-        env:
-          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      - name: Validate deployment source
+        shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "$AWS_DEPLOY_ROLE_ARN" ]]; then
-            echo "Repository environment variable AWS_DEPLOY_ROLE_ARN is required." >&2
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Automatic staging deployment is restricted to main." >&2
             exit 1
           fi
-          if [[ "$GITHUB_REF" != "refs/heads/feature/aws-deployment" ]]; then
-            echo "Staging deployments are restricted to feature/aws-deployment." >&2
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_REF" != refs/heads/feature/* ]]; then
+            echo "Manual staging deployment is restricted to feature/** branches." >&2
             exit 1
           fi
 
+      - name: Detect frontend and backend changes
+        id: changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          REQUESTED_SCOPE: ${{ github.event.inputs.deployment_scope || 'auto' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$REQUESTED_SCOPE" == "frontend" ]]; then
+            backend=false
+            frontend=true
+            base=manual-override
+            changed_files="Manual frontend override"
+          elif [[ "$REQUESTED_SCOPE" == "backend" ]]; then
+            backend=true
+            frontend=false
+            base=manual-override
+            changed_files="Manual backend override"
+          elif [[ "$REQUESTED_SCOPE" == "both" ]]; then
+            backend=true
+            frontend=true
+            base=manual-override
+            changed_files="Manual full deployment override"
+          else
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+              git fetch --no-tags origin main
+              base=$(git merge-base origin/main "$GITHUB_SHA")
+            else
+              base="$BEFORE_SHA"
+              if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+                base=$(git rev-list --max-parents=0 "$GITHUB_SHA")
+              fi
+            fi
+
+            mapfile -t paths < <(git diff --name-only "$base" "$GITHUB_SHA")
+            backend=false
+            frontend=false
+            for path in "${paths[@]}"; do
+              case "$path" in
+                backend/sync-api/*|ops/aws/ecs/task-definition.staging.json)
+                  backend=true
+                  ;;
+              esac
+              case "$path" in
+                src/*|public/*|index.html|package.json|package-lock.json|vite.config.ts|tsconfig.json|.env.staging|amplify.yml|customHttp.yml|scripts/validate-production-config.mjs)
+                  frontend=true
+                  ;;
+              esac
+            done
+            changed_files=$(printf '%s\n' "${paths[@]:-No changed files}")
+          fi
+
+          {
+            echo "backend=$backend"
+            echo "frontend=$frontend"
+            echo "base=$base"
+            echo "changed-files<<EOF"
+            echo "$changed_files"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Deployment scope"
+            echo
+            echo "- Source: \`$GITHUB_REF_NAME\` at \`$GITHUB_SHA\`"
+            echo "- Comparison base: \`$base\`"
+            echo "- Requested scope: \`$REQUESTED_SCOPE\`"
+            echo "- Backend: \`$backend\`"
+            echo "- Frontend: \`$frontend\`"
+            echo
+            echo '<details><summary>Changed files</summary>'
+            echo
+            echo '```text'
+            echo "$changed_files"
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Require successful CI for this commit
+        if: steps.changes.outputs.backend == 'true' || steps.changes.outputs.frontend == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           ci_conclusion=""
@@ -91,13 +171,50 @@ jobs:
             exit 1
           fi
 
+  backend:
+    name: Deploy backend
+    needs: detect
+    if: needs.detect.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: staging
+    env:
+      ECR_REPOSITORY: dear-diary-sync-api
+      ECS_CLUSTER: default
+      ECS_SERVICE: dear-diary-sync-staging
+      ECS_CONTAINER_NAME: Main
+      ECS_TASK_DEFINITION: ops/aws/ecs/task-definition.staging.json
+      ECS_ROLLBACK_ALARM: default/dear-diary-sync-staging/RollbackAlarm
+      STAGING_HEALTH_URL: https://de-95a19ada9bcf4598832bc6673d977727.ecs.ap-south-1.on.aws/actuator/health
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      active-task-definition: ${{ steps.backend-verification.outputs.active-task-definition }}
+      scan-critical: ${{ steps.scan.outputs.critical }}
+      scan-high: ${{ steps.scan.outputs.high }}
+      scan-medium: ${{ steps.scan.outputs.medium }}
+      scan-low: ${{ steps.scan.outputs.low }}
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$AWS_DEPLOY_ROLE_ARN" ]]; then
+            echo "Repository environment variable AWS_DEPLOY_ROLE_ARN is required." >&2
+            exit 1
+          fi
+
       - name: Configure temporary AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
-          role-session-name: staging-${{ github.run_id }}
+          role-session-name: staging-backend-${{ github.run_id }}
 
       - name: Log in to Amazon ECR
         id: ecr
@@ -107,6 +224,7 @@ jobs:
         id: image
         env:
           ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        shell: bash
         run: |
           set -euo pipefail
           tagged_image="$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
@@ -145,6 +263,7 @@ jobs:
         id: scan
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        shell: bash
         run: |
           set -euo pipefail
           scan_status=""
@@ -201,7 +320,6 @@ jobs:
           image: ${{ steps.image.outputs.image }}
 
       - name: Deploy backend to ECS
-        id: ecs-deploy
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task-definition.outputs.task-definition }}
@@ -214,6 +332,7 @@ jobs:
         id: backend-verification
         env:
           EXPECTED_IMAGE: ${{ steps.image.outputs.image }}
+        shell: bash
         run: |
           set -euo pipefail
           # JMESPath requires literal backticks.
@@ -248,11 +367,70 @@ jobs:
 
           echo "active-task-definition=$active_task_definition" >> "$GITHUB_OUTPUT"
 
+  frontend:
+    name: Deploy web
+    needs: [detect, backend]
+    if: >-
+      always() &&
+      needs.detect.result == 'success' &&
+      needs.detect.outputs.frontend == 'true' &&
+      (needs.backend.result == 'success' || needs.backend.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    permissions:
+      contents: write
+      id-token: write
+    outputs:
+      amplify-job-id: ${{ steps.amplify.outputs.job-id }}
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate deployment configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$AWS_DEPLOY_ROLE_ARN" ]]; then
+            echo "Repository environment variable AWS_DEPLOY_ROLE_ARN is required." >&2
+            exit 1
+          fi
+
+      - name: Configure temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: staging-web-${{ github.run_id }}
+
+      - name: Require GitHub-owned Amplify deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          auto_build=$(aws amplify get-branch \
+            --app-id "$AMPLIFY_APP_ID" \
+            --branch-name "$AMPLIFY_BRANCH" \
+            --query 'branch.enableAutoBuild' \
+            --output text)
+          if [[ "$auto_build" != "False" ]]; then
+            echo "Amplify auto-build must be disabled for $AMPLIFY_BRANCH." >&2
+            exit 1
+          fi
+
+      - name: Publish the selected commit to the staging source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force origin "$GITHUB_SHA:refs/heads/$AMPLIFY_BRANCH"
+
       - name: Start Amplify staging release
-        if: >-
-          inputs.deploy_frontend ||
-          contains(github.event.head_commit.message, '[deploy-staging-web]')
         id: amplify
+        shell: bash
         run: |
           set -euo pipefail
           job_id=$(aws amplify start-job \
@@ -290,35 +468,61 @@ jobs:
             exit 1
           fi
 
+          deployed_commit=$(aws amplify get-job \
+            --app-id "$AMPLIFY_APP_ID" \
+            --branch-name "$AMPLIFY_BRANCH" \
+            --job-id "$job_id" \
+            --query 'job.summary.commitId' \
+            --output text)
+          if [[ "$deployed_commit" != "$GITHUB_SHA" ]]; then
+            echo "Amplify deployed commit $deployed_commit; expected $GITHUB_SHA." >&2
+            exit 1
+          fi
+
       - name: Verify deployed web assets
-        if: >-
-          inputs.deploy_frontend ||
-          contains(github.event.head_commit.message, '[deploy-staging-web]')
         run: node scripts/verify-web-deployment.mjs "$STAGING_WEB_URL"
 
+  summary:
+    name: Deployment summary
+    needs: [detect, backend, frontend]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
       - name: Write deployment summary
-        if: always()
         env:
-          IMAGE: ${{ steps.image.outputs.image }}
-          AMPLIFY_JOB_ID: ${{ steps.amplify.outputs.job-id }}
-          ACTIVE_TASK_DEFINITION: ${{ steps.backend-verification.outputs.active-task-definition }}
-          SCAN_CRITICAL: ${{ steps.scan.outputs.critical }}
-          SCAN_HIGH: ${{ steps.scan.outputs.high }}
-          SCAN_MEDIUM: ${{ steps.scan.outputs.medium }}
-          SCAN_LOW: ${{ steps.scan.outputs.low }}
+          BACKEND_REQUESTED: ${{ needs.detect.outputs.backend }}
+          FRONTEND_REQUESTED: ${{ needs.detect.outputs.frontend }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          IMAGE: ${{ needs.backend.outputs.image }}
+          ACTIVE_TASK_DEFINITION: ${{ needs.backend.outputs.active-task-definition }}
+          SCAN_CRITICAL: ${{ needs.backend.outputs.scan-critical }}
+          SCAN_HIGH: ${{ needs.backend.outputs.scan-high }}
+          SCAN_MEDIUM: ${{ needs.backend.outputs.scan-medium }}
+          SCAN_LOW: ${{ needs.backend.outputs.scan-low }}
+          AMPLIFY_JOB_ID: ${{ needs.frontend.outputs.amplify-job-id }}
+        shell: bash
         run: |
           {
             echo "## Staging deployment"
             echo
-            echo "- Commit: \`$GITHUB_SHA\`"
-            echo "- Backend image: \`${IMAGE:-not built}\`"
-            echo "- ECS task definition: \`${ACTIVE_TASK_DEFINITION:-not deployed}\`"
-            echo "- ECR findings: critical=${SCAN_CRITICAL:-n/a}, high=${SCAN_HIGH:-n/a}, medium=${SCAN_MEDIUM:-n/a}, low=${SCAN_LOW:-n/a}"
-            echo "- Backend health: $STAGING_HEALTH_URL"
-            if [[ -n "${AMPLIFY_JOB_ID:-}" ]]; then
+            echo "- Source: \`$GITHUB_REF_NAME\` at \`$GITHUB_SHA\`"
+            echo "- Backend requested: \`${BACKEND_REQUESTED:-false}\`; result: \`$BACKEND_RESULT\`"
+            echo "- Frontend requested: \`${FRONTEND_REQUESTED:-false}\`; result: \`$FRONTEND_RESULT\`"
+            if [[ -n "$IMAGE" ]]; then
+              echo "- Backend image: \`$IMAGE\`"
+              echo "- ECS task definition: \`$ACTIVE_TASK_DEFINITION\`"
+              echo "- ECR findings: critical=$SCAN_CRITICAL, high=$SCAN_HIGH, medium=$SCAN_MEDIUM, low=$SCAN_LOW"
+            fi
+            if [[ -n "$AMPLIFY_JOB_ID" ]]; then
               echo "- Amplify job: \`$AMPLIFY_JOB_ID\`"
               echo "- Web: $STAGING_WEB_URL"
-            else
-              echo "- Web deployment: not requested"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${BACKEND_REQUESTED:-false}" == "true" && "$BACKEND_RESULT" != "success" ]]; then
+            exit 1
+          fi
+          if [[ "${FRONTEND_REQUESTED:-false}" == "true" && "$FRONTEND_RESULT" != "success" ]]; then
+            exit 1
+          fi

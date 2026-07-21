@@ -56,8 +56,11 @@
     {
       "Sid": "RunAndInspectAmplifyStagingJobs",
       "Effect": "Allow",
-      "Action": ["amplify:GetJob", "amplify:StartJob"],
-      "Resource": "arn:aws:amplify:ap-south-1:908027418886:apps/d33b4rjnv35mrn/branches/feature-aws-deployment/jobs/*"
+      "Action": ["amplify:GetBranch", "amplify:GetJob", "amplify:StartJob"],
+      "Resource": [
+        "arn:aws:amplify:ap-south-1:908027418886:apps/d33b4rjnv35mrn/branches/staging",
+        "arn:aws:amplify:ap-south-1:908027418886:apps/d33b4rjnv35mrn/branches/staging/jobs/*"
+      ]
     }
   ]
 }

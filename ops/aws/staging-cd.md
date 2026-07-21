@@ -1,19 +1,64 @@
 # Staging continuous delivery
 
-The staging deployment workflow is intentionally manual-only during its pilot. Pushing the workflow cannot deploy AWS resources by itself.
+The repository has one shared staging environment. CI runs automatically for pushes to `main` and
+`feature/**`, and for pull requests. Deployment behavior is intentionally different by source:
 
-## Deployment order and gates
+- A successful `main` push starts staging CD automatically.
+- A `feature/**` commit is deployed only through **Actions > Deploy staging > Run workflow**.
+- Manual deployments can use `auto`, `frontend`, `backend`, or `both` scope.
+- Amplify auto-build is disabled. GitHub Actions is the only web deployment owner.
 
-1. Require a successful `CI` push run for the exact commit.
-2. Authenticate to AWS with a short-lived GitHub OIDC token.
-3. Reuse the commit-tagged ECR image when it already exists; otherwise build and push it once.
-4. Wait for ECR scanning and reject Critical or High findings.
-5. Render the scanned image digest into the repository-managed ECS task definition.
-6. Deploy ECS and wait for service stability.
-7. Verify the active digest, public health response, and rollback alarm.
-8. Optionally start an Amplify release and verify every referenced JavaScript and CSS asset has the correct MIME type.
+The shared environment may intentionally contain components from different source branches. For
+example, deploying a backend-only feature and then a frontend-only `main` change leaves the feature
+backend alongside the `main` frontend.
 
-The frontend option must remain off until Amplify auto-build is disabled for the staging branch. This avoids two releases for the same commit.
+## Change detection
+
+For a `main` push, the workflow compares the pushed commit range. For a manual feature deployment,
+`auto` compares the selected commit with its merge-base on `main`.
+
+Backend deployment paths:
+
+- `backend/sync-api/**`
+- `ops/aws/ecs/task-definition.staging.json`
+
+Frontend deployment paths:
+
+- `src/**`
+- `public/**`
+- `index.html`
+- `package.json` and `package-lock.json`
+- `vite.config.ts` and `tsconfig.json`
+- `.env.staging`
+- `amplify.yml` and `customHttp.yml`
+- `scripts/validate-production-config.mjs`
+
+Changes outside these paths do not deploy application components. Use an explicit manual scope when
+an indirect dependency is not represented by this list.
+
+## Deployment gates
+
+Both component jobs require a successful `CI` push run for the exact source commit. Deployments then
+run as follows:
+
+### Backend
+
+1. Authenticate to AWS with a short-lived GitHub OIDC token.
+2. Reuse the commit-tagged ECR image when present; otherwise build and push it.
+3. Wait for ECR scanning and reject Critical or High findings.
+4. Render the immutable digest into the ECS task definition.
+5. Deploy ECS and wait for service stability.
+6. Verify the active digest, public health response, and rollback alarm.
+
+### Frontend
+
+1. Confirm that Amplify auto-build is disabled.
+2. Move the machine-managed Git branch `staging` to the selected source commit.
+3. Start an Amplify `RELEASE` job for that branch.
+4. Verify every referenced JavaScript and CSS asset has the expected MIME type.
+
+The dedicated `staging` Git branch is necessary because an Amplify repository branch builds the
+latest commit from its mapped Git branch. Developers must not commit directly to this branch.
 
 ## One-time AWS setup
 
@@ -22,9 +67,7 @@ The AWS account must have an IAM OpenID Connect provider with:
 - Provider URL: `https://token.actions.githubusercontent.com`
 - Audience: `sts.amazonaws.com`
 
-Create it under **IAM > Identity providers** if it does not exist. Do not create an IAM access key for GitHub.
-
-From the repository root, create the staging role and attach its inline policy:
+Create the GitHub deployment role and attach the repository-managed inline policy:
 
 ```powershell
 $roleName = 'DearDiaryGitHubStagingDeployRole'
@@ -37,33 +80,52 @@ aws iam put-role-policy `
   --role-name $roleName `
   --policy-name DearDiaryStagingDeploy `
   --policy-document file://ops/aws/iam/github-actions-staging-permissions.json
-
-aws iam get-role `
-  --role-name $roleName `
-  --query 'Role.Arn' `
-  --output text
 ```
 
-The trust policy accepts tokens only from the `staging` GitHub environment in `dsadasivani/dear-diary-web`. The permissions policy can update only the existing staging ECS service and Amplify branch, pass only the two existing ECS roles, and push only to the sync API repository.
+The trust policy accepts tokens only from the `staging` GitHub environment. The permissions policy
+can update only the existing ECS service, push to the sync API ECR repository, and start/inspect jobs
+for the Amplify `staging` branch.
+
+## One-time staging branch setup
+
+Run these steps after this workflow is available on `main`:
+
+1. Create the machine-managed Git branch from `main`:
+
+   ```powershell
+   git fetch origin main
+   git push origin origin/main:refs/heads/staging
+   ```
+
+2. In Amplify, connect the repository branch named `staging` to app `d33b4rjnv35mrn`.
+3. Disable auto-build for both `staging` and the old `feature/aws-deployment` Amplify branch.
+4. Confirm the staging URL is `https://staging.d33b4rjnv35mrn.amplifyapp.com`.
+5. Apply the updated IAM inline policy shown above.
+
+Do not enable branch protection that prevents GitHub Actions from force-updating the machine-managed
+`staging` branch.
 
 ## One-time GitHub setup
 
-Under **Repository settings > Environments**:
+Under **Repository settings > Environments > staging**:
 
-1. Create an environment named `staging`.
-2. Restrict its deployment branches to `feature/aws-deployment` during the pilot.
-3. Add an environment variable named `AWS_DEPLOY_ROLE_ARN` containing the role ARN printed above.
+1. Allow deployments from `main` and `feature/**`.
+2. Keep `AWS_DEPLOY_ROLE_ARN` set to the staging deployment role ARN.
 
-This is a variable, not a secret: an IAM role ARN contains no credentials.
+Under **Repository settings > Actions > General > Workflow permissions**:
 
-## Pilot sequence
+1. Enable **Read and write permissions** so the web job can update the `staging` source branch.
 
-1. Commit and push the repository changes.
-2. Wait for CI to succeed on that commit.
-3. While this workflow exists only on the feature branch, trigger the backend pilot with a commit whose message contains `[deploy-staging]`. The workflow waits for CI on that exact commit before deploying. Ordinary commits do not deploy.
-4. Verify backend synchronization from web and mobile.
-5. Disable Amplify auto-build for `feature/aws-deployment`.
-6. Trigger the full pilot with a commit whose message contains `[deploy-staging-web]`.
-7. Verify login and two-way synchronization.
+## Operation
 
-After the workflow reaches the default branch, GitHub also exposes its manual `workflow_dispatch` control in the Actions tab. After both pilot runs succeed, replace the commit-message gate so a successful staging-branch CI run starts the deployment automatically.
+### Feature deployment
+
+1. Push the feature commit and wait for CI to pass.
+2. Open **Actions > Deploy staging > Run workflow**.
+3. Select the feature branch and deployment scope.
+4. Run the workflow and review its deployment summary.
+
+### Main deployment
+
+Push or merge to `main`. The deployment workflow starts automatically, waits for exact-commit CI,
+and deploys only the components detected in that push.
