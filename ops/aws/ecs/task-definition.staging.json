@@ -25,7 +25,7 @@
         },
         {
           "name": "SYNC_CORS_ALLOWED_ORIGINS",
-          "value": "http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://feature-aws-deployment.d33b4rjnv35mrn.amplifyapp.com"
+          "value": "http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://staging.d33b4rjnv35mrn.amplifyapp.com"
         },
         {
           "name": "SYNC_DB_MAX_POOL_SIZE",

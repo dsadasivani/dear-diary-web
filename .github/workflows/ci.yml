@@ -2,10 +2,13 @@ name: CI
 
 on:
   pull_request:
-  push:
     branches:
       - main
-      - 'feature/**'
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
 
 jobs:
   backend:
@@ -89,3 +92,31 @@ jobs:
       - run: npx cap sync android
       - run: npm run android:test
       - run: npm run android:lint
+
+  required:
+    name: CI passed
+    if: always()
+    needs: [backend, web, supabase, browser, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI job to pass
+        env:
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          WEB_RESULT: ${{ needs.web.result }}
+          SUPABASE_RESULT: ${{ needs.supabase.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result in \
+            "$BACKEND_RESULT" \
+            "$WEB_RESULT" \
+            "$SUPABASE_RESULT" \
+            "$BROWSER_RESULT" \
+            "$ANDROID_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "A required CI job ended with result: $result" >&2
+              exit 1
+            fi
+          done

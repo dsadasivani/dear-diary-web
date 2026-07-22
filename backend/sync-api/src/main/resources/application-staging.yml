@@ -13,7 +13,7 @@ management:
 
 sync:
   cors:
-    allowed-origins: ${SYNC_CORS_ALLOWED_ORIGINS:http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://feature-aws-deployment.d33b4rjnv35mrn.amplifyapp.com}
+    allowed-origins: ${SYNC_CORS_ALLOWED_ORIGINS:http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://staging.d33b4rjnv35mrn.amplifyapp.com}
   object-store:
     enabled: ${SYNC_OBJECT_STORE_ENABLED:true}
     bucket: ${SYNC_OBJECT_STORE_BUCKET:dear-diary-sync-staging-908027418886}
