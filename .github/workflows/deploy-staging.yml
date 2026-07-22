@@ -148,14 +148,59 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          ci_sha="$GITHUB_SHA"
+          pr_number=""
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            pull_requests=$(gh api \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              --header "Accept: application/vnd.github+json" \
+              "/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls")
+            pr_number=$(jq -r \
+              --arg sha "$GITHUB_SHA" \
+              '[.[] | select(.state == "open" and .base.ref == "main" and .head.sha == $sha)] | first | .number // empty' \
+              <<< "$pull_requests")
+            if [[ -z "$pr_number" ]]; then
+              echo "Manual feature deployment requires an open PR targeting main for commit $GITHUB_SHA." >&2
+              exit 1
+            fi
+            echo "Using open PR #$pr_number as the deployment approval context."
+          else
+            for attempt in {1..30}; do
+              pull_requests=$(gh api \
+                --header "X-GitHub-Api-Version: 2022-11-28" \
+                --header "Accept: application/vnd.github+json" \
+                "/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls")
+              merged_pr=$(jq -c \
+                --arg sha "$GITHUB_SHA" \
+                '[.[] | select(.state == "closed" and .merged_at != null and .base.ref == "main" and .merge_commit_sha == $sha)] | first // empty' \
+                <<< "$pull_requests")
+              if [[ -n "$merged_pr" ]]; then
+                break
+              fi
+              echo "Waiting for GitHub to associate merged PR with $GITHUB_SHA ($attempt/30)..."
+              sleep 5
+            done
+            if [[ -z "${merged_pr:-}" ]]; then
+              echo "Automatic deployment requires main commit $GITHUB_SHA to come from a merged PR." >&2
+              exit 1
+            fi
+            pr_number=$(jq -r '.number' <<< "$merged_pr")
+            ci_sha=$(jq -r '.head.sha' <<< "$merged_pr")
+            if [[ -z "$ci_sha" || "$ci_sha" == "null" ]]; then
+              echo "Merged PR #$pr_number did not provide a head commit for CI verification." >&2
+              exit 1
+            fi
+            echo "Using merged PR #$pr_number and feature commit $ci_sha as the deployment approval context."
+          fi
+
           ci_conclusion=""
           for attempt in {1..80}; do
             run=$(gh api \
               --header "X-GitHub-Api-Version: 2022-11-28" \
-              "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=1")
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$ci_sha&event=pull_request&per_page=1")
             ci_status=$(jq -r '.workflow_runs[0].status // "not-found"' <<< "$run")
             ci_conclusion=$(jq -r '.workflow_runs[0].conclusion // ""' <<< "$run")
-            echo "Waiting for CI ($attempt/80): status=$ci_status conclusion=${ci_conclusion:-pending}"
+            echo "Waiting for PR #$pr_number CI ($attempt/80): status=$ci_status conclusion=${ci_conclusion:-pending}"
 
             if [[ "$ci_status" == "completed" ]]; then
               if [[ "$ci_conclusion" == "success" ]]; then
@@ -167,7 +212,7 @@ jobs:
             sleep 15
           done
           if [[ "$ci_conclusion" != "success" ]]; then
-            echo "Timed out waiting for successful CI on commit $GITHUB_SHA." >&2
+            echo "Timed out waiting for successful CI on PR #$pr_number commit $ci_sha." >&2
             exit 1
           fi
 

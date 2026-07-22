@@ -1,7 +1,8 @@
 # Staging continuous delivery
 
-The repository has one shared staging environment. CI runs automatically for pushes to `main` and
-`feature/**`, and for pull requests. Deployment behavior is intentionally different by source:
+The repository has one shared staging environment. CI runs for pull requests targeting `main` and
+for every update to those pull requests. Direct feature-branch and post-merge `main` pushes do not
+start a duplicate CI run. Deployment behavior is intentionally different by source:
 
 - A successful `main` push starts staging CD automatically.
 - A `feature/**` commit is deployed only through **Actions > Deploy staging > Run workflow**.
@@ -38,8 +39,10 @@ an indirect dependency is not represented by this list.
 
 ## Deployment gates
 
-Both component jobs require a successful `CI` push run for the exact source commit. Deployments then
-run as follows:
+Both component jobs require successful pull-request `CI`. Manual feature deployments require the
+selected commit to be the head of an open PR targeting `main`. Automatic `main` deployments require
+the pushed commit to belong to a merged PR targeting `main`; direct pushes are blocked. Both paths
+then verify successful CI for that PR's exact feature-head commit before deploying.
 
 ### Backend
 
@@ -124,16 +127,29 @@ Under **Repository settings > Actions > General > Workflow permissions**:
 
 1. Enable **Read and write permissions** so the web job can update the `staging` source branch.
 
+Protect `main` under **Repository settings > Rules > Rulesets** before enabling this flow:
+
+1. Require a pull request before merging.
+2. Require the `CI passed` status check and require branches to be up to date before merging.
+3. Block force pushes and branch deletion.
+4. Disable bypass for direct pushes, including administrator bypass.
+
+The deployment workflow independently rejects deployable `main` commits that are not associated
+with a merged PR, but branch protection remains the primary control that prevents untested commits
+from reaching `main`.
+
 ## Operation
 
 ### Feature deployment
 
-1. Push the feature commit and wait for CI to pass.
-2. Open **Actions > Deploy staging > Run workflow**.
-3. Select the feature branch and deployment scope.
-4. Run the workflow and review its deployment summary.
+1. Push the feature commit and open a PR targeting `main`.
+2. Wait for the PR CI run to pass for the latest commit.
+3. Open **Actions > Deploy staging > Run workflow**.
+4. Select the feature branch and deployment scope.
+5. Run the workflow and review its deployment summary.
 
 ### Main deployment
 
-Push or merge to `main`. The deployment workflow starts automatically, waits for exact-commit CI,
-and deploys only the components detected in that push.
+Merge an approved, up-to-date PR to `main`. The deployment workflow starts automatically, verifies
+the merged PR and its successful feature-head CI, and deploys only the components detected in that
+push. A direct push to `main` fails the deployment gate.
