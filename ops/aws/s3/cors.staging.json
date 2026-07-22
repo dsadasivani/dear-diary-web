@@ -1,0 +1,17 @@
+{
+  "CORSRules": [
+    {
+      "AllowedHeaders": ["*"],
+      "AllowedMethods": ["GET", "PUT", "HEAD"],
+      "AllowedOrigins": [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://localhost",
+        "capacitor://localhost",
+        "https://staging.d33b4rjnv35mrn.amplifyapp.com"
+      ],
+      "ExposeHeaders": ["ETag"],
+      "MaxAgeSeconds": 3600
+    }
+  ]
+}

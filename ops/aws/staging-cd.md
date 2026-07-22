@@ -101,6 +101,14 @@ Run these steps after this workflow is available on `main`:
 3. Disable auto-build for both `staging` and the old `feature/aws-deployment` Amplify branch.
 4. Confirm the staging URL is `https://staging.d33b4rjnv35mrn.amplifyapp.com`.
 5. Apply the updated IAM inline policy shown above.
+6. Apply the repository-managed S3 CORS configuration:
+
+   ```powershell
+   aws s3api put-bucket-cors `
+     --bucket dear-diary-sync-staging-908027418886 `
+     --cors-configuration file://ops/aws/s3/cors.staging.json `
+     --region ap-south-1
+   ```
 
 Do not enable branch protection that prevents GitHub Actions from force-updating the machine-managed
 `staging` branch.
