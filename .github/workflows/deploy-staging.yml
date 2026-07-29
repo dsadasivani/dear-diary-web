@@ -372,6 +372,7 @@ jobs:
             --cluster "$ECS_CLUSTER" \
             --service "$ECS_SERVICE" \
             --desired-count 1 \
+            --health-check-grace-period-seconds 90 \
             --no-cli-pager
 
       - name: Render task definition with the scanned image digest
