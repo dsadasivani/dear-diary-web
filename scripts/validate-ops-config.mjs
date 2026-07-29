@@ -70,4 +70,14 @@ for (const requiredScheduleSetting of [
   }
 }
 
+const stagingDeployPolicy = JSON.parse(
+  await readFile('ops/aws/iam/github-actions-staging-permissions.json', 'utf8'),
+);
+const stagingImageActions =
+  stagingDeployPolicy.Statement.find(({ Sid }) => Sid === 'PushAndInspectStagingImages')?.Action ??
+  [];
+if (!stagingImageActions.includes('ecr:BatchGetImage')) {
+  throw new Error('Staging deployment role must be able to read ECR manifests for Buildx pushes.');
+}
+
 console.log('Operational dashboards, alerts, and security workflow validation passed.');
