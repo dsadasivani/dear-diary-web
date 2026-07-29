@@ -45,7 +45,7 @@ Resources:
     Properties:
       Description: Start Dear Diary staging at the beginning of each weekday.
       FlexibleTimeWindow:
-        Mode: OFF
+        Mode: 'OFF'
       ScheduleExpression: !Ref StartSchedule
       ScheduleExpressionTimezone: !Ref ScheduleTimezone
       State: ENABLED
@@ -59,7 +59,7 @@ Resources:
     Properties:
       Description: Stop Dear Diary staging every evening, including weekends.
       FlexibleTimeWindow:
-        Mode: OFF
+        Mode: 'OFF'
       ScheduleExpression: !Ref StopSchedule
       ScheduleExpressionTimezone: !Ref ScheduleTimezone
       State: ENABLED

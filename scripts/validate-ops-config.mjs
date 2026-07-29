@@ -69,6 +69,9 @@ for (const requiredScheduleSetting of [
     throw new Error(`Missing staging schedule setting: ${requiredScheduleSetting}`);
   }
 }
+if ((stagingSchedule.match(/Mode: 'OFF'/g) ?? []).length !== 2) {
+  throw new Error("Scheduler flexible-window OFF values must be quoted to remain strings in YAML.");
+}
 
 const stagingDeployPolicy = JSON.parse(
   await readFile('ops/aws/iam/github-actions-staging-permissions.json', 'utf8'),
