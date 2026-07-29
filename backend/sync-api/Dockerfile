@@ -7,7 +7,9 @@ COPY --chown=gradle:gradle src ./src
 RUN gradle --no-daemon clean bootJar \
     && cp "$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-plain.jar' -print -quit)" /workspace/app.jar
 
-FROM eclipse-temurin:21-jre-noble
+FROM eclipse-temurin:21-jre-alpine
+
+RUN apk upgrade --no-cache
 
 WORKDIR /app
 COPY --from=builder /workspace/app.jar /app/app.jar

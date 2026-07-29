@@ -7,6 +7,9 @@ plugins {
 group = "com.deardiary"
 version = "0.1.0-SNAPSHOT"
 
+extra["netty.version"] = "4.1.136.Final"
+extra["postgresql.version"] = "42.7.12"
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
