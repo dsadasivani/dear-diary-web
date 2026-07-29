@@ -7,8 +7,8 @@
     {
       "name": "Main",
       "image": "908027418886.dkr.ecr.ap-south-1.amazonaws.com/dear-diary-sync-api:replaced-by-deploy-workflow",
-      "cpu": 1024,
-      "memoryReservation": 2048,
+      "cpu": 512,
+      "memoryReservation": 1024,
       "portMappings": [
         {
           "containerPort": 8080,
@@ -25,7 +25,7 @@
         },
         {
           "name": "SYNC_CORS_ALLOWED_ORIGINS",
-          "value": "http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://feature-aws-deployment.d33b4rjnv35mrn.amplifyapp.com"
+          "value": "http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://staging.d33b4rjnv35mrn.amplifyapp.com"
         },
         {
           "name": "SYNC_DB_MAX_POOL_SIZE",
@@ -113,10 +113,10 @@
     }
   ],
   "requiresCompatibilities": ["FARGATE"],
-  "cpu": "1024",
-  "memory": "2048",
+  "cpu": "512",
+  "memory": "1024",
   "runtimePlatform": {
-    "cpuArchitecture": "X86_64",
+    "cpuArchitecture": "ARM64",
     "operatingSystemFamily": "LINUX"
   }
 }

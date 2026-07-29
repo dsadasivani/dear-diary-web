@@ -266,7 +266,8 @@ export default function NotesScreen({
   const activeMenuNote = notes.find((note) => note.id === menuNoteId) || null;
   const canSaveDraft = Boolean(draft.title.trim() || richTextHtmlToPlainText(draft.body).trim());
 
-  const Editor = ({ fullScreen = false }: { fullScreen?: boolean }) => (
+  // Keep the editor subtree mounted across draft updates so focus and the rich-text caret survive.
+  const renderEditor = (fullScreen = false) => (
     <section
       className={`${fullScreen ? 'fixed inset-0 z-[70] overflow-y-auto bg-brand-bg px-4 pb-8 pt-3 mobile-overlay-safe' : 'surface-paper min-h-[650px] px-7 py-5 xl:px-10'} flex flex-col`}
       aria-label={editingId ? 'Edit note' : 'New note'}
@@ -612,7 +613,7 @@ export default function NotesScreen({
 
           <div className="min-w-0 flex-1">
             {creating || editingId ? (
-              <Editor />
+              renderEditor()
             ) : (
               <EmptyState
                 icon={<BookOpen className="h-6 w-6" />}
@@ -625,7 +626,7 @@ export default function NotesScreen({
       ) : (
         <>
           <ListPanel />
-          {(creating || editingId) && <Editor fullScreen />}
+          {(creating || editingId) && renderEditor(true)}
         </>
       )}
 

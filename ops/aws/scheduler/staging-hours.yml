@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Start Dear Diary staging on weekday mornings and stop it every evening.
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: default
+  ServiceName:
+    Type: String
+    Default: dear-diary-sync-staging
+  StartSchedule:
+    Type: String
+    Default: cron(0 9 ? * MON-FRI *)
+    Description: EventBridge Scheduler expression evaluated in the configured timezone.
+  StopSchedule:
+    Type: String
+    Default: cron(0 21 * * ? *)
+    Description: Daily stop expression evaluated in the configured timezone.
+  ScheduleTimezone:
+    Type: String
+    Default: Asia/Kolkata
+
+Resources:
+  SchedulerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: UpdateOnlyDearDiaryStaging
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecs:UpdateService
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${ClusterName}/${ServiceName}
+
+  WeekdayStartSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Start Dear Diary staging at the beginning of each weekday.
+      FlexibleTimeWindow:
+        Mode: OFF
+      ScheduleExpression: !Ref StartSchedule
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      State: ENABLED
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:ecs:updateService
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        Input: !Sub '{"Cluster":"${ClusterName}","Service":"${ServiceName}","DesiredCount":1}'
+
+  DailyStopSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Stop Dear Diary staging every evening, including weekends.
+      FlexibleTimeWindow:
+        Mode: OFF
+      ScheduleExpression: !Ref StopSchedule
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      State: ENABLED
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:ecs:updateService
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        Input: !Sub '{"Cluster":"${ClusterName}","Service":"${ServiceName}","DesiredCount":0}'
+
+Outputs:
+  StartScheduleName:
+    Value: !Ref WeekdayStartSchedule
+  StopScheduleName:
+    Value: !Ref DailyStopSchedule
