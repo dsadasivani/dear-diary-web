@@ -1,4 +1,4 @@
-FROM gradle:8.14.3-jdk21-alpine AS builder
+FROM --platform=$BUILDPLATFORM gradle:8.14.3-jdk21-alpine AS builder
 
 WORKDIR /workspace
 COPY --chown=gradle:gradle build.gradle.kts settings.gradle.kts ./
@@ -8,10 +8,6 @@ RUN gradle --no-daemon clean bootJar \
     && cp "$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-plain.jar' -print -quit)" /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-noble
-
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=builder /workspace/app.jar /app/app.jar

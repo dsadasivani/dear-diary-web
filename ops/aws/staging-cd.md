@@ -116,6 +116,29 @@ Run these steps after this workflow is available on `main`:
 Do not enable branch protection that prevents GitHub Actions from force-updating the machine-managed
 `staging` branch.
 
+## Staging compute schedule
+
+The backend uses a 0.5 vCPU, 1 GiB ARM64 Fargate task. GitHub Actions publishes a Linux ARM64 image
+and wakes the service before deployment verification.
+
+Staging normally runs from 09:00 to 21:00 Asia/Kolkata on weekdays. A daily stop also catches
+manually started weekend tasks. Deploy the version-controlled EventBridge Scheduler resources once:
+
+```powershell
+aws cloudformation deploy `
+  --template-file ops/aws/scheduler/staging-hours.yml `
+  --stack-name dear-diary-staging-hours `
+  --capabilities CAPABILITY_IAM `
+  --region ap-south-1
+```
+
+To override the hours, pass `StartSchedule`, `StopSchedule`, or `ScheduleTimezone` parameters to the
+stack. Deployments intentionally leave the backend running until the next scheduled stop so the
+deployed revision can be exercised.
+
+The schedule is appropriate only for the shared staging environment. Production services must not
+inherit scheduled shutdown or a single-task availability model.
+
 ## One-time GitHub setup
 
 Under **Repository settings > Environments > staging**:

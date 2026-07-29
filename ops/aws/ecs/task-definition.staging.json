@@ -7,8 +7,8 @@
     {
       "name": "Main",
       "image": "908027418886.dkr.ecr.ap-south-1.amazonaws.com/dear-diary-sync-api:replaced-by-deploy-workflow",
-      "cpu": 1024,
-      "memoryReservation": 2048,
+      "cpu": 512,
+      "memoryReservation": 1024,
       "portMappings": [
         {
           "containerPort": 8080,
@@ -113,10 +113,10 @@
     }
   ],
   "requiresCompatibilities": ["FARGATE"],
-  "cpu": "1024",
-  "memory": "2048",
+  "cpu": "512",
+  "memory": "1024",
   "runtimePlatform": {
-    "cpuArchitecture": "X86_64",
+    "cpuArchitecture": "ARM64",
     "operatingSystemFamily": "LINUX"
   }
 }
