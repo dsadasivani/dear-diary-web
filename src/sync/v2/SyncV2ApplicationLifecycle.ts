@@ -239,6 +239,9 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
           this.pullAllowed = result.pullAllowed;
           this.writesAllowed = result.writesAllowed;
           if (this.assertAuthorized && !this.authorizationTimer) {
+            void this.assertAuthorized().catch((error) =>
+              this.onError('sync.v2.authorization', error),
+            );
             this.authorizationTimer = setInterval(() => {
               void this.assertAuthorized!().catch((error) =>
                 this.onError('sync.v2.authorization', error),
@@ -1455,12 +1458,9 @@ export class SyncV2ApplicationLifecycle {
       account.v1AccountId || account.accountId,
       controls,
     );
-    const assertAuthorized =
-      account.deviceRole === 'web_companion'
-        ? async () => {
-            await api.listDeviceKeyPackages(account.deviceId);
-          }
-        : null;
+    const assertAuthorized = async () => {
+      await api.listDeviceKeyPackages(account.deviceId);
+    };
     return new RuntimeDelegate(
       new SyncV2RuntimeCoordinator(bootstrap, pullWorker, outboxWorker),
       puller,
