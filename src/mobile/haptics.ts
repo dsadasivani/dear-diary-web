@@ -1,24 +1,35 @@
-import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { isNativePlatform } from '../platform';
 
 export type HapticImpact = 'light' | 'medium' | 'heavy';
 
 const impactStyles: Record<HapticImpact, ImpactStyle> = {
   light: ImpactStyle.Light,
-  medium: ImpactStyle.Medium,
-  heavy: ImpactStyle.Heavy,
+  medium: ImpactStyle.Light,
+  heavy: ImpactStyle.Medium,
 };
 
 const fallbackPatterns: Record<HapticImpact, number> = {
-  light: 10,
-  medium: 18,
-  heavy: 28,
+  light: 4,
+  medium: 8,
+  heavy: 14,
 };
+
+let lastFeedbackAt = 0;
+const MIN_FEEDBACK_INTERVAL_MS = 40;
 
 export const triggerImpact = async (impact: HapticImpact = 'light'): Promise<void> => {
   try {
+    const now = Date.now();
+    if (now - lastFeedbackAt < MIN_FEEDBACK_INTERVAL_MS) return;
+    lastFeedbackAt = now;
+
     if (isNativePlatform()) {
-      await Haptics.impact({ style: impactStyles[impact] });
+      if (impact === 'light') {
+        await Haptics.selectionChanged();
+      } else {
+        await Haptics.impact({ style: impactStyles[impact] });
+      }
       return;
     }
 
@@ -31,11 +42,11 @@ export const triggerImpact = async (impact: HapticImpact = 'light'): Promise<voi
 export const triggerSuccess = async (): Promise<void> => {
   try {
     if (isNativePlatform()) {
-      await Haptics.notification({ type: NotificationType.Success });
+      await Haptics.impact({ style: ImpactStyle.Light });
       return;
     }
 
-    window.navigator?.vibrate?.([12, 30, 12]);
+    window.navigator?.vibrate?.(8);
   } catch {
     // Haptics are intentionally best-effort.
   }

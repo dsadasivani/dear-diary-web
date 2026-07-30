@@ -47,6 +47,7 @@ import type { RepositoryChange, SyncStatusSummary } from './repositories';
 import {
   addNativeAppStateListener,
   addNativeBackListener,
+  addNativeDeviceLockListener,
   addNativeUrlOpenListener,
   exitNativeApp,
   getNativeLaunchUrl,
@@ -984,6 +985,15 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     });
   }, [isAuthenticated]);
 
+  useEffect(
+    () =>
+      addNativeDeviceLockListener(() => {
+        if (!isAuthenticated) return;
+        handleLockApp();
+      }),
+    [isAuthenticated],
+  );
+
   useEffect(() => {
     const handleRevokedDevice = () => {
       showToast('This device was revoked and its encrypted cache was cleared.', 'warning');
@@ -1854,15 +1864,13 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             onBack={activeTab === 'search' ? () => handleNavigate('home') : undefined}
           />
         )}
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={`${activeTab}-${currentScreen}`}
-            {...pageMotion(prefersReducedMotion)}
-            className="flex-grow flex flex-col justify-start"
-          >
-            {renderSuspendedContent()}
-          </motion.div>
-        </AnimatePresence>
+        <motion.div
+          key={`${activeTab}-${currentScreen}`}
+          {...pageMotion(true)}
+          className="flex-grow flex flex-col justify-start"
+        >
+          {renderSuspendedContent()}
+        </motion.div>
       </main>
 
       {layout === 'mobile' && showRootNavigation && !isCreateSheetOpen && !isProfileSheetOpen && (

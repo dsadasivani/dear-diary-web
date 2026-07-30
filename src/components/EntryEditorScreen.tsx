@@ -3199,6 +3199,15 @@ export default function EntryEditorScreen({
 
   return (
     <div className="relative flex flex-col gap-5 pb-32 font-sans">
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handlePhotoUpload}
+        multiple
+        accept="image/*"
+        className="hidden"
+        aria-label="Choose entry photos"
+      />
       {/* Top Header */}
       <header className="surface-glass-strong sticky top-0 z-30 flex items-center justify-between border-b border-brand-border/60 py-3">
         <button
@@ -3852,16 +3861,6 @@ export default function EntryEditorScreen({
               >
                 <X className="h-4 w-4" />
               </button>
-
-              {/* Hidden Photo File uploader input */}
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handlePhotoUpload}
-                multiple
-                accept="image/*"
-                className="hidden"
-              />
             </div>
           </div>
         </div>

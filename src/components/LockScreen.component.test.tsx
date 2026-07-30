@@ -8,6 +8,9 @@ import type {
   SecurityConfig,
   SupabaseAuthSession,
 } from '../types';
+import { withRecoveryQuestion } from '../domain/security';
+import * as platform from '../platform';
+import { secureAuthService } from '../platform/security';
 import LockScreen from './LockScreen';
 
 const mocks = vi.hoisted(() => ({
@@ -248,6 +251,34 @@ describe('LockScreen first-run sync setup', () => {
     expect(screen.queryByText(/^erase$/i)).not.toBeInTheDocument();
   });
 
+  it('unlocks the app from the ambient lock screen with enabled native biometrics', async () => {
+    const nativePlatform = vi.spyOn(platform, 'isNativePlatform').mockReturnValue(true);
+    const authenticate = vi.spyOn(secureAuthService, 'authenticate').mockResolvedValue(true);
+    const onUnlock = vi.fn();
+    mocks.getLocalSyncAccountState.mockResolvedValue({ deviceRole: 'primary_mobile' });
+
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={{
+          ...savedSecurity,
+          isBiometricsEnabled: true,
+          passkeyCredentialId: 'native-biometric',
+        }}
+        onSecurityChange={vi.fn()}
+        onUnlock={onUnlock}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /unlock with biometrics/i }));
+
+    expect(authenticate).toHaveBeenCalledWith('native-biometric');
+    await waitFor(() => expect(onUnlock).toHaveBeenCalledOnce());
+    nativePlatform.mockRestore();
+    authenticate.mockRestore();
+  });
+
   it('shows the configured recovery question for question-based PIN recovery', async () => {
     const user = userEvent.setup();
     render(
@@ -261,11 +292,43 @@ describe('LockScreen first-run sync setup', () => {
 
     await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
     await user.click(await screen.findByRole('button', { name: /forgot security passcode pin/i }));
-    await user.click(screen.getByRole('button', { name: /answer security question/i }));
 
     expect(screen.getByText('What was the name of your first pet?')).toBeInTheDocument();
     expect(screen.queryByText(/recovery question unavailable/i)).not.toBeInTheDocument();
   });
+
+  it('requires the security answer before linked Google verification for PIN reset', async () => {
+    const user = userEvent.setup();
+    const sequentialRecoverySecurity = {
+      ...withRecoveryQuestion(pinOnlySecurity, 'first-pet', 'Blue'),
+      linkedGoogleUserId: googleSession.userId,
+      linkedGoogleEmail: googleSession.email,
+    };
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={sequentialRecoverySecurity}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    await user.click(await screen.findByRole('button', { name: /forgot security passcode pin/i }));
+
+    expect(
+      screen.queryByRole('button', { name: /verify google account/i }),
+    ).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText(/security question answer/i), 'Blue');
+    await user.click(screen.getByRole('button', { name: /verify answer/i }));
+
+    expect(await screen.findByText(/security answer is correct/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /verify google account/i }));
+
+    expect(mocks.startGoogleAuth).toHaveBeenCalledWith('pin-reset');
+    expect(await screen.findByText(/recovery verified by Google/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reset pin/i })).toBeInTheDocument();
+  }, 15_000);
 
   it('does not offer security-question recovery when only Google recovery is configured', async () => {
     const user = userEvent.setup();

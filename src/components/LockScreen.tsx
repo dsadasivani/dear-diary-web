@@ -10,6 +10,7 @@ import {
   Cloud,
   Eye,
   EyeOff,
+  Fingerprint,
   LoaderCircle,
   Lock,
   Moon,
@@ -56,6 +57,8 @@ import {
   validateRecoveryPassphrase,
 } from '../sync/e2eeKeyPackage';
 import { triggerImpact } from '../mobile/haptics';
+import { isNativePlatform } from '../platform';
+import { secureAuthService } from '../platform/security';
 
 interface LockScreenProps {
   initialSecurity: SecurityConfig;
@@ -94,7 +97,7 @@ const formatGoogleAuthError = (err: any): string => {
 };
 
 type SetupStep = 'welcome' | 'pin' | 'confirm' | 'recovery' | 'complete';
-type RecoveryMode = 'choosing' | 'question' | 'newPin' | null;
+type RecoveryMode = 'choosing' | 'question' | 'google' | 'newPin' | null;
 type SyncSetupProgressKey = 'connect' | 'verify' | 'prepare' | 'restore' | 'finish';
 interface SyncSetupSelection {
   googleSession: GoogleAccountSession;
@@ -177,6 +180,8 @@ export default function LockScreen({
   const [resetNewPin, setResetNewPin] = useState('');
   const [resetConfirmPin, setResetConfirmPin] = useState('');
   const [recoveryVerifiedBy, setRecoveryVerifiedBy] = useState<'question' | 'google' | null>(null);
+  const [isRecoveryQuestionVerified, setIsRecoveryQuestionVerified] = useState(false);
+  const [isBiometricUnlocking, setIsBiometricUnlocking] = useState(false);
   const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() =>
     initialSecurity.isPinCreated ? 'ambient' : 'keypad',
   );
@@ -229,7 +234,7 @@ export default function LockScreen({
   }, [theme]);
 
   const triggerHaptic = (pattern: number | number[]) => {
-    const strength = Array.isArray(pattern) ? 'heavy' : pattern >= 15 ? 'medium' : 'light';
+    const strength = Array.isArray(pattern) || pattern >= 15 ? 'medium' : 'light';
     void triggerImpact(strength);
   };
 
@@ -539,11 +544,18 @@ export default function LockScreen({
 
   const handleVerifySecurityAnswer = () => {
     if (verifyRecoveryAnswer(security, recoveryAnswer)) {
-      setRecoveryVerifiedBy('question');
-      setRecoveryMode('newPin');
+      setIsRecoveryQuestionVerified(true);
+      if (security.linkedGoogleUserId) {
+        setRecoveryVerifiedBy(null);
+        setRecoveryMode('google');
+        setSuccessMsg('Security answer verified. Now verify your linked Google account.');
+      } else {
+        setRecoveryVerifiedBy('question');
+        setRecoveryMode('newPin');
+        setSuccessMsg('Security answer verified. Choose a new PIN.');
+      }
       setRecoveryAnswer('');
       setError('');
-      setSuccessMsg('Security answer verified. Choose a new PIN.');
     } else {
       fail('Security answer did not match.');
     }
@@ -562,6 +574,11 @@ export default function LockScreen({
 
   const handleVerifyGoogleReset = async () => {
     if (!security.linkedGoogleUserId) return;
+    if (hasRecoveryQuestion(security) && !isRecoveryQuestionVerified) {
+      fail('Answer your security question before Google verification.');
+      setRecoveryMode('question');
+      return;
+    }
     setIsResetting(true);
     setError('');
     setSuccessMsg('Opening Google verification...');
@@ -597,12 +614,39 @@ export default function LockScreen({
       onSecurityChange(updated);
       setRecoveryMode(null);
       setRecoveryVerifiedBy(null);
+      setIsRecoveryQuestionVerified(false);
       setResetNewPin('');
       setResetConfirmPin('');
       setSuccessMsg('PIN reset successfully.');
       await completeUnlock(updated);
     } catch (err: any) {
       fail(err?.message || 'Could not reset PIN.');
+    }
+  };
+
+  const handleBiometricUnlock = async () => {
+    if (!security.isBiometricsEnabled || !isNativePlatform()) return;
+    setIsBiometricUnlocking(true);
+    setError('');
+    setSuccessMsg('Checking biometric identity...');
+    try {
+      const verified =
+        security.isBiometricsSimulated ||
+        (await secureAuthService.authenticate(security.passkeyCredentialId));
+      if (!verified) {
+        fail('Biometric identity was not confirmed. Use your app PIN.');
+        return;
+      }
+      const unlockedSecurity = { ...security, isLocked: false };
+      await diaryRepository.saveSecurityConfig(unlockedSecurity);
+      setSecurity(unlockedSecurity);
+      onSecurityChange(unlockedSecurity);
+      setSuccessMsg('Biometric identity verified.');
+      await completeUnlock(unlockedSecurity);
+    } catch (err: any) {
+      fail(err?.message || 'Biometric unlock failed. Use your app PIN.');
+    } finally {
+      setIsBiometricUnlocking(false);
     }
   };
 
@@ -840,6 +884,17 @@ export default function LockScreen({
                     Tap to Unlock
                   </span>
                 </motion.button>
+                {security.isPinCreated && security.isBiometricsEnabled && isNativePlatform() && (
+                  <button
+                    type="button"
+                    onClick={handleBiometricUnlock}
+                    disabled={isBiometricUnlocking}
+                    className="inline-flex min-h-11 items-center gap-2 rounded-full border border-brand-border/65 bg-white/55 px-4 text-xs font-bold text-brand-plum shadow-sm backdrop-blur-xl transition-colors hover:border-brand-pink/40 hover:text-brand-pink disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.05] dark:text-brand-text"
+                  >
+                    <Fingerprint className="h-4 w-4" />
+                    {isBiometricUnlocking ? 'Checking identity…' : 'Unlock with biometrics'}
+                  </button>
+                )}
               </div>
 
               <div className="hidden">
@@ -1192,7 +1247,7 @@ export default function LockScreen({
                         )}
                         <div className="rounded-2xl border border-brand-pink/15 bg-brand-pink/5 p-3 text-left text-xs leading-relaxed text-brand-text-muted">
                           {isRecoveringSyncAccount
-                            ? 'Use the recovery passphrase you created when this encrypted account was first set up.'
+                            ? 'Use the recovery passphrase from the original setup. After the encrypted restore is verified, this device becomes the only active primary and the previous primary and companions are revoked.'
                             : 'This 8-digit recovery passphrase protects your encrypted diary. Keep it somewhere safe.'}
                         </div>
                       </>
@@ -1545,7 +1600,10 @@ export default function LockScreen({
                       <button
                         onClick={() => {
                           triggerHaptic(15);
-                          setRecoveryMode('choosing');
+                          setRecoveryMode(hasSecurityQuestionRecovery ? 'question' : 'choosing');
+                          setRecoveryAnswer('');
+                          setRecoveryVerifiedBy(null);
+                          setIsRecoveryQuestionVerified(false);
                         }}
                         className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors"
                       >
@@ -1597,7 +1655,7 @@ export default function LockScreen({
                                 </span>
                               </button>
                             )}
-                            {hasGoogleRecovery && (
+                            {hasGoogleRecovery && !hasSecurityQuestionRecovery && (
                               <button
                                 onClick={handleVerifyGoogleReset}
                                 disabled={isResetting}
@@ -1621,6 +1679,7 @@ export default function LockScreen({
                             </p>
                             <div className="relative">
                               <input
+                                aria-label="Security question answer"
                                 type={showRecoveryAnswer ? 'text' : 'password'}
                                 value={recoveryAnswer}
                                 onChange={(e) => setRecoveryAnswer(e.target.value)}
@@ -1646,6 +1705,31 @@ export default function LockScreen({
                               className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-md shadow-brand-plum/10 transition-all hover:bg-brand-pink disabled:cursor-not-allowed disabled:opacity-40 dark:bg-[#EADCD1] dark:text-[#21191C]"
                             >
                               Verify Answer
+                            </button>
+                          </div>
+                        )}
+
+                        {recoveryMode === 'google' && (
+                          <div className="mt-6 flex w-full flex-col gap-3">
+                            <p className="rounded-2xl border border-brand-sage/30 bg-brand-sage/10 px-4 py-3 text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/75">
+                              Your security answer is correct. Verify{' '}
+                              <strong>
+                                {security.linkedGoogleEmail || 'your linked Google account'}
+                              </strong>{' '}
+                              before choosing a new PIN.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={handleVerifyGoogleReset}
+                              disabled={isResetting}
+                              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-plum py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-md transition-colors hover:bg-brand-pink disabled:opacity-50 dark:bg-[#EADCD1] dark:text-[#21191C]"
+                            >
+                              {isResetting ? (
+                                <LoaderCircle className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <ShieldCheck className="h-4 w-4" />
+                              )}
+                              Verify Google Account
                             </button>
                           </div>
                         )}

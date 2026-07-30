@@ -5,6 +5,7 @@ import { SplashScreen } from '@capacitor/splash-screen';
 import { StatusBar, Style } from '@capacitor/status-bar';
 
 const BACK_EVENT = 'dear-diary:android-back';
+const DEVICE_LOCK_EVENT = 'dear-diary:device-locked';
 
 export const isCapacitorNative = (): boolean => Capacitor.isNativePlatform();
 
@@ -77,6 +78,12 @@ export const addNativeAppStateListener = (
     disposed = true;
     void listener?.remove();
   };
+};
+
+export const addNativeDeviceLockListener = (handler: () => void): (() => void) => {
+  if (!isCapacitorNative()) return () => undefined;
+  window.addEventListener(DEVICE_LOCK_EVENT, handler);
+  return () => window.removeEventListener(DEVICE_LOCK_EVENT, handler);
 };
 
 export const addNativeUrlOpenListener = (
