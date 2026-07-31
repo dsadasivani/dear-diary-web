@@ -58,9 +58,10 @@ export default function JournalCover({
   const Emblem = emblemFor(diary);
   const foilCount = Math.min(4, diary.foilIcons?.length || 0);
 
+  // The same diary can appear on several root screens at different sizes and positions.
+  // A shared layout ID makes Motion fly the cover between those unrelated placements.
   return (
     <motion.div
-      layoutId={diary.id ? `journal-cover-${diary.id}` : undefined}
       transition={reducedMotion ? { duration: 0.01 } : motionTransitions.sharedObject}
       whileTap={reducedMotion ? undefined : { scale: 0.985 }}
       className={`relative isolate overflow-hidden border border-black/15 bg-[var(--cover-color)] text-white shadow-[0_16px_36px_rgba(37,22,27,0.16),inset_1px_0_rgba(255,255,255,0.18)] ${large ? 'aspect-[3/4.35] rounded-[0.7rem_1.15rem_1.15rem_0.7rem]' : 'h-16 w-12 rounded-[0.35rem_0.65rem_0.65rem_0.35rem]'} ${className}`}

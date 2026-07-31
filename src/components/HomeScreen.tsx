@@ -21,6 +21,8 @@ interface HomeScreenProps {
   userProfile: UserProfile;
   layout?: ResponsiveLayout;
   excludeDiaryIds?: string[];
+  initialSummary?: HomeSummary | null;
+  onSummaryChange?: (summary: HomeSummary) => void;
   onNavigate: (tab: string, screen?: string, diaryId?: string, entryId?: string) => void;
   onOpenQuickNote: (noteText: string) => void;
   onOpenNewEntryWithPrompt: (promptText: string) => void;
@@ -42,6 +44,8 @@ export default function HomeScreen({
   userProfile,
   layout = 'mobile',
   excludeDiaryIds = [],
+  initialSummary = null,
+  onSummaryChange,
   onNavigate,
   onOpenQuickNote,
   onOpenNewEntryWithPrompt,
@@ -50,7 +54,7 @@ export default function HomeScreen({
   const reducedMotion = useReducedMotion();
   const { setAmbientContext, resetAmbientContext } = useAmbientTheme();
   const [playLaunchReveal] = useState(() => !hasPlayedHomeReveal);
-  const [summary, setSummary] = useState<HomeSummary | null>(null);
+  const [summary, setSummary] = useState<HomeSummary | null>(initialSummary);
   const [summaryError, setSummaryError] = useState('');
   const [quickThought, setQuickThought] = useState('');
   const [promptIndex, setPromptIndex] = useState(0);
@@ -59,6 +63,10 @@ export default function HomeScreen({
   useEffect(() => {
     hasPlayedHomeReveal = true;
   }, []);
+
+  useEffect(() => {
+    if (initialSummary) setSummary(initialSummary);
+  }, [initialSummary]);
 
   useEffect(() => {
     setAmbientContext({
@@ -70,16 +78,16 @@ export default function HomeScreen({
 
   const loadSummary = useCallback(async () => {
     try {
-      setSummary(
-        await diaryRepository.getHomeSummary({
-          excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [],
-        }),
-      );
+      const nextSummary = await diaryRepository.getHomeSummary({
+        excludeDiaryIds: excludeDiaryKey ? excludeDiaryKey.split('|') : [],
+      });
+      setSummary(nextSummary);
+      onSummaryChange?.(nextSummary);
       setSummaryError('');
     } catch (error: any) {
       setSummaryError(error?.message || 'Today could not be loaded.');
     }
-  }, [excludeDiaryKey]);
+  }, [excludeDiaryKey, onSummaryChange]);
 
   useEffect(() => {
     void loadSummary();
