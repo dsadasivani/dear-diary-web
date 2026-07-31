@@ -199,6 +199,44 @@ class AdvancedWorkflowIntegrationTest {
     }
 
     @Test
+    void expiredRecoveryDoesNotBlockAReplacementDevice() throws Exception {
+        enable("primary_recovery_enabled", "PRIMARY_RECOVERY");
+        var objectStore = new InMemoryEncryptedObjectStore();
+        var protocols = new ProtocolService(jdbc);
+        var packages = new KeyPackageService(jdbc, transactions, devices, accounts,
+            new ObjectKeyFactory(), objectStore, clock, protocols);
+        var recovery = new RecoveryService(jdbc, transactions, accounts, protocols, packages, clock);
+        var staleKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
+        var staleDevice = UUID.randomUUID();
+        var staleAttempt = UUID.randomUUID();
+        recovery.begin("advanced-user", new RecoveryRequests.Begin(staleAttempt, staleDevice,
+            Base64.getEncoder().encodeToString(staleKey.getPublic().getEncoded()), "test"));
+
+        var competingKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
+        assertApiCode(() -> recovery.begin("advanced-user", new RecoveryRequests.Begin(
+            UUID.randomUUID(), UUID.randomUUID(),
+            Base64.getEncoder().encodeToString(competingKey.getPublic().getEncoded()), "test")),
+            "RECOVERY_ALREADY_ACTIVE");
+
+        jdbc.update("UPDATE sync_recovery_state SET expires_at = ? WHERE account_id = ?",
+            OffsetDateTime.now(clock).minusMinutes(1), accountId);
+        var replacementKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
+        var replacementDevice = UUID.randomUUID();
+        var replacementAttempt = UUID.randomUUID();
+        var replacement = recovery.begin("advanced-user", new RecoveryRequests.Begin(
+            replacementAttempt, replacementDevice,
+            Base64.getEncoder().encodeToString(replacementKey.getPublic().getEncoded()), "test"));
+
+        assertThat(replacement.recoveryAttemptId()).isEqualTo(replacementAttempt);
+        assertThat(replacement.recoveryDeviceId()).isEqualTo(replacementDevice);
+        assertThat(replacement.status()).isEqualTo("REQUESTED");
+        assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?",
+            String.class, staleDevice)).isEqualTo("REVOKED");
+        assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?",
+            String.class, replacementDevice)).isEqualTo("RECOVERY_PENDING");
+    }
+
+    @Test
     void rotationAdvancesEpochOnlyAfterActiveDeviceAndRecoveryPackagesAreAvailable() throws Exception {
         enable("key_rotation_enabled", "KEY_ROTATION");
         var objectStore = new InMemoryEncryptedObjectStore();

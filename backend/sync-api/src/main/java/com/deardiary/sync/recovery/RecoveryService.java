@@ -49,12 +49,23 @@ public class RecoveryService {
         return transactions.execute(status -> {
             lockAccount(account.accountId());
             var existing = loadOptional(account.accountId(), true);
-            if (existing != null && !isTerminal(existing.status())) {
+            var now = OffsetDateTime.now(clock);
+            var existingIsActive = existing != null
+                && !isTerminal(existing.status())
+                && now.isBefore(existing.expiresAt());
+            if (existingIsActive) {
                 if (existing.attemptId().equals(request.recoveryAttemptId())
                         && existing.deviceId().equals(request.recoveryDeviceId())) return response(existing, null);
                 throw invalid("RECOVERY_ALREADY_ACTIVE");
             }
-            var now = OffsetDateTime.now(clock);
+            if (existing != null
+                    && !isTerminal(existing.status())
+                    && !existing.deviceId().equals(request.recoveryDeviceId())) {
+                jdbc.update("""
+                    UPDATE sync_devices SET device_status = 'REVOKED', revoked_at = ?
+                    WHERE account_id = ? AND device_id = ? AND device_status = 'RECOVERY_PENDING'
+                    """, now, account.accountId(), existing.deviceId());
+            }
             var expires = now.plus(Duration.ofHours(24));
             jdbc.update("""
                 INSERT INTO sync_devices (
