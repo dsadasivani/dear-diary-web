@@ -218,8 +218,9 @@ class AdvancedWorkflowIntegrationTest {
             Base64.getEncoder().encodeToString(competingKey.getPublic().getEncoded()), "test")),
             "RECOVERY_ALREADY_ACTIVE");
 
-        jdbc.update("UPDATE sync_recovery_state SET expires_at = ? WHERE account_id = ?",
-            OffsetDateTime.now(clock).minusMinutes(1), accountId);
+        jdbc.update("""
+            UPDATE sync_recovery_state SET requested_at = ?, expires_at = ? WHERE account_id = ?
+            """, OffsetDateTime.now(clock).minusDays(2), OffsetDateTime.now(clock).minusDays(1), accountId);
         var replacementKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
         var replacementDevice = UUID.randomUUID();
         var replacementAttempt = UUID.randomUUID();
