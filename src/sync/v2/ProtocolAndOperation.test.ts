@@ -227,6 +227,31 @@ test('API client authenticates requests and maps backend safety codes', async ()
   assert.equal(authorization, 'Bearer access-token');
 });
 
+test('API client does not mislabel recovery state conflicts as record version conflicts', async () => {
+  const client = new SyncV2ApiClient({
+    baseUrl: 'https://sync.invalid/',
+    accessToken: async () => 'access-token',
+    fetch: async () =>
+      new Response(
+        JSON.stringify({
+          code: 'RECOVERY_ALREADY_ACTIVE',
+          retryable: false,
+          userActionRequired: true,
+        }),
+        { status: 409, headers: { 'content-type': 'application/json' } },
+      ),
+  });
+
+  await assert.rejects(
+    client.beginRecovery({}),
+    (error: unknown) =>
+      error instanceof SyncError &&
+      error.code === 'RECOVERY_CONFLICT' &&
+      error.userActionRequired &&
+      !error.message.includes('newer version'),
+  );
+});
+
 test('API client calls the native global fetch with the Window-compatible receiver', async () => {
   const originalFetch = globalThis.fetch;
   try {
