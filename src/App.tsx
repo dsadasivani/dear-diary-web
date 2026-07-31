@@ -43,7 +43,7 @@ import {
 } from './types';
 import type { NoteConversionRequest } from './components/NotesScreen';
 import type { SettingsSection } from './components/AppSettingsScreen';
-import type { RepositoryChange, SyncStatusSummary } from './repositories';
+import type { HomeSummary, RepositoryChange, SyncStatusSummary } from './repositories';
 import {
   addNativeAppStateListener,
   addNativeBackListener,
@@ -271,6 +271,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [archiveMonths, setArchiveMonths] = useState<PartitionHydrationState[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
   const [homeStreak, setHomeStreak] = useState(0);
+  const [homeSummary, setHomeSummary] = useState<HomeSummary | null>(null);
 
   const lockedDiaryIds = React.useMemo(
     () =>
@@ -301,6 +302,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         storedSecurity,
         storedArchiveMonths,
         storedSyncStatus,
+        storedHomeSummary,
       ] = await Promise.all([
         diaryRepository.listDiaries(),
         diaryRepository.listEntries(),
@@ -309,6 +311,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         diaryRepository.getSecurityConfig(),
         diaryRepository.listAvailableArchiveMonths(),
         diaryRepository.getSyncStatusSummary(),
+        diaryRepository.getHomeSummary(),
       ]);
       setDiaries(storedDiaries);
       setEntries(storedEntries);
@@ -319,6 +322,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       setSecurity(storedSecurity);
       setArchiveMonths(storedArchiveMonths);
       setSyncStatus(storedSyncStatus);
+      setHomeSummary(storedHomeSummary);
       applyThemePreference(currentTheme);
       void syncNativeStatusBar(currentTheme);
     });
@@ -351,6 +355,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       setSecurity(storedSecurity);
       setArchiveMonths(storedArchiveMonths);
       setSyncStatus(storedSyncStatus);
+      setHomeSummary(storedHomeSummary);
       applyThemePreference(currentTheme);
       void syncNativeStatusBar(currentTheme);
     });
@@ -1259,6 +1264,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             userProfile={userProfile}
             layout={layout}
             excludeDiaryIds={lockedDiaryIds}
+            initialSummary={homeSummary}
+            onSummaryChange={setHomeSummary}
             onNavigate={handleNavigate}
             onOpenQuickNote={handleOpenQuickNote}
             onOpenNewEntryWithPrompt={handleOpenNewEntryWithPrompt}
@@ -1864,13 +1871,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             onBack={activeTab === 'search' ? () => handleNavigate('home') : undefined}
           />
         )}
-        <motion.div
-          key={`${activeTab}-${currentScreen}`}
-          {...pageMotion(true)}
-          className="flex-grow flex flex-col justify-start"
-        >
-          {renderSuspendedContent()}
-        </motion.div>
+        <div className="flex-grow flex flex-col justify-start">{renderSuspendedContent()}</div>
       </main>
 
       {layout === 'mobile' && showRootNavigation && !isCreateSheetOpen && !isProfileSheetOpen && (

@@ -18,6 +18,7 @@ import type {
   InitiateSyncV2SnapshotResponse,
   SyncV2Snapshot,
 } from './api/SyncV2ApiTypes';
+import { repositorySnapshotFromV2State } from './RepositorySnapshotAdapter';
 
 class MemoryStore implements LocalDataStore {
   readonly values = new Map<string, string>();
@@ -181,6 +182,26 @@ const harness = async () => {
     },
   };
 };
+
+test('converts only legacy-supported record versions while retaining restored security', () => {
+  const security = { pinHash: 'restored-security' };
+  const snapshot = repositorySnapshotFromV2State({
+    records: {
+      'ENTRY:entry-1': { id: 'entry-1', title: 'Restored entry' },
+      'SECURITY:security': security,
+    },
+    recordVersions: {
+      'ENTRY:entry-1': 7,
+      'SECURITY:security': 4,
+    },
+    mediaPointers: {},
+  });
+
+  assert.equal(snapshot.security, security);
+  assert.deepEqual(snapshot.syncRecordVersions, {
+    'entry:entry-1': 7,
+  });
+});
 
 test('creates, registers, restores, and acknowledges an integrity-verified account snapshot', async () => {
   const context = await harness();

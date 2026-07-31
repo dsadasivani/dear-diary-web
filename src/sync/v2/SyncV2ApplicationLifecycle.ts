@@ -1,5 +1,5 @@
 import type { LocalDataStore } from '../../platform/storage';
-import type { DiaryRepository, RepositorySnapshot } from '../../repositories/DiaryRepository';
+import type { DiaryRepository } from '../../repositories/DiaryRepository';
 import type {
   GoogleAccountSession,
   LocalSyncAccountState,
@@ -100,6 +100,10 @@ import {
 import { reportUnexpectedError } from '../../infrastructure/telemetry/reportUnexpectedError';
 import { signWithDeviceBundle } from './v2CompanionPairing';
 import { clearSyncV2LocalCache } from './clearSyncV2LocalCache';
+import {
+  repositorySnapshotFromV2State,
+  repositorySnapshotToV2State,
+} from './RepositorySnapshotAdapter';
 
 const PROTOCOL_VERSION = 2;
 const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
@@ -125,52 +129,6 @@ const canonicalJson = (value: unknown): string => {
     .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
     .join(',')}}`;
 };
-
-export const repositorySnapshotToV2State = (
-  snapshot: RepositorySnapshot,
-): SyncV2CanonicalSnapshotState => {
-  const records: Record<string, unknown> = {};
-  snapshot.diaries.forEach((value) => {
-    records[`DIARY:${value.id}`] = value;
-  });
-  snapshot.entries.forEach((value) => {
-    records[`ENTRY:${value.id}`] = value;
-  });
-  snapshot.notes.forEach((value) => {
-    records[`NOTE:${value.id}`] = value;
-  });
-  if (snapshot.settings) records['SETTINGS:settings'] = snapshot.settings;
-  if (snapshot.userProfile) records['PROFILE:profile'] = snapshot.userProfile;
-  if (snapshot.security) records['SECURITY:security'] = snapshot.security;
-  return {
-    records,
-    recordVersions: Object.fromEntries(Object.keys(records).map((key) => [key, 0])),
-    mediaPointers: {},
-  };
-};
-
-const repositorySnapshotFromV2State = (
-  state: SyncV2CanonicalSnapshotState,
-): RepositorySnapshot => ({
-  diaries: Object.entries(state.records)
-    .filter(([key]) => key.startsWith('DIARY:'))
-    .map(([, value]) => value as RepositorySnapshot['diaries'][number]),
-  entries: Object.entries(state.records)
-    .filter(([key]) => key.startsWith('ENTRY:'))
-    .map(([, value]) => value as RepositorySnapshot['entries'][number]),
-  notes: Object.entries(state.records)
-    .filter(([key]) => key.startsWith('NOTE:'))
-    .map(([, value]) => value as RepositorySnapshot['notes'][number]),
-  settings: state.records['SETTINGS:settings'] as RepositorySnapshot['settings'],
-  userProfile: state.records['PROFILE:profile'] as RepositorySnapshot['userProfile'],
-  security: state.records['SECURITY:security'] as RepositorySnapshot['security'],
-  syncRecordVersions: Object.fromEntries(
-    Object.entries(state.recordVersions).map(([key, version]) => {
-      const separator = key.indexOf(':');
-      return [`${key.slice(0, separator).toLowerCase()}${key.slice(separator)}`, version];
-    }),
-  ),
-});
 
 const stateDigest = async (state: SyncV2CanonicalSnapshotState): Promise<string> =>
   sha256Hex(new TextEncoder().encode(canonicalJson(state)));
