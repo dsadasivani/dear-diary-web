@@ -1,18 +1,17 @@
 import {
-  BookHeart,
-  Feather,
-  Flower2,
-  KeyRound,
+  FavouriteBook as BookHeart,
+  Compass as Feather,
+  Flower as Flower2,
+  Key as KeyRound,
   Leaf,
   Lock,
-  MoonStar,
-  Mountain,
+  HalfMoon as MoonStar,
+  Trekking as Mountain,
   Palette,
-  Plane,
-  Sparkles,
-  type LucideIcon,
-} from 'lucide-react';
-import type { CSSProperties } from 'react';
+  Airplane as Plane,
+  Sparks as Sparkles,
+} from 'iconoir-react';
+import type { ComponentType, CSSProperties, SVGProps } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { Diary } from '../types';
 import { motionTransitions } from './ui/motion';
@@ -25,7 +24,9 @@ interface JournalCoverProps {
   showTitle?: boolean;
 }
 
-const EMBLEMS: LucideIcon[] = [
+type CoverIcon = ComponentType<SVGProps<SVGSVGElement>>;
+
+const EMBLEMS: CoverIcon[] = [
   BookHeart,
   Feather,
   Leaf,
@@ -36,9 +37,9 @@ const EMBLEMS: LucideIcon[] = [
   Mountain,
   KeyRound,
 ];
-const FOIL_MARKS: LucideIcon[] = [Sparkles, MoonStar, Flower2, Leaf];
+const FOIL_MARKS: CoverIcon[] = [Sparkles, MoonStar, Flower2, Leaf];
 
-const emblemFor = (diary: JournalCoverProps['diary']): LucideIcon => {
+const emblemFor = (diary: JournalCoverProps['diary']): CoverIcon => {
   const source = `${diary.emoji || ''}${diary.name || ''}`;
   const hash = Array.from(source).reduce(
     (sum, character) => sum + (character.codePointAt(0) || 0),
@@ -118,9 +119,9 @@ export default function JournalCover({
 
         {showTitle && large && (
           <div
-            className={`${foilCount ? '' : 'mt-auto'} border-t border-white/25 pt-3 text-shadow-sm`}
+            className={`${foilCount ? '' : 'mt-auto'} rounded-md border border-white/15 bg-black/65 px-3 py-2.5 shadow-[0_8px_24px_rgba(20,12,16,0.2)] backdrop-blur-sm`}
           >
-            <p className="line-clamp-2 font-serif-diary text-[clamp(1rem,2.4vw,1.35rem)] font-semibold leading-tight tracking-[-0.01em] text-white drop-shadow-md">
+            <p className="line-clamp-2 font-serif-diary text-[clamp(1rem,2.4vw,1.35rem)] font-semibold leading-tight tracking-[-0.01em] text-white">
               {diary.name || 'Untitled journal'}
             </p>
             <span className="mt-2 block h-px w-8 bg-[#f5d99b]/80" />

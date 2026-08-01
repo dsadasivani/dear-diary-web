@@ -1,15 +1,22 @@
 import {
   ArrowLeft,
-  BarChart2,
-  BookOpen,
-  ClipboardList,
+  StatsUpSquare as BarChart2,
+  BookStack as BookPlus,
+  Book as BookOpen,
+  Camera,
+  TaskList as ClipboardList,
   Home,
   Lock,
+  BookLock as LockKeyhole,
+  Microphone as Mic,
+  PageEdit as NotebookPen,
+  EditPencil as PenLine,
   Plus,
   Search,
   Settings,
-} from 'lucide-react';
-import ProfileAvatar from './ProfileAvatar';
+  Notes as StickyNote,
+  User,
+} from 'iconoir-react';
 import type { UserProfile } from '../types';
 import { BottomSheet } from './ui/BottomSheet';
 import { motion, useReducedMotion } from 'motion/react';
@@ -25,7 +32,7 @@ export const isRootDestinationScreen = (activeTab: string, currentScreen: string
 
 const destinations = [
   { id: 'home' as const, label: 'Today', icon: Home, testId: 'nav-home' },
-  { id: 'diaries' as const, label: 'Journals', icon: BookOpen, testId: 'nav-diaries' },
+  { id: 'diaries' as const, label: 'Memories', icon: BookOpen, testId: 'nav-diaries' },
   { id: 'notes' as const, label: 'Notes', icon: ClipboardList, testId: 'nav-notes' },
   { id: 'stats' as const, label: 'Insights', icon: BarChart2, testId: 'nav-stats' },
 ];
@@ -81,12 +88,12 @@ export function MobileBottomNavigation({ active, onNavigate, onCreate }: Navigat
           onCreate();
         }}
         className="app-create-button"
-        aria-label="Create"
+        aria-label="Write"
       >
         <span className="app-create-icon" aria-hidden="true">
-          <Plus className="h-5 w-5" />
+          <PenLine className="h-5 w-5" />
         </span>
-        <span className="app-nav-label">New</span>
+        <span className="app-nav-label">Write</span>
       </button>
       {last.map(renderItem)}
     </nav>
@@ -159,11 +166,21 @@ interface AppHeaderProps {
   onSearch: () => void;
   onProfile: () => void;
   onBack?: () => void;
+  brandOnly?: boolean;
 }
 
-export function AppHeader({ title, profile, onSearch, onProfile, onBack }: AppHeaderProps) {
+export function AppHeader({
+  title,
+  profile,
+  onSearch,
+  onProfile,
+  onBack,
+  brandOnly = false,
+}: AppHeaderProps) {
   return (
-    <header className={`app-header ${onBack ? 'app-header-with-back' : ''}`}>
+    <header
+      className={`app-header ${onBack ? 'app-header-with-back' : ''} ${brandOnly ? 'app-header-brand-only' : ''}`}
+    >
       <div className="app-header-leading">
         {onBack ? (
           <button
@@ -178,11 +195,11 @@ export function AppHeader({ title, profile, onSearch, onProfile, onBack }: AppHe
         <div className="app-header-copy">
           <p className="app-header-eyebrow">
             {!onBack && (
-              <BookOpen className="app-header-eyebrow-icon" strokeWidth={2.1} aria-hidden="true" />
+              <BookOpen className="app-header-eyebrow-icon" aria-hidden="true" />
             )}
             <span>Dear Diary</span>
           </p>
-          <h1 className="app-header-title">{title}</h1>
+          <h1 className={brandOnly ? 'sr-only' : 'app-header-title'}>{title}</h1>
         </div>
       </div>
       <div className="app-header-actions">
@@ -203,9 +220,10 @@ export function AppHeader({ title, profile, onSearch, onProfile, onBack }: AppHe
           onClick={onProfile}
           className="app-header-action app-header-profile"
           aria-label="Open profile and settings"
-          style={{ backgroundColor: profile.avatarColor }}
+          title={`Signed in as ${profile.name}`}
+          style={{ backgroundColor: 'var(--color-secondary)' }}
         >
-          <ProfileAvatar profile={profile} />
+          <User className="h-5 w-5" aria-hidden="true" />
         </button>
       </div>
     </header>
@@ -244,16 +262,17 @@ export function ProfileActionSheet({
       onClose={onClose}
       title={profile.name}
       label="Profile menu"
-      className="md:max-w-sm"
+      className="open-page-profile-sheet md:max-w-sm"
     >
-      <div className="grid gap-1">
+      <div className="open-page-profile-actions">
+        <p className="open-page-profile-note">Your private space on this device.</p>
         <button
           type="button"
           onClick={() => {
             onSettings();
             onClose();
           }}
-          className="flex min-h-12 items-center gap-3 rounded-[var(--radius-control)] px-3 text-sm font-bold hover:bg-surface-subtle"
+          className="open-page-profile-action flex min-h-12 items-center gap-3 rounded-[var(--radius-control)] px-3 text-sm font-bold hover:bg-surface-subtle"
         >
           <Settings className="h-5 w-5" />
           Settings
@@ -265,7 +284,7 @@ export function ProfileActionSheet({
             onLock();
             onClose();
           }}
-          className="flex min-h-12 items-center gap-3 rounded-[var(--radius-control)] px-3 text-sm font-bold hover:bg-surface-subtle"
+          className="open-page-profile-action open-page-profile-lock flex min-h-12 items-center gap-3 rounded-[var(--radius-control)] px-3 text-sm font-bold hover:bg-surface-subtle"
         >
           <Lock className="h-5 w-5" />
           Lock Dear Diary
@@ -288,45 +307,80 @@ export function CreateActionSheet({
   const actions = [
     {
       label: 'New Journal Entry',
+      description: 'Open a full private page',
+      icon: NotebookPen,
       onClick: onNewEntry,
       disabled: !hasJournals,
+      primary: true,
     },
-    { label: 'Quick Note', onClick: onNewNote },
+    {
+      label: 'Quick Note',
+      description: 'Keep a passing thought',
+      icon: StickyNote,
+      onClick: onNewNote,
+    },
     {
       label: 'Voice Reflection',
+      description: 'Capture in your own voice',
+      icon: Mic,
       onClick: onVoice,
       disabled: !hasJournals,
     },
     {
       label: 'Photo Memory',
+      description: 'Add an image-led memory',
+      icon: Camera,
       onClick: onPhoto,
       disabled: !hasJournals,
     },
-    { label: 'New Journal', onClick: onNewJournal },
+    {
+      label: 'New Journal',
+      description: 'Create another private space',
+      icon: BookPlus,
+      onClick: onNewJournal,
+    },
   ];
   return (
-    <BottomSheet open={open} onClose={onClose} title="Create" className="md:max-w-md">
-      <div className="grid gap-1">
-        {actions.map((action) => (
-          <button
-            key={action.label}
-            type="button"
-            disabled={action.disabled}
-            onClick={() => {
-              action.onClick();
-              onClose();
-            }}
-            className="group flex min-h-14 items-center justify-between rounded-[var(--radius-control)] px-3 py-3 text-left transition-colors hover:bg-surface-subtle disabled:opacity-45"
-          >
-            <span>
-              <span className="block text-sm font-bold">{action.label}</span>
-              {action.disabled && (
-                <span className="block text-xs text-ink-secondary">Create a journal first</span>
-              )}
-            </span>
-            <Plus className="h-4 w-4 text-ink-tertiary transition-transform group-hover:rotate-90" />
-          </button>
-        ))}
+    <BottomSheet open={open} onClose={onClose} title="Write" className="md:max-w-md">
+      <div className="open-page-create-sheet">
+        <p className="open-page-create-intro">Choose how this moment wants to be remembered.</p>
+        <div className="open-page-create-actions">
+          {actions.map((action) => {
+            const Icon = action.icon;
+            return (
+              <button
+                key={action.label}
+                type="button"
+                disabled={action.disabled}
+                onClick={() => {
+                  action.onClick();
+                  onClose();
+                }}
+                className={`open-page-create-action ${action.primary ? 'open-page-create-action-primary' : ''}`}
+              >
+                <span className="open-page-create-action-icon" aria-hidden="true">
+                  <Icon className="h-5 w-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-bold text-ink">{action.label}</span>
+                  <span className="mt-0.5 block text-xs text-ink-secondary">
+                    {action.description}
+                  </span>
+                  {action.disabled && (
+                    <span className="mt-1 block text-xs font-semibold text-[var(--color-warning)]">
+                      Create a journal first
+                    </span>
+                  )}
+                </span>
+                <Plus className="h-4 w-4 text-ink-tertiary" aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+        <p className="open-page-create-private">
+          <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />
+          Everything is saved privately on this device first.
+        </p>
       </div>
     </BottomSheet>
   );

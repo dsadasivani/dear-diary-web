@@ -1,5 +1,14 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { IconoirProvider } from 'iconoir-react';
+import '@fontsource/source-serif-4/400.css';
+import '@fontsource/source-serif-4/400-italic.css';
+import '@fontsource/source-serif-4/600.css';
+import '@fontsource/dm-sans/300.css';
+import '@fontsource/dm-sans/400.css';
+import '@fontsource/dm-sans/500.css';
+import '@fontsource/dm-sans/600.css';
+import '@fontsource/dm-sans/700.css';
 import AppBootstrap from './AppBootstrap.tsx';
 import './index.css';
 import { setupCapacitorBootstrap } from './mobile/capacitorBootstrap';
@@ -21,9 +30,11 @@ applyAccentThemePreference(getLocalAccentThemePreference());
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AmbientThemeProvider>
-      <AppBootstrap />
-    </AmbientThemeProvider>
+    <IconoirProvider iconProps={{ strokeWidth: 1.8 }}>
+      <AmbientThemeProvider>
+        <AppBootstrap />
+      </AmbientThemeProvider>
+    </IconoirProvider>
   </StrictMode>,
 );
 

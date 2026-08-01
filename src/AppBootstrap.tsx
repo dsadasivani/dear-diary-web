@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { BookOpen, RefreshCw } from 'lucide-react';
+import { Book as BookOpen, Refresh as RefreshCw } from 'iconoir-react';
 import type { AppSettings, LocalSyncAccountState, SecurityConfig, UserProfile } from './types';
 import { diaryRepository } from './repositories';
 import { hydrateNativeUiPreferences } from './mobile/nativeStorageBridge';

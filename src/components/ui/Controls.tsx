@@ -1,5 +1,5 @@
 import { useId, type KeyboardEvent, type ReactNode } from 'react';
-import { Check } from 'lucide-react';
+import { Check } from 'iconoir-react';
 
 interface SwitchProps {
   checked: boolean;

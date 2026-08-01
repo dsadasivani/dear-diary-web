@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
-import { X } from 'lucide-react';
+import { Xmark as X } from 'iconoir-react';
 import OverlayPortal from '../OverlayPortal';
 
 export interface AppDialogProps {

@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
-  BookOpen,
-  GripVertical,
-  MoreHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
+  Book as BookOpen,
+  Drag as GripVertical,
+  MenuScale as MoreHorizontal,
+  SidebarCollapse as PanelLeftClose,
+  SidebarExpand as PanelLeftOpen,
   Pin,
   Plus,
   Search,
-  Trash2,
-} from 'lucide-react';
+  Trash as Trash2,
+} from 'iconoir-react';
 import type { AppSettings, Diary, Note, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
@@ -269,10 +269,10 @@ export default function NotesScreen({
   // Keep the editor subtree mounted across draft updates so focus and the rich-text caret survive.
   const renderEditor = (fullScreen = false) => (
     <section
-      className={`${fullScreen ? 'fixed inset-0 z-[70] overflow-y-auto bg-brand-bg px-4 pb-8 pt-3 mobile-overlay-safe' : 'surface-paper min-h-[650px] px-7 py-5 xl:px-10'} flex flex-col`}
+      className={`${fullScreen ? 'open-page-note-editor fixed inset-0 z-[70] overflow-y-auto bg-brand-bg px-4 pb-8 pt-3 mobile-overlay-safe' : 'surface-paper min-h-[650px] px-7 py-5 xl:px-10'} flex flex-col`}
       aria-label={editingId ? 'Edit note' : 'New note'}
     >
-      <header className="surface-glass-strong sticky top-0 z-20 -mx-2 flex items-center justify-between gap-3 border-b border-brand-border/60 px-2 py-2">
+      <header className="open-page-note-editor-header surface-glass-strong sticky top-0 z-20 -mx-2 flex items-center justify-between gap-3 border-b border-brand-border/60 px-2 py-2">
         <IconButton label="Close note editor" onClick={closeEditor}>
           <ArrowLeft className="h-5 w-5" />
         </IconButton>
@@ -298,7 +298,7 @@ export default function NotesScreen({
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col py-8">
+      <main className="open-page-note-editor-paper mx-auto flex w-full max-w-2xl flex-1 flex-col py-8">
         <input
           data-testid="note-title-input"
           aria-label="Note title"
@@ -384,8 +384,8 @@ export default function NotesScreen({
 
   const ListPanel = () => (
     <section className="min-w-0" aria-label="Notes list">
-      <div className="mb-4 grid gap-2 border-y border-brand-border/60 py-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <label className="relative">
+      <div className="open-page-notes-controls mb-4 grid gap-2 border-y border-brand-border/60 py-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <label className="open-page-note-search relative">
           <span className="sr-only">Search notes</span>
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
           <input
@@ -402,7 +402,7 @@ export default function NotesScreen({
           id="note-filter"
           value={filter}
           onChange={(event) => setFilter(event.target.value as Filter)}
-          className="min-h-11 rounded-full border border-brand-border bg-brand-card-bg px-3 text-sm font-bold"
+          className="open-page-note-filter min-h-11 rounded-full border border-brand-border bg-brand-card-bg px-3 text-sm font-bold"
         >
           <option value="all">All notes</option>
           <option value="pinned">Pinned</option>
@@ -425,9 +425,13 @@ export default function NotesScreen({
           }
         />
       ) : (
-        <div className="divide-y divide-brand-border/60 border-y border-brand-border/60 overflow-hidden">
+        <div className="open-page-note-list divide-y divide-brand-border/60 border-y border-brand-border/60 overflow-hidden">
           {visible.map((note) => (
-            <article key={note.id} data-testid="note-card" className="relative overflow-hidden">
+            <article
+              key={note.id}
+              data-testid="note-card"
+              className="open-page-note-row relative overflow-hidden"
+            >
               <div className="absolute inset-y-0 right-0 flex w-24 items-center justify-center bg-brand-rose/10">
                 <button
                   type="button"
@@ -439,7 +443,7 @@ export default function NotesScreen({
                 </button>
               </div>
               <div
-                className="relative flex items-start gap-3 bg-brand-bg px-1 py-4 transition-transform duration-200 dark:bg-brand-bg"
+                className="open-page-note-row-content relative flex items-start gap-3 bg-brand-bg px-1 py-4 transition-transform duration-200 dark:bg-brand-bg"
                 style={{ transform: revealedNoteId === note.id ? 'translateX(-6rem)' : undefined }}
                 onTouchStart={(event) => {
                   touchStartX.current = event.touches[0]?.clientX ?? null;
@@ -460,7 +464,7 @@ export default function NotesScreen({
                   className="min-w-0 flex-1 text-left"
                 >
                   <span className="flex items-center gap-2">
-                    <span className="truncate font-serif-diary text-xl font-semibold text-brand-plum dark:text-brand-text">
+                    <span className="open-page-note-title truncate font-serif-diary text-xl font-semibold text-brand-plum dark:text-brand-text">
                       {note.title}
                     </span>
                     {note.isPinned && (
@@ -471,12 +475,12 @@ export default function NotesScreen({
                     )}
                   </span>
                   <span
-                    className={`mt-1 block text-sm leading-relaxed text-brand-text-muted ${layout === 'mobile' ? 'line-clamp-1' : 'line-clamp-2'}`}
+                    className={`open-page-note-excerpt mt-1 block text-sm leading-relaxed text-brand-text-muted ${layout === 'mobile' ? 'line-clamp-1' : 'line-clamp-2'}`}
                   >
                     {richTextHtmlToPlainText(note.body) || 'Empty note'}
                   </span>
                   <span
-                    className={`mt-2 text-xs text-brand-text-muted ${layout === 'mobile' && !note.tags.length ? 'hidden' : 'block'}`}
+                    className={`open-page-note-meta mt-2 text-xs text-brand-text-muted ${layout === 'mobile' && !note.tags.length ? 'hidden' : 'block'}`}
                   >
                     {layout !== 'mobile' && new Date(note.updatedAt).toLocaleDateString()}
                     {note.tags.length
@@ -502,17 +506,31 @@ export default function NotesScreen({
   );
 
   return (
-    <div className="space-y-6 pb-20">
-      <header className="flex items-end justify-between gap-4">
+    <div className={`${layout === 'mobile' ? 'open-page-notes' : ''} space-y-6 pb-20`}>
+      <header className="open-page-notes-intro flex items-end justify-between gap-4">
+        {layout === 'mobile' && (
+          <div className="min-w-0">
+            <p className="open-page-eyebrow">Quick capture</p>
+            <h1>Notes</h1>
+            <p className="open-page-notes-summary">
+              {notes.length} {notes.length === 1 ? 'note' : 'notes'} · Thoughts kept close
+            </p>
+          </div>
+        )}
         {layout !== 'mobile' && (
           <div>
             <h1 className="type-page-title font-bold">Notes</h1>
             <p className="mt-1 text-sm text-brand-text-muted">Lightweight thoughts, kept close.</p>
           </div>
         )}
-        <AppButton tone="primary" data-testid="new-note-button" onClick={openCreator}>
+        <AppButton
+          tone="primary"
+          data-testid="new-note-button"
+          aria-label="New Note"
+          onClick={openCreator}
+        >
           <Plus className="h-4 w-4" />
-          New Note
+          {layout === 'mobile' ? 'New' : 'New Note'}
         </AppButton>
       </header>
       {error && (

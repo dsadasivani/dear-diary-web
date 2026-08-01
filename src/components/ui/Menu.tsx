@@ -6,7 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
-import { MoreHorizontal } from 'lucide-react';
+import { MenuScale as MoreHorizontal } from 'iconoir-react';
 
 interface ContextMenuProps {
   open: boolean;

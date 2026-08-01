@@ -7,7 +7,7 @@ describe('EntrySaveStatus', () => {
     const view = render(
       <EntrySaveStatus state="saved" lastSavedAt={new Date(2026, 0, 1, 9, 30)} />,
     );
-    expect(screen.getByRole('status')).toHaveTextContent(/Saved locally at/);
+    expect(screen.getByRole('status')).toHaveTextContent(/Saved privately at/);
     view.rerender(<EntrySaveStatus state="offline-pending" />);
     await waitFor(() =>
       expect(screen.getByRole('status')).toHaveTextContent(/sync waits for connection/),

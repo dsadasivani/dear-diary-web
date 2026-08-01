@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Check, Clipboard, Cloud, LoaderCircle, ShieldCheck } from 'lucide-react';
+import {
+  Book as BookOpen,
+  Check,
+  Copy as Clipboard,
+  Cloud,
+  RefreshDouble as LoaderCircle,
+  ShieldCheck,
+} from 'iconoir-react';
 import { diaryRepository } from '../repositories';
 import type { LocalSyncAccountState } from '../types';
 import {

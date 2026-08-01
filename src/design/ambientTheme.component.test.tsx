@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { deriveAmbientTheme, getAmbientTime } from './ambientTheme';
 
-describe('Living Memories ambient theme', () => {
+describe('Night Archive ambient theme', () => {
   it('uses controlled, contrast-safe palettes for mood and time inputs', () => {
     expect(deriveAmbientTheme({ mode: 'light', time: 'dawn', mood: 'joyful' })).toMatchObject({
-      primary: '#D93F6B',
-      heroStart: '#FFF0F4',
+      primary: '#8C617E',
+      heroStart: '#F0E4EB',
     });
     expect(deriveAmbientTheme({ mode: 'dark', time: 'night', mood: 'calm' })).toMatchObject({
-      primary: '#49D7C7',
-      heroStart: '#171A2B',
+      primary: '#C98562',
+      heroStart: '#181D27',
     });
   });
 

@@ -76,6 +76,8 @@
     "@capacitor/status-bar": "^8.0.2",
     "@capawesome/capacitor-google-sign-in": "^0.1.2",
     "@capgo/capacitor-native-biometric": "^8.4.12",
+    "@fontsource/dm-sans": "^5.3.0",
+    "@fontsource/source-serif-4": "^5.3.0",
     "@independo/capacitor-voice-recorder": "^8.3.3",
     "@supabase/supabase-js": "^2.110.0",
     "crypto-js": "^4.2.0",
@@ -83,7 +85,7 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "fflate": "^0.8.3",
-    "lucide-react": "^0.546.0",
+    "iconoir-react": "^7.11.1",
     "motion": "^12.23.24",
     "react": "^19.0.1",
     "react-dom": "^19.0.1"

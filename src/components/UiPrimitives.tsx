@@ -1,5 +1,5 @@
 import React, { type ReactNode } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { NavArrowRight as ChevronRight } from 'iconoir-react';
 
 type ButtonTone = 'primary' | 'secondary' | 'danger' | 'quiet';
 
@@ -35,7 +35,7 @@ export function AppButton({
     <button
       {...props}
       type={type}
-      className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-control)] border px-4 py-2.5 text-sm font-bold transition-[background-color,border-color,color,transform] duration-200 active:scale-[0.985] disabled:scale-100 disabled:opacity-45 ${toneClass} ${className}`}
+      className={`app-button inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-control)] border px-4 py-2.5 text-sm font-bold transition-[background-color,border-color,color,transform] duration-200 active:scale-[0.985] disabled:scale-100 disabled:opacity-45 ${toneClass} ${className}`}
     />
   );
 }

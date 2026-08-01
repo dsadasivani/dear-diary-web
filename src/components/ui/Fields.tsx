@@ -1,5 +1,5 @@
 import type { InputHTMLAttributes, ReactNode } from 'react';
-import { Search, X } from 'lucide-react';
+import { Search, Xmark as X } from 'iconoir-react';
 
 interface SearchFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> {
   label?: string;

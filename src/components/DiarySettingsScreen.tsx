@@ -1,5 +1,12 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ImagePlus, Lock, RotateCcw, Save, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  MediaImage as ImagePlus,
+  Lock,
+  Refresh as RotateCcw,
+  FloppyDisk as Save,
+  Trash as Trash2,
+} from 'iconoir-react';
 import type { Diary, Entry, ResponsiveLayout, SecurityConfig } from '../types';
 import { PREDEFINED_COLORS } from '../domain/journalCatalog';
 import { verifyPin } from '../domain/security';

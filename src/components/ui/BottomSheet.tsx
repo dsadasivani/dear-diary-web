@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { X } from 'lucide-react';
+import { Xmark as X } from 'iconoir-react';
 import OverlayPortal from '../OverlayPortal';
 import { motionTransitions, reducedMotionVariants, sheetVariants } from './motion';
 
