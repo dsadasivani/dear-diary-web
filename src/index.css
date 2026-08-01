@@ -12,7 +12,7 @@
   --color-surface-strong: #e4ddd1;
   --color-text-primary: #202631;
   --color-text-secondary: #626875;
-  --color-text-tertiary: #858a93;
+  --color-text-tertiary: #686d77;
   --color-text-inverse: #ffffff;
   --color-primary: #2e6b62;
   --color-primary-hover: #24574f;
@@ -3106,7 +3106,65 @@ button:disabled {
 }
 
 @media (max-width: 767px) {
+  @keyframes open-page-lock-clock-glow {
+    0%,
+    100% {
+      opacity: var(--lock-clock-glow-rest, 0.2);
+      transform: scale(0.92);
+    }
+    50% {
+      opacity: var(--lock-clock-glow-peak, 0.46);
+      transform: scale(1.06);
+    }
+  }
+
+  @keyframes open-page-lock-clock-breathe {
+    0%,
+    100% {
+      transform: scale(1);
+      text-shadow:
+        0 0 8px
+          color-mix(
+            in srgb,
+            var(--lock-clock-glow-primary) var(--lock-clock-shadow-rest-primary),
+            transparent
+          ),
+        0 8px 44px color-mix(in srgb, #000 var(--lock-clock-shadow-rest-dark), transparent);
+    }
+    50% {
+      transform: scale(1.012);
+      text-shadow:
+        0 0 18px
+          color-mix(
+            in srgb,
+            var(--lock-clock-glow-primary) var(--lock-clock-shadow-peak-primary),
+            transparent
+          ),
+        0 0 42px
+          color-mix(
+            in srgb,
+            var(--lock-clock-glow-secondary) var(--lock-clock-shadow-peak-secondary),
+            transparent
+          ),
+        0 8px 44px color-mix(in srgb, #000 var(--lock-clock-shadow-peak-dark), transparent);
+    }
+  }
+
   .open-page-lock.lock-atmosphere {
+    background-image:
+      radial-gradient(
+        circle at 50% 40%,
+        color-mix(in srgb, #b97891 3%, transparent) 0,
+        transparent 34%
+      ),
+      radial-gradient(
+        circle at 50% 52%,
+        color-mix(in srgb, #c79a43 2%, transparent) 0,
+        transparent 45%
+      );
+  }
+
+  .dark .open-page-lock.lock-atmosphere {
     background-image:
       radial-gradient(
         circle at 50% 40%,
@@ -3125,9 +3183,48 @@ button:disabled {
   }
 
   .open-page-lock-ambient > .open-page-lock-clock-stage {
+    --lock-clock-glow-primary: #c79a43;
+    --lock-clock-glow-secondary: #b97891;
+    --lock-clock-glow-rest: 0.1;
+    --lock-clock-glow-peak: 0.3;
+    --lock-clock-glow-primary-mix: 18%;
+    --lock-clock-glow-secondary-mix: 10%;
+    --lock-clock-glow-inset-inline: 14%;
+    --lock-clock-glow-inset-start: -12%;
+    --lock-clock-glow-inset-end: -16%;
+    --lock-clock-glow-blur: 12px;
+    --lock-clock-shadow-rest-primary: 7%;
+    --lock-clock-shadow-peak-primary: 21%;
+    --lock-clock-shadow-peak-secondary: 9%;
+    --lock-clock-shadow-rest-dark: 7%;
+    --lock-clock-shadow-peak-dark: 9%;
+    isolation: isolate;
     position: relative;
     padding: 1rem 0.5rem 0.65rem !important;
     border: 0 !important;
+  }
+
+  .dark .open-page-lock-ambient > .open-page-lock-clock-stage {
+    --lock-clock-glow-primary: var(--color-primary);
+    --lock-clock-glow-secondary: var(--color-secondary);
+    --lock-clock-glow-rest: 0.28;
+    --lock-clock-glow-peak: 0.58;
+    --lock-clock-glow-primary-mix: 24%;
+    --lock-clock-glow-secondary-mix: 17%;
+    --lock-clock-glow-inset-inline: 8%;
+    --lock-clock-glow-inset-start: -24%;
+    --lock-clock-glow-inset-end: -28%;
+    --lock-clock-glow-blur: 18px;
+    --lock-clock-shadow-rest-primary: 8%;
+    --lock-clock-shadow-peak-primary: 28%;
+    --lock-clock-shadow-peak-secondary: 17%;
+    --lock-clock-shadow-rest-dark: 12%;
+    --lock-clock-shadow-peak-dark: 14%;
+  }
+
+  .open-page-lock-ambient > .open-page-lock-clock-stage > * {
+    position: relative;
+    z-index: 1;
   }
 
   .open-page-lock-clock-topline,
@@ -3160,6 +3257,7 @@ button:disabled {
   }
 
   .open-page-lock-clock-time {
+    animation: open-page-lock-clock-breathe 5.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
     display: flex;
     align-items: baseline;
     justify-content: center;
@@ -3171,7 +3269,52 @@ button:disabled {
     letter-spacing: -0.06em;
     line-height: 0.94;
     font-variant-numeric: tabular-nums;
-    text-shadow: 0 8px 44px color-mix(in srgb, #000 14%, transparent);
+    text-shadow:
+      0 0 8px
+        color-mix(
+          in srgb,
+          var(--lock-clock-glow-primary) var(--lock-clock-shadow-rest-primary),
+          transparent
+        ),
+      0 8px 44px color-mix(in srgb, #000 var(--lock-clock-shadow-rest-dark), transparent);
+    transform-origin: center;
+    will-change: transform, text-shadow;
+  }
+
+  .open-page-lock-clock-time::before {
+    position: absolute;
+    z-index: -1;
+    top: var(--lock-clock-glow-inset-start);
+    right: var(--lock-clock-glow-inset-inline);
+    bottom: var(--lock-clock-glow-inset-end);
+    left: var(--lock-clock-glow-inset-inline);
+    border-radius: 50%;
+    animation: open-page-lock-clock-glow 5.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    background:
+      radial-gradient(
+        ellipse at 40% 50%,
+        color-mix(
+            in srgb,
+            var(--lock-clock-glow-primary) var(--lock-clock-glow-primary-mix),
+            transparent
+          )
+          0,
+        transparent 56%
+      ),
+      radial-gradient(
+        ellipse at 62% 50%,
+        color-mix(
+            in srgb,
+            var(--lock-clock-glow-secondary) var(--lock-clock-glow-secondary-mix),
+            transparent
+          )
+          0,
+        transparent 58%
+      );
+    content: '';
+    filter: blur(var(--lock-clock-glow-blur));
+    pointer-events: none;
+    will-change: opacity, transform;
   }
 
   .open-page-lock-clock-colon {

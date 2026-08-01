@@ -119,9 +119,9 @@ export default function JournalCover({
 
         {showTitle && large && (
           <div
-            className={`${foilCount ? '' : 'mt-auto'} border-t border-white/25 pt-3 text-shadow-sm`}
+            className={`${foilCount ? '' : 'mt-auto'} rounded-md border border-white/15 bg-black/65 px-3 py-2.5 shadow-[0_8px_24px_rgba(20,12,16,0.2)] backdrop-blur-sm`}
           >
-            <p className="line-clamp-2 font-serif-diary text-[clamp(1rem,2.4vw,1.35rem)] font-semibold leading-tight tracking-[-0.01em] text-white drop-shadow-md">
+            <p className="line-clamp-2 font-serif-diary text-[clamp(1rem,2.4vw,1.35rem)] font-semibold leading-tight tracking-[-0.01em] text-white">
               {diary.name || 'Untitled journal'}
             </p>
             <span className="mt-2 block h-px w-8 bg-[#f5d99b]/80" />

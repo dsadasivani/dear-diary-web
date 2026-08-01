@@ -263,7 +263,7 @@ test('local app creates, edits, and deletes a diary entry through the UI', async
   await expect(
     page
       .getByRole('status')
-      .filter({ hasText: /saved locally|saved at/i })
+      .filter({ hasText: /saved (?:locally|privately)(?: at)?/i })
       .first(),
   ).toBeVisible({ timeout: 10_000 });
   await page
