@@ -10,14 +10,15 @@ import {
 import {
   ArrowLeft,
   Check,
-  ImagePlus,
-  LayoutGrid,
+  NavArrowRight as ChevronRight,
+  MediaImage as ImagePlus,
+  ViewGrid as LayoutGrid,
   List,
   Lock,
   Plus,
-  SlidersHorizontal,
-  Trash2,
-} from 'lucide-react';
+  FilterList as SlidersHorizontal,
+  Trash as Trash2,
+} from 'iconoir-react';
 import type { Diary, ResponsiveLayout } from '../types';
 import { PREDEFINED_COLORS } from '../domain/journalCatalog';
 import { persistNativeLocalStorageItem } from '../mobile/nativeStorageBridge';
@@ -443,32 +444,215 @@ export default function DiariesScreen({
           <option value="created">Newest created</option>
         </select>
       </label>
-      <fieldset className="mt-5">
-        <legend className="text-sm font-bold">View</legend>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <AppButton
-            onClick={() => setMode('gallery')}
-            tone={viewMode === 'gallery' ? 'primary' : 'secondary'}
-          >
-            <LayoutGrid className="h-4 w-4" />
-            Gallery
-          </AppButton>
-          <AppButton
-            onClick={() => setMode('list')}
-            tone={viewMode === 'list' ? 'primary' : 'secondary'}
-          >
-            <List className="h-4 w-4" />
-            List
-          </AppButton>
-        </div>
-      </fieldset>
+      {layout === 'mobile' ? (
+        <fieldset className="mt-5">
+          <legend className="text-sm font-bold">Show journals</legend>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {(['all', 'locked', 'unlocked', 'empty'] as DiaryFilter[]).map((filter) => (
+              <FilterChip
+                key={filter}
+                selected={filterBy === filter}
+                onClick={() => setFilterBy(filter)}
+              >
+                {filter === 'all' ? 'All' : filter[0].toUpperCase() + filter.slice(1)}
+              </FilterChip>
+            ))}
+          </div>
+        </fieldset>
+      ) : (
+        <fieldset className="mt-5">
+          <legend className="text-sm font-bold">View</legend>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <AppButton
+              onClick={() => setMode('gallery')}
+              tone={viewMode === 'gallery' ? 'primary' : 'secondary'}
+            >
+              <LayoutGrid className="h-4 w-4" />
+              Gallery
+            </AppButton>
+            <AppButton
+              onClick={() => setMode('list')}
+              tone={viewMode === 'list' ? 'primary' : 'secondary'}
+            >
+              <List className="h-4 w-4" />
+              List
+            </AppButton>
+          </div>
+        </fieldset>
+      )}
     </>
   );
+
+  if (layout === 'mobile') {
+    return (
+      <div className="open-page-library" data-testid="open-page-library">
+        <header className="open-page-library-intro">
+          <div>
+            <p className="open-page-library-eyebrow">Private memory library</p>
+            <h1>Memories</h1>
+            <p className="open-page-library-summary">
+              {diaries.length} journals · {totalEntries} entries
+              {latest ? ` · Updated ${latest.lastUpdated}` : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="open-page-library-create"
+            onClick={() => setCreating(true)}
+            aria-label="New Journal"
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            New
+          </button>
+        </header>
+
+        <section aria-label="Journal search and filters" className="open-page-library-search">
+          <SearchField
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onClear={() => setQuery('')}
+            placeholder="Search your journals"
+            label="Search journals"
+          />
+          <button
+            type="button"
+            className="open-page-library-filter"
+            onClick={() => setShowLibraryControls(true)}
+          >
+            <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+            Filter
+          </button>
+        </section>
+
+        <section aria-label="Journal gallery" className="open-page-library-list">
+          <div className="open-page-library-heading">
+            <h2>{query || filterBy !== 'all' ? 'Matching journals' : 'Your journals'}</h2>
+            <div className="open-page-library-heading-actions">
+              <span>
+                {visible.length} {visible.length === 1 ? 'space' : 'spaces'}
+              </span>
+              <div className="open-page-library-view-switch" aria-label="Journal view">
+                <button
+                  type="button"
+                  aria-label="Gallery view"
+                  aria-pressed={viewMode === 'gallery'}
+                  onClick={() => setMode('gallery')}
+                >
+                  <LayoutGrid className="h-4 w-4" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="List view"
+                  aria-pressed={viewMode === 'list'}
+                  onClick={() => setMode('list')}
+                >
+                  <List className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {visible.length === 0 ? (
+            <div className="open-page-library-empty">
+              <p>No journals match this view.</p>
+              <button type="button" onClick={() => setFilterBy('all')}>
+                Show every journal
+              </button>
+            </div>
+          ) : viewMode === 'list' ? (
+            <div className="open-page-library-rows">
+              {visible.map((diary) => (
+                <button
+                  key={diary.id}
+                  type="button"
+                  data-testid="diary-card"
+                  onClick={() => {
+                    void triggerImpact('light');
+                    onNavigate('diaries', 'diaryDetail', diary.id);
+                  }}
+                  className="open-page-journal-row"
+                >
+                  <JournalCover
+                    diary={diary}
+                    variant="thumbnail"
+                    showTitle={false}
+                    className="open-page-journal-cover"
+                  />
+                  <span className="open-page-journal-copy">
+                    <span className="open-page-journal-title">{diary.name}</span>
+                    <span className="open-page-journal-meta">
+                      {diary.entryCount} {diary.entryCount === 1 ? 'entry' : 'entries'} ·{' '}
+                      {diary.lastUpdated}
+                    </span>
+                    {diary.isLocked && (
+                      <span className="open-page-journal-private">
+                        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                        PIN protected
+                      </span>
+                    )}
+                  </span>
+                  <ChevronRight className="h-5 w-5 text-ink-tertiary" aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="open-page-library-grid">
+              {visible.map((diary) => (
+                <button
+                  key={diary.id}
+                  type="button"
+                  data-testid="diary-card"
+                  onClick={() => {
+                    void triggerImpact('light');
+                    onNavigate('diaries', 'diaryDetail', diary.id);
+                  }}
+                  className="open-page-journal-card"
+                >
+                  <JournalCover
+                    diary={diary}
+                    variant="full"
+                    showTitle={false}
+                    className="open-page-journal-card-cover"
+                  />
+                  <span className="open-page-journal-card-copy">
+                    <span className="open-page-journal-title">{diary.name}</span>
+                    <span className="open-page-journal-meta">
+                      {diary.entryCount} {diary.entryCount === 1 ? 'entry' : 'entries'} ·{' '}
+                      {diary.lastUpdated}
+                    </span>
+                    {diary.isLocked && (
+                      <span className="open-page-journal-private">
+                        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                        PIN protected
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <BottomSheet
+          open={showLibraryControls}
+          title="Filter memories"
+          onClose={() => setShowLibraryControls(false)}
+          footer={
+            <AppButton tone="primary" onClick={() => setShowLibraryControls(false)}>
+              Done
+            </AppButton>
+          }
+        >
+          {libraryControls}
+        </BottomSheet>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-7 pb-4">
       <header className="flex flex-wrap items-end justify-between gap-4">
-        {layout !== 'mobile' && (
+        <>
           <div>
             <h1 className="type-page-title">Your journals</h1>
             <p className="type-supporting mt-2">
@@ -476,7 +660,7 @@ export default function DiariesScreen({
               {latest ? ` · Updated ${latest.lastUpdated}` : ''}
             </p>
           </div>
-        )}
+        </>
         <AppButton tone="primary" onClick={() => setCreating(true)}>
           <Plus className="h-4 w-4" />
           New Journal
@@ -630,7 +814,7 @@ export default function DiariesScreen({
                     </span>
                     <span className="type-metadata mt-0.5 block">
                       {diary.entryCount} entries
-                      {layout !== 'mobile' && ` · ${diary.lastUpdated}`}
+                      {` · ${diary.lastUpdated}`}
                     </span>
                   </span>
                   {diary.isLocked && (

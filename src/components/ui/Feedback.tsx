@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Check, LoaderCircle } from 'lucide-react';
+import { Check, RefreshDouble as LoaderCircle } from 'iconoir-react';
 
 type FeedbackTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 

@@ -3,33 +3,33 @@ import { Capacitor } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft,
-  Trash2,
+  Trash as Trash2,
   Calendar,
-  Tag,
+  Label as Tag,
   Camera,
   Plus,
-  X,
+  Xmark as X,
   Bold,
   Italic,
   Underline,
   List,
   Strikethrough,
-  Maximize2,
-  Minimize2,
+  Enlarge as Maximize2,
+  Reduce as Minimize2,
   Type,
-  Heading2,
+  TextSize as Heading2,
   Quote,
-  ChevronUp,
-  ChevronDown,
-  Mic,
-  MicOff,
+  NavArrowUp as ChevronUp,
+  NavArrowDown as ChevronDown,
+  Microphone as Mic,
+  MicrophoneMute as MicOff,
   Pause,
   Play,
   Square,
-  Sparkles,
+  Sparks as Sparkles,
   Clock,
   Edit,
-} from 'lucide-react';
+} from 'iconoir-react';
 import { AppSettings, Diary, Entry, EntryBlock, ResponsiveLayout } from '../types';
 import RichTextEditor from './RichTextEditor';
 import AudioWaveformPlayer from './AudioWaveformPlayer';
@@ -138,7 +138,7 @@ export default function EntryEditorScreen({
   const [isEditorReady, setIsEditorReady] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
-  const [showEntryDetails, setShowEntryDetails] = useState(Boolean(showDiarySelector));
+  const [showEntryDetails, setShowEntryDetails] = useState(false);
   const [showAddTools, setShowAddTools] = useState(false);
   const [showFormattingTools, setShowFormattingTools] = useState(false);
   const baselineFingerprintRef = useRef<string | null>(null);
@@ -3198,7 +3198,7 @@ export default function EntryEditorScreen({
   }
 
   return (
-    <div className="relative flex flex-col gap-5 pb-32 font-sans">
+    <div className="open-page-editor relative flex flex-col gap-3 pb-32 font-sans">
       <input
         type="file"
         ref={fileInputRef}
@@ -3209,11 +3209,11 @@ export default function EntryEditorScreen({
         aria-label="Choose entry photos"
       />
       {/* Top Header */}
-      <header className="surface-glass-strong sticky top-0 z-30 flex items-center justify-between border-b border-brand-border/60 py-3">
+      <header className="open-page-editor-header sticky top-0 z-30 flex items-center justify-between py-2.5">
         <button
           onClick={handleRequestBack}
           aria-label="Close editor"
-          className="p-2 text-brand-plum hover:bg-brand-blush-light rounded-full transition-all active:scale-90"
+          className="open-page-editor-back rounded-full p-2 text-brand-plum transition-all active:scale-90"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -3222,7 +3222,7 @@ export default function EntryEditorScreen({
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className="bg-brand-sage hover:bg-brand-sage-dark text-white px-5 py-2 rounded-full text-xs font-bold transition-all active:scale-95 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+            className="open-page-editor-done rounded-full bg-brand-sage px-4 py-2 text-xs font-bold text-white transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSaving ? 'Saving...' : 'Done'}
           </button>
@@ -3230,12 +3230,12 @@ export default function EntryEditorScreen({
       </header>
 
       {/* Unified Writing Canvas */}
-      <main className="surface-paper flex flex-grow flex-col gap-4 rounded-[var(--radius-sheet)] border-x border-brand-border/60 px-4 py-5 md:px-5">
+      <main className="open-page-editor-canvas flex flex-grow flex-col gap-4 px-4 py-4 md:px-5">
         <button
           type="button"
           aria-expanded={showEntryDetails}
           onClick={() => setShowEntryDetails((previous) => !previous)}
-          className="flex w-full items-center justify-between border-y border-brand-border/60 px-1 py-2.5 text-left text-xs font-bold text-brand-sage"
+          className="open-page-editor-details flex w-full items-center justify-between px-1 py-2.5 text-left text-xs font-bold text-brand-sage"
         >
           <span>Entry details</span>
           {showEntryDetails ? (
@@ -3285,39 +3285,31 @@ export default function EntryEditorScreen({
             )}
 
             {/* Modern Inline Metadata Ribbon */}
-            <div className="flex flex-wrap items-center gap-2 text-xs text-brand-sage/80 border-b border-brand-border/20 pb-2 mb-1 select-none">
+            <div className="open-page-editor-meta select-none">
               {/* Inline Date Field */}
-              <div className="flex items-center gap-1 hover:text-brand-pink transition-colors cursor-pointer">
-                <Calendar className="w-3.5 h-3.5 text-brand-pink" />
+              <div className="open-page-editor-meta-field open-page-editor-meta-date">
                 <input
                   type="date"
                   aria-label="Entry date"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
-                  className="bg-transparent border-none text-brand-plum font-serif-diary font-bold py-0 p-0 focus:outline-none focus:ring-0 cursor-pointer w-[105px]"
+                  className="open-page-editor-meta-input"
                 />
               </div>
 
-              <span className="text-brand-border/60">•</span>
-
               {/* Inline Time Field */}
-              <div className="flex items-center gap-1 hover:text-brand-pink transition-colors cursor-pointer">
-                <Clock className="w-3.5 h-3.5 text-brand-pink" />
+              <div className="open-page-editor-meta-field open-page-editor-meta-time">
                 <input
                   type="time"
                   aria-label="Entry time"
                   value={time}
                   onChange={(e) => setTime(e.target.value)}
-                  className="bg-transparent border-none text-brand-plum font-serif-diary font-bold py-0 p-0 focus:outline-none focus:ring-0 cursor-pointer w-[65px]"
+                  className="open-page-editor-meta-input"
                 />
               </div>
 
-              <span className="text-brand-border/60">•</span>
-
               {/* Word Count */}
-              <div className="text-xs font-semibold text-brand-sage/80 bg-brand-rose-light/40 dark:bg-brand-rose-light/10 px-2 py-0.5 rounded-md border border-brand-border/20">
-                {liveWordCount} words
-              </div>
+              <div className="open-page-editor-word-count">{liveWordCount} words</div>
             </div>
           </>
         )}
@@ -3330,7 +3322,7 @@ export default function EntryEditorScreen({
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Title your entry..."
-            className={`w-full border-none border-b border-brand-border/25 bg-transparent p-0 pb-2 font-bold text-brand-plum outline-none transition-colors placeholder:text-brand-sage/35 focus:border-brand-pink/40 focus:ring-0 text-2xl md:text-3xl ${
+            className={`open-page-editor-title w-full border-none bg-transparent p-0 pb-2 font-bold text-brand-plum outline-none transition-colors placeholder:text-brand-sage/35 focus:ring-0 text-2xl md:text-3xl ${
               fontFamily === 'serif'
                 ? 'font-serif-diary'
                 : fontFamily === 'sans'
@@ -3342,7 +3334,7 @@ export default function EntryEditorScreen({
 
         {/* Cohesive Inline Mood & Tags Row */}
         {showEntryDetails && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-brand-border/20 pb-2.5 mb-1.5">
+          <div className="open-page-editor-taxonomy">
             {/* Active Mood Button with overlay dropdown */}
             <div className="relative">
               <select
@@ -3360,10 +3352,7 @@ export default function EntryEditorScreen({
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-brand-border bg-white dark:bg-brand-card-bg text-brand-plum text-xs font-semibold hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 transition-all shadow-sm"
-              >
+              <button type="button" className="open-page-editor-mood-chip">
                 <span>{mood.emoji}</span>
                 <span>Feeling {mood.name}</span>
                 <ChevronDown className="w-3 h-3 text-brand-sage/80" />
@@ -3375,15 +3364,12 @@ export default function EntryEditorScreen({
             {/* Active Tags list */}
             <div className="flex flex-wrap items-center gap-1.5">
               {selectedTags.map((tag) => (
-                <span
-                  key={tag}
-                  className="text-xs font-semibold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded-full border border-brand-pink/15 flex items-center gap-1"
-                >
+                <span key={tag} className="open-page-editor-tag-chip">
                   #{tag}
                   <button
                     type="button"
                     onClick={() => handleTagToggle(tag)}
-                    className="hover:text-red-500 font-extrabold ml-1 leading-none text-xs text-brand-pink/60 hover:text-brand-rose transition-colors"
+                    className="open-page-editor-tag-remove"
                     title="Remove tag"
                   >
                     ×
@@ -3393,7 +3379,7 @@ export default function EntryEditorScreen({
               <button
                 type="button"
                 onClick={() => setShowTagPicker(true)}
-                className="flex items-center gap-1 text-xs font-bold text-brand-sage hover:text-brand-pink px-2 py-0.5 rounded-full border border-dashed border-brand-border/60 bg-transparent hover:border-brand-pink/40 transition-all cursor-pointer"
+                className="open-page-editor-tag-add"
               >
                 <Plus className="w-2.5 h-2.5 text-brand-pink" />
                 <span>Tag</span>
@@ -3405,7 +3391,7 @@ export default function EntryEditorScreen({
         {/* Content Canvas (Timelines, text body inputs) */}
         <div className="flex flex-col gap-2.5 flex-grow mt-1">
           {/* A single disclosure point keeps the default canvas quiet. */}
-          <div className="flex items-center justify-between border-y border-brand-border/50 py-2 text-brand-sage select-none">
+          <div className="open-page-editor-tools flex items-center justify-between py-1 text-brand-sage select-none">
             <button
               type="button"
               onClick={() =>
@@ -3448,9 +3434,9 @@ export default function EntryEditorScreen({
                         {/* Timeline point */}
                         <div className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-brand-bg border-2 border-brand-pink group-hover:scale-110 transition-transform" />
 
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 overflow-hidden">
-                            <span className="font-mono text-xs font-bold text-brand-pink bg-brand-pink/5 px-2 py-0.5 rounded flex items-center gap-1 border border-brand-pink/10 shadow-sm">
+                        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+                          <div className="flex min-w-0 flex-col items-start gap-2">
+                            <span className="font-mono text-xs font-bold text-brand-pink bg-brand-pink/5 px-2 py-1 rounded flex items-center gap-1 border border-brand-pink/10 shadow-sm">
                               <Clock className="w-3.5 h-3.5" />
                               Moment {index + 1}
                             </span>
@@ -3463,10 +3449,10 @@ export default function EntryEditorScreen({
                                 updated[index].time = e.target.value;
                                 setBlocks(updated);
                               }}
-                              className="w-28 min-w-28 text-xs font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink p-0 transition-colors cursor-pointer"
+                              className="w-24 min-w-0 text-sm font-mono bg-transparent text-brand-plum border-b border-dashed border-brand-pink/20 focus:outline-none focus:border-brand-pink py-1 transition-colors cursor-pointer"
                             />
                           </div>
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 pt-0.5">
                             <button
                               type="button"
                               onClick={() => {
@@ -3543,9 +3529,9 @@ export default function EntryEditorScreen({
 
             {/* New Moment drafting area */}
             <div
-              className={`flex flex-col gap-2.5 flex-grow ${blocks.length > 0 ? 'border-t border-brand-pink/10 pt-3' : ''}`}
+              className={`open-page-editor-moment flex flex-grow flex-col gap-2.5 ${blocks.length > 0 ? 'border-t border-brand-pink/10 pt-3' : ''}`}
             >
-              <div className="flex items-center justify-between bg-brand-pink/5 px-2.5 py-1 rounded-xl border border-brand-pink/15">
+              <div className="open-page-editor-moment-meta flex items-center justify-between px-1 py-1">
                 <div className="flex items-center gap-1.5 select-none overflow-hidden w-full">
                   <Clock className="w-3.5 h-3.5 text-brand-pink flex-shrink-0" />
                   <span className="text-xs font-bold text-brand-pink uppercase tracking-wider truncate">
@@ -3569,7 +3555,7 @@ export default function EntryEditorScreen({
                 onFocus={() => setActiveBlockId(null)}
                 placeholder="Write a moment…"
                 testId="entry-body-editor"
-                className={`rich-text-editor min-h-[260px] w-full text-lg leading-[1.75] text-brand-plum focus:outline-none focus:ring-0 ${
+                className={`open-page-entry-body rich-text-editor min-h-[320px] w-full text-lg leading-[1.75] text-brand-plum focus:outline-none focus:ring-0 ${
                   fontFamily === 'serif'
                     ? 'font-serif-diary'
                     : fontFamily === 'sans'

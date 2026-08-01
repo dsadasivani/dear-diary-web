@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Flame,
-  BookOpen,
+  FireFlame as Flame,
+  Book as BookOpen,
   Camera,
   Settings,
   ArrowRight,
-  Sparkles,
-  X,
-  ChevronDown,
-} from 'lucide-react';
+  Sparks as Sparkles,
+  Xmark as X,
+  NavArrowDown as ChevronDown,
+} from 'iconoir-react';
 import { Diary, Entry, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { calculateStreak } from '../domain/journalCatalog';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
@@ -402,9 +402,15 @@ export default function StatsScreen({
   };
 
   return (
-    <div className="space-y-8 pb-24">
-      <header className="surface-glass-strong sticky top-0 z-30 -mx-2 flex items-center justify-between border-b border-brand-border/60 px-2 py-3">
-        {layout !== 'mobile' && (
+    <div className={`${layout === 'mobile' ? 'open-page-insights' : ''} space-y-8 pb-24`}>
+      <header className="open-page-insights-intro surface-glass-strong sticky top-0 z-30 -mx-2 flex items-center justify-between border-b border-brand-border/60 px-2 py-3">
+        {layout === 'mobile' ? (
+          <div className="min-w-0">
+            <p className="open-page-eyebrow">Private reflections</p>
+            <h1>Insights</h1>
+            <p>Patterns from your writing, never prescriptions.</p>
+          </div>
+        ) : (
           <div>
             <h1 className="type-page-title font-bold">Insights</h1>
             <p className="mt-1 text-sm text-brand-text-muted">
@@ -423,9 +429,11 @@ export default function StatsScreen({
       </header>
 
       {hasUnhydratedArchives && (
-        <StatusNotice tone="info">
-          {layout === 'mobile' ? 'Totals use downloaded entries.' : scopeHint}
-        </StatusNotice>
+        <div className="open-page-insights-scope">
+          <StatusNotice tone="info">
+            {layout === 'mobile' ? 'Showing downloaded memories only.' : scopeHint}
+          </StatusNotice>
+        </div>
       )}
       {loading ? (
         <LoadingSkeleton lines={7} label="Loading insights" className="py-12" />
@@ -442,7 +450,7 @@ export default function StatsScreen({
         />
       ) : (
         <>
-          <section className="surface-paper rounded-[var(--radius-sheet)] border-x border-brand-border/60 px-5 py-7 md:px-8 md:py-9">
+          <section className="open-page-insights-summary surface-paper rounded-[var(--radius-sheet)] border-x border-brand-border/60 px-5 py-7 md:px-8 md:py-9">
             <p className="app-eyebrow hidden sm:block">Monthly reflection</p>
             {layout === 'mobile' ? (
               <div>
@@ -458,7 +466,7 @@ export default function StatsScreen({
                 {monthlyNarrative}
               </h2>
             )}
-            <div className="mt-7 grid grid-cols-3 gap-4 border-t border-brand-border/60 pt-5">
+            <div className="open-page-insights-metrics mt-7 grid grid-cols-3 gap-4 border-t border-brand-border/60 pt-5">
               <div>
                 <Flame className="h-4 w-4 text-brand-pink" />
                 <p className="mt-2 text-3xl font-bold tabular-nums">{streak}</p>
@@ -483,7 +491,7 @@ export default function StatsScreen({
             </div>
           </section>
 
-          <section aria-label="Insight stories">
+          <section className="open-page-insight-stories" aria-label="Insight stories">
             <h2 className="type-section-title font-bold">
               {layout === 'mobile' ? 'Highlights' : 'A few things you may notice'}
             </h2>
@@ -495,7 +503,7 @@ export default function StatsScreen({
               {(layout === 'mobile' ? mobileInsightStories : insightStories).map((story, index) => (
                 <article
                   key={story}
-                  className={`surface-paper snap-start rounded-[var(--radius-card)] border border-brand-border/60 p-5 sm:min-w-[280px] ${layout === 'mobile' ? 'min-w-[58%]' : 'min-w-[82%]'}`}
+                  className={`open-page-insight-story surface-paper snap-start rounded-[var(--radius-card)] border border-brand-border/60 p-5 sm:min-w-[280px] ${layout === 'mobile' ? 'min-w-[58%]' : 'min-w-[82%]'}`}
                 >
                   <p className="text-xs font-bold text-brand-pink">
                     {String(index + 1).padStart(2, '0')}
@@ -515,7 +523,7 @@ export default function StatsScreen({
           >
             <main className="min-w-0 space-y-9">
               <section
-                className="border-y border-brand-border/60 py-6"
+                className="open-page-consistency border-y border-brand-border/60 py-6"
                 aria-labelledby="consistency-title"
               >
                 <div className="flex items-end justify-between gap-4">
@@ -544,7 +552,7 @@ export default function StatsScreen({
                 </div>
               </section>
 
-              <section aria-labelledby="pixels-title">
+              <section className="open-page-pixels" aria-labelledby="pixels-title">
                 <div className="flex flex-wrap items-end justify-between gap-4">
                   <div>
                     <h2 id="pixels-title" className="type-section-title font-bold">
@@ -734,7 +742,7 @@ export default function StatsScreen({
               </section>
             </main>
 
-            <aside className="space-y-8 xl:border-l xl:border-brand-border/60 xl:pl-8">
+            <aside className="open-page-insights-details space-y-8 xl:border-l xl:border-brand-border/60 xl:pl-8">
               <section>
                 <h2 className="type-section-title font-bold">Mood landscape</h2>
                 <p className="mt-1 text-sm text-brand-text-muted">

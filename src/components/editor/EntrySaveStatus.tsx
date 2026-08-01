@@ -1,5 +1,11 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { AlertCircle, Check, Cloud, CloudUpload, LoaderCircle } from 'lucide-react';
+import {
+  WarningCircle as AlertCircle,
+  Check,
+  Cloud,
+  CloudUpload,
+  RefreshDouble as LoaderCircle,
+} from 'iconoir-react';
 import { motionTransitions } from '../ui/motion';
 
 export type EntrySaveState =
@@ -8,7 +14,7 @@ export type EntrySaveState =
 const statePresentation = {
   dirty: { label: 'Unsaved changes', Icon: CloudUpload, tone: 'text-[var(--color-warning)]' },
   saving: { label: 'Saving locally…', Icon: LoaderCircle, tone: 'text-ink-secondary' },
-  saved: { label: 'Saved locally', Icon: Check, tone: 'text-[var(--color-success)]' },
+  saved: { label: 'Saved privately', Icon: Check, tone: 'text-[var(--color-success)]' },
   error: { label: 'Could not save', Icon: AlertCircle, tone: 'text-[var(--color-danger)]' },
   'offline-pending': {
     label: 'Saved locally · sync waits for connection',
@@ -37,7 +43,7 @@ export default function EntrySaveStatus({
   const label =
     message ||
     (state === 'saved' && lastSavedAt
-      ? `Saved locally at ${lastSavedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      ? `Saved privately at ${lastSavedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
       : presentation.label);
 
   return (

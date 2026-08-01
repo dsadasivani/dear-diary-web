@@ -1,4 +1,4 @@
-import { X } from 'lucide-react';
+import { Xmark as X } from 'iconoir-react';
 
 export type ToastTone = 'success' | 'error' | 'info' | 'warning';
 

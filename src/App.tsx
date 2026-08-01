@@ -1,25 +1,25 @@
 import React, { Suspense, useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
-  AlertCircle,
+  WarningCircle as AlertCircle,
   ArrowLeft,
-  BarChart2,
-  BookOpen,
+  StatsUpSquare as BarChart2,
+  Book as BookOpen,
   Check,
-  ClipboardList,
+  TaskList as ClipboardList,
   Eye,
-  EyeOff,
+  EyeClosed as EyeOff,
   Fingerprint,
   Home,
-  LoaderCircle,
+  RefreshDouble as LoaderCircle,
   Lock,
   Plus,
-  RefreshCw,
+  Refresh as RefreshCw,
   Search,
   ShieldCheck,
   WifiOff,
-  X,
-} from 'lucide-react';
+  Xmark as X,
+} from 'iconoir-react';
 
 import OverlayPortal from './components/OverlayPortal';
 import ProfileAvatar from './components/ProfileAvatar';
@@ -1835,7 +1835,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   return (
     <div
-      className={`app-canvas tablet-shell-content min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none relative safe-area-root app-shell ${layout === 'mobile' && showRootNavigation ? 'app-shell-with-navigation' : ''}`}
+      className={`app-canvas tablet-shell-content min-h-screen bg-brand-bg text-brand-text flex flex-col items-center overflow-x-hidden font-sans select-none relative safe-area-root app-shell ${layout === 'mobile' && showRootNavigation ? 'app-shell-with-navigation' : ''} ${layout === 'mobile' && ((currentScreen === 'list' && ['home', 'diaries', 'notes', 'stats', 'search'].includes(activeTab)) || (activeTab === 'diaries' && currentScreen === 'diaryDetail') || (activeTab === 'stats' && currentScreen === 'appSettings')) ? 'open-page-shell' : ''}`}
     >
       {renderSyncAuthorizationBanner()}
       {renderSyncStatusBadge()}
@@ -1869,6 +1869,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             onSearch={() => handleNavigate('search')}
             onProfile={() => setIsProfileSheetOpen(true)}
             onBack={activeTab === 'search' ? () => handleNavigate('home') : undefined}
+            brandOnly={
+              activeTab === 'home' ||
+              (currentScreen === 'list' &&
+                ['diaries', 'notes', 'stats', 'search'].includes(activeTab))
+            }
           />
         )}
         <div className="flex-grow flex flex-col justify-start">{renderSuspendedContent()}</div>

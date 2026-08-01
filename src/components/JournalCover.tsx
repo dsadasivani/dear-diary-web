@@ -1,18 +1,17 @@
 import {
-  BookHeart,
-  Feather,
-  Flower2,
-  KeyRound,
+  FavouriteBook as BookHeart,
+  Compass as Feather,
+  Flower as Flower2,
+  Key as KeyRound,
   Leaf,
   Lock,
-  MoonStar,
-  Mountain,
+  HalfMoon as MoonStar,
+  Trekking as Mountain,
   Palette,
-  Plane,
-  Sparkles,
-  type LucideIcon,
-} from 'lucide-react';
-import type { CSSProperties } from 'react';
+  Airplane as Plane,
+  Sparks as Sparkles,
+} from 'iconoir-react';
+import type { ComponentType, CSSProperties, SVGProps } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { Diary } from '../types';
 import { motionTransitions } from './ui/motion';
@@ -25,7 +24,9 @@ interface JournalCoverProps {
   showTitle?: boolean;
 }
 
-const EMBLEMS: LucideIcon[] = [
+type CoverIcon = ComponentType<SVGProps<SVGSVGElement>>;
+
+const EMBLEMS: CoverIcon[] = [
   BookHeart,
   Feather,
   Leaf,
@@ -36,9 +37,9 @@ const EMBLEMS: LucideIcon[] = [
   Mountain,
   KeyRound,
 ];
-const FOIL_MARKS: LucideIcon[] = [Sparkles, MoonStar, Flower2, Leaf];
+const FOIL_MARKS: CoverIcon[] = [Sparkles, MoonStar, Flower2, Leaf];
 
-const emblemFor = (diary: JournalCoverProps['diary']): LucideIcon => {
+const emblemFor = (diary: JournalCoverProps['diary']): CoverIcon => {
   const source = `${diary.emoji || ''}${diary.name || ''}`;
   const hash = Array.from(source).reduce(
     (sum, character) => sum + (character.codePointAt(0) || 0),

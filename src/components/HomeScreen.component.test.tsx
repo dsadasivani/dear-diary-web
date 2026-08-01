@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { HomeSummary } from '../repositories/DiaryRepository';
 import type { UserProfile } from '../types';
@@ -67,8 +68,10 @@ const initialSummary: HomeSummary = {
 };
 
 describe('HomeScreen', () => {
-  it('renders the preserved summary immediately while refreshing in the background', () => {
+  it('renders the preserved summary and resumes the latest page directly in the editor', async () => {
     repositoryMocks.getHomeSummary.mockReturnValue(new Promise(() => undefined));
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
 
     render(
       <AmbientThemeProvider>
@@ -76,7 +79,7 @@ describe('HomeScreen', () => {
           userProfile={profile}
           layout="mobile"
           initialSummary={initialSummary}
-          onNavigate={vi.fn()}
+          onNavigate={onNavigate}
           onOpenQuickNote={vi.fn()}
           onOpenNewEntryWithPrompt={vi.fn()}
         />
@@ -84,7 +87,17 @@ describe('HomeScreen', () => {
     );
 
     expect(screen.getAllByText('Already loaded entry')).not.toHaveLength(0);
-    expect(screen.getByText('My Diary')).toBeInTheDocument();
+    expect(screen.getByText('A moment worth keeping')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start writing' })).toBeInTheDocument();
+    expect(screen.getByText('From your memories')).toBeInTheDocument();
+    expect(screen.getByLabelText('Current writing streak')).toHaveTextContent('1 day streak');
+    expect(screen.getByRole('progressbar', { name: 'Daily writing target' })).toHaveAttribute(
+      'aria-valuenow',
+      '12',
+    );
     expect(screen.queryByText('Your recent pages will gather here.')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('home-continue-entry-button'));
+    expect(onNavigate).toHaveBeenCalledWith('diaries', 'entryEditor', 'diary-1', 'entry-1');
   });
 });

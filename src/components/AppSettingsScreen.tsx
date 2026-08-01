@@ -6,24 +6,26 @@ import {
   Bell,
   Check,
   ShieldCheck,
-  RefreshCw,
+  Refresh as RefreshCw,
   Plus,
-  Tag,
-  Smile,
-  X,
-  Sun,
-  Moon,
+  Label as Tag,
+  Emoji as Smile,
+  Xmark as X,
+  SunLight as Sun,
+  HalfMoon as Moon,
   Cloud,
-  CloudLightning,
+  CloudSync as CloudLightning,
   Fingerprint,
   Palette,
   Eye,
-  EyeOff,
+  EyeClosed as EyeOff,
   Database,
-  Info,
-  PenLine,
-  ChevronRight,
-} from 'lucide-react';
+  InfoCircle as Info,
+  EditPencil as PenLine,
+  NavArrowRight as ChevronRight,
+  User,
+  Mail,
+} from 'iconoir-react';
 import {
   AppSettings,
   LocalSyncAccountState,
@@ -42,7 +44,6 @@ import {
   withRecoveryQuestion,
 } from '../domain/security';
 import type { PinLength } from '../domain/security';
-import { User, Mail } from 'lucide-react';
 import { isNativePlatform } from '../platform';
 import { secureAuthService } from '../platform/security';
 import { getCachedGoogleDriveSession } from '../utils/googleAuth';
@@ -851,10 +852,10 @@ export default function AppSettingsScreen({
 
   return (
     <div
-      className={`${hasSidebar ? 'mx-auto grid w-full max-w-6xl grid-cols-[220px_minmax(0,880px)] items-start justify-center gap-8' : 'flex flex-col gap-4'} pb-8 font-sans`}
+      className={`${hasSidebar ? 'mx-auto grid w-full max-w-6xl grid-cols-[220px_minmax(0,880px)] items-start justify-center gap-8' : 'open-page-settings flex flex-col gap-4'} pb-8 font-sans`}
     >
       <header
-        className={`${hasSidebar ? 'col-span-full border-none bg-transparent py-0' : 'sticky top-0 -mx-4 border-b border-brand-rose-light/40 bg-brand-bg/95 px-4 py-3'} z-30 flex items-center justify-between backdrop-blur-md`}
+        className={`${hasSidebar ? 'col-span-full border-none bg-transparent py-0' : 'open-page-settings-header sticky top-0 -mx-4 border-b border-brand-rose-light/40 bg-brand-bg/95 px-4 py-3'} z-30 flex items-center justify-between backdrop-blur-md`}
       >
         <div className="flex items-center gap-2">
           <button
@@ -866,11 +867,19 @@ export default function AppSettingsScreen({
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
+            {!hasSidebar && !mobileSectionOpen && (
+              <p className="open-page-eyebrow">Your sanctuary</p>
+            )}
             <h1
               className={`${hasSidebar ? 'text-4xl font-semibold' : 'text-xl font-bold'} tracking-[-0.025em] text-brand-plum dark:text-brand-text`}
             >
               {!hasSidebar && mobileSectionOpen ? currentSection.label : 'Settings'}
             </h1>
+            {!hasSidebar && !mobileSectionOpen && (
+              <p className="open-page-settings-summary">
+                Privacy, writing, and device preferences.
+              </p>
+            )}
             {hasSidebar && (
               <p className="mt-2 text-lg text-brand-text-muted">
                 Manage your digital sanctuary and privacy preferences.
@@ -882,7 +891,7 @@ export default function AppSettingsScreen({
 
       <nav
         aria-label="Settings sections"
-        className={`${hasSidebar ? 'sticky top-6 border-r border-brand-border/70 pr-3' : mobileSectionOpen ? 'hidden' : 'overflow-hidden border-y border-brand-border bg-transparent'}`}
+        className={`${hasSidebar ? 'sticky top-6 border-r border-brand-border/70 pr-3' : mobileSectionOpen ? 'hidden' : 'open-page-settings-nav overflow-hidden border-y border-brand-border bg-transparent'}`}
       >
         {SETTINGS_SECTIONS.map((section) => {
           const Icon = section.icon;
@@ -902,6 +911,11 @@ export default function AppSettingsScreen({
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-bold">{section.label}</span>
+                {!hasSidebar && (
+                  <span className="open-page-settings-description mt-0.5 block text-xs text-brand-text-muted">
+                    {section.description}
+                  </span>
+                )}
               </span>
               {!hasSidebar && (
                 <ChevronRight
@@ -916,7 +930,7 @@ export default function AppSettingsScreen({
 
       {/* Security Config settings */}
       {(hasSidebar || mobileSectionOpen) && (
-        <div className="min-w-0 flex flex-col gap-5">
+        <div className="open-page-settings-content min-w-0 flex flex-col gap-5">
           <div className="hidden sm:block">
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand-sage">
               Settings

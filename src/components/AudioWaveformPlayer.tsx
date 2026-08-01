@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, type ChangeEvent } from 'react';
-import { Play, Pause, Volume2, Trash2 } from 'lucide-react';
+import { Play, Pause, SoundHigh as Volume2, Trash as Trash2 } from 'iconoir-react';
 import { eventSyncEngine } from '../repositories';
 import { parseSyncMediaReference } from '../sync/syncMedia';
 

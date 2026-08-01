@@ -1,24 +1,24 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  AlertCircle,
+  WarningCircle as AlertCircle,
   ArrowLeft,
-  BookOpen,
-  CalendarDays,
+  Book as BookOpen,
+  Calendar as CalendarDays,
   Check,
-  Delete,
+  Erase as Delete,
   Cloud,
   Eye,
-  EyeOff,
+  EyeClosed as EyeOff,
   Fingerprint,
-  LoaderCircle,
+  RefreshDouble as LoaderCircle,
   Lock,
-  Moon,
+  HalfMoon as Moon,
   ShieldCheck,
-  Sparkles,
-  Sun,
-  X,
-} from 'lucide-react';
+  Sparks as Sparkles,
+  SunLight as Sun,
+  Xmark as X,
+} from 'iconoir-react';
 import {
   AppSettings,
   GoogleAccountSession,
@@ -758,10 +758,22 @@ export default function LockScreen({
     accountSetupProgressKey === 'restore'
       ? 'Large diaries can take a little while to decrypt and import.'
       : 'Keep this screen open while setup finishes.';
+  const [clockHours = '0', clockMinutes = '00'] = time.split(':');
+  const clockHour = Number(clockHours) || 0;
+  const dayPhase =
+    clockHour < 5
+      ? 'Still night'
+      : clockHour < 12
+        ? 'Morning'
+        : clockHour < 17
+          ? 'Afternoon'
+          : clockHour < 21
+            ? 'Evening'
+            : 'Night';
 
   return (
     <div
-      className={`min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-colors duration-300 lg:justify-center lg:px-8 lg:py-8`}
+      className={`open-page-lock min-h-screen min-h-[100dvh] w-screen ${activeBgClass} text-brand-text flex flex-col items-center justify-between relative overflow-hidden font-sans select-none px-6 py-6 transition-colors duration-300 lg:justify-center lg:px-8 lg:py-8`}
     >
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
         <div className="absolute inset-y-0 left-0 hidden w-1/2 bg-accent-soft/30 lg:block" />
@@ -811,7 +823,7 @@ export default function LockScreen({
         </motion.div>
       </section>
 
-      <header className="w-full max-w-sm lg:absolute lg:left-8 lg:right-auto lg:top-8 lg:max-w-none xl:left-10 flex justify-between items-center z-10">
+      <header className="open-page-lock-header w-full max-w-sm lg:absolute lg:left-8 lg:right-auto lg:top-8 lg:max-w-none xl:left-10 flex justify-between items-center z-10">
         <div className="flex items-center gap-2 bg-white/55 dark:bg-white/[0.06] backdrop-blur-xl px-3.5 py-1.5 rounded-full border border-brand-border/50 dark:border-white/10 shadow-sm">
           <BookOpen className="w-3.5 h-3.5 text-brand-pink" />
           <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#3E2429] dark:text-[#EADCD1]">
@@ -833,7 +845,7 @@ export default function LockScreen({
         </motion.button>
       </header>
 
-      <main className="w-full max-w-sm lg:absolute lg:inset-y-0 lg:left-1/2 lg:ml-0 lg:mr-0 lg:w-1/2 lg:max-w-none lg:flex-grow-0 lg:px-10 xl:px-16 flex-grow flex flex-col justify-center items-center z-10 relative">
+      <main className="open-page-lock-main w-full max-w-sm lg:absolute lg:inset-y-0 lg:left-1/2 lg:ml-0 lg:mr-0 lg:w-1/2 lg:max-w-none lg:flex-grow-0 lg:px-10 xl:px-16 flex-grow flex flex-col justify-center items-center z-10 relative">
         <AnimatePresence mode="wait">
           {screenMode === 'ambient' ? (
             <motion.div
@@ -842,15 +854,29 @@ export default function LockScreen({
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, y: -32, scale: 0.98 }}
               transition={{ duration: 0.4 }}
-              className="flex w-full flex-col items-center justify-center gap-12 py-4 text-center lg:h-auto lg:max-w-[420px] lg:gap-7 lg:p-0"
+              className="open-page-lock-ambient flex w-full flex-col items-center justify-center gap-12 py-4 text-center lg:h-auto lg:max-w-[420px] lg:gap-7 lg:p-0"
             >
-              <div className="w-full max-w-[310px] mt-3 select-none px-5 py-5 lg:hidden">
-                <h2 className="font-serif-diary text-[4.75rem] font-bold text-brand-plum dark:text-[#ECE6E1] leading-none">
-                  {time}
-                </h2>
-                <div className="mt-3 inline-flex items-center justify-center gap-2 text-[12px] font-bold text-brand-text-muted dark:text-[#EADCD1]/80">
-                  <CalendarDays className="w-3.5 h-3.5 text-brand-pink" />
+              <div className="open-page-lock-clock-stage mt-3 w-full max-w-[360px] select-none lg:hidden">
+                <div className="open-page-lock-clock-topline">
+                  <span className="open-page-lock-clock-phase">{dayPhase}</span>
+                </div>
+
+                <time className="open-page-lock-clock-time" aria-label={`Current time ${time}`}>
+                  <span aria-hidden="true">{clockHours}</span>
+                  <span className="open-page-lock-clock-colon" aria-hidden="true">
+                    :
+                  </span>
+                  <span aria-hidden="true">{clockMinutes}</span>
+                  <span className="sr-only">{time}</span>
+                </time>
+
+                <div className="open-page-lock-clock-date">
                   <span>{date}</span>
+                </div>
+
+                <div className="open-page-lock-clock-private">
+                  <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                  <span>Private on this device</span>
                 </div>
               </div>
 
@@ -923,7 +949,7 @@ export default function LockScreen({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 80 }}
               transition={{ type: 'spring', damping: 25, stiffness: 180 }}
-              className="w-full lg:max-w-[440px]"
+              className="open-page-lock-keypad w-full lg:max-w-[440px]"
             >
               <motion.div
                 animate={shakeTrigger ? { x: [-10, 10, -8, 8, -5, 5, 0] } : {}}
@@ -1493,7 +1519,7 @@ export default function LockScreen({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-y-2 gap-x-4 mt-0.5 justify-items-center lg:mx-auto lg:mt-9 lg:w-[300px] lg:gap-x-8 lg:gap-y-8">
+                    <div className="open-page-pin-grid grid grid-cols-3 gap-y-2 gap-x-4 mt-0.5 justify-items-center lg:mx-auto lg:mt-9 lg:w-[300px] lg:gap-x-8 lg:gap-y-8">
                       {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
                         <motion.button
                           key={num}
@@ -1568,7 +1594,7 @@ export default function LockScreen({
                           security.isPinCreated ? security.pinLength : selectedPinLength,
                         )
                       }
-                      className={`w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}
+                      className={`open-page-pin-submit w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}
                     >
                       {security.isPinCreated
                         ? 'Unlock Diary'

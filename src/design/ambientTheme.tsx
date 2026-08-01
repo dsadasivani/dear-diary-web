@@ -36,13 +36,13 @@ export interface AmbientTheme {
 }
 
 const LIGHT_SUPPORTING_ACCENTS = [
-  { color: '#D93F6B', container: '#FFF0F4', glow: 'rgba(217, 63, 107, 0.13)' },
-  { color: '#0C8F80', container: '#E7FAF7', glow: 'rgba(12, 143, 128, 0.13)' },
+  { color: '#8C617E', container: '#F0E4EB', glow: 'rgba(140, 97, 126, 0.1)' },
+  { color: '#B86F4D', container: '#F4E4DB', glow: 'rgba(184, 111, 77, 0.1)' },
 ] as const;
 
 const DARK_SUPPORTING_ACCENTS = [
-  { color: '#FF7A9A', container: '#351E2A', glow: 'rgba(255, 122, 154, 0.12)' },
-  { color: '#49D7C7', container: '#163633', glow: 'rgba(73, 215, 199, 0.12)' },
+  { color: '#A8799B', container: '#3A2638', glow: 'rgba(168, 121, 155, 0.1)' },
+  { color: '#C98562', container: '#412A20', glow: 'rgba(201, 133, 98, 0.1)' },
 ] as const;
 
 type AmbientAccent = { color: string; container: string; glow: string };
@@ -155,9 +155,9 @@ export const deriveAmbientTheme = ({
       : time === 'dusk'
         ? journalAccent?.container || accents[0].container
         : time === 'night'
-          ? mode === 'dark'
-            ? '#171A2B'
-            : '#EEF1FF'
+      ? mode === 'dark'
+            ? '#181D27'
+            : '#F0EBE2'
           : selected.container;
 
   return {

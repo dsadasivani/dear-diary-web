@@ -42,7 +42,7 @@ describe('redesigned application shell', () => {
     expect(isRootDestinationScreen('stats', 'appSettings')).toBe(false);
   });
 
-  it('exposes four primary mobile destinations plus Create', async () => {
+  it('exposes four primary mobile destinations plus Write', async () => {
     const user = userEvent.setup();
     const onNavigate = vi.fn();
     const onCreate = vi.fn();
@@ -53,8 +53,8 @@ describe('redesigned application shell', () => {
     expect(screen.getByRole('button', { name: 'Today' })).toHaveAttribute('aria-current', 'page');
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Journals' }));
-    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await user.click(screen.getByRole('button', { name: 'Memories' }));
+    await user.click(screen.getByRole('button', { name: 'Write' }));
     expect(onNavigate).toHaveBeenCalledWith('diaries');
     expect(onCreate).toHaveBeenCalledOnce();
   });
@@ -75,7 +75,7 @@ describe('redesigned application shell', () => {
       />,
     );
 
-    expect(screen.getByRole('dialog', { name: 'Create' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Write' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /New Journal Entry/ })).toBeDisabled();
     expect(screen.getAllByText('Create a journal first').length).toBeGreaterThan(0);
     await user.keyboard('{Escape}');

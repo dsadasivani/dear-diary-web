@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { ArrowUpRight, Calendar, ChevronRight, Flame, PenLine, Plus, Shuffle } from 'lucide-react';
+import {
+  ArrowUpRight,
+  Calendar,
+  NavArrowRight as ChevronRight,
+  FireFlame as Flame,
+  BookLock as LockKeyhole,
+  EditPencil as PenLine,
+  Plus,
+  Shuffle,
+} from 'iconoir-react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { ResponsiveLayout, UserProfile } from '../types';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
@@ -29,6 +38,7 @@ interface HomeScreenProps {
 }
 
 const DEFAULT_PROMPTS = [
+  'What are you noticing right now?',
   'What made you smile unexpectedly today?',
   'Describe a small detail of nature you noticed today.',
   'Write down three things you are grateful for in this moment.',
@@ -116,11 +126,17 @@ export default function HomeScreen({
         : 'Begin today’s page';
   const todayWordCount = summary?.todayWordCount || 0;
   const goal = Math.max(1, profile.writingGoal || 100);
+  const targetProgress = Math.min(100, Math.round((todayWordCount / goal) * 100));
   const prompt = DEFAULT_PROMPTS[promptIndex];
 
   const openContinue = () => {
     if (mostRecentEntry)
-      onNavigate('diaries', 'diaryDetail', mostRecentEntry.diaryId, mostRecentEntry.id);
+      onNavigate(
+        'diaries',
+        layout === 'mobile' ? 'entryEditor' : 'diaryDetail',
+        mostRecentEntry.diaryId,
+        mostRecentEntry.id,
+      );
     else onOpenNewEntryWithPrompt('');
   };
 
@@ -352,6 +368,139 @@ export default function HomeScreen({
     </form>
   );
 
+  const MobileOpenPage = () => {
+    const memoryEntry =
+      recentEntries.find((entry) => entry.id !== mostRecentEntry?.id) || mostRecentEntry;
+
+    return (
+      <div className="open-page-home" data-testid="home-open-page">
+        <motion.header
+          className="open-page-greeting"
+          initial={playLaunchReveal && !reducedMotion ? { opacity: 0, y: 10 } : false}
+          animate={{ opacity: 1, y: 0 }}
+          transition={motionTransitions.page}
+        >
+          <div className="open-page-home-meta">
+            <p className="open-page-date">
+              {new Date().toLocaleDateString(undefined, {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+                year: 'numeric',
+              })}
+            </p>
+            <p className="open-page-streak" aria-label="Current writing streak">
+              <Flame className="h-3.5 w-3.5" aria-hidden="true" />
+              {summary?.currentStreak || 0} {(summary?.currentStreak || 0) === 1 ? 'day' : 'days'}{' '}
+              streak
+            </p>
+          </div>
+          <div className="open-page-greeting-line">
+            <h1>{greeting}</h1>
+            <div className="open-page-target">
+              <div className="open-page-target-copy">
+                <span>Daily target</span>
+                <strong>
+                  {todayWordCount}/{goal}
+                </strong>
+              </div>
+              <div
+                className="open-page-target-track"
+                role="progressbar"
+                aria-label="Daily writing target"
+                aria-valuemin={0}
+                aria-valuemax={goal}
+                aria-valuenow={Math.min(todayWordCount, goal)}
+              >
+                <span style={{ width: `${targetProgress}%` }} />
+              </div>
+            </div>
+          </div>
+        </motion.header>
+
+        {summaryError && (
+          <StatusNotice tone="warning" role="alert">
+            {summaryError}
+          </StatusNotice>
+        )}
+
+        <section className="open-page-writing-surface" aria-labelledby="open-page-prompt-title">
+          <div className="open-page-writing-copy">
+            <p className="open-page-kicker">A moment worth keeping</p>
+            <h2 id="open-page-prompt-title">{prompt}</h2>
+          </div>
+          <div className="open-page-writing-actions">
+            <button
+              type="button"
+              data-testid="home-write-entry-button"
+              onClick={() => onOpenNewEntryWithPrompt(prompt)}
+              className="open-page-primary-action"
+            >
+              <PenLine className="h-5 w-5" aria-hidden="true" />
+              Start writing
+            </button>
+            <button
+              type="button"
+              onClick={() => setPromptIndex((index) => (index + 1) % DEFAULT_PROMPTS.length)}
+              className="open-page-prompt-action"
+            >
+              Use a prompt
+            </button>
+          </div>
+        </section>
+
+        <button
+          type="button"
+          data-testid="home-continue-entry-button"
+          onClick={openContinue}
+          className="open-page-continue"
+        >
+          <PenLine className="h-5 w-5" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-left">
+            <span className="text-ink-secondary">{mostRecentEntry ? 'Continue' : 'Begin'}</span>
+            <span aria-hidden="true"> · </span>
+            <span className="font-semibold text-ink">
+              {mostRecentEntry?.title || "Today's page"}
+            </span>
+          </span>
+          <ChevronRight className="h-5 w-5 text-ink-tertiary" aria-hidden="true" />
+        </button>
+
+        <section className="open-page-memory" aria-labelledby="open-page-memory-title">
+          <h2 id="open-page-memory-title">From your memories</h2>
+          {memoryEntry ? (
+            <button
+              type="button"
+              onClick={() =>
+                onNavigate('diaries', 'diaryDetail', memoryEntry.diaryId, memoryEntry.id)
+              }
+              className="open-page-memory-row"
+            >
+              <span className="open-page-memory-date">
+                {new Date(memoryEntry.date).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                })}
+              </span>
+              <span className="open-page-memory-copy">
+                <span className="open-page-memory-title">{memoryEntry.title}</span>
+                <span className="open-page-private-note">
+                  <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />
+                  Private on this device
+                </span>
+              </span>
+              <ChevronRight className="h-5 w-5 text-ink-tertiary" aria-hidden="true" />
+            </button>
+          ) : (
+            <p className="open-page-empty-memory">Your memories will gather here as you write.</p>
+          )}
+        </section>
+      </div>
+    );
+  };
+
+  if (layout === 'mobile') return <MobileOpenPage />;
+
   return (
     <div className="space-y-7 pb-4">
       <motion.header
@@ -369,7 +518,7 @@ export default function HomeScreen({
         </p>
         <h1 className="mt-1 font-serif-diary text-[clamp(2rem,5vw,3.5rem)] font-semibold leading-none tracking-[-0.025em] text-ink">
           {greeting}
-          {layout !== 'mobile' && `, ${profile.name || 'Writer'}`}
+          {`, ${profile.name || 'Writer'}`}
         </h1>
       </motion.header>
       {summaryError && (

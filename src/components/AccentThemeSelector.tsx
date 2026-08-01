@@ -1,4 +1,4 @@
-import { Check, Palette } from 'lucide-react';
+import { Check, Palette } from 'iconoir-react';
 import { ACCENT_THEME_OPTIONS, type AccentThemeId } from '../design/accentThemes';
 
 interface AccentThemeSelectorProps {

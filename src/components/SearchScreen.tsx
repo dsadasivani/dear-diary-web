@@ -9,14 +9,14 @@ import {
 import { motion, useAnimationControls, useReducedMotion } from 'motion/react';
 import {
   ArrowRight,
-  BookOpen,
+  Book as BookOpen,
   Download,
-  FileText,
+  EmptyPage as FileText,
   Filter,
-  Image,
-  RefreshCw,
+  MediaImage as Image,
+  Refresh as RefreshCw,
   Search,
-} from 'lucide-react';
+} from 'iconoir-react';
 import type { AppSettings, Note, PartitionHydrationState, ResponsiveLayout } from '../types';
 import { getTagsForSettings } from '../domain/appSettings';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
@@ -396,7 +396,10 @@ export default function SearchScreen({
 
   const archiveNotice =
     unloadedArchiveMonths.length > 0 ? (
-      <StatusNotice tone={failedArchiveMonths.length ? 'warning' : 'info'}>
+      <StatusNotice
+        tone={failedArchiveMonths.length ? 'warning' : 'info'}
+        className="open-page-search-archive"
+      >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p>
@@ -450,7 +453,7 @@ export default function SearchScreen({
     ) : null;
 
   const discovery = (
-    <div className="space-y-8 py-4">
+    <div className="open-page-search-discovery space-y-8 py-4">
       {recentSearches.length > 0 && (
         <section>
           <h2 className="type-section-title font-bold">Recent searches</h2>
@@ -468,7 +471,7 @@ export default function SearchScreen({
           </div>
         </section>
       )}
-      <section>
+      <section className="open-page-search-sources">
         <h2 className="type-section-title font-bold">
           {layout === 'mobile' ? 'Search your memories' : 'Find a thread'}
         </h2>
@@ -484,7 +487,7 @@ export default function SearchScreen({
               setSelectedSource('diaries');
               setShowFilters(false);
             }}
-            className={`surface-paper flex items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left ${layout === 'mobile' ? 'min-h-16' : 'min-h-24'}`}
+            className={`open-page-search-source surface-paper flex items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left ${layout === 'mobile' ? 'min-h-16' : 'min-h-24'}`}
           >
             <BookOpen className="h-6 w-6 text-brand-sage" />
             <span>
@@ -502,7 +505,7 @@ export default function SearchScreen({
               setSelectedSource('notes');
               setShowFilters(false);
             }}
-            className={`surface-paper flex items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left ${layout === 'mobile' ? 'min-h-16' : 'min-h-24'}`}
+            className={`open-page-search-source surface-paper flex items-center gap-4 rounded-[var(--radius-card)] border border-brand-border/60 p-4 text-left ${layout === 'mobile' ? 'min-h-16' : 'min-h-24'}`}
           >
             <FileText className="h-6 w-6 text-brand-pink" />
             <span>
@@ -515,7 +518,7 @@ export default function SearchScreen({
         </div>
       </section>
       {availableTags.length > 0 && (
-        <section>
+        <section className="open-page-search-themes">
           <h2 className="type-section-title font-bold">Suggested themes</h2>
           <div className="mt-3 flex flex-wrap gap-2">
             {availableTags.slice(0, 8).map((tag) => (
@@ -601,10 +604,16 @@ export default function SearchScreen({
   );
 
   return (
-    <div className="pb-20">
-      <header className="surface-glass-strong sticky top-0 z-30 -mx-2 border-b border-brand-border/60 px-2 py-3">
+    <div className={`${layout === 'mobile' ? 'open-page-search' : ''} pb-20`}>
+      <header className="open-page-search-header surface-glass-strong sticky top-0 z-30 -mx-2 border-b border-brand-border/60 px-2 py-3">
         <div className="flex items-end justify-between gap-4">
-          {layout !== 'mobile' && (
+          {layout === 'mobile' ? (
+            <div className="min-w-0">
+              <p className="open-page-eyebrow">Memory retrieval</p>
+              <h1>Search</h1>
+              <p>Find a memory, not a record.</p>
+            </div>
+          ) : (
             <div>
               <h1 className="type-page-title font-bold">Search</h1>
               <p className="mt-1 text-sm text-brand-text-muted">Find a memory, not a record.</p>
@@ -613,7 +622,7 @@ export default function SearchScreen({
           <button
             type="button"
             onClick={() => setShowFilters(true)}
-            className="ml-auto inline-flex min-h-11 items-center gap-2 rounded-full border border-brand-border px-4 text-sm font-bold text-brand-sage"
+            className="open-page-search-filters ml-auto inline-flex min-h-11 items-center gap-2 rounded-full border border-brand-border px-4 text-sm font-bold text-brand-sage"
           >
             <Filter className="h-4 w-4" />
             Filters
@@ -627,7 +636,7 @@ export default function SearchScreen({
         <motion.div
           ref={searchFieldRef}
           animate={searchFieldAnimation}
-          className="mt-3 will-change-transform"
+          className="open-page-search-field mt-3 will-change-transform"
         >
           <SearchField
             value={query}
@@ -687,7 +696,7 @@ export default function SearchScreen({
       )}
 
       <div
-        className={`mt-6 grid gap-7 ${layout === 'desktop' ? 'xl:grid-cols-[230px_minmax(0,1fr)] 2xl:grid-cols-[230px_minmax(0,1fr)_300px]' : ''}`}
+        className={`open-page-search-results mt-6 grid gap-7 ${layout === 'desktop' ? 'xl:grid-cols-[230px_minmax(0,1fr)] 2xl:grid-cols-[230px_minmax(0,1fr)_300px]' : ''}`}
       >
         {layout === 'desktop' && (
           <aside className="hidden border-r border-brand-border/60 pr-6 xl:block">

@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Link2, LoaderCircle, Monitor, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import {
+  Check,
+  Link as Link2,
+  RefreshDouble as LoaderCircle,
+  Computer as Monitor,
+  Refresh as RefreshCw,
+  ShieldCheck,
+  Trash as Trash2,
+} from 'iconoir-react';
 import type { LocalSyncAccountState, PairingSession, SyncDevice } from '../types';
 import { diaryRepository, eventSyncEngine } from '../repositories';
 import { approveCompanionPairing } from '../sync/companionPairing';

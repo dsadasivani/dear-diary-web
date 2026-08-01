@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, LoaderCircle, ShieldCheck, X } from 'lucide-react';
+import {
+  WarningCircle as AlertCircle,
+  RefreshDouble as LoaderCircle,
+  ShieldCheck,
+  Xmark as X,
+} from 'iconoir-react';
 import OverlayPortal from './OverlayPortal';
 
 interface PassphraseConfirmationDialogProps {
