@@ -34,7 +34,7 @@
     "backend:bootRun:staging": "cross-env SPRING_PROFILES_ACTIVE=staging npm run backend:bootRun",
     "backend:bootRun:production": "cross-env SPRING_PROFILES_ACTIVE=production npm run backend:bootRun",
     "test:supabase": "node scripts/supabase-integration-tests.mjs",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --grep-invert @accessibility",
     "test:accessibility": "playwright test --grep @accessibility",
     "benchmark:seed": "node scripts/create-benchmark-fixture.mjs",
     "benchmark:run": "node scripts/run-benchmark-fixture.mjs",

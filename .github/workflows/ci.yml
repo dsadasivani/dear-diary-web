@@ -10,6 +10,10 @@ on:
       - reopened
       - ready_for_review
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -86,6 +90,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+          cache: gradle
       - uses: android-actions/setup-android@v3
       - run: npm ci
       - run: npm run build

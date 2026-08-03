@@ -50,7 +50,9 @@ const stagingWorkflow = await readFile('.github/workflows/deploy-staging.yml', '
 for (const requiredDeploymentSetting of [
   '--platform linux/arm64',
   '--desired-count 1',
-  '--health-check-grace-period-seconds 90',
+  '--health-check-grace-period-seconds 300',
+  '--cache-from type=gha,scope=staging-backend-arm64',
+  '--cache-to type=gha,mode=max,scope=staging-backend-arm64',
   'docker/setup-qemu-action@v3',
   'docker/setup-buildx-action@v3',
 ]) {
