@@ -9,7 +9,6 @@ const googleSession: GoogleAccountSession = {
   email: 'writer@example.com',
   displayName: 'Google Writer',
   imageUrl: 'https://example.com/avatar.jpg',
-  accessToken: 'token',
 };
 
 test('populates an untouched local profile from Google', async () => {

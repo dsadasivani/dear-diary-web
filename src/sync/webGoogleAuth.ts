@@ -1,6 +1,5 @@
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import type { GoogleAccountSession, SupabaseAuthSession } from '../types';
-import { DRIVE_APPDATA_SCOPE } from '../utils/googleAuth';
 import { getConfiguredSupabaseAnonKey, getConfiguredSupabaseUrl } from './config';
 import {
   SYNC_SECRET_STORE,
@@ -37,18 +36,13 @@ const mapSession = (session: Session): WebGoogleSyncSession => {
   );
   const identityData = googleIdentity?.identity_data || session.user.user_metadata || {};
   const googleUserId = identityData.sub || identityData.provider_id;
-  if (!googleUserId || !session.provider_token) {
-    throw new Error(
-      'Google sign-in did not return the identity and Drive token required for pairing.',
-    );
-  }
+  if (!googleUserId) throw new Error('Google sign-in did not return a stable account identity.');
   return {
     googleSession: {
       userId: googleUserId,
       email: session.user.email || identityData.email || null,
       displayName: identityData.full_name || identityData.name || null,
       imageUrl: identityData.avatar_url || identityData.picture || null,
-      accessToken: session.provider_token,
       idToken: null,
     },
     supabaseSession: {
@@ -73,9 +67,9 @@ export const startWebGoogleSyncSignIn = async (): Promise<void> => {
   const { error } = await client.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      scopes: `openid email profile ${DRIVE_APPDATA_SCOPE}`,
+      scopes: 'openid email profile',
       redirectTo: `${window.location.origin}${window.location.pathname}`,
-      queryParams: { access_type: 'offline', prompt: 'consent' },
+      queryParams: { prompt: 'select_account consent', max_age: '0' },
     },
   });
   if (error) throw error;

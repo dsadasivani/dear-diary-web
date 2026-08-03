@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -34,5 +35,13 @@ public class DeviceController {
     @GetMapping
     List<DeviceResponse> list(Authentication authentication, @RequestParam UUID requestingDeviceId) {
         return managementService.list(authentication.getName(), requestingDeviceId);
+    }
+
+    @PostMapping("/{deviceId}/revoke-self")
+    SelfRevocationResponse revokeSelf(
+            Authentication authentication,
+            @PathVariable UUID deviceId,
+            @Valid @RequestBody SelfRevocationRequest request) {
+        return managementService.revokeSelf(authentication.getName(), deviceId, request);
     }
 }

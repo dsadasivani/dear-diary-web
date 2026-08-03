@@ -62,11 +62,6 @@ import { isValidPin, unlockWithPin } from './domain/security';
 import useResponsiveLayout from './hooks/useResponsiveLayout';
 import { calculateStreak } from './domain/journalCatalog';
 import { shouldLockAfterBackground } from './domain/privacyLock';
-import { loadPendingPrimaryRecovery, resumePendingPrimaryRecovery } from './sync/accountBootstrap';
-import { createConfiguredSupabaseControlPlaneClient } from './sync/config';
-import { resumePendingDeviceKeyRotation } from './sync/deviceKeyRotation';
-import { loadSyncSecrets } from './sync/syncSecrets';
-import { restoreGoogleDriveSession } from './utils/googleAuth';
 import { reportUnexpectedError } from './infrastructure/telemetry/reportUnexpectedError';
 import {
   applyThemePreference,
@@ -185,6 +180,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [syncAuthorizationMessage, setSyncAuthorizationMessage] = useState('');
   const [isReauthorizingSync, setIsReauthorizingSync] = useState(false);
   const [desktopSearchQuery, setDesktopSearchQuery] = useState('');
+  const desktopSearchInputRef = React.useRef<HTMLInputElement>(null);
   const [searchInitialQuery, setSearchInitialQuery] = useState('');
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection | undefined>(
     undefined,
@@ -200,6 +196,31 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [isProfileSheetOpen, setIsProfileSheetOpen] = useState(false);
   const isRootScreen = isRootDestinationScreen(activeTab, currentScreen);
   const showRootNavigation = isRootScreen && !isLocalFocusedFlow;
+
+  useEffect(() => {
+    if (!isDesktop) return;
+    const handleDesktopShortcut = (event: KeyboardEvent) => {
+      if (isCreateSheetOpen || isProfileSheetOpen) return;
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      const isEditing =
+        target?.isContentEditable ||
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.tagName === 'SELECT';
+      if (isEditing) return;
+      if (event.key === '/') {
+        event.preventDefault();
+        desktopSearchInputRef.current?.focus();
+      }
+      if (event.key.toLowerCase() === 'c' && showRootNavigation) {
+        event.preventDefault();
+        setIsCreateSheetOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleDesktopShortcut);
+    return () => window.removeEventListener('keydown', handleDesktopShortcut);
+  }, [isCreateSheetOpen, isDesktop, isProfileSheetOpen, showRootNavigation]);
 
   const handleLocalFocusedFlowChange = useCallback((active: boolean, onBack?: () => void) => {
     localFocusedFlowBackRef.current = active ? onBack || null : null;
@@ -455,55 +476,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   const resumePendingSyncWorkAfterUnlock = async () => {
     await syncV2Application.resumeAfterUnlock();
-    const activeV2Account = await diaryRepository.getLocalSyncAccountState();
-    if (activeV2Account?.syncProtocolVersion === 2) return activeV2Account;
-    const secrets = await loadSyncSecrets();
-    const pendingRecovery = await loadPendingPrimaryRecovery();
-    const accessToken =
-      secrets?.supabaseSession.accessToken || pendingRecovery?.supabaseSession.accessToken;
-    if (pendingRecovery && !accessToken) {
-      throw new Error(
-        'Primary recovery is pending but sync authorization is unavailable. Reconnect Google and Supabase to finish recovery.',
-      );
-    }
-    if (pendingRecovery && accessToken) {
-      const controlPlane = createConfiguredSupabaseControlPlaneClient(accessToken);
-      const googleSession =
-        (await restoreGoogleDriveSession(false).catch(() => null)) ||
-        secrets?.googleSession ||
-        pendingRecovery.googleSession ||
-        null;
-      const result = await resumePendingPrimaryRecovery({
-        repository: diaryRepository,
-        controlPlane,
-        googleSession,
-      });
-      if (result.status === 'completed' || result.status === 'aborted') {
-        showToast(result.message, 'info');
-        await reloadShellData();
-      }
-    }
-    const refreshedAccount = await diaryRepository.getLocalSyncAccountState();
-    if (!refreshedAccount || refreshedAccount.deviceRole !== 'primary_mobile')
-      return refreshedAccount;
-    const refreshedSecrets = await loadSyncSecrets();
-    if (!refreshedSecrets) return refreshedAccount;
-    const controlPlane = createConfiguredSupabaseControlPlaneClient(
-      refreshedSecrets.supabaseSession.accessToken,
-    );
-    const googleSession =
-      (await restoreGoogleDriveSession(false).catch(() => null)) ||
-      refreshedSecrets.googleSession ||
-      null;
-    const result = await resumePendingDeviceKeyRotation({
-      repository: diaryRepository,
-      controlPlane,
-      googleSession,
-    });
-    if (result.status === 'completed' || result.status === 'aborted') {
-      showToast(result.message, 'info');
-      await reloadShellData();
-    }
     return diaryRepository.getLocalSyncAccountState();
   };
 
@@ -600,7 +572,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           setSyncAuthorizationMessage('');
           await eventSyncEngine.pullPending();
         },
-        'Checking Google Drive and bringing in pending updates.',
+        'Checking encrypted sync and bringing in pending updates.',
       );
       showToast('Encrypted sync reconnected.', 'success');
     } catch (reauthorizationError: any) {
@@ -763,15 +735,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     handleNavigate('search');
   };
 
-  const handleDesktopNewEntry = () => {
-    const targetDiary = diaries[0];
-    if (targetDiary) {
-      handleNavigate('diaries', 'entryEditor', targetDiary.id);
-      return;
-    }
-    handleNavigate('diaries');
-  };
-
   const handleCreateEntry = (capture?: 'voice' | 'photo') => {
     const targetDiary = diaries[0];
     if (!targetDiary) {
@@ -793,7 +756,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const rootPageTitle = () =>
     ({
       home: 'Today',
-      diaries: 'Journals',
+      diaries: 'Memories',
       notes: 'Notes',
       search: 'Search',
       stats: currentScreen === 'appSettings' ? 'Settings' : 'Insights',
@@ -1565,7 +1528,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     return (
       {
         home: 'Today',
-        diaries: 'Journals',
+        diaries: 'Memories',
         notes: 'Notes',
         search: 'Search',
       }[activeTab] || 'Dear Diary'
@@ -1591,7 +1554,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       },
       {
         id: 'diaries',
-        label: 'Journals',
+        label: 'Memories',
         icon: BookOpen,
         onClick: () => handleNavigate('diaries'),
         active: activeTab === 'diaries',
@@ -1628,7 +1591,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         )}
 
         <div className="relative z-10 flex h-screen min-h-0">
-          <aside className="flex h-screen w-[232px] shrink-0 flex-col border-r border-brand-border/70 bg-gradient-to-b from-brand-blush-light/78 via-brand-blush-light/48 to-white/35 px-4 py-5 shadow-[18px_0_70px_rgba(62,36,41,0.06)] backdrop-blur-xl dark:from-brand-card-bg/78 dark:via-brand-card-bg/55 dark:to-brand-bg/45 xl:w-72 xl:px-6 xl:py-7">
+          <aside className="flex h-screen w-[232px] shrink-0 flex-col border-r border-brand-border/70 bg-gradient-to-b from-brand-blush-light/78 via-brand-blush-light/48 to-white/35 px-4 py-5 shadow-[18px_0_70px_rgba(62,36,41,0.06)] backdrop-blur-xl dark:from-brand-card-bg/78 dark:via-brand-card-bg/55 dark:to-brand-bg/45 xl:w-64 xl:px-5 xl:py-7">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-brand-border bg-white text-brand-sage shadow-sm dark:bg-brand-bg/40 xl:h-12 xl:w-12">
                 <BookOpen className="h-5 w-5 xl:h-6 xl:w-6" />
@@ -1651,6 +1614,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                     key={item.id}
                     type="button"
                     data-testid={`nav-${item.id}`}
+                    aria-current={item.active ? 'page' : undefined}
                     onClick={item.onClick}
                     className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-bold transition-all xl:gap-4 xl:rounded-2xl xl:px-4 xl:py-3 ${
                       item.active
@@ -1698,10 +1662,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           <section className="flex min-w-0 flex-1 flex-col">
             <header className="flex h-16 shrink-0 items-center justify-between border-b border-brand-border/55 bg-brand-bg/78 px-5 backdrop-blur-2xl dark:bg-brand-bg/70 xl:h-20 xl:px-10">
               <div className="min-w-0">
-                <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-brand-sage">
-                  Dear Diary
-                </p>
-                <h2 className="truncate font-serif-diary text-xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-2xl">
+                <h2 className="truncate text-base font-extrabold tracking-[-0.01em] text-brand-plum dark:text-brand-text xl:text-lg">
                   {desktopPageTitle()}
                 </h2>
               </div>
@@ -1714,31 +1675,38 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 >
                   <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-text-muted" />
                   <input
+                    ref={desktopSearchInputRef}
                     type="text"
                     data-testid="nav-search"
                     aria-label="Global search"
+                    aria-keyshortcuts="/"
                     value={desktopSearchQuery}
                     onChange={(event) => setDesktopSearchQuery(event.target.value)}
-                    placeholder="Search thoughts, memories, dreams"
-                    className="w-full rounded-full border border-brand-border/60 bg-white/68 py-2.5 pl-11 pr-4 text-sm font-semibold text-brand-plum placeholder:text-brand-text-muted/55 outline-none transition-all focus:border-brand-sage focus:bg-white focus:shadow-[0_8px_30px_rgba(62,36,41,0.08)] dark:bg-white/5 dark:text-brand-text xl:py-3"
+                    placeholder="Search memories"
+                    className="w-full rounded-full border border-brand-border/60 bg-white/68 py-2.5 pl-11 pr-12 text-sm font-semibold text-brand-plum placeholder:text-brand-text-muted/55 outline-none transition-all focus:border-brand-sage focus:bg-white focus:shadow-[0_8px_30px_rgba(62,36,41,0.08)] dark:bg-white/5 dark:text-brand-text xl:py-3"
                   />
+                  <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md border border-brand-border/70 bg-white/70 px-2 py-0.5 text-[10px] font-bold text-brand-text-muted xl:block dark:bg-white/5">
+                    /
+                  </kbd>
                 </form>
                 <button
                   type="button"
                   data-testid="new-entry-button"
-                  onClick={handleDesktopNewEntry}
+                  aria-keyshortcuts="C"
+                  onClick={() => setIsCreateSheetOpen(true)}
                   className="inline-flex items-center gap-2 rounded-full bg-brand-sage px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark active:scale-[0.98] xl:px-5 xl:py-3"
                 >
                   <Plus className="h-4 w-4" />
-                  <span className="hidden xl:inline">New Entry</span>
-                  <span className="xl:hidden">New</span>
+                  <span>Write</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleNavigate('stats', 'appSettings')}
+                  data-testid="profile-menu-button"
+                  onClick={() => setIsProfileSheetOpen(true)}
                   className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-brand-border bg-white text-xl shadow-sm transition-transform hover:scale-105 dark:bg-brand-card-bg xl:h-12 xl:w-12"
                   style={{ backgroundColor: userProfile.avatarColor }}
-                  title="Open settings"
+                  aria-label="Open profile and settings"
+                  title="Open profile and settings"
                 >
                   <ProfileAvatar profile={userProfile} />
                 </button>
@@ -1758,6 +1726,23 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             </main>
           </section>
         </div>
+        <CreateActionSheet
+          open={isCreateSheetOpen}
+          hasJournals={diaries.length > 0}
+          onClose={() => setIsCreateSheetOpen(false)}
+          onNewEntry={() => handleCreateEntry()}
+          onNewNote={() => handleNavigate('notes', 'list', '', '', '', NEW_NOTE_NAVIGATION_ID)}
+          onVoice={() => handleCreateEntry('voice')}
+          onPhoto={() => handleCreateEntry('photo')}
+          onNewJournal={() => handleNavigate('diaries')}
+        />
+        <ProfileActionSheet
+          open={isProfileSheetOpen}
+          profile={userProfile}
+          onClose={() => setIsProfileSheetOpen(false)}
+          onSettings={() => handleNavigate('stats', 'appSettings')}
+          onLock={handleLockApp}
+        />
         {renderToast()}
       </div>
     );

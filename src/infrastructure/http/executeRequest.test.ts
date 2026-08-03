@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mapDriveError } from '../../sync/errors';
+import { mapSupabaseError } from '../../sync/errors';
 import { executeRequest } from './executeRequest';
 
 test('retries retryable responses and preserves a correlation identifier', async () => {
@@ -12,7 +12,7 @@ test('retries retryable responses and preserves a correlation identifier', async
       attempts += 1;
       return new Response('', { status: attempts === 1 ? 503 : 200 });
     },
-    mapError: (error) => mapDriveError(error, 'download'),
+    mapError: mapSupabaseError,
     retryPolicy: { maxAttempts: 2 },
     random: () => 0,
     sleep: async () => undefined,
@@ -30,7 +30,7 @@ test('does not retry non-retryable authorization failures', async () => {
         attempts += 1;
         return new Response('', { status: 401 });
       },
-      mapError: (error) => mapDriveError(error),
+      mapError: mapSupabaseError,
       sleep: async () => undefined,
     }),
     (error: unknown) =>

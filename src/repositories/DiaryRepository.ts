@@ -3,7 +3,6 @@ import type {
   BackupMergePreview,
   BackupMergeResult,
   Diary,
-  DriveBackupSettings,
   Entry,
   LocalSyncAccountState,
   Note,
@@ -208,7 +207,6 @@ export interface RepositorySnapshot {
   settings?: AppSettings;
   userProfile?: UserProfile;
   security?: SecurityConfig;
-  driveBackupSettings?: DriveBackupSettings;
   syncRecordVersions?: Record<string, number>;
   syncMediaPointers?: Record<string, SyncMediaPointer>;
 }
@@ -274,8 +272,6 @@ export interface DiaryRepository {
   saveUserProfile(profile: UserProfile): Promise<void>;
   getSecurityConfig(): Promise<SecurityConfig>;
   saveSecurityConfig(config: SecurityConfig): Promise<void>;
-  getDriveBackupSettings(): Promise<DriveBackupSettings>;
-  saveDriveBackupSettings(settings: DriveBackupSettings): Promise<void>;
   getLocalSyncAccountState(): Promise<LocalSyncAccountState | null>;
   saveLocalSyncAccountState(state: LocalSyncAccountState): Promise<void>;
   clearLocalSyncAccountState(): Promise<void>;

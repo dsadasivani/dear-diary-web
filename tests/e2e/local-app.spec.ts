@@ -20,11 +20,6 @@ const createFirstPin = async (page: Page) => {
   await enterPin(page, APP_PIN);
   await page.getByRole('button', { name: /confirm pin/i }).click();
 
-  await expect(page.getByPlaceholder('Enter a memorable answer')).toBeVisible();
-  await page.getByPlaceholder('Enter a memorable answer').fill('Blue');
-  const saveRecoveryButton = page.getByRole('button', { name: /save recovery question/i });
-  await expect(saveRecoveryButton).toBeEnabled();
-  await saveRecoveryButton.click();
   const enterDiaryButton = page.getByRole('button', { name: /enter dear diary/i });
   if ((await enterDiaryButton.count()) && (await enterDiaryButton.isVisible())) {
     await enterDiaryButton.click();
@@ -68,7 +63,7 @@ const lockFromProfileMenu = async (page: Page) => {
   if ((await profileMenuButton.count()) && (await profileMenuButton.isVisible())) {
     await profileMenuButton.click();
   }
-  await page.getByTestId('lock-app-button').click();
+  await page.getByRole('button', { name: 'Lock Dear Diary', exact: true }).click();
 };
 
 const openSettings = async (page: Page) => {
@@ -319,9 +314,16 @@ test('settings uses responsive section navigation and isolates section content',
   }
 
   await sectionNavigation.getByRole('button', { name: /Data & Storage/ }).click();
-  await expect(page.getByText('Cloud storage', { exact: true })).toBeVisible();
+  await expect(page.getByText('Cloud storage', { exact: true })).toHaveCount(0);
   await expect(page.getByText('On this device', { exact: true })).toBeVisible();
+  await expect(page.getByText('Clear journal content on this device')).toBeVisible();
   await expect(page.getByText('Local sync queue')).not.toBeVisible();
+  if (isMobile) {
+    await page.getByRole('button', { name: 'Back to settings' }).click();
+    await expect(sectionNavigation).toBeVisible();
+  }
+  await expect(sectionNavigation.getByRole('button', { name: /Advanced/ })).toHaveCount(0);
+  await expect(sectionNavigation.getByRole('button', { name: /Sync & Devices/ })).toBeVisible();
 });
 
 test('appearance offers named color personalities and persists the selection', async ({ page }) => {

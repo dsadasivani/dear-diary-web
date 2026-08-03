@@ -148,8 +148,6 @@ test('zero-cursor companion clears a stale safety stop when it has no local writ
     googleUserId: 'google-1',
     googleEmail: 'companion@example.com',
     devicePublicKey: 'public-key',
-    recoveryKeyDriveFileId: '',
-    latestSnapshotDriveFileId: '',
     linkedAt: 1,
   });
 
@@ -177,8 +175,6 @@ test('companion safety recovery does not clear a stop when a local write is pend
     googleUserId: 'google-1',
     googleEmail: 'companion@example.com',
     devicePublicKey: 'public-key',
-    recoveryKeyDriveFileId: '',
-    latestSnapshotDriveFileId: '',
     linkedAt: 1,
   });
 
@@ -272,7 +268,7 @@ test('API client calls the native global fetch with the Window-compatible receiv
   }
 });
 
-test('V1 device signing keys export to the V2 backend SPKI registration format', async () => {
+test('legacy device signing keys export to the backend SPKI registration format', async () => {
   const device = await generateDeviceKeyPair();
   const encoded = await exportDeviceSigningPublicKeySpki(device.publicKey);
   const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));

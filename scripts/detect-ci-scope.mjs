@@ -37,7 +37,6 @@ const createEmptyScope = () => ({
   backend: false,
   web: false,
   browser: false,
-  supabase: false,
   android: false,
 });
 
@@ -55,7 +54,10 @@ export const classifyCiScope = (changedPaths) => {
       recognized = true;
     }
 
-    if (changedPath.startsWith('backend/sync-api/') || changedPath === 'scripts/run-backend-gradle.mjs') {
+    if (
+      changedPath.startsWith('backend/sync-api/') ||
+      changedPath === 'scripts/run-backend-gradle.mjs'
+    ) {
       scope.backend = true;
       recognized = true;
     }
@@ -83,14 +85,6 @@ export const classifyCiScope = (changedPaths) => {
       changedPath === 'scripts/run-gradle.mjs'
     ) {
       scope.android = true;
-      recognized = true;
-    }
-
-    if (
-      changedPath.startsWith('docs/supabase/') ||
-      changedPath === 'scripts/supabase-integration-tests.mjs'
-    ) {
-      scope.supabase = true;
       recognized = true;
     }
 

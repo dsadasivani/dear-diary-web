@@ -1,12 +1,10 @@
 import { unzipSync, zipSync } from 'fflate';
 import {
   AppSettings,
-  BackupSchedulePreference,
   BackupManifest,
   BackupMergePreview,
   BackupMergeResult,
   Diary,
-  DriveBackupSettings,
   Entry,
   Note,
   UserProfile,
@@ -40,8 +38,9 @@ export interface DearDiaryBackupPayload {
   settings: AppSettings;
   userProfile: UserProfile;
   security?: unknown;
-  driveBackupSettings?: DriveBackupSettings;
-  backupSchedule?: BackupSchedulePreference;
+  // Older portable files may contain retired Drive metadata; validation ignores it.
+  driveBackupSettings?: unknown;
+  backupSchedule?: unknown;
   mediaAssets: BackupMediaAsset[];
 }
 
@@ -53,8 +52,6 @@ export interface BackupBundle {
 export interface BackupCreationContext {
   deviceId: string;
   contentRevision: number;
-  parentBackupFileId?: string;
-  schedule?: BackupSchedulePreference;
 }
 
 const textEncoder = new TextEncoder();
@@ -185,9 +182,7 @@ const calculateChecksum = async (
     .join('');
 };
 
-const createPayloadAndMedia = async (
-  context: BackupCreationContext,
-): Promise<{
+const createPayloadAndMedia = async (): Promise<{
   payload: DearDiaryBackupPayload;
   mediaFiles: Record<string, Uint8Array>;
 }> => {
@@ -233,7 +228,6 @@ const createPayloadAndMedia = async (
       notes,
       settings: sanitizeSettings(cloneJson(snapshot.settings!)),
       userProfile,
-      backupSchedule: context.schedule ? cloneJson(context.schedule) : undefined,
       mediaAssets,
     },
     mediaFiles,
@@ -244,13 +238,10 @@ const getAppVersion = (): string =>
   (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
 
 const getBackupCreationContext = async (): Promise<BackupCreationContext> => {
-  const settings = await diaryRepository.getDriveBackupSettings();
-  if (!settings.deviceId) throw new Error('This device does not have a backup identity.');
+  const account = await diaryRepository.getLocalSyncAccountState();
   return {
-    deviceId: settings.deviceId,
-    contentRevision: settings.contentRevision || 0,
-    parentBackupFileId: settings.parentBackupFileId || settings.lastBackupFileId,
-    schedule: settings.schedule,
+    deviceId: account?.deviceId || 'local-device',
+    contentRevision: 0,
   };
 };
 
@@ -258,7 +249,7 @@ export const createBackupBundle = async (
   providedContext?: BackupCreationContext,
 ): Promise<BackupBundle> => {
   const context = providedContext || (await getBackupCreationContext());
-  const { payload, mediaFiles } = await createPayloadAndMedia(context);
+  const { payload, mediaFiles } = await createPayloadAndMedia();
   const dataJson = JSON.stringify(payload);
   const checksum = await calculateChecksum(dataJson, mediaFiles);
   const totalBytes = Object.values(mediaFiles).reduce(
@@ -282,7 +273,6 @@ export const createBackupBundle = async (
     checksum,
     deviceId: context.deviceId,
     contentRevision: context.contentRevision,
-    parentBackupFileId: context.parentBackupFileId,
   };
 
   const bytes = zipSync({
@@ -401,13 +391,6 @@ export const restoreBackupBundle = async (bytes: Uint8Array): Promise<BackupMani
     console.warn('Post-restore media cleanup will retry later:', error),
   );
 
-  const currentBackupSettings = await diaryRepository.getDriveBackupSettings();
-  await diaryRepository.saveDriveBackupSettings({
-    ...currentBackupSettings,
-    schedule: payload.backupSchedule || currentBackupSettings.schedule,
-    lastRestoreAt: Date.now(),
-  });
-
   return manifest;
 };
 
@@ -452,12 +435,6 @@ export const mergeBackupBundle = async (
     payloadSnapshot(payload),
     payload.mediaAssets?.length || 0,
   );
-  const currentBackupSettings = await diaryRepository.getDriveBackupSettings();
-  await diaryRepository.saveDriveBackupSettings({
-    ...currentBackupSettings,
-    schedule: payload.backupSchedule || currentBackupSettings.schedule,
-    lastRestoreAt: Date.now(),
-  });
   return { manifest, result };
 };
 

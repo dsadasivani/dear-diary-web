@@ -23,7 +23,6 @@ import {
   StatusNotice,
 } from './UiPrimitives';
 import { useAmbientTheme } from '../design/ambientTheme';
-import { toLocalDateKey } from '../utils/localDate';
 import { motionTransitions } from './ui/motion';
 
 interface HomeScreenProps {
@@ -117,13 +116,6 @@ export default function HomeScreen({
   const recentEntries = summary?.recentEntries || [];
   const recentDiaries = (summary?.recentDiaries || []).slice(0, layout === 'desktop' ? 4 : 3);
   const mostRecentEntry = recentEntries[0];
-  const todayKey = toLocalDateKey();
-  const continueLabel =
-    mostRecentEntry?.date === todayKey
-      ? 'Continue today’s entry'
-      : mostRecentEntry
-        ? 'Return to your last page'
-        : 'Begin today’s page';
   const todayWordCount = summary?.todayWordCount || 0;
   const goal = Math.max(1, profile.writingGoal || 100);
   const targetProgress = Math.min(100, Math.round((todayWordCount / goal) * 100));
@@ -158,15 +150,11 @@ export default function HomeScreen({
         className="living-memory-hero relative overflow-hidden p-5 md:p-8"
         aria-labelledby="continue-writing-title"
       >
-        <p className="app-eyebrow hidden sm:block">Your open page</p>
+        <p className="app-eyebrow hidden sm:block">Continue your story</p>
         <div className="mt-0 flex items-end justify-between gap-5 sm:mt-3">
           <div className="min-w-0">
             <h2 id="continue-writing-title" className="type-section-title truncate md:text-3xl">
-              {layout === 'mobile'
-                ? mostRecentEntry
-                  ? 'Continue writing'
-                  : 'Start writing'
-                : continueLabel}
+              {mostRecentEntry ? 'Continue writing' : 'Start writing'}
             </h2>
             <p className="type-supporting mt-1 truncate">
               {mostRecentEntry?.title || 'A quiet page is ready when you are.'}
@@ -198,7 +186,9 @@ export default function HomeScreen({
       >
         “
       </span>
-      <p className="app-eyebrow hidden sm:block">A question for today</p>
+      <p className="app-eyebrow hidden sm:block">
+        {layout === 'desktop' ? 'A moment worth keeping' : 'A question for today'}
+      </p>
       <h2
         id="daily-prompt-title"
         className="relative mt-0 max-w-3xl font-serif-diary text-[clamp(1.65rem,4vw,2.55rem)] font-medium leading-[1.12] tracking-[-0.02em] text-ink sm:mt-4"
@@ -212,14 +202,14 @@ export default function HomeScreen({
           onClick={() => onOpenNewEntryWithPrompt(prompt)}
         >
           <Plus className="h-4 w-4" />
-          {layout === 'mobile' ? 'Write' : 'Write from this'}
+          {layout === 'mobile' ? 'Write' : 'Start writing'}
         </AppButton>
         <AppButton
           tone="quiet"
           onClick={() => setPromptIndex((index) => (index + 1) % DEFAULT_PROMPTS.length)}
         >
           <Shuffle className="h-4 w-4" />
-          {layout === 'mobile' ? 'New prompt' : 'Another prompt'}
+          New prompt
         </AppButton>
       </div>
     </section>
@@ -247,7 +237,7 @@ export default function HomeScreen({
             key={entry.id}
             type="button"
             onClick={() => onNavigate('diaries', 'diaryDetail', entry.diaryId, entry.id)}
-            className="group grid w-full grid-cols-[4.25rem_minmax(0,1fr)_auto] items-center gap-3 py-4 text-left"
+            className="group grid w-full grid-cols-[4.25rem_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-2 py-4 text-left transition-colors hover:bg-surface-subtle focus-visible:bg-surface-subtle"
           >
             <span className="type-metadata border-r border-[var(--border-subtle)] pr-3 text-right">
               {new Date(entry.date).toLocaleDateString(undefined, {
@@ -292,7 +282,7 @@ export default function HomeScreen({
         }
         className="mb-4"
       />
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-2">
         {recentDiaries.map((diary) => (
           <motion.button
             key={diary.id}
@@ -502,24 +492,33 @@ export default function HomeScreen({
   if (layout === 'mobile') return <MobileOpenPage />;
 
   return (
-    <div className="space-y-7 pb-4">
+    <div className="desktop-home space-y-7 pb-4">
       <motion.header
         initial={playLaunchReveal && !reducedMotion ? { opacity: 0, y: 10 } : false}
         animate={{ opacity: 1, y: 0 }}
         transition={motionTransitions.page}
       >
-        <p className="flex items-center gap-2 text-sm font-semibold text-ink-secondary">
-          <Calendar className="h-4 w-4" />
-          {new Date().toLocaleDateString(undefined, {
-            weekday: 'long',
-            month: 'long',
-            day: 'numeric',
-          })}
-        </p>
-        <h1 className="mt-1 font-serif-diary text-[clamp(2rem,5vw,3.5rem)] font-semibold leading-none tracking-[-0.025em] text-ink">
+        <div className="desktop-home-meta">
+          <p className="flex items-center gap-2 text-sm font-semibold text-ink-secondary">
+            <Calendar className="h-4 w-4" />
+            {new Date().toLocaleDateString(undefined, {
+              weekday: 'long',
+              month: 'long',
+              day: 'numeric',
+            })}
+          </p>
+          <p className="desktop-home-streak">
+            <Flame className="h-4 w-4" aria-hidden="true" />
+            {summary?.currentStreak || 0} {(summary?.currentStreak || 0) === 1 ? 'day' : 'days'}{' '}
+            streak
+          </p>
+        </div>
+        <h1 className="mt-2 font-serif-diary text-[clamp(2.35rem,4vw,3.25rem)] font-semibold leading-none tracking-[-0.025em] text-ink">
           {greeting}
-          {`, ${profile.name || 'Writer'}`}
         </h1>
+        <p className="mt-2 text-sm font-medium text-ink-secondary">
+          Welcome back, {profile.name || 'Writer'}. What would you like to remember?
+        </p>
       </motion.header>
       {summaryError && (
         <StatusNotice tone="warning" role="alert">
@@ -527,16 +526,16 @@ export default function HomeScreen({
         </StatusNotice>
       )}
       {layout === 'desktop' ? (
-        <div className="grid gap-9 2xl:grid-cols-[minmax(0,7fr)_minmax(280px,3fr)]">
-          <main className="space-y-9">
+        <div className="desktop-home-layout">
+          <main className="space-y-7">
             <ContinueSpace />
             <PromptPaper />
             <RecentEntries />
           </main>
-          <aside className="space-y-7">
+          <aside className="desktop-home-aside space-y-7">
             <Progress />
-            <RecentJournals />
             <QuickCapture />
+            <RecentJournals />
           </aside>
         </div>
       ) : (

@@ -5,6 +5,7 @@ import {
   loadSyncSecrets,
   saveSyncSecrets,
   withAccountRootKeyForEpoch,
+  withPrimaryRecoveryCredential,
   type SyncSecretStorage,
 } from './syncSecrets';
 
@@ -38,6 +39,28 @@ test('persists and restores account root key material through secret storage', a
   const restored = await loadSyncSecrets(storage);
   assert.deepEqual(restored?.accountRootKey, accountRootKey);
   assert.equal(restored?.supabaseSession.refreshToken, 'refresh');
+  assert.equal(restored?.primaryRecoveryCredential, undefined);
+});
+
+test('upgrades a legacy version-1 secret with a primary-only recovery credential', async () => {
+  const storage = new MemorySecretStorage();
+  const accountRootKey = new Uint8Array(32).fill(7);
+  const upgraded = withPrimaryRecoveryCredential(
+    {
+      version: 1,
+      accountId: 'account-1',
+      accountRootKey,
+      devicePrivateKeyJwk: '{"kty":"EC"}',
+      supabaseSession: { accessToken: 'access', refreshToken: 'refresh' },
+    },
+    '12345678',
+  );
+  await saveSyncSecrets(upgraded, storage);
+
+  const restored = await loadSyncSecrets(storage);
+  assert.equal(restored?.version, 2);
+  assert.equal(restored?.primaryRecoveryCredential?.passphrase, '12345678');
+  assert.equal(restored?.primaryRecoveryCredential?.version, 1);
 });
 
 test('persists multiple epoch root keys', async () => {

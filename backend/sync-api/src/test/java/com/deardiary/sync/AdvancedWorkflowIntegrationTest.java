@@ -10,9 +10,7 @@ import com.deardiary.sync.device.DeviceAuthorizationService;
 import com.deardiary.sync.device.DeviceRegistrationRequest;
 import com.deardiary.sync.device.DeviceRegistrationService;
 import com.deardiary.sync.device.DeviceManagementService;
-import com.deardiary.sync.migration.AdvanceMigrationRequest;
-import com.deardiary.sync.migration.BeginMigrationRequest;
-import com.deardiary.sync.migration.MigrationService;
+import com.deardiary.sync.device.SelfRevocationRequest;
 import com.deardiary.sync.keypackage.KeyPackageRequest;
 import com.deardiary.sync.keypackage.KeyPackageService;
 import com.deardiary.sync.keypackage.ApplyDeviceKeyPackageRequest;
@@ -129,30 +127,18 @@ class AdvancedWorkflowIntegrationTest {
             assertThat(device.deviceRole()).isEqualTo("COMPANION");
             assertThat(device.encryptionPublicKey()).isEqualTo("e".repeat(32));
         });
-    }
 
-    @Test
-    void migrationRequiresVerifiedSnapshotAndPermanentlyClosesRollbackAfterV2Mutation() {
-        var migrations = new MigrationService(jdbc, transactions, devices, clock);
-        var migrationId = UUID.randomUUID();
-        var digest = "b".repeat(64);
-        // The V1 baseline and the newly registered V2 account have independent sequence spaces.
-        migrations.begin("advanced-user", new BeginMigrationRequest(migrationId, primaryDeviceId, digest, 7));
-        advance(migrations, migrationId, "DRAINING_V1", null, null);
-        advance(migrations, migrationId, "VALIDATING_LOCAL_STATE", null, null);
-        advance(migrations, migrationId, "CREATING_V2_SNAPSHOT", digest, null);
-        advance(migrations, migrationId, "UPLOADING_V2_SNAPSHOT", digest, null);
-        advance(migrations, migrationId, "REGISTERING_V2_ACCOUNT", digest, null);
-        assertThatThrownBy(() -> advance(migrations, migrationId, "VERIFYING_V2_RESTORE", digest, UUID.randomUUID()))
-            .isInstanceOf(ApiException.class).extracting(error -> ((ApiException) error).code())
-            .isEqualTo("SNAPSHOT_NOT_FOUND");
-        var snapshotId = insertAvailableSnapshot();
-        advance(migrations, migrationId, "VERIFYING_V2_RESTORE", digest, snapshotId);
-        advance(migrations, migrationId, "V2_ACTIVE", digest, snapshotId);
-        jdbc.update("UPDATE sync_accounts SET current_sequence = 1 WHERE account_id = ?", accountId);
-        assertThatThrownBy(() -> migrations.rollback("advanced-user", migrationId, primaryDeviceId))
-            .isInstanceOf(ApiException.class).extracting(error -> ((ApiException) error).code())
-            .isEqualTo("MIGRATION_ROLLBACK_UNAVAILABLE");
+        var management = new DeviceManagementService(jdbc, devices);
+        assertApiCode(() -> management.revokeSelf("advanced-user", companionId,
+            new SelfRevocationRequest(sign(primaryKey, "device-revoke-self:" + companionId))),
+            "INVALID_DEVICE_SIGNATURE");
+        var signature = sign(companionKey, "device-revoke-self:" + companionId);
+        assertThat(management.revokeSelf("advanced-user", companionId,
+            new SelfRevocationRequest(signature)).deviceStatus()).isEqualTo("REVOKED");
+        assertThat(management.revokeSelf("advanced-user", companionId,
+            new SelfRevocationRequest(signature)).deviceStatus()).isEqualTo("REVOKED");
+        assertApiCode(() -> management.revokeSelf("another-user", companionId,
+            new SelfRevocationRequest(signature)), "DEVICE_NOT_FOUND");
     }
 
     @Test
@@ -323,10 +309,6 @@ class AdvancedWorkflowIntegrationTest {
             new ApplyDeviceKeyPackageRequest(remainingCompanionId,
                 sign(remainingCompanionKey, "key-package-applied:" + remainingPackageId + ":2")));
         assertThat(applied.status()).isEqualTo("APPLIED");
-    }
-
-    private void advance(MigrationService service, UUID id, String status, String digest, UUID snapshotId) {
-        service.advance("advanced-user", id, new AdvanceMigrationRequest(primaryDeviceId, status, digest, snapshotId));
     }
 
     private UUID insertAvailableSnapshot() {

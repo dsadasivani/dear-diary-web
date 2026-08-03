@@ -12,7 +12,6 @@ import type {
   SyncV2Protocol,
   SyncV2Snapshot,
   SyncV2KeyPackage,
-  SyncV2Migration,
   SyncV2Pairing,
   SyncV2Recovery,
   SyncV2Rotation,
@@ -91,6 +90,16 @@ export class SyncV2ApiClient {
     );
   }
 
+  revokeSelf(
+    deviceId: string,
+    possessionSignature: string,
+  ): Promise<{ deviceId: string; deviceStatus: 'REVOKED' }> {
+    return this.json(`/api/v2/sync/devices/${encodeURIComponent(deviceId)}/revoke-self`, {
+      method: 'POST',
+      body: JSON.stringify({ possessionSignature }),
+    });
+  }
+
   initiateOperation(
     request: InitiateSyncV2OperationRequest,
   ): Promise<InitiateSyncV2OperationResponse> {
@@ -143,46 +152,6 @@ export class SyncV2ApiClient {
     return this.json(
       `/api/v2/sync/snapshots/latest?partitionKey=account&snapshotSchemaVersion=${snapshotSchemaVersion}`,
       { method: 'GET' },
-    );
-  }
-
-  beginMigration(request: {
-    migrationId: string;
-    deviceId: string;
-    baselineDigest: string;
-    baselineSequence: number;
-  }): Promise<SyncV2Migration> {
-    return this.json('/api/v2/sync/migrations/begin', {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-  }
-
-  advanceMigration(
-    migrationId: string,
-    request: {
-      deviceId: string;
-      nextStatus: string;
-      validationDigest?: string;
-      snapshotId?: string;
-    },
-  ): Promise<SyncV2Migration> {
-    return this.json(`/api/v2/sync/migrations/${encodeURIComponent(migrationId)}/advance`, {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-  }
-
-  getMigration(migrationId: string): Promise<SyncV2Migration> {
-    return this.json(`/api/v2/sync/migrations/${encodeURIComponent(migrationId)}`, {
-      method: 'GET',
-    });
-  }
-
-  rollbackMigration(migrationId: string, deviceId: string): Promise<SyncV2Migration> {
-    return this.json(
-      `/api/v2/sync/migrations/${encodeURIComponent(migrationId)}/rollback?deviceId=${encodeURIComponent(deviceId)}`,
-      { method: 'POST' },
     );
   }
 

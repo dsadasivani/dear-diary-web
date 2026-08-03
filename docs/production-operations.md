@@ -40,13 +40,6 @@ cursor. A failed or interrupted import leaves the previous local state unchanged
 snapshot restore remains disabled because the current V2 event API uses one global cursor; enabling it
 without partition cursors could skip events.
 
-## Advanced workflow operations
-
-Migration is deliberately one-way after authoritative V2 activity. The persistent migration journal drains V1,
-compares canonical digests, creates and restores a V2 snapshot in temporary state, then activates V2 before making
-V1 read-only. Never manually force `V1_READ_ONLY`; rollback is rejected once the account sequence advances after
-V2 activation. V1 remote data is retained and is never automatically deleted.
-
 Keep `companion_pairing_enabled`, `primary_recovery_enabled`, and `key_rotation_enabled` false, with their matching
 kill switches engaged, until the feature has passed staging recovery drills. Pairing requires an active primary,
 an expiring challenge, signed approval, and target-device possession proof. Recovery does not revoke the prior

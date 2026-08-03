@@ -23,10 +23,10 @@ The backend allows the browser development origins plus the Capacitor Android/iO
 
 Open `http://localhost:3000`. To exercise a clean setup:
 
-1. Create the local PIN and recovery question on the Android primary device.
+1. Create the local PIN on the Android primary device.
 2. Connect Google and create the 8-digit recovery passphrase.
 3. Wait for encrypted account setup to finish.
-4. Create or edit a note and confirm **Settings -> Sync & Backup** reports that sync is up to date.
+4. Create or edit a note and confirm **Settings -> Sync & Devices** reports that sync is up to date.
 5. Open the browser companion page, approve its pairing code on mobile, and unlock it with the mobile PIN.
 
 The browser build is a companion device. The initial account must be created on Android. With an emulator running:

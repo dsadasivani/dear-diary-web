@@ -40,8 +40,6 @@ test('syncing repository saves locally and requests background flush without awa
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 2,
     linkedAt: 1,
   });
@@ -78,8 +76,6 @@ test('expected background flush failures are handled at the repository call site
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 0,
     linkedAt: 1,
   });

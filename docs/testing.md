@@ -15,7 +15,7 @@ npm run test:server
 npm run build
 ```
 
-The suites cover domain rules, security and recovery, encrypted local storage, repository behavior, outbox transitions, Sync V1 compatibility, Sync V2 protocol and replay, media handling, React components, and the Express host.
+The suites cover domain rules, Google-verified PIN recovery, encrypted local storage, repository behavior, outbox transitions, Sync V2 protocol and replay, media handling, React components, and the Express host.
 
 ## Service and platform checks
 
@@ -24,7 +24,7 @@ These commands require additional tooling:
 | Command                      | Requirement                                             | Coverage                                                                                                         |
 | ---------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `npm run backend:test`       | Java 21 and Docker for Testcontainers integration cases | Spring API, Flyway migrations, authentication, operations, replay, snapshots, workflows, and garbage collection. |
-| `npm run test:supabase`      | Docker                                                  | V1 compatibility migrations, RLS, RPC behavior, and concurrency.                                                 |
+| `npm run backend:test`       | Docker for integration cases                            | Sync V2 authorization, device, recovery, rotation, and object workflows.                                         |
 | `npm run test:e2e`           | Installed Playwright browsers                           | Browser launch and application workflows.                                                                        |
 | `npm run test:accessibility` | Installed Playwright browsers                           | Axe checks for tagged application routes.                                                                        |
 | `npm run android:test`       | Android SDK and JDK                                     | Android unit tests.                                                                                              |
