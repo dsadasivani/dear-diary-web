@@ -2,6 +2,8 @@ FROM --platform=$BUILDPLATFORM gradle:8.14.3-jdk21-alpine AS builder
 
 WORKDIR /workspace
 COPY --chown=gradle:gradle build.gradle.kts settings.gradle.kts ./
+RUN gradle --no-daemon dependencies
+
 COPY --chown=gradle:gradle src ./src
 
 RUN gradle --no-daemon clean bootJar \

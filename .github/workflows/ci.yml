@@ -10,8 +10,44 @@ on:
       - reopened
       - ready_for_review
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    name: Detect CI scope
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.scope.outputs.backend }}
+      web: ${{ steps.scope.outputs.web }}
+      browser: ${{ steps.scope.outputs.browser }}
+      supabase: ${{ steps.scope.outputs.supabase }}
+      android: ${{ steps.scope.outputs.android }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/detect-ci-scope.mjs "$BASE_SHA" "$HEAD_SHA"
+
+  repository-guards:
+    name: Repository guards
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --test scripts/detect-ci-scope.test.mjs
+      - run: node scripts/validate-ops-config.mjs
+      - run: node scripts/secret-and-artifact-scan.mjs
+
   backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +62,8 @@ jobs:
       - run: npm run backend:test
 
   web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,11 +78,11 @@ jobs:
       - run: npm run test:component
       - run: npm run test:server
       - run: npm run build
-      - run: npm run scan:secrets
-      - run: npm run test:ops
       - run: npm audit --audit-level=high
 
   supabase:
+    needs: changes
+    if: needs.changes.outputs.supabase == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +94,8 @@ jobs:
       - run: npm run test:supabase
 
   browser:
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
@@ -67,15 +107,24 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run test:e2e
-        env:
-          HOME: /root
-      - run: npm run test:accessibility
+      - name: Run functional, visual, and accessibility tests
+        run: npm run test:e2e
         env:
           HOME: /root
 
   android:
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    name: Android ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: tests
+            script: android:test
+          - name: lint
+            script: android:lint
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,37 +135,63 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: android-actions/setup-android@v3
+          cache: gradle
+      - name: Ensure the required Android SDK is available
+        shell: bash
+        run: |
+          if [[ ! -d "$ANDROID_HOME/platforms/android-36" ]]; then
+            yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          fi
       - run: npm ci
       - run: npm run build
-      - run: npx cap sync android
-      - run: npm run android:test
-      - run: npm run android:lint
+      - run: npx --no-install cap sync android
+      - run: npm run ${{ matrix.script }}
 
   required:
     name: CI passed
     if: always()
-    needs: [backend, web, supabase, browser, android]
+    needs: [changes, repository-guards, backend, web, supabase, browser, android]
     runs-on: ubuntu-latest
     steps:
-      - name: Require every CI job to pass
+      - name: Require all selected CI jobs to pass
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          GUARDS_RESULT: ${{ needs.repository-guards.result }}
+          BACKEND_EXPECTED: ${{ needs.changes.outputs.backend }}
           BACKEND_RESULT: ${{ needs.backend.result }}
+          WEB_EXPECTED: ${{ needs.changes.outputs.web }}
           WEB_RESULT: ${{ needs.web.result }}
+          SUPABASE_EXPECTED: ${{ needs.changes.outputs.supabase }}
           SUPABASE_RESULT: ${{ needs.supabase.result }}
+          BROWSER_EXPECTED: ${{ needs.changes.outputs.browser }}
           BROWSER_RESULT: ${{ needs.browser.result }}
+          ANDROID_EXPECTED: ${{ needs.changes.outputs.android }}
           ANDROID_RESULT: ${{ needs.android.result }}
         shell: bash
         run: |
           set -euo pipefail
-          for result in \
-            "$BACKEND_RESULT" \
-            "$WEB_RESULT" \
-            "$SUPABASE_RESULT" \
-            "$BROWSER_RESULT" \
-            "$ANDROID_RESULT"; do
-            if [[ "$result" != "success" ]]; then
-              echo "A required CI job ended with result: $result" >&2
+
+          if [[ "$CHANGES_RESULT" != "success" || "$GUARDS_RESULT" != "success" ]]; then
+            echo "CI scope detection or repository guards failed." >&2
+            exit 1
+          fi
+
+          require_selected() {
+            local name="$1"
+            local expected="$2"
+            local result="$3"
+            if [[ "$expected" == "true" && "$result" != "success" ]]; then
+              echo "$name was selected but ended with result: $result" >&2
               exit 1
             fi
-          done
+            if [[ "$expected" != "true" && "$result" != "skipped" && "$result" != "success" ]]; then
+              echo "$name was not selected but ended unexpectedly with result: $result" >&2
+              exit 1
+            fi
+          }
+
+          require_selected backend "$BACKEND_EXPECTED" "$BACKEND_RESULT"
+          require_selected web "$WEB_EXPECTED" "$WEB_RESULT"
+          require_selected supabase "$SUPABASE_EXPECTED" "$SUPABASE_RESULT"
+          require_selected browser "$BROWSER_EXPECTED" "$BROWSER_RESULT"
+          require_selected android "$ANDROID_EXPECTED" "$ANDROID_RESULT"

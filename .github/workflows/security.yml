@@ -7,6 +7,10 @@ on:
   schedule:
     - cron: '17 3 * * 1'
 
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   security-events: write
@@ -53,7 +57,7 @@ jobs:
           cache: gradle
       - name: Build Java for CodeQL
         if: matrix.language == 'java-kotlin'
-        run: npm run backend:test
+        run: node scripts/run-backend-gradle.mjs classes testClasses
       - uses: github/codeql-action/analyze@v4
 
   dependency-review:

@@ -291,6 +291,8 @@ jobs:
             docker buildx build \
               --platform linux/arm64 \
               --pull \
+              --cache-from type=gha,scope=staging-backend-arm64 \
+              --cache-to type=gha,mode=max,scope=staging-backend-arm64 \
               --label "org.opencontainers.image.revision=$GITHUB_SHA" \
               --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
               --provenance=false \
@@ -372,7 +374,7 @@ jobs:
             --cluster "$ECS_CLUSTER" \
             --service "$ECS_SERVICE" \
             --desired-count 1 \
-            --health-check-grace-period-seconds 90 \
+            --health-check-grace-period-seconds 300 \
             --no-cli-pager
 
       - name: Render task definition with the scanned image digest
