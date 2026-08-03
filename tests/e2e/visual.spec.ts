@@ -116,6 +116,7 @@ test('Living Memories responsive visual matrix', async ({ page, browserName }) =
   await capture(page, 'settings-light');
   await returnToRootNavigation(page);
   await page.getByTestId('nav-stats').click();
+  await expect(page.getByRole('heading', { name: 'Writing consistency' })).toBeVisible();
   await capture(page, 'insights-light');
 
   await page.evaluate(() => {
