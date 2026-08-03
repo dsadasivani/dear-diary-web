@@ -347,18 +347,33 @@ export default function StatsScreen({
     'December',
   ];
   const selectedMonthPrefix = `${selectedPixelYear}-${String(selectedPixelMonth + 1).padStart(2, '0')}`;
-  const selectedMonthEntryCount = entries.filter((entry) =>
+  const selectedMonthEntries = entries.filter((entry) =>
     entry.date.startsWith(selectedMonthPrefix),
-  ).length;
+  );
+  const selectedMonthEntryCount = selectedMonthEntries.length;
+  const selectedMonthDominantMood = (() => {
+    const counts = new Map<string, number>();
+    selectedMonthEntries.forEach((entry) => {
+      const mood = entry.moodName || 'Reflective';
+      counts.set(mood, (counts.get(mood) || 0) + 1);
+    });
+    const topMood = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    return topMood
+      ? {
+          name: topMood[0],
+          percentage: Math.round((topMood[1] / selectedMonthEntryCount) * 100),
+        }
+      : null;
+  })();
   const monthlyNarrative =
     entries.length === 0
       ? 'Your reflections will gather here as you begin writing.'
       : selectedMonthEntryCount > 0
-        ? `You wrote ${selectedMonthEntryCount} ${selectedMonthEntryCount === 1 ? 'reflection' : 'reflections'} in ${monthNames[selectedPixelMonth]}. ${dominantMoodSummary ? `${dominantMoodSummary.name} was the mood label you used most often across available entries.` : ''}`
+        ? `You wrote ${selectedMonthEntryCount} ${selectedMonthEntryCount === 1 ? 'reflection' : 'reflections'} in ${monthNames[selectedPixelMonth]}. ${selectedMonthDominantMood ? `${selectedMonthDominantMood.name} was the mood you chose most often.` : ''}`
         : `No reflections are available for ${monthNames[selectedPixelMonth]} yet. Your current writing streak is ${streak} ${streak === 1 ? 'day' : 'days'}.`;
   const mobileMonthlySummary =
     selectedMonthEntryCount > 0
-      ? `${selectedMonthEntryCount} ${selectedMonthEntryCount === 1 ? 'reflection' : 'reflections'}${dominantMoodSummary ? ` · Mostly ${dominantMoodSummary.name.toLowerCase()}` : ''}`
+      ? `${selectedMonthEntryCount} ${selectedMonthEntryCount === 1 ? 'reflection' : 'reflections'}${selectedMonthDominantMood ? ` · Mostly ${selectedMonthDominantMood.name.toLowerCase()}` : ''}`
       : 'No reflections';
   const insightStories = [
     streak > 0
@@ -402,7 +417,9 @@ export default function StatsScreen({
   };
 
   return (
-    <div className={`${layout === 'mobile' ? 'open-page-insights' : ''} space-y-8 pb-24`}>
+    <div
+      className={`${layout === 'mobile' ? 'open-page-insights space-y-8 pb-24' : layout === 'desktop' ? 'insights-web space-y-7 pb-8' : 'space-y-8 pb-24'}`}
+    >
       <header className="open-page-insights-intro surface-glass-strong sticky top-0 z-30 -mx-2 flex items-center justify-between border-b border-brand-border/60 px-2 py-3">
         {layout === 'mobile' ? (
           <div className="min-w-0">
@@ -411,10 +428,11 @@ export default function StatsScreen({
             <p>Patterns from your writing, never prescriptions.</p>
           </div>
         ) : (
-          <div>
-            <h1 className="type-page-title font-bold">Insights</h1>
+          <div className="min-w-0">
+            <p className="app-eyebrow">Private reflections</p>
+            <h1 className="type-page-title font-bold">Your writing, gently reflected</h1>
             <p className="mt-1 text-sm text-brand-text-muted">
-              A gentle view of your writing over time.
+              Notice rhythms, moods, and memories without turning reflection into a score.
             </p>
           </div>
         )}
@@ -450,23 +468,29 @@ export default function StatsScreen({
         />
       ) : (
         <>
-          <section className="open-page-insights-summary surface-paper rounded-[var(--radius-sheet)] border-x border-brand-border/60 px-5 py-7 md:px-8 md:py-9">
-            <p className="app-eyebrow hidden sm:block">Monthly reflection</p>
-            {layout === 'mobile' ? (
-              <div>
+          <section
+            className={`open-page-insights-summary surface-paper rounded-[var(--radius-sheet)] border-x border-brand-border/60 px-5 py-7 md:px-8 md:py-9 ${layout === 'desktop' ? 'insights-web-summary' : ''}`}
+          >
+            <div className="insights-summary-copy">
+              <p className="app-eyebrow hidden sm:block">Monthly reflection</p>
+              {layout === 'mobile' ? (
+                <div>
+                  <h2 className="font-serif-diary text-3xl font-semibold leading-tight text-brand-plum dark:text-brand-text">
+                    {monthNames[selectedPixelMonth]}
+                  </h2>
+                  <p className="mt-1 text-sm font-semibold text-brand-text-muted">
+                    {mobileMonthlySummary}
+                  </p>
+                </div>
+              ) : (
                 <h2 className="font-serif-diary text-3xl font-semibold leading-tight text-brand-plum dark:text-brand-text">
-                  {monthNames[selectedPixelMonth]}
+                  {monthlyNarrative}
                 </h2>
-                <p className="mt-1 text-sm font-semibold text-brand-text-muted">
-                  {mobileMonthlySummary}
-                </p>
-              </div>
-            ) : (
-              <h2 className="mt-3 max-w-4xl font-serif-diary text-3xl font-semibold leading-tight text-brand-plum dark:text-brand-text md:text-4xl">
-                {monthlyNarrative}
-              </h2>
-            )}
-            <div className="open-page-insights-metrics mt-7 grid grid-cols-3 gap-4 border-t border-brand-border/60 pt-5">
+              )}
+            </div>
+            <div
+              className={`open-page-insights-metrics mt-7 grid grid-cols-3 gap-4 border-t border-brand-border/60 pt-5 ${layout === 'desktop' ? 'insights-web-metrics' : ''}`}
+            >
               <div>
                 <Flame className="h-4 w-4 text-brand-pink" />
                 <p className="mt-2 text-3xl font-bold tabular-nums">{streak}</p>
@@ -492,18 +516,24 @@ export default function StatsScreen({
           </section>
 
           <section className="open-page-insight-stories" aria-label="Insight stories">
-            <h2 className="type-section-title font-bold">
-              {layout === 'mobile' ? 'Highlights' : 'A few things you may notice'}
-            </h2>
+            <h2 className="type-section-title font-bold">Highlights</h2>
             <div
-              className="no-scrollbar mt-4 flex snap-x gap-3 overflow-x-auto pb-2"
-              tabIndex={0}
-              aria-label="Insight stories; scroll horizontally for more"
+              className={
+                layout === 'desktop'
+                  ? 'insights-web-story-grid mt-4'
+                  : 'no-scrollbar mt-4 flex snap-x gap-3 overflow-x-auto pb-2'
+              }
+              tabIndex={layout === 'desktop' ? undefined : 0}
+              aria-label={
+                layout === 'desktop'
+                  ? 'Insight highlights'
+                  : 'Insight stories; scroll horizontally for more'
+              }
             >
               {(layout === 'mobile' ? mobileInsightStories : insightStories).map((story, index) => (
                 <article
                   key={story}
-                  className={`open-page-insight-story surface-paper snap-start rounded-[var(--radius-card)] border border-brand-border/60 p-5 sm:min-w-[280px] ${layout === 'mobile' ? 'min-w-[58%]' : 'min-w-[82%]'}`}
+                  className={`open-page-insight-story surface-paper rounded-[var(--radius-card)] border border-brand-border/60 p-5 ${layout === 'mobile' ? 'min-w-[58%] snap-start sm:min-w-[280px]' : layout === 'desktop' ? 'insights-web-story-card' : 'min-w-[82%] snap-start sm:min-w-[280px]'}`}
                 >
                   <p className="text-xs font-bold text-brand-pink">
                     {String(index + 1).padStart(2, '0')}
@@ -518,12 +548,10 @@ export default function StatsScreen({
             </div>
           </section>
 
-          <div
-            className={`grid gap-8 ${layout === 'desktop' ? 'xl:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]' : ''}`}
-          >
+          <div className={layout === 'desktop' ? 'insights-web-layout' : 'grid gap-8'}>
             <main className="min-w-0 space-y-9">
               <section
-                className="open-page-consistency border-y border-brand-border/60 py-6"
+                className={`open-page-consistency border-y border-brand-border/60 py-6 ${layout === 'desktop' ? 'insights-web-card' : ''}`}
                 aria-labelledby="consistency-title"
               >
                 <div className="flex items-end justify-between gap-4">
@@ -538,7 +566,7 @@ export default function StatsScreen({
                   <span className="text-xs font-bold text-brand-text-muted">Less → More</span>
                 </div>
                 <div
-                  className="mt-6 grid grid-cols-10 gap-2"
+                  className={`mt-6 grid grid-cols-10 gap-2 ${layout === 'desktop' ? 'insights-activity-grid' : ''}`}
                   role="img"
                   aria-label="Writing activity during the last 30 days"
                 >
@@ -552,7 +580,10 @@ export default function StatsScreen({
                 </div>
               </section>
 
-              <section className="open-page-pixels" aria-labelledby="pixels-title">
+              <section
+                className={`open-page-pixels ${layout === 'desktop' ? 'insights-web-card' : ''}`}
+                aria-labelledby="pixels-title"
+              >
                 <div className="flex flex-wrap items-end justify-between gap-4">
                   <div>
                     <h2 id="pixels-title" className="type-section-title font-bold">
@@ -612,7 +643,7 @@ export default function StatsScreen({
                   </div>
                 </div>
                 {pixelViewMode === 'month' ? (
-                  <div className="mt-6">
+                  <div className={`mt-6 ${layout === 'desktop' ? 'insights-calendar' : ''}`}>
                     <div className="grid grid-cols-7 gap-2 text-center text-xs font-bold text-brand-text-muted">
                       {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
                         <span key={`${day}-${index}`}>{day}</span>
@@ -742,8 +773,10 @@ export default function StatsScreen({
               </section>
             </main>
 
-            <aside className="open-page-insights-details space-y-8 xl:border-l xl:border-brand-border/60 xl:pl-8">
-              <section>
+            <aside
+              className={`open-page-insights-details space-y-5 ${layout === 'desktop' ? 'insights-web-patterns' : ''}`}
+            >
+              <section className={layout === 'desktop' ? 'insights-web-card' : ''}>
                 <h2 className="type-section-title font-bold">Mood landscape</h2>
                 <p className="mt-1 text-sm text-brand-text-muted">
                   Descriptive labels from available entries—not a diagnosis.
@@ -773,7 +806,13 @@ export default function StatsScreen({
                   </div>
                 )}
               </section>
-              <section className="border-t border-brand-border/60 pt-6">
+              <section
+                className={
+                  layout === 'desktop'
+                    ? 'insights-web-card'
+                    : 'border-t border-brand-border/60 pt-6'
+                }
+              >
                 <h2 className="type-section-title font-bold">Themes</h2>
                 <div className="mt-5 space-y-4">
                   {topTags.map((item) => (
@@ -793,7 +832,7 @@ export default function StatsScreen({
           </div>
 
           {photos.length > 0 && (
-            <section>
+            <section className={layout === 'desktop' ? 'insights-web-section' : ''}>
               <div className="flex items-end justify-between">
                 <div>
                   <h2 className="type-section-title font-bold">Photo memories</h2>
@@ -829,7 +868,9 @@ export default function StatsScreen({
               </div>
             </section>
           )}
-          <details className="border-y border-brand-border/60 py-4">
+          <details
+            className={`border-y border-brand-border/60 py-4 ${layout === 'desktop' ? 'insights-web-details' : ''}`}
+          >
             <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between text-sm font-bold">
               Detailed observations
               <ChevronDown className="h-4 w-4" />
