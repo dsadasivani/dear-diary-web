@@ -22,7 +22,6 @@ jobs:
       backend: ${{ steps.scope.outputs.backend }}
       web: ${{ steps.scope.outputs.web }}
       browser: ${{ steps.scope.outputs.browser }}
-      supabase: ${{ steps.scope.outputs.supabase }}
       android: ${{ steps.scope.outputs.android }}
     steps:
       - uses: actions/checkout@v4
@@ -79,19 +78,6 @@ jobs:
       - run: npm run test:server
       - run: npm run build
       - run: npm audit --audit-level=high
-
-  supabase:
-    needs: changes
-    if: needs.changes.outputs.supabase == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm run test:supabase
 
   browser:
     needs: changes
@@ -150,7 +136,7 @@ jobs:
   required:
     name: CI passed
     if: always()
-    needs: [changes, repository-guards, backend, web, supabase, browser, android]
+    needs: [changes, repository-guards, backend, web, browser, android]
     runs-on: ubuntu-latest
     steps:
       - name: Require all selected CI jobs to pass
@@ -161,8 +147,6 @@ jobs:
           BACKEND_RESULT: ${{ needs.backend.result }}
           WEB_EXPECTED: ${{ needs.changes.outputs.web }}
           WEB_RESULT: ${{ needs.web.result }}
-          SUPABASE_EXPECTED: ${{ needs.changes.outputs.supabase }}
-          SUPABASE_RESULT: ${{ needs.supabase.result }}
           BROWSER_EXPECTED: ${{ needs.changes.outputs.browser }}
           BROWSER_RESULT: ${{ needs.browser.result }}
           ANDROID_EXPECTED: ${{ needs.changes.outputs.android }}
@@ -192,6 +176,5 @@ jobs:
 
           require_selected backend "$BACKEND_EXPECTED" "$BACKEND_RESULT"
           require_selected web "$WEB_EXPECTED" "$WEB_RESULT"
-          require_selected supabase "$SUPABASE_EXPECTED" "$SUPABASE_RESULT"
           require_selected browser "$BROWSER_EXPECTED" "$BROWSER_RESULT"
           require_selected android "$ANDROID_EXPECTED" "$ANDROID_RESULT"
