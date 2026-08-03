@@ -150,8 +150,12 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     private readonly recoverBlockedDeletes: () => Promise<void>,
     private readonly assertAuthorized: (() => Promise<void>) | null,
     private readonly onError: (context: string, error: unknown) => void | Promise<void>,
+    private readonly recoverUnknownPullStop: () => Promise<boolean>,
   ) {}
-  start(): Promise<void> {
+  async start(): Promise<void> {
+    // Coordinator startup completes its initial pull before it enables the
+    // outbox worker, so this recovery probe cannot release pending writes first.
+    if (await this.recoverUnknownPullStop()) await this.stop();
     if (!this.starting)
       this.starting = this.coordinator
         .start()
@@ -1162,6 +1166,7 @@ export class SyncV2ApplicationLifecycle {
         }).then(() => undefined),
       assertAuthorized,
       (context, error) => this.handleRuntimeError(context, error),
+      () => safety.clearRecoverableUnknownPull(account.accountId),
     );
   }
 }

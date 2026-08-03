@@ -46,6 +46,7 @@ const SYNC_OVERRIDE_METHODS = [
   'createNote',
   'updateNote',
   'deleteNote',
+  'resetContent',
 ] as const satisfies ReadonlyArray<keyof DiaryRepository>;
 
 const createBoundRepositoryDelegate = (target: DiaryRepository): DiaryRepository => {
@@ -298,6 +299,80 @@ export const createSyncingDiaryRepository = (
         });
         requestBackgroundFlush(syncEngine);
         return true;
+      };
+    if (property === 'resetContent')
+      return async (): Promise<void> => {
+        const account = await localRepository.getLocalSyncAccountState();
+        if (!account) {
+          await localRepository.resetContent();
+          return;
+        }
+
+        // An account-wide reset must start from the newest known record set so
+        // records that were created on another device are tombstoned too.
+        await syncEngine.pullPending();
+
+        const [diaries, entries, notes, versions] = await Promise.all([
+          localRepository.listDiaries(),
+          localRepository.listEntries(),
+          localRepository.listNotes(),
+          localRepository.listSyncRecordVersions(),
+        ]);
+        const ids = {
+          diary: new Set(diaries.map((diary) => diary.id)),
+          entry: new Set(entries.map((entry) => entry.id)),
+          note: new Set(notes.map((note) => note.id)),
+        };
+        for (const recordKey of Object.keys(versions)) {
+          const separator = recordKey.indexOf(':');
+          if (separator <= 0) continue;
+          const recordType = recordKey.slice(0, separator);
+          const recordId = recordKey.slice(separator + 1);
+          if (
+            recordId &&
+            (recordType === 'diary' || recordType === 'entry' || recordType === 'note')
+          ) {
+            ids[recordType].add(recordId);
+          }
+        }
+
+        const enqueueDelete = (recordType: 'diary' | 'entry' | 'note', recordId: string) =>
+          localRepository.applyLocalMutationWithOutbox({
+            operationId: crypto.randomUUID(),
+            recordType,
+            recordId,
+            operation: 'delete',
+            account,
+            localPayload: null,
+            syncPayload: null,
+          });
+
+        // Tombstone entries individually before their journals. This advances
+        // the authoritative server version for every entry and prevents a
+        // stale offline edit from resurrecting it after the reset.
+        for (const entryId of ids.entry) await enqueueDelete('entry', entryId);
+        for (const noteId of ids.note) await enqueueDelete('note', noteId);
+        for (const diaryId of ids.diary) await enqueueDelete('diary', diaryId);
+
+        const blankDiary: Diary = {
+          id: createId('diary'),
+          name: 'My Diary',
+          emoji: '\uD83D\uDCD4',
+          color: '#8A3D55',
+          isLocked: false,
+          entryCount: 0,
+          lastUpdated: 'No entries yet',
+          lastEntryUpdatedAt: undefined,
+        };
+        await localRepository.applyLocalMutationWithOutbox({
+          operationId: crypto.randomUUID(),
+          recordType: 'diary',
+          recordId: blankDiary.id,
+          operation: 'upsert',
+          account,
+          localPayload: blankDiary,
+        });
+        requestBackgroundFlush(syncEngine);
       };
 
     return undefined;

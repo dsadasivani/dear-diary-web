@@ -316,7 +316,12 @@ test('settings uses responsive section navigation and isolates section content',
   await sectionNavigation.getByRole('button', { name: /Data & Storage/ }).click();
   await expect(page.getByText('Cloud storage', { exact: true })).toHaveCount(0);
   await expect(page.getByText('On this device', { exact: true })).toBeVisible();
-  await expect(page.getByText('Clear journal content on this device')).toBeVisible();
+  await expect(page.getByText('Delete all journal data')).toBeVisible();
+  await expect(page.getByText(/deletion syncs to every linked device/i)).toBeVisible();
+  await page.getByRole('button', { name: 'Review clear action' }).click();
+  await expect(page.getByText(/This cannot be undone/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete everywhere' })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel' }).click();
   await expect(page.getByText('Local sync queue')).not.toBeVisible();
   if (isMobile) {
     await page.getByRole('button', { name: 'Back to settings' }).click();

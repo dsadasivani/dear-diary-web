@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import CompanionApprovalPanel from './CompanionApprovalPanel';
 
@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listSyncV2Devices: vi.fn(),
   resumePendingSyncV2DeviceRevocation: vi.fn(),
   hasPrimaryRecoveryCredential: vi.fn(),
+  revokeSyncV2Device: vi.fn(),
 }));
 
 vi.mock('../repositories', () => ({
@@ -27,7 +28,7 @@ vi.mock('../sync/v2/v2CompanionPairing', () => ({
 vi.mock('../sync/v2/v2DeviceManagement', () => ({
   listSyncV2Devices: mocks.listSyncV2Devices,
   resumePendingSyncV2DeviceRevocation: mocks.resumePendingSyncV2DeviceRevocation,
-  revokeSyncV2Device: vi.fn(),
+  revokeSyncV2Device: mocks.revokeSyncV2Device,
   hasPrimaryRecoveryCredential: mocks.hasPrimaryRecoveryCredential,
   enrollPrimaryRecoveryCredential: vi.fn(),
 }));
@@ -45,6 +46,8 @@ describe('CompanionApprovalPanel', () => {
     mocks.listSyncV2Devices.mockResolvedValue([]);
     mocks.resumePendingSyncV2DeviceRevocation.mockResolvedValue('none');
     mocks.hasPrimaryRecoveryCredential.mockResolvedValue(true);
+    mocks.pullPending.mockResolvedValue(undefined);
+    mocks.revokeSyncV2Device.mockResolvedValue(undefined);
   });
 
   it('shows active companions returned by device management', async () => {
@@ -116,5 +119,61 @@ describe('CompanionApprovalPanel', () => {
     mocks.hasPrimaryRecoveryCredential.mockResolvedValue(false);
     render(<CompanionApprovalPanel />);
     expect(await screen.findByText('Finish security upgrade')).toBeInTheDocument();
+  });
+
+  it('dismisses confirmation immediately and completes device removal in the background', async () => {
+    let finishRevocation!: () => void;
+    mocks.revokeSyncV2Device.mockImplementation(
+      () => new Promise<void>((resolve) => (finishRevocation = resolve)),
+    );
+    mocks.listSyncV2Devices.mockResolvedValue([
+      {
+        deviceId: 'web-v2',
+        deviceRole: 'COMPANION',
+        deviceStatus: 'ACTIVE',
+        platform: 'web',
+        encryptionPublicKey: 'public',
+        registeredAt: '2026-07-15T00:00:00Z',
+        lastSeenAt: '2026-07-15T00:00:00Z',
+        lastAppVersion: null,
+      },
+    ]);
+
+    render(<CompanionApprovalPanel />);
+    fireEvent.click(await screen.findByTitle('Remove device'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Device' }));
+
+    await waitFor(() => expect(screen.queryByText('Remove device?')).not.toBeInTheDocument());
+    expect(screen.getByText('Removal in progress')).toBeInTheDocument();
+    expect(
+      screen.getByText('Removing this device securely. You can continue using the app.'),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(mocks.revokeSyncV2Device).toHaveBeenCalledWith('web-v2'));
+
+    finishRevocation();
+    await screen.findByText('Device removed and the encrypted account key was rotated.');
+  });
+
+  it('makes a failed background removal retryable', async () => {
+    mocks.revokeSyncV2Device.mockRejectedValue(new Error('Network unavailable.'));
+    mocks.listSyncV2Devices.mockResolvedValue([
+      {
+        deviceId: 'web-v2',
+        deviceRole: 'COMPANION',
+        deviceStatus: 'ACTIVE',
+        platform: 'web',
+        encryptionPublicKey: 'public',
+        registeredAt: '2026-07-15T00:00:00Z',
+        lastSeenAt: '2026-07-15T00:00:00Z',
+        lastAppVersion: null,
+      },
+    ]);
+
+    render(<CompanionApprovalPanel />);
+    fireEvent.click(await screen.findByTitle('Remove device'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Device' }));
+
+    expect(await screen.findByText('Network unavailable.')).toBeInTheDocument();
+    expect(screen.getByTitle('Remove device')).toBeEnabled();
   });
 });

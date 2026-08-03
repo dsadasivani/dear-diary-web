@@ -112,24 +112,33 @@ export default function CompanionApprovalPanel() {
     }
   };
 
-  const revoke = async () => {
-    if (!revocationTarget) return;
+  const revoke = () => {
+    if (!revocationTarget || revocationInFlightRef.current) return;
+    const targetDeviceId = revocationTarget.deviceId;
     revocationInFlightRef.current = true;
-    setWorkingId(revocationTarget.deviceId);
+    setWorkingId(targetDeviceId);
+    setRevocationTarget(null);
     setError('');
-    try {
-      await eventSyncEngine.pullPending();
-      await revokeSyncV2Device(revocationTarget.deviceId);
-      setMessage('Device removed and the encrypted account key was rotated.');
-      setRevocationTarget(null);
-      revocationInFlightRef.current = false;
-      await refresh();
-    } catch (revokeError: any) {
-      setError(revokeError?.message || 'Device removal failed.');
-      revocationInFlightRef.current = false;
-    } finally {
-      setWorkingId('');
-    }
+    setMessage('Removing this device securely. You can continue using the app.');
+
+    void (async () => {
+      let completed = false;
+      try {
+        await eventSyncEngine.pullPending();
+        await revokeSyncV2Device(targetDeviceId);
+        completed = true;
+        setMessage('Device removed and the encrypted account key was rotated.');
+      } catch (revokeError: any) {
+        setMessage('');
+        setError(
+          revokeError?.message || 'Device removal could not finish. Tap Remove Device to retry.',
+        );
+      } finally {
+        setWorkingId('');
+        revocationInFlightRef.current = false;
+        if (completed) void refresh(false);
+      }
+    })();
   };
 
   return (
@@ -250,16 +259,25 @@ export default function CompanionApprovalPanel() {
                     Web browser
                   </p>
                   <p className="text-xs uppercase text-brand-text-muted">
-                    {device.platform} · Last seen {new Date(device.lastSeenAt).toLocaleDateString()}
+                    {workingId === device.deviceId
+                      ? 'Removal in progress'
+                      : `${device.platform} · Last seen ${new Date(device.lastSeenAt).toLocaleDateString()}`}
                   </p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setRevocationTarget(device)}
-                disabled={securityUpgradeRequired || workingId === device.deviceId}
+                disabled={securityUpgradeRequired || Boolean(workingId)}
                 className="flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 text-red-600 disabled:opacity-40"
-                title={securityUpgradeRequired ? 'Finish security upgrade first' : 'Remove device'}
+                title={
+                  securityUpgradeRequired
+                    ? 'Finish security upgrade first'
+                    : workingId === device.deviceId
+                      ? 'Removing device securely'
+                      : 'Remove device'
+                }
+                aria-busy={workingId === device.deviceId}
               >
                 {workingId === device.deviceId ? (
                   <LoaderCircle className="h-4 w-4 animate-spin" />
@@ -283,7 +301,7 @@ export default function CompanionApprovalPanel() {
       <BottomSheet
         open={Boolean(revocationTarget)}
         title="Remove device?"
-        description="This browser will lose access immediately. Your encrypted account key will be rotated for the remaining devices."
+        description="Secure removal will continue in the background. You can keep using the app while the encrypted account key is rotated."
         onClose={() => !workingId && setRevocationTarget(null)}
       >
         <div className="flex gap-2">
@@ -297,11 +315,11 @@ export default function CompanionApprovalPanel() {
           </button>
           <button
             type="button"
-            onClick={() => void revoke()}
+            onClick={revoke}
             disabled={Boolean(workingId)}
             className="flex-1 rounded-xl bg-red-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-40"
           >
-            {workingId ? 'Removing…' : 'Remove Device'}
+            Remove Device
           </button>
         </div>
       </BottomSheet>

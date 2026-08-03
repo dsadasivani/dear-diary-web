@@ -1064,6 +1064,11 @@ export class LocalDiaryRepository implements DiaryRepository {
     return versions[`${recordType}:${recordId}`] || 0;
   }
 
+  async listSyncRecordVersions(): Promise<Record<string, number>> {
+    await this.waitForWrites();
+    return clone(await this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}));
+  }
+
   applySyncEvent(
     event: SyncDomainEvent,
     sequence: number,

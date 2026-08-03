@@ -276,6 +276,7 @@ export interface DiaryRepository {
   saveLocalSyncAccountState(state: LocalSyncAccountState): Promise<void>;
   clearLocalSyncAccountState(): Promise<void>;
   getSyncRecordVersion(recordType: SyncRecordType, recordId: string): Promise<number>;
+  listSyncRecordVersions(): Promise<Record<string, number>>;
   applySyncEvent(
     event: SyncDomainEvent,
     sequence: number,

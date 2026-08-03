@@ -263,6 +263,8 @@ export default function AppSettingsScreen({
 
   // Reset confirm state
   const [showConfirmReset, setShowConfirmReset] = useState<boolean>(false);
+  const [isResettingContent, setIsResettingContent] = useState(false);
+  const [resetContentError, setResetContentError] = useState('');
   const [showConfirmUnlink, setShowConfirmUnlink] = useState(false);
   const [isUnlinking, setIsUnlinking] = useState(false);
 
@@ -697,16 +699,43 @@ export default function AppSettingsScreen({
   };
 
   const handleResetDatabase = async () => {
-    await diaryRepository.resetContent();
-    await pruneOrphanedMedia(0).catch((error) =>
-      console.warn('Media cleanup will retry later:', error),
-    );
-    await onResetSuccess();
-    setShowConfirmReset(false);
-    if (onShowToast) {
-      onShowToast('All diary entries, notes, and photos have been reset.', 'success');
-    } else {
-      alert('All diary entries, notes, and photos have been reset. Default "My Diary" created.');
+    setIsResettingContent(true);
+    setResetContentError('');
+    try {
+      const syncConfigured = Boolean(await diaryRepository.getLocalSyncAccountState());
+      await diaryRepository.resetContent();
+      let syncPending = false;
+      if (syncConfigured) {
+        try {
+          await eventSyncEngine.flushPendingOutbox();
+          syncPending = (await diaryRepository.getSyncStatusSummary()).pendingOutboxCount > 0;
+        } catch (error) {
+          syncPending = true;
+          console.warn('Account-wide content reset will retry syncing:', error);
+        }
+      }
+      await pruneOrphanedMedia(0).catch((error) =>
+        console.warn('Media cleanup will retry later:', error),
+      );
+      await onResetSuccess();
+      setShowConfirmReset(false);
+      onShowToast?.(
+        syncPending
+          ? 'Journal data was deleted here. Other devices will update when sync reconnects.'
+          : syncConfigured
+            ? 'Journal data was deleted from this account and synced devices.'
+            : 'Journal data was deleted from this device.',
+        syncPending ? 'warning' : 'success',
+      );
+    } catch (error) {
+      const message = syncAuthorizationMessage(
+        error,
+        'Could not delete journal data. Connect to the internet and try again.',
+      );
+      setResetContentError(message);
+      onShowToast?.(message, 'error');
+    } finally {
+      setIsResettingContent(false);
     }
   };
 
@@ -1670,16 +1699,20 @@ export default function AppSettingsScreen({
                 </div>
                 <div className="rounded-3xl border border-red-200 bg-red-50/70 p-5 dark:border-red-900/40 dark:bg-red-950/10">
                   <h3 className="text-sm font-bold text-red-700 dark:text-red-300">
-                    Clear journal content on this device
+                    Delete all journal data
                   </h3>
                   <p className="mt-2 text-sm leading-relaxed text-red-600 dark:text-red-400">
-                    Deletes local diaries, entries, notes, and unreferenced media. Your account,
-                    security settings, and remote encrypted data are not affected.
+                    Permanently deletes journals, entries, notes, and attached media from this
+                    account. The deletion syncs to every linked device. Your profile, security
+                    settings, and device links remain.
                   </p>
                   {!showConfirmReset ? (
                     <button
                       type="button"
-                      onClick={() => setShowConfirmReset(true)}
+                      onClick={() => {
+                        setResetContentError('');
+                        setShowConfirmReset(true);
+                      }}
                       className="mt-4 min-h-11 rounded-xl border border-red-300 px-4 text-sm font-bold text-red-700"
                     >
                       Review clear action
@@ -1687,12 +1720,14 @@ export default function AppSettingsScreen({
                   ) : (
                     <div className="mt-4 rounded-2xl border border-red-300 bg-white/60 p-3 dark:bg-black/10">
                       <p className="text-sm font-bold text-red-700 dark:text-red-300">
-                        This cannot be undone on this device.
+                        This cannot be undone. Linked devices will delete this content when they
+                        next sync.
                       </p>
                       <div className="mt-3 grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={() => setShowConfirmReset(false)}
+                          disabled={isResettingContent}
                           className="min-h-11 rounded-xl border border-brand-border text-sm font-bold text-brand-sage"
                         >
                           Cancel
@@ -1700,11 +1735,20 @@ export default function AppSettingsScreen({
                         <button
                           type="button"
                           onClick={() => void handleResetDatabase()}
+                          disabled={isResettingContent}
                           className="min-h-11 rounded-xl bg-red-600 text-sm font-bold text-white"
                         >
-                          Clear local content
+                          {isResettingContent ? 'Deleting everywhere...' : 'Delete everywhere'}
                         </button>
                       </div>
+                      {resetContentError && (
+                        <p
+                          className="mt-3 text-sm font-medium text-red-700 dark:text-red-300"
+                          role="alert"
+                        >
+                          {resetContentError}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
