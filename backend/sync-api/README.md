@@ -66,8 +66,8 @@ hash, encrypted object kind, key epoch, schema, account, partition, and through-
 replacing an empty V2 state and its cursor. Partial partition restore is intentionally unavailable while V2
 uses a single global event cursor.
 
-Advanced workflows expose durable server state machines for controlled V1-to-V2 migration, trusted-device
-companion pairing, passphrase-wrapped primary recovery, and account-key rotation. Pairing uses short-lived
+Advanced workflows expose durable server state machines for trusted-device companion pairing,
+passphrase-wrapped primary recovery, and account-key rotation. Pairing uses short-lived
 challenge/response requests and target-bound encrypted packages. Recovery activates the replacement primary
 only after a local-key possession proof, verified snapshot restore, and cursor acknowledgment. Rotation advances
 the server epoch atomically only after packages exist for every remaining active device plus recovery, revokes the

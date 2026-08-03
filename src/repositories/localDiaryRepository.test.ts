@@ -715,7 +715,7 @@ test('uses structured record commits for note CRUD without reading the full note
   assert.equal(store.structuredCommitCount, 3);
   assert.equal(store.collectionReadCount('deardiary_notes'), 0);
   assert.equal(await repository.getNote(note.id), null);
-  assert.equal((await repository.getDriveBackupSettings()).contentRevision, 3);
+  assert.equal((await repository.getLocalRepositoryMetadata()).contentRevision, 3);
 });
 
 test('uses atomic structured record and outbox commit for local-first note mutations', async () => {
@@ -728,8 +728,6 @@ test('uses atomic structured record and outbox commit for local-first note mutat
     googleUserId: 'google-structured',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-structured',
-    latestSnapshotDriveFileId: 'snapshot-structured',
     currentSyncSequence: 0,
     linkedAt: 1,
   };
@@ -778,7 +776,7 @@ test('uses atomic structured record and outbox commit for local-first note mutat
     updatedAt: outboxV2['op-structured-local'].updatedAt,
   });
   assert.equal(JSON.stringify(outboxV2).includes(note.body), false);
-  assert.equal((await repository.getDriveBackupSettings()).contentRevision, 1);
+  assert.equal((await repository.getLocalRepositoryMetadata()).contentRevision, 1);
 });
 
 test('sanitizes malicious rich text when creating and updating entries and notes', async () => {
@@ -872,8 +870,6 @@ test('exports and replaces application content while retaining target device lin
   assert.deepEqual(restored.settings, snapshot.settings);
   assert.deepEqual(restored.userProfile, snapshot.userProfile);
   assert.deepEqual(restored.security, snapshot.security);
-  assert.notEqual(restored.driveBackupSettings?.deviceId, snapshot.driveBackupSettings?.deviceId);
-  assert.equal(restored.driveBackupSettings?.contentRevision, 1);
 });
 
 test('sanitizes malicious rich text during snapshot import', async () => {
@@ -911,16 +907,14 @@ test('sanitizes malicious rich text during snapshot import', async () => {
   assert.equal((await target.getNote(note.id))?.body, '<div>Note</div>');
 });
 
-test('initializes settings, profile, security, and Drive metadata through the repository', async () => {
+test('initializes settings, profile, security, and local revision metadata', async () => {
   const repository = await createRepository();
 
   assert.equal((await repository.getSettings()).theme, 'light');
   assert.equal((await repository.getUserProfile()).name, 'Writer');
   assert.equal((await repository.getSecurityConfig()).isPinCreated, false);
-  const backup = await repository.getDriveBackupSettings();
+  const backup = await repository.getLocalRepositoryMetadata();
   assert.ok(backup.deviceId);
-  assert.equal(backup.schedule?.mode, 'daily');
-  assert.equal(backup.schedule?.network, 'wifi');
   assert.equal(backup.contentRevision, 0);
 });
 
@@ -944,7 +938,7 @@ test('portable restore preserves local security, reminders, theme, and backup id
   };
   await target.saveSecurityConfig(targetSecurity);
   await target.saveSettings({ remindersEnabled: true, reminderTime: '07:15', theme: 'light' });
-  const before = await target.getDriveBackupSettings();
+  const before = await target.getLocalRepositoryMetadata();
 
   await target.importSnapshot(await source.exportSnapshot(), 'replace-portable');
 
@@ -955,7 +949,7 @@ test('portable restore preserves local security, reminders, theme, and backup id
   assert.equal(settings.reminderTime, '07:15');
   assert.equal(settings.theme, 'light');
   assert.deepEqual(settings.customTags, ['cloud']);
-  const after = await target.getDriveBackupSettings();
+  const after = await target.getLocalRepositoryMetadata();
   assert.equal(after.deviceId, before.deviceId);
   assert.equal(after.contentRevision, (before.contentRevision || 0) + 1);
 });
@@ -974,7 +968,7 @@ test('increments and publishes a content revision after portable writes only', a
   unsubscribe();
 
   assert.deepEqual(revisions, [1, 2]);
-  assert.equal((await repository.getDriveBackupSettings()).contentRevision, 2);
+  assert.equal((await repository.getLocalRepositoryMetadata()).contentRevision, 2);
 });
 
 test('applies canonical sync events idempotently and tracks record versions', async () => {
@@ -986,8 +980,6 @@ test('applies canonical sync events idempotently and tracks record versions', as
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 2,
     linkedAt: 1,
   });
@@ -1027,8 +1019,6 @@ test('sanitizes malicious rich text during sync event replay', async () => {
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 2,
     linkedAt: 1,
   });
@@ -1083,8 +1073,6 @@ test('applies portable settings and profile events without replacing local remin
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 2,
     linkedAt: 1,
   });
@@ -1142,8 +1130,6 @@ test('skips already-covered historical events during partition replay', async ()
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 50,
     linkedAt: 1,
   });
@@ -1296,8 +1282,6 @@ test('atomically applies a local note mutation with its durable outbox operation
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 2,
     linkedAt: 1,
   });
@@ -1352,8 +1336,6 @@ test('chains same-record local mutations once an earlier outbox operation is in 
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 2,
     linkedAt: 1,
   });
@@ -1421,8 +1403,6 @@ test('rapid same-record saves never reset an in-flight V2 operation', async () =
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 0,
     linkedAt: 1,
   });
@@ -1491,8 +1471,6 @@ test('local autosaves and V2 worker transitions cannot overwrite each other', as
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 0,
     linkedAt: 1,
   });
@@ -1614,8 +1592,6 @@ test('keeps local-first mutations and pending outbox rows after repository resta
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 2,
     linkedAt: 1,
   });
@@ -1661,8 +1637,6 @@ test('acknowledges a local mutation without rewriting the local record', async (
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    recoveryKeyDriveFileId: 'key-1',
-    latestSnapshotDriveFileId: 'snapshot-1',
     currentSyncSequence: 2,
     linkedAt: 1,
   });

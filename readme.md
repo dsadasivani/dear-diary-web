@@ -10,7 +10,7 @@ Journal plaintext stays on trusted devices. The current Sync V2 path encrypts pa
 - Rich-text entries, timeline blocks, moods, tags, photos, audio notes, and dictation.
 - Quick notes with pinning, tags, rich text, and conversion to journal entries.
 - Search, calendar and table-of-contents views, writing streaks, mood trends, tag usage, and a writing heatmap.
-- A local PIN, recovery question, Android biometric unlock, automatic privacy locking, and diary-level access controls.
+- A local PIN, Google-verified PIN recovery, Android biometric unlock, automatic privacy locking, and diary-level access controls.
 - Encrypted, local-first multi-device sync with durable outbox operations, companion pairing, recovery, key rotation, conflict preservation, and encrypted snapshots.
 - Encrypted IndexedDB storage on the web and SQLCipher-backed SQLite plus app-private media files on Android.
 
@@ -90,7 +90,7 @@ See [docs/local-sync-v2.md](docs/local-sync-v2.md) for endpoints, emulator netwo
 | `npm run backend:bootRun:development` | Start the backend with the development Spring profile.                         |
 | `npm run backend:bootRun:staging`     | Start the backend with the staging Spring profile.                             |
 | `npm run backend:bootRun:production`  | Start the backend with the production Spring profile.                          |
-| `npm run test:supabase`               | Run Docker-backed compatibility migrations and RPC tests.                      |
+| `npm run backend:test`                | Run the Sync V2 backend unit and integration tests.                            |
 | `npm run test:e2e`                    | Run Playwright end-to-end tests.                                               |
 | `npm run test:accessibility`          | Run the accessibility-tagged Playwright checks.                                |
 | `npm run test:ops`                    | Validate dashboards and alert configuration.                                   |
@@ -138,7 +138,7 @@ browser code; such values must never be treated as secrets.
 The main client settings are:
 
 - `VITE_GOOGLE_WEB_CLIENT_ID` for Google identity and legacy Drive compatibility flows.
-- `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth and the V1 compatibility control plane.
+- `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth and Sync V2.
 - `VITE_SYNC_V2_API_URL` for the Spring Boot Sync V2 service.
 - `VITE_TELEMETRY_ENDPOINT` and `VITE_CRASH_REPORT_ENDPOINT` for optional privacy-safe reporting.
 
@@ -173,7 +173,7 @@ Clearing browser site data or Android app storage removes local journal data and
 | `src/repositories` | Local-first repository abstraction and implementations.                       |
 | `src/platform`     | Storage, security, filesystem, audio, and platform adapters.                  |
 | `src/mobile`       | Capacitor bootstrap, native media, reminders, and deep links.                 |
-| `src/sync`         | Encryption, V1 compatibility, outbox, recovery, and Sync V2 client logic.     |
+| `src/sync`         | Encryption, outbox, recovery, and Sync V2 client logic.                       |
 | `backend/sync-api` | Spring Boot Sync V2 API and Flyway migrations.                                |
 | `android`          | Native Android shell and Drive bridge.                                        |
 | `tests/e2e`        | Playwright application and accessibility tests.                               |
@@ -184,4 +184,4 @@ Clearing browser site data or Android app storage removes local journal data and
 
 - iOS dependencies and scripts are present, but an iOS native project is not checked in and must be generated and validated on macOS.
 - Physical-device validation is still required for real OAuth and object-store environments, biometrics, permission prompts, background behavior, interrupted storage migration, low-storage handling, and production-signed Android builds.
-- Legacy V1 sync and portable backup code remain until account migration and rollback requirements allow their removal.
+- Google is used for account identity only; encrypted synchronization uses the Sync V2 service.

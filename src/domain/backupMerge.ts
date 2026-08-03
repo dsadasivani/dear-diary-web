@@ -190,7 +190,6 @@ export const buildPortableMergePlan = (
       settings: catalogs.settings,
       userProfile: local.userProfile,
       security: local.security,
-      driveBackupSettings: local.driveBackupSettings,
     },
     preview,
     result: { ...preview, importedDiaryIds },

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   ArrowLeft,
@@ -14,17 +14,16 @@ import {
   SunLight as Sun,
   HalfMoon as Moon,
   Cloud,
-  CloudSync as CloudLightning,
   Fingerprint,
   Palette,
-  Eye,
-  EyeClosed as EyeOff,
   Database,
   InfoCircle as Info,
   EditPencil as PenLine,
   NavArrowRight as ChevronRight,
   User,
   Mail,
+  MediaImage as ImagePlus,
+  Trash as Trash2,
 } from 'iconoir-react';
 import {
   AppSettings,
@@ -35,21 +34,15 @@ import {
   UserProfile,
 } from '../types';
 import { PREDEFINED_TAGS, PREDEFINED_MOODS, PREDEFINED_COLORS } from '../domain/journalCatalog';
-import {
-  createCustomRecoveryQuestionId,
-  getRecoveryQuestionText,
-  isValidPin,
-  SECURITY_RECOVERY_QUESTIONS,
-  updatePinWithCurrentPin,
-  withRecoveryQuestion,
-} from '../domain/security';
+import { isValidPin, updatePinWithCurrentPin } from '../domain/security';
 import type { PinLength } from '../domain/security';
 import { isNativePlatform } from '../platform';
 import { secureAuthService } from '../platform/security';
-import { getCachedGoogleDriveSession } from '../utils/googleAuth';
-import { diaryRepository, eventSyncEngine } from '../repositories';
+import { diaryRepository, eventSyncEngine, syncV2Application } from '../repositories';
 import { createDefaultUserProfile } from '../repositories/defaults';
 import { pruneOrphanedMedia } from '../mobile/mediaGarbageCollector';
+import { persistOptimizedImageFile } from '../mobile/mediaStorage';
+import { isSupportedImageMimeType } from '../mobile/imageOptimization';
 import {
   getReminderCapability,
   normalizeReminderTime,
@@ -63,14 +56,12 @@ import {
   RECOVERY_PASSPHRASE_DIGIT_LENGTH,
 } from '../sync/e2eeKeyPackage';
 import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
-import type { DriveSyncStatus } from '../sync/eventSyncEngine';
 import type { PreservedSyncConflict, SyncStatusSummary } from '../repositories';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 import { pageMotion } from './ui/motion';
 import { BottomSheet } from './ui/BottomSheet';
 import {
   exportPrivacySafeSyncDiagnostics,
-  formatSyncHealthAge,
   getSyncHealthStatusMessage,
   type SyncHealth,
 } from '../sync/health/SyncHealth';
@@ -101,13 +92,11 @@ export type SettingsSection =
   | 'privacy-security'
   | 'sync-backup'
   | 'data-storage'
-  | 'advanced'
   | 'about';
 
 const sectionTab = (section: SettingsSection): 'profile' | 'security' | 'backup' | 'customize' => {
   if (section === 'privacy-security') return 'security';
-  if (section === 'sync-backup' || section === 'data-storage' || section === 'advanced')
-    return 'backup';
+  if (section === 'sync-backup' || section === 'data-storage') return 'backup';
   if (section === 'appearance' || section === 'writing' || section === 'notifications')
     return 'customize';
   return 'profile';
@@ -146,26 +135,20 @@ const SETTINGS_SECTIONS: Array<{
   {
     id: 'privacy-security',
     label: 'Privacy & Security',
-    description: 'PIN, recovery, and biometrics',
+    description: 'PIN and biometrics',
     icon: ShieldCheck,
   },
   {
     id: 'sync-backup',
-    label: 'Sync & Backup',
-    description: 'Account, devices, and recovery readiness',
+    label: 'Sync & Devices',
+    description: 'Connected account, sync health, and devices',
     icon: Cloud,
   },
   {
     id: 'data-storage',
     label: 'Data & Storage',
-    description: 'Local and cloud storage',
+    description: 'Storage used on this device',
     icon: Database,
-  },
-  {
-    id: 'advanced',
-    label: 'Advanced',
-    description: 'Diagnostics, queue state, and reset tools',
-    icon: Lock,
   },
   { id: 'about', label: 'About', description: 'App version and privacy principles', icon: Info },
 ];
@@ -181,11 +164,6 @@ const formatBytes = (bytes: number): string => {
 const formatDateTime = (value?: string | number | null): string =>
   value ? new Date(value).toLocaleString() : 'Never';
 
-const percentOf = (value: number, total: number): number =>
-  total > 0 ? Math.min(100, Math.max(0, (value / total) * 100)) : 0;
-
-const storagePercentLabel = (value: number): string => `${Math.round(value)}%`;
-
 const syncAuthorizationMessage = (error: unknown, fallback: string): string => {
   const message = error instanceof Error ? error.message : String(error || '');
   if (/no credentials available/i.test(message)) {
@@ -193,8 +171,6 @@ const syncAuthorizationMessage = (error: unknown, fallback: string): string => {
   }
   return message || fallback;
 };
-
-const CUSTOM_QUESTION_SELECT_VALUE = 'custom';
 
 export default function AppSettingsScreen({
   initialSettings,
@@ -240,6 +216,9 @@ export default function AppSettingsScreen({
   const [profileAvatarUri, setProfileAvatarUri] = useState(profile.avatarUri);
   const [profileWritingGoal, setProfileWritingGoal] = useState(profile.writingGoal || 100);
   const [showAvatarEditor, setShowAvatarEditor] = useState(false);
+  const [isSavingAvatar, setIsSavingAvatar] = useState(false);
+  const [avatarError, setAvatarError] = useState('');
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // Custom Tags and Moods
   const [customTags, setCustomTags] = useState<string[]>(settings.customTags || []);
@@ -257,32 +236,12 @@ export default function AppSettingsScreen({
   const [pinError, setPinError] = useState<string>('');
   const [pinSuccess, setPinSuccess] = useState<boolean>(false);
 
-  // Security question states
-  const currentQuestionIsPreset = SECURITY_RECOVERY_QUESTIONS.some(
-    (q) => q.id === security.recoveryQuestionId,
-  );
-  const [showRecoveryForm, setShowRecoveryForm] = useState<boolean>(false);
-  const [recoveryQuestionId, setRecoveryQuestionId] = useState<string>(
-    currentQuestionIsPreset
-      ? security.recoveryQuestionId || SECURITY_RECOVERY_QUESTIONS[0]?.id || ''
-      : CUSTOM_QUESTION_SELECT_VALUE,
-  );
-  const [customRecoveryQuestion, setCustomRecoveryQuestion] = useState<string>(
-    currentQuestionIsPreset ? '' : security.recoveryQuestionText || '',
-  );
-  const [securityAnswer, setSecurityAnswer] = useState<string>('');
-  const [showSecurityAnswer, setShowSecurityAnswer] = useState<boolean>(false);
-  const [recoveryError, setRecoveryError] = useState<string>('');
-  const [recoverySuccess, setRecoverySuccess] = useState<boolean>(false);
   const [syncAccountState, setSyncAccountState] = useState<LocalSyncAccountState | null>(null);
   const [showSyncRecoveryForm, setShowSyncRecoveryForm] = useState(false);
   const [newRecoveryPassphrase, setNewRecoveryPassphrase] = useState('');
   const [confirmNewRecoveryPassphrase, setConfirmNewRecoveryPassphrase] = useState('');
   const [syncRecoveryError, setSyncRecoveryError] = useState('');
   const [isRotatingRecoveryPassphrase, setIsRotatingRecoveryPassphrase] = useState(false);
-  const [driveSyncStatus, setDriveSyncStatus] = useState<DriveSyncStatus | null>(null);
-  const [isDriveSyncStatusLoading, setIsDriveSyncStatusLoading] = useState(false);
-  const [driveSyncStatusError, setDriveSyncStatusError] = useState('');
   const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
   const [isLocalStorageUsageLoading, setIsLocalStorageUsageLoading] = useState(false);
   const [localStorageUsageError, setLocalStorageUsageError] = useState('');
@@ -304,9 +263,10 @@ export default function AppSettingsScreen({
 
   // Reset confirm state
   const [showConfirmReset, setShowConfirmReset] = useState<boolean>(false);
+  const [showConfirmUnlink, setShowConfirmUnlink] = useState(false);
+  const [isUnlinking, setIsUnlinking] = useState(false);
 
   // Encrypted sync authorization/status states
-  const cachedGoogleDriveSession = React.useMemo(() => getCachedGoogleDriveSession(), []);
   const [authError, setAuthError] = useState('');
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
@@ -324,34 +284,15 @@ export default function AppSettingsScreen({
     void diaryRepository.getLocalSyncAccountState().then(setSyncAccountState);
   }, []);
 
-  const googleStorageUsed = driveSyncStatus?.storageQuota?.usage;
-  const googleStorageLimit = driveSyncStatus?.storageQuota?.limit;
-  const googleStoragePercent =
-    googleStorageUsed && googleStorageLimit ? percentOf(googleStorageUsed, googleStorageLimit) : 0;
-  const appStorageBytes = driveSyncStatus?.appStorageBytes || 0;
-  const journalDataPercent = driveSyncStatus
-    ? percentOf(driveSyncStatus.storageBreakdown.journalDataBytes, appStorageBytes)
-    : 0;
-  const imageStoragePercent = driveSyncStatus
-    ? percentOf(driveSyncStatus.storageBreakdown.imageBytes, appStorageBytes)
-    : 0;
-  const audioStoragePercent = driveSyncStatus
-    ? percentOf(driveSyncStatus.storageBreakdown.audioBytes, appStorageBytes)
-    : 0;
-  const pendingCleanupPercent = driveSyncStatus
-    ? percentOf(driveSyncStatus.storageBreakdown.pendingCleanupBytes, appStorageBytes)
-    : 0;
   const pendingSyncCount = syncStatus?.pendingOutboxCount || 0;
   const failedSyncCount = syncStatus?.failedOperationCount || 0;
-  const conflictSyncCount = syncStatus?.conflictCount || 0;
 
   const reconnectSyncAccount = async (): Promise<void> => {
     setAuthError('');
-    setDriveSyncStatusError('');
     setIsAuthLoading(true);
     try {
       await eventSyncEngine.reauthorize();
-      await Promise.all([refreshDriveSyncStatus(), refreshLocalSyncStatus()]);
+      await refreshLocalSyncStatus();
       onShowToast?.('Encrypted sync authorization renewed.', 'success');
     } catch (error: any) {
       setAuthError(
@@ -359,22 +300,6 @@ export default function AppSettingsScreen({
       );
     } finally {
       setIsAuthLoading(false);
-    }
-  };
-
-  const refreshDriveSyncStatus = async (): Promise<void> => {
-    if (!syncAccountState) return;
-    setDriveSyncStatusError('');
-    setIsDriveSyncStatusLoading(true);
-    try {
-      setDriveSyncStatus(await eventSyncEngine.getDriveSyncStatus());
-    } catch (error: any) {
-      setDriveSyncStatus(null);
-      setDriveSyncStatusError(
-        syncAuthorizationMessage(error, 'Cloud storage usage could not be loaded.'),
-      );
-    } finally {
-      setIsDriveSyncStatusLoading(false);
     }
   };
 
@@ -420,7 +345,7 @@ export default function AppSettingsScreen({
     const diagnostics = exportPrivacySafeSyncDiagnostics(
       syncHealth,
       import.meta.env.VITE_APP_VERSION || '1.0.0',
-      1,
+      2,
     );
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(diagnostics, null, 2)], { type: 'application/json' }),
@@ -458,7 +383,7 @@ export default function AppSettingsScreen({
     setSyncStatusError('');
     try {
       await eventSyncEngine.flushPendingOutbox();
-      await Promise.all([refreshLocalSyncStatus(), refreshDriveSyncStatus()]);
+      await refreshLocalSyncStatus();
       onShowToast?.('Sync retry completed.', 'success');
     } catch (error: any) {
       const message = error?.message || 'Sync retry could not finish.';
@@ -469,17 +394,6 @@ export default function AppSettingsScreen({
       setIsRetryingSync(false);
     }
   };
-
-  useEffect(() => {
-    if (
-      activeTab === 'backup' &&
-      syncAccountState &&
-      !driveSyncStatus &&
-      !isDriveSyncStatusLoading
-    ) {
-      void refreshDriveSyncStatus();
-    }
-  }, [activeTab, syncAccountState?.accountId]);
 
   useEffect(() => {
     if (activeTab === 'backup') {
@@ -620,66 +534,6 @@ export default function AppSettingsScreen({
     }
   };
 
-  const handleToggleRecoveryForm = () => {
-    const nextVisible = !showRecoveryForm;
-    setShowRecoveryForm(nextVisible);
-    setRecoveryError('');
-    setRecoverySuccess(false);
-    setSecurityAnswer('');
-    setShowSecurityAnswer(false);
-
-    if (nextVisible) {
-      const isPreset = SECURITY_RECOVERY_QUESTIONS.some(
-        (q) => q.id === security.recoveryQuestionId,
-      );
-      setRecoveryQuestionId(
-        isPreset
-          ? security.recoveryQuestionId || SECURITY_RECOVERY_QUESTIONS[0]?.id || ''
-          : CUSTOM_QUESTION_SELECT_VALUE,
-      );
-      setCustomRecoveryQuestion(isPreset ? '' : getRecoveryQuestionText(security));
-    }
-  };
-
-  const handleRecoveryQuestionSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setRecoveryError('');
-    setRecoverySuccess(false);
-
-    if (!security.isPinCreated) {
-      setRecoveryError('Create an App Security PIN before setting a recovery question.');
-      return;
-    }
-
-    if (recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE && !customRecoveryQuestion.trim()) {
-      setRecoveryError('Enter your custom security question.');
-      return;
-    }
-
-    if (!securityAnswer.trim()) {
-      setRecoveryError('Enter a security answer.');
-      return;
-    }
-
-    try {
-      const questionId =
-        recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE
-          ? createCustomRecoveryQuestionId()
-          : recoveryQuestionId;
-      const questionText =
-        recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE
-          ? customRecoveryQuestion.trim()
-          : undefined;
-      const updated = withRecoveryQuestion(security, questionId, securityAnswer, questionText);
-      await persistSecurity(updated);
-      setSecurityAnswer('');
-      setRecoverySuccess(true);
-      onShowToast?.('Security question updated successfully.', 'success');
-    } catch (err: any) {
-      setRecoveryError(err?.message || 'Could not update security question.');
-    }
-  };
-
   const handleToggleBiometrics = async (checked: boolean) => {
     if (!security.isPinCreated) {
       setWebAuthnError('Please configure an App Security PIN code first.');
@@ -706,7 +560,7 @@ export default function AppSettingsScreen({
     setIsWebAuthnLoading(true);
     try {
       const result = await secureAuthService.enroll(
-        cachedGoogleDriveSession?.email || profile.email || 'dear.diary.user',
+        syncAccountState?.googleEmail || profile.email || 'dear.diary.user',
       );
       if (result) {
         const newConfig = {
@@ -789,6 +643,23 @@ export default function AppSettingsScreen({
     }
   };
 
+  const handleAvatarFile = async (file?: File): Promise<void> => {
+    if (!file) return;
+    setIsSavingAvatar(true);
+    setAvatarError('');
+    try {
+      if (!isSupportedImageMimeType(file.type)) {
+        throw new Error('Choose a JPEG, PNG, WebP, or BMP image.');
+      }
+      setProfileAvatarUri(await persistOptimizedImageFile(file, 'avatar'));
+    } catch (error: any) {
+      setAvatarError(error?.message || 'Profile photo could not be saved.');
+    } finally {
+      setIsSavingAvatar(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+    }
+  };
+
   const handleReminderToggle = async (enabled: boolean) => {
     if (enabled) {
       const granted = await requestReminderPermission().catch(() => false);
@@ -836,6 +707,18 @@ export default function AppSettingsScreen({
       onShowToast('All diary entries, notes, and photos have been reset.', 'success');
     } else {
       alert('All diary entries, notes, and photos have been reset. Default "My Diary" created.');
+    }
+  };
+
+  const handleUnlinkThisBrowser = async () => {
+    setIsUnlinking(true);
+    setAuthError('');
+    try {
+      await syncV2Application.unlinkThisCompanion();
+    } catch (error: any) {
+      setAuthError(error?.message || 'Could not unlink this browser.');
+      setIsUnlinking(false);
+      setShowConfirmUnlink(false);
     }
   };
 
@@ -989,7 +872,7 @@ export default function AppSettingsScreen({
                           Profile image
                         </span>
                         <span className="mt-1 block text-xs text-brand-text-muted">
-                          Choose an emblem and background color
+                          Choose a photo or a personal emblem
                         </span>
                       </span>
                       <ChevronRight className="h-5 w-5 text-brand-text-muted" />
@@ -1007,7 +890,7 @@ export default function AppSettingsScreen({
                             type="text"
                             value={profileName}
                             onChange={(e) => setProfileName(e.target.value)}
-                            placeholder={cachedGoogleDriveSession?.displayName || 'Your nickname'}
+                            placeholder={profile.name || 'Your nickname'}
                             className="w-full bg-brand-bg border border-brand-border py-2.5 pl-10 pr-4 rounded-xl text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
                             required
                           />
@@ -1026,7 +909,7 @@ export default function AppSettingsScreen({
                             readOnly
                             aria-readonly="true"
                             tabIndex={-1}
-                            placeholder={cachedGoogleDriveSession?.email || 'Email address'}
+                            placeholder={syncAccountState?.googleEmail || 'Email address'}
                             className="w-full cursor-default bg-brand-bg/60 border border-brand-border py-2.5 pl-10 pr-4 rounded-xl text-xs text-brand-text-muted focus:outline-none"
                             required
                           />
@@ -1139,6 +1022,14 @@ export default function AppSettingsScreen({
                       </dd>
                     </div>
                   </dl>
+                  <button
+                    type="button"
+                    onClick={exportSyncDiagnostics}
+                    disabled={!syncHealth}
+                    className="mt-5 min-h-11 w-full rounded-xl border border-brand-border px-4 text-sm font-bold text-brand-sage disabled:opacity-40"
+                  >
+                    Download support information
+                  </button>
                 </div>
               </motion.div>
             )}
@@ -1284,159 +1175,6 @@ export default function AppSettingsScreen({
                       </button>
                     </form>
                   )}
-                </div>
-
-                {/* Security question card */}
-                <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
-                        <ShieldCheck className="w-4 h-4" />
-                      </span>
-                      <div>
-                        <h3 className="text-sm font-bold text-brand-plum">Security Question</h3>
-                        <p className="text-xs text-brand-sage mt-0.5">
-                          {security.isPinCreated
-                            ? getRecoveryQuestionText(security)
-                            : 'Create a PIN before adding recovery'}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleToggleRecoveryForm}
-                      disabled={!security.isPinCreated}
-                      className="px-4 py-2 bg-brand-bg hover:bg-brand-rose-light disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold text-brand-sage-dark rounded-full border border-brand-border transition-colors"
-                    >
-                      {showRecoveryForm ? 'Close' : security.recoveryQuestionId ? 'Modify' : 'Add'}
-                    </button>
-                  </div>
-
-                  {showRecoveryForm && (
-                    <form
-                      onSubmit={handleRecoveryQuestionSubmit}
-                      className="mt-3 pt-3 border-t border-brand-border flex flex-col gap-3"
-                    >
-                      <label className="flex flex-col gap-1">
-                        <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                          Question
-                        </span>
-                        <select
-                          value={recoveryQuestionId}
-                          onChange={(e) => {
-                            setRecoveryQuestionId(e.target.value);
-                            setRecoveryError('');
-                          }}
-                          className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
-                        >
-                          {SECURITY_RECOVERY_QUESTIONS.map((q) => (
-                            <option key={q.id} value={q.id}>
-                              {q.question}
-                            </option>
-                          ))}
-                          <option value={CUSTOM_QUESTION_SELECT_VALUE}>
-                            Write my own question
-                          </option>
-                        </select>
-                      </label>
-
-                      {recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE && (
-                        <label className="flex flex-col gap-1">
-                          <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                            Custom Question
-                          </span>
-                          <input
-                            type="text"
-                            value={customRecoveryQuestion}
-                            onChange={(e) => setCustomRecoveryQuestion(e.target.value)}
-                            placeholder="Type your security question"
-                            className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
-                          />
-                        </label>
-                      )}
-
-                      <label className="flex flex-col gap-1">
-                        <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                          Answer
-                        </span>
-                        <div className="relative">
-                          <input
-                            type={showSecurityAnswer ? 'text' : 'password'}
-                            value={securityAnswer}
-                            onChange={(e) => setSecurityAnswer(e.target.value)}
-                            placeholder="Enter a memorable answer"
-                            className="w-full bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 pr-10 rounded-xl focus:outline-none focus:border-brand-pink"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowSecurityAnswer((prev) => !prev)}
-                            className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink"
-                            title={showSecurityAnswer ? 'Hide answer' : 'Show answer'}
-                          >
-                            {showSecurityAnswer ? (
-                              <EyeOff className="w-4 h-4" />
-                            ) : (
-                              <Eye className="w-4 h-4" />
-                            )}
-                          </button>
-                        </div>
-                      </label>
-
-                      {recoveryError && (
-                        <p className="text-xs font-bold text-brand-pink-dark text-center">
-                          {recoveryError}
-                        </p>
-                      )}
-                      {recoverySuccess && (
-                        <p className="text-xs font-bold text-brand-sage text-center flex items-center justify-center gap-1">
-                          <Check className="w-4 h-4" /> Security question updated successfully!
-                        </p>
-                      )}
-
-                      <button
-                        type="submit"
-                        disabled={
-                          !securityAnswer.trim() ||
-                          (recoveryQuestionId === CUSTOM_QUESTION_SELECT_VALUE &&
-                            !customRecoveryQuestion.trim())
-                        }
-                        className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
-                      >
-                        Save Security Question
-                      </button>
-                    </form>
-                  )}
-                </div>
-
-                <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="p-2.5 bg-brand-blush-light dark:bg-brand-blush-light/10 text-brand-pink rounded-2xl">
-                        <Cloud className="w-4 h-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <h3 className="text-sm font-bold text-brand-plum">
-                          Google Account Recovery
-                        </h3>
-                        <p className="text-xs text-brand-sage mt-0.5 break-words">
-                          {syncAccountState?.googleEmail ||
-                            security.linkedGoogleEmail ||
-                            'Account unavailable'}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('profile')}
-                      disabled={!security.isPinCreated}
-                      className="shrink-0 px-4 py-2 bg-brand-bg hover:bg-brand-rose-light disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold text-brand-sage-dark rounded-full border border-brand-border transition-colors"
-                    >
-                      Manage
-                    </button>
-                  </div>
-                  <p className="text-xs text-brand-text-muted leading-relaxed">
-                    This account verifies sync access and forgotten-PIN recovery on this device.
-                  </p>
                 </div>
 
                 {syncAccountState?.deviceRole === 'primary_mobile' && (
@@ -1681,9 +1419,9 @@ export default function AppSettingsScreen({
                       </p>
                     </div>
                     <span
-                      className={`${failedSyncCount > 0 || driveSyncStatusError ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300' : 'bg-brand-sage/10 text-brand-sage'} rounded-full px-3 py-1.5 text-xs font-bold`}
+                      className={`${failedSyncCount > 0 ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300' : 'bg-brand-sage/10 text-brand-sage'} rounded-full px-3 py-1.5 text-xs font-bold`}
                     >
-                      {failedSyncCount > 0 || driveSyncStatusError
+                      {failedSyncCount > 0
                         ? 'Needs attention'
                         : pendingSyncCount > 0
                           ? 'Syncing'
@@ -1696,9 +1434,7 @@ export default function AppSettingsScreen({
                     <div className="rounded-2xl bg-brand-bg/50 p-3">
                       <dt className="text-brand-text-muted">Last sync</dt>
                       <dd className="mt-1 font-bold text-brand-plum dark:text-brand-text">
-                        {formatDateTime(
-                          syncHealth?.lastSuccessfulPullAt || driveSyncStatus?.lastUploadAt,
-                        )}
+                        {formatDateTime(syncHealth?.lastSuccessfulPullAt)}
                       </dd>
                     </div>
                     <div className="rounded-2xl bg-brand-bg/50 p-3">
@@ -1717,42 +1453,139 @@ export default function AppSettingsScreen({
                     >
                       {isRetryingSync ? 'Syncing…' : 'Sync Now'}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => openSection('privacy-security')}
-                      disabled={!syncAccountState}
-                      className="min-h-11 rounded-xl border border-brand-border px-4 text-sm font-bold text-brand-sage disabled:opacity-40"
-                    >
-                      Review Recovery
-                    </button>
                   </div>
+                  {syncStatusError && (
+                    <p className="mt-3 rounded-xl bg-amber-50 p-3 text-sm font-semibold text-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
+                      {syncStatusError}
+                    </p>
+                  )}
                 </div>
+
+                {preservedConflicts.length > 0 && (
+                  <div className="rounded-3xl border border-amber-200 bg-amber-50/80 p-5 dark:border-amber-900/50 dark:bg-amber-950/20">
+                    <h3 className="text-sm font-bold text-amber-800 dark:text-amber-300">
+                      Sync issues to review
+                    </h3>
+                    <p className="mt-1 text-sm text-brand-text-muted">
+                      Choose which version to keep for each conflicting edit.
+                    </p>
+                    <div className="mt-4 space-y-3">
+                      {preservedConflicts.map((conflict) => {
+                        const isBusy = conflictActionId === conflict.operation.operationId;
+                        return (
+                          <div
+                            key={conflict.operation.operationId}
+                            className="rounded-2xl border border-amber-200 bg-white/60 p-3 dark:bg-black/10"
+                          >
+                            <p className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+                              {conflict.operation.recordType} edit conflict
+                            </p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() =>
+                                  void runConflictAction(
+                                    conflict.operation.operationId,
+                                    () =>
+                                      diaryRepository.resolvePreservedSyncConflict(
+                                        conflict.operation.operationId,
+                                        'keep-recovered',
+                                      ),
+                                    'Edit from this device queued to sync.',
+                                  )
+                                }
+                                className="rounded-full bg-brand-sage px-3 py-2 text-xs font-bold text-white disabled:opacity-45"
+                              >
+                                Use edit from this device
+                              </button>
+                              {conflict.operation.recoveredRecordId && (
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() =>
+                                    void runConflictAction(
+                                      conflict.operation.operationId,
+                                      () =>
+                                        diaryRepository.resolvePreservedSyncConflict(
+                                          conflict.operation.operationId,
+                                          'keep-current',
+                                        ),
+                                      'Synced version kept.',
+                                    )
+                                  }
+                                  className="rounded-full border border-brand-border px-3 py-2 text-xs font-bold text-brand-plum disabled:opacity-45"
+                                >
+                                  Use synced version
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() =>
+                                  void runConflictAction(
+                                    conflict.operation.operationId,
+                                    () =>
+                                      diaryRepository.resolvePreservedSyncConflict(
+                                        conflict.operation.operationId,
+                                        'keep-both',
+                                      ),
+                                    'Both copies kept.',
+                                  )
+                                }
+                                className="rounded-full border border-brand-border px-3 py-2 text-xs font-bold text-brand-sage disabled:opacity-45"
+                              >
+                                Keep both copies
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <CompanionApprovalPanel />
 
-                <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
-                  <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
-                    Recovery readiness
-                  </h3>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                    <div className="rounded-xl bg-brand-bg/50 p-3">
-                      <p className="text-brand-text-muted">Google account</p>
-                      <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">
-                        {syncAccountState ? 'Connected' : 'Not connected'}
-                      </p>
-                    </div>
-                    <div className="rounded-xl bg-brand-bg/50 p-3">
-                      <p className="text-brand-text-muted">Encryption</p>
-                      <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">
-                        {syncAccountState ? 'Always on' : 'Unavailable'}
-                      </p>
-                    </div>
+                {syncAccountState?.deviceRole === 'web_companion' && (
+                  <div className="rounded-3xl border border-red-200 bg-red-50/70 p-5 dark:border-red-900/40 dark:bg-red-950/10">
+                    <h3 className="text-sm font-bold text-red-700 dark:text-red-300">
+                      Unlink this browser
+                    </h3>
+                    <p className="mt-2 text-sm leading-relaxed text-red-600 dark:text-red-400">
+                      Stops sync, revokes this browser, and permanently clears its local encrypted
+                      journal data and keys. Your other devices are unaffected.
+                    </p>
+                    {!showConfirmUnlink ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmUnlink(true)}
+                        className="mt-4 min-h-11 rounded-xl border border-red-300 px-4 text-sm font-bold text-red-700"
+                      >
+                        Unlink this browser
+                      </button>
+                    ) : (
+                      <div className="mt-4 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmUnlink(false)}
+                          disabled={isUnlinking}
+                          className="min-h-11 rounded-xl border border-brand-border text-sm font-bold text-brand-sage disabled:opacity-40"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleUnlinkThisBrowser()}
+                          disabled={isUnlinking}
+                          className="min-h-11 rounded-xl bg-red-600 text-sm font-bold text-white disabled:opacity-40"
+                        >
+                          {isUnlinking ? 'Unlinking…' : 'Confirm unlink'}
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <p className="mt-3 rounded-xl border border-brand-sage/25 bg-brand-sage/10 p-3 text-sm leading-6 text-brand-sage-dark">
-                    Your recovery passphrase protects the account key before diary data reaches
-                    Google Drive.
-                  </p>
-                </div>
+                )}
               </motion.div>
             )}
 
@@ -1835,551 +1668,43 @@ export default function AppSettingsScreen({
                     </p>
                   )}
                 </div>
-                <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
-                        Cloud storage
-                      </h3>
-                      <p className="mt-1 text-sm text-brand-text-muted">
-                        Encrypted Dear Diary data in hidden Google Drive app storage.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void refreshDriveSyncStatus()}
-                      disabled={!syncAccountState || isDriveSyncStatusLoading}
-                      className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-brand-border text-brand-sage disabled:opacity-40"
-                      aria-label="Refresh storage usage"
-                    >
-                      <RefreshCw
-                        className={`h-4 w-4 ${isDriveSyncStatusLoading ? 'animate-spin' : ''}`}
-                      />
-                    </button>
-                  </div>
-                  <div className="mt-4 flex items-end justify-between gap-3">
-                    <p className="text-2xl font-semibold text-brand-plum dark:text-brand-text">
-                      {driveSyncStatus
-                        ? formatBytes(appStorageBytes)
-                        : isDriveSyncStatusLoading
-                          ? 'Loading…'
-                          : 'Not loaded'}
-                    </p>
-                    {googleStorageUsed && googleStorageLimit && (
-                      <span className="rounded-full bg-brand-pink/10 px-3 py-1 text-xs font-bold text-brand-pink">
-                        {storagePercentLabel(googleStoragePercent)} of Drive
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-4 grid gap-2">
-                    {[
-                      ['Journal data', driveSyncStatus?.storageBreakdown.journalDataBytes || 0],
-                      ['Photos', driveSyncStatus?.storageBreakdown.imageBytes || 0],
-                      ['Voice notes', driveSyncStatus?.storageBreakdown.audioBytes || 0],
-                    ].map(([label, bytes]) => (
-                      <div
-                        key={String(label)}
-                        className="flex items-center justify-between rounded-xl bg-brand-bg/50 p-3 text-sm"
-                      >
-                        <span className="font-semibold text-brand-plum dark:text-brand-text">
-                          {label}
-                        </span>
-                        <span className="font-bold text-brand-sage">
-                          {driveSyncStatus ? formatBytes(Number(bytes)) : '—'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  {!syncAccountState && (
-                    <p className="mt-3 rounded-xl border border-brand-border bg-brand-bg/40 p-3 text-sm text-brand-text-muted">
-                      Connect encrypted sync to see cloud storage usage.
-                    </p>
-                  )}
-                  {driveSyncStatusError && syncAccountState && (
-                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
-                      <p>{driveSyncStatusError}</p>
-                      <button
-                        type="button"
-                        onClick={() => void reconnectSyncAccount()}
-                        disabled={isAuthLoading}
-                        className="mt-2 min-h-11 rounded-xl bg-amber-100 px-3 py-2 text-xs font-bold text-amber-800 disabled:opacity-50 dark:bg-amber-900/40 dark:text-amber-200"
-                      >
-                        {isAuthLoading ? 'Reconnecting…' : 'Reconnect'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            )}
-
-            {selectedSection === 'advanced' && (
-              <motion.div
-                key="advanced"
-                {...pageMotion(prefersReducedMotion)}
-                className="flex flex-col gap-5"
-              >
-                <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <span className="p-2.5 rounded-2xl bg-brand-pink/10 text-brand-pink">
-                        <CloudLightning className="w-4 h-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <h3 className="text-xs font-bold text-brand-plum dark:text-brand-text">
-                          Sync & Backup Storage
-                        </h3>
-                        <p className="text-xs text-brand-text-muted truncate">
-                          {syncAccountState?.googleEmail || 'Sync & Backup is not configured'}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void refreshDriveSyncStatus()}
-                      disabled={!syncAccountState || isDriveSyncStatusLoading}
-                      className="h-9 w-9 shrink-0 rounded-full border border-brand-border text-brand-sage flex items-center justify-center disabled:opacity-40"
-                      title="Refresh Sync & Backup status"
-                      aria-label="Refresh Sync & Backup status"
-                    >
-                      <RefreshCw
-                        className={`h-4 w-4 ${isDriveSyncStatusLoading ? 'animate-spin' : ''}`}
-                      />
-                    </button>
-                  </div>
-
-                  {syncAccountState ? (
-                    <>
-                      {driveSyncStatusError && (
-                        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
-                          <p className="font-bold">{driveSyncStatusError}</p>
-                          {driveSyncStatusError.includes('authorization') && (
-                            <button
-                              type="button"
-                              onClick={() => void reconnectSyncAccount()}
-                              disabled={isAuthLoading}
-                              className="mt-2 rounded-lg bg-amber-100 px-3 py-2 text-xs font-bold text-amber-800 disabled:opacity-50 dark:bg-amber-900/40 dark:text-amber-200"
-                            >
-                              {isAuthLoading ? 'Reconnecting...' : 'Reconnect encrypted sync'}
-                            </button>
-                          )}
-                        </div>
-                      )}
-
-                      <div className="rounded-2xl border border-brand-border/40 bg-brand-bg/35 p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-xs font-bold uppercase tracking-wider text-brand-sage">
-                              Local sync queue
-                            </p>
-                            <p className="mt-1 text-sm font-bold text-brand-plum dark:text-brand-text">
-                              {syncStatus
-                                ? failedSyncCount > 0
-                                  ? 'Needs retry'
-                                  : pendingSyncCount > 0
-                                    ? 'Pending upload'
-                                    : 'Caught up'
-                                : syncAccountState
-                                  ? 'Checking...'
-                                  : 'Unavailable'}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => void retryLocalSync()}
-                            disabled={!syncAccountState || isRetryingSync}
-                            className="h-9 w-9 shrink-0 rounded-full border border-brand-border text-brand-sage flex items-center justify-center disabled:opacity-40"
-                            title="Retry encrypted sync"
-                            aria-label="Retry encrypted sync"
-                          >
-                            <RefreshCw
-                              className={`h-4 w-4 ${isRetryingSync ? 'animate-spin' : ''}`}
-                            />
-                          </button>
-                        </div>
-                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                          <div className="rounded-xl bg-brand-card-bg/70 border border-brand-border/40 p-3">
-                            <p className="font-bold uppercase tracking-wider text-brand-sage">
-                              Pending
-                            </p>
-                            <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">
-                              {pendingSyncCount}
-                            </p>
-                          </div>
-                          <div className="rounded-xl bg-brand-card-bg/70 border border-brand-border/40 p-3">
-                            <p className="font-bold uppercase tracking-wider text-brand-sage">
-                              Failed
-                            </p>
-                            <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">
-                              {failedSyncCount}
-                            </p>
-                          </div>
-                          <div className="rounded-xl bg-brand-card-bg/70 border border-brand-border/40 p-3">
-                            <p className="font-bold uppercase tracking-wider text-brand-sage">
-                              Network
-                            </p>
-                            <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">
-                              {syncStatus
-                                ? syncStatus.isOffline
-                                  ? 'Offline'
-                                  : 'Online'
-                                : 'Checking'}
-                            </p>
-                          </div>
-                          <div className="rounded-xl bg-brand-card-bg/70 border border-brand-border/40 p-3">
-                            <p className="font-bold uppercase tracking-wider text-brand-sage">
-                              Conflicts
-                            </p>
-                            <p className="mt-1 font-bold text-brand-plum dark:text-brand-text">
-                              {conflictSyncCount}
-                            </p>
-                          </div>
-                        </div>
-                        <p className="mt-1 text-xs text-brand-text-muted">
-                          Connected Google identity:{' '}
-                          {syncAccountState?.googleEmail ||
-                            security.linkedGoogleEmail ||
-                            'Not connected'}
-                        </p>
-                        {syncHealth && (
-                          <div className="mt-3 rounded-xl border border-brand-border/40 bg-brand-card-bg/70 p-3 text-xs">
-                            <p className="font-bold uppercase tracking-wider text-brand-sage">
-                              Sync health
-                            </p>
-                            <p className="mt-2 font-bold text-brand-plum dark:text-brand-text">
-                              {getSyncHealthStatusMessage(syncHealth)}
-                            </p>
-                            <div className="mt-3 grid grid-cols-2 gap-2">
-                              <span>
-                                Saved locally: {formatDateTime(syncHealth.lastLocalWriteAt)}
-                              </span>
-                              <span>
-                                Last push: {formatDateTime(syncHealth.lastSuccessfulPushAt)}
-                              </span>
-                              <span>
-                                Last pull: {formatDateTime(syncHealth.lastSuccessfulPullAt)}
-                              </span>
-                              <span>Pending: {syncHealth.pendingOperationCount}</span>
-                              <span>
-                                Oldest pending age:{' '}
-                                {formatSyncHealthAge(syncHealth.oldestPendingOperationAt)}
-                              </span>
-                              <span>Auth: {syncHealth.authState}</span>
-                              <span>Realtime: {syncHealth.realtimeState}</span>
-                              <span>Integrity: {syncHealth.integrityState}</span>
-                              <span>App: {import.meta.env.VITE_APP_VERSION || '1.0.0'}</span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={exportSyncDiagnostics}
-                              className="mt-3 rounded-lg border border-brand-border px-3 py-2 font-bold text-brand-sage"
-                            >
-                              Export privacy-safe diagnostics
-                            </button>
-                          </div>
-                        )}
-                        {syncStatusError && (
-                          <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
-                            {syncStatusError}
-                          </p>
-                        )}
-                        {preservedConflicts.length > 0 && (
-                          <div className="mt-3 space-y-2">
-                            <p className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
-                              Conflict centre
-                            </p>
-                            {preservedConflicts.map((conflict) => {
-                              const recoveredTitle =
-                                conflict.recoveredRecord && 'title' in conflict.recoveredRecord
-                                  ? conflict.recoveredRecord.title
-                                  : conflict.operation.recoveredRecordId;
-                              const currentTitle =
-                                conflict.currentRecord && 'title' in conflict.currentRecord
-                                  ? conflict.currentRecord.title
-                                  : conflict.operation.recordId;
-                              const isBusy = conflictActionId === conflict.operation.operationId;
-                              return (
-                                <div
-                                  key={conflict.operation.operationId}
-                                  className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-xs dark:border-amber-900/50 dark:bg-amber-950/20"
-                                >
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                      <p className="font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
-                                        Preserved {conflict.operation.recordType} conflict
-                                      </p>
-                                      <p className="mt-1 truncate font-semibold text-brand-plum dark:text-brand-text">
-                                        Current synced version:{' '}
-                                        {currentTitle || conflict.operation.recordId}
-                                      </p>
-                                      {conflict.operation.recoveredRecordId && (
-                                        <p className="mt-0.5 truncate font-semibold text-brand-text-muted">
-                                          Recovered local edit:{' '}
-                                          {recoveredTitle || conflict.operation.recoveredRecordId}
-                                        </p>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className="mt-3 flex flex-wrap gap-2">
-                                    <button
-                                      type="button"
-                                      disabled={isBusy}
-                                      onClick={() =>
-                                        void runConflictAction(
-                                          conflict.operation.operationId,
-                                          () =>
-                                            diaryRepository.resolvePreservedSyncConflict(
-                                              conflict.operation.operationId,
-                                              'keep-recovered',
-                                            ),
-                                          'Recovered edit queued to become current.',
-                                        )
-                                      }
-                                      className="rounded-full bg-brand-sage px-3 py-1.5 font-bold text-white disabled:opacity-45"
-                                    >
-                                      Keep recovered
-                                    </button>
-                                    {conflict.operation.recoveredRecordId && (
-                                      <button
-                                        type="button"
-                                        disabled={isBusy}
-                                        onClick={() =>
-                                          void runConflictAction(
-                                            conflict.operation.operationId,
-                                            () =>
-                                              diaryRepository.resolvePreservedSyncConflict(
-                                                conflict.operation.operationId,
-                                                'keep-current',
-                                              ),
-                                            'Current synced version kept.',
-                                          )
-                                        }
-                                        className="rounded-full border border-brand-border bg-brand-card-bg px-3 py-1.5 font-bold text-brand-rose disabled:opacity-45"
-                                      >
-                                        Keep current
-                                      </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      disabled={isBusy}
-                                      onClick={() =>
-                                        void runConflictAction(
-                                          conflict.operation.operationId,
-                                          () =>
-                                            diaryRepository.resolvePreservedSyncConflict(
-                                              conflict.operation.operationId,
-                                              'keep-both',
-                                            ),
-                                          'Both versions kept.',
-                                        )
-                                      }
-                                      className="rounded-full border border-brand-border bg-brand-card-bg px-3 py-1.5 font-bold text-brand-sage disabled:opacity-45"
-                                    >
-                                      Keep both
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="rounded-2xl border border-brand-border/40 bg-brand-bg/35 p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-xs font-bold uppercase tracking-wider text-brand-sage">
-                              Google storage used
-                            </p>
-                            <p className="mt-1 text-sm font-bold text-brand-plum dark:text-brand-text">
-                              {driveSyncStatus
-                                ? googleStorageUsed && googleStorageLimit
-                                  ? `${formatBytes(googleStorageUsed)} of ${formatBytes(googleStorageLimit)}`
-                                  : 'Storage limit not reported'
-                                : isDriveSyncStatusLoading
-                                  ? 'Loading...'
-                                  : 'Not loaded'}
-                            </p>
-                          </div>
-                          {googleStorageUsed && googleStorageLimit && (
-                            <span className="rounded-full bg-brand-pink/10 px-2.5 py-1 text-xs font-bold text-brand-pink">
-                              {storagePercentLabel(googleStoragePercent)}
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-brand-border/45">
-                          <div
-                            className="h-full rounded-full bg-brand-pink transition-all"
-                            style={{ width: `${googleStoragePercent}%` }}
-                          />
-                        </div>
-                        <p className="mt-2 text-xs text-brand-text-muted">
-                          Dear Diary is using {driveSyncStatus ? formatBytes(appStorageBytes) : '-'}{' '}
-                          in hidden Google Drive app storage.
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-1 gap-2">
-                        {[
-                          [
-                            'Journal data',
-                            driveSyncStatus?.storageBreakdown.journalDataBytes || 0,
-                            journalDataPercent,
-                            'bg-brand-sage',
-                          ],
-                          [
-                            'Photos',
-                            driveSyncStatus?.storageBreakdown.imageBytes || 0,
-                            imageStoragePercent,
-                            'bg-brand-pink',
-                          ],
-                          [
-                            'Voice notes',
-                            driveSyncStatus?.storageBreakdown.audioBytes || 0,
-                            audioStoragePercent,
-                            'bg-brand-plum',
-                          ],
-                          ...(driveSyncStatus?.storageBreakdown.pendingCleanupBytes
-                            ? [
-                                [
-                                  'Pending cleanup',
-                                  driveSyncStatus.storageBreakdown.pendingCleanupBytes,
-                                  pendingCleanupPercent,
-                                  'bg-amber-500',
-                                ],
-                              ]
-                            : []),
-                        ].map(([label, bytes, percent, colorClass]) => (
-                          <div
-                            key={String(label)}
-                            className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3"
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="text-xs font-bold text-brand-plum dark:text-brand-text">
-                                {label}
-                              </p>
-                              <p className="text-xs font-bold text-brand-sage">
-                                {driveSyncStatus ? formatBytes(Number(bytes)) : '-'}
-                              </p>
-                            </div>
-                            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand-border/45">
-                              <div
-                                className={`h-full rounded-full ${colorClass}`}
-                                style={{ width: `${Number(percent)}%` }}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <div className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3">
-                          <p className="font-bold uppercase tracking-wider text-brand-sage">
-                            Last saved to cloud
-                          </p>
-                          <p className="mt-1 text-xs font-bold text-brand-plum dark:text-brand-text">
-                            {driveSyncStatus
-                              ? formatDateTime(driveSyncStatus.lastUploadAt)
-                              : isDriveSyncStatusLoading
-                                ? 'Loading...'
-                                : 'Not loaded'}
-                          </p>
-                        </div>
-                        <div className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3">
-                          <p className="font-bold uppercase tracking-wider text-brand-sage">
-                            Sync health
-                          </p>
-                          <p className="mt-1 text-xs font-bold text-brand-plum dark:text-brand-text">
-                            {driveSyncStatusError
-                              ? 'Needs attention'
-                              : driveSyncStatus
-                                ? 'Ready'
-                                : 'Not checked'}
-                          </p>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <p className="rounded-xl border border-brand-border/40 bg-brand-bg/35 p-3 text-xs leading-relaxed text-brand-text-muted">
-                      Create or recover an encrypted account to see cloud storage usage.
-                    </p>
-                  )}
-                </div>
-
-                <div className="bg-brand-card-bg p-5 rounded-3xl journal-shadow border border-brand-border flex flex-col gap-3">
-                  <h3 className="text-xs font-bold text-brand-plum">Recovery Readiness</h3>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3">
-                      <p className="text-brand-sage font-bold">Google account</p>
-                      <p className="text-brand-plum mt-1">
-                        {syncAccountState ? 'Connected' : 'Not connected'}
-                      </p>
-                    </div>
-                    <div className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3">
-                      <p className="text-brand-sage font-bold">Sync & Backup</p>
-                      <p className="text-brand-plum mt-1">
-                        {driveSyncStatusError
-                          ? 'Needs attention'
-                          : driveSyncStatus
-                            ? 'Ready'
-                            : 'Checking'}
-                      </p>
-                    </div>
-                    <div className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3">
-                      <p className="text-brand-sage font-bold">Encryption</p>
-                      <p className="text-brand-plum mt-1">
-                        {syncAccountState ? 'Always on' : 'Unavailable'}
-                      </p>
-                    </div>
-                    <div className="rounded-xl bg-brand-bg/50 border border-brand-border/40 p-3">
-                      <p className="text-brand-sage font-bold">Recovery passphrase</p>
-                      <p className="text-brand-plum mt-1">
-                        {syncAccountState ? 'Configured' : 'Not configured'}
-                      </p>
-                    </div>
-                  </div>
-                  <p className="rounded-xl border border-brand-sage/25 bg-brand-sage/10 p-3 text-xs leading-relaxed text-brand-sage-dark">
-                    End-to-end encryption is always active for encrypted accounts. Your recovery
-                    passphrase protects the account key before diary data reaches Google Drive.
-                  </p>
-                  <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
-                    Android Clear Storage or uninstall removes the local PIN, encrypted database,
-                    secure keys, media, and account link. Confirm cloud sync is healthy before doing
-                    either.
-                  </p>
-                </div>
-
-                <div className="bg-red-50/70 dark:bg-red-950/10 p-5 rounded-3xl border border-red-200 dark:border-red-900/40 flex flex-col gap-3">
-                  <h3 className="text-xs font-bold text-red-700 dark:text-red-300">
-                    Reset Local Journal Content
+                <div className="rounded-3xl border border-red-200 bg-red-50/70 p-5 dark:border-red-900/40 dark:bg-red-950/10">
+                  <h3 className="text-sm font-bold text-red-700 dark:text-red-300">
+                    Clear journal content on this device
                   </h3>
-                  <p className="text-xs text-red-600 dark:text-red-400">
-                    Deletes diaries, entries, notes, and unreferenced media. Security and encrypted
-                    account configuration remain on this device.
+                  <p className="mt-2 text-sm leading-relaxed text-red-600 dark:text-red-400">
+                    Deletes local diaries, entries, notes, and unreferenced media. Your account,
+                    security settings, and remote encrypted data are not affected.
                   </p>
                   {!showConfirmReset ? (
                     <button
                       type="button"
                       onClick={() => setShowConfirmReset(true)}
-                      className="py-2.5 rounded-xl border border-red-300 text-red-700 text-xs font-bold"
+                      className="mt-4 min-h-11 rounded-xl border border-red-300 px-4 text-sm font-bold text-red-700"
                     >
-                      Review Reset
+                      Review clear action
                     </button>
                   ) : (
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirmReset(false)}
-                        className="py-2.5 rounded-xl border border-brand-border text-brand-sage text-xs font-bold"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleResetDatabase()}
-                        className="py-2.5 rounded-xl bg-red-600 text-white text-xs font-bold"
-                      >
-                        Delete Content
-                      </button>
+                    <div className="mt-4 rounded-2xl border border-red-300 bg-white/60 p-3 dark:bg-black/10">
+                      <p className="text-sm font-bold text-red-700 dark:text-red-300">
+                        This cannot be undone on this device.
+                      </p>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmReset(false)}
+                          className="min-h-11 rounded-xl border border-brand-border text-sm font-bold text-brand-sage"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleResetDatabase()}
+                          className="min-h-11 rounded-xl bg-red-600 text-sm font-bold text-white"
+                        >
+                          Clear local content
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2639,12 +1964,15 @@ export default function AppSettingsScreen({
       <BottomSheet
         open={showAvatarEditor}
         title="Edit profile image"
-        description="Choose a personal emblem and a calm background color."
-        onClose={() => setShowAvatarEditor(false)}
+        description="Choose a photo or keep a personal emblem as your fallback."
+        onClose={() => {
+          if (!isSavingAvatar) setShowAvatarEditor(false);
+        }}
         footer={
           <button
             type="button"
             onClick={() => setShowAvatarEditor(false)}
+            disabled={isSavingAvatar}
             className="min-h-11 rounded-xl bg-brand-sage px-5 text-sm font-bold text-white"
           >
             Done
@@ -2667,6 +1995,47 @@ export default function AppSettingsScreen({
             />
           </span>
         </div>
+        <input
+          ref={avatarInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/bmp"
+          className="sr-only"
+          onChange={(event) => void handleAvatarFile(event.target.files?.[0])}
+        />
+        <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => avatarInputRef.current?.click()}
+            disabled={isSavingAvatar}
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white disabled:opacity-50"
+          >
+            <ImagePlus className="h-4 w-4" />
+            {isSavingAvatar
+              ? 'Preparing photo…'
+              : profileAvatarUri
+                ? 'Change photo'
+                : 'Choose photo'}
+          </button>
+          {profileAvatarUri && (
+            <button
+              type="button"
+              onClick={() => {
+                setProfileAvatarUri(undefined);
+                setAvatarError('');
+              }}
+              disabled={isSavingAvatar}
+              className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-200 px-4 text-sm font-bold text-red-600 disabled:opacity-50 dark:border-red-900/50 dark:text-red-300"
+            >
+              <Trash2 className="h-4 w-4" />
+              Remove photo
+            </button>
+          )}
+        </div>
+        {avatarError && (
+          <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+            {avatarError}
+          </p>
+        )}
         <fieldset className="mt-6">
           <legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">
             Emblem

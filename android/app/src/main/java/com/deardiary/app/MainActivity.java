@@ -21,7 +21,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        registerPlugin(DearDiaryDrivePlugin.class);
+        LegacyDriveTeardown.run(this);
         super.onCreate(savedInstanceState);
         ContextCompat.registerReceiver(
             this,

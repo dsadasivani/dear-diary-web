@@ -155,30 +155,6 @@ export interface SyncV2Snapshot {
   downloadExpiresAt: string | null;
 }
 
-export type SyncV2MigrationStatus =
-  | 'PRECHECK'
-  | 'DRAINING_V1'
-  | 'VALIDATING_LOCAL_STATE'
-  | 'CREATING_V2_SNAPSHOT'
-  | 'UPLOADING_V2_SNAPSHOT'
-  | 'REGISTERING_V2_ACCOUNT'
-  | 'VERIFYING_V2_RESTORE'
-  | 'V2_ACTIVE'
-  | 'V1_READ_ONLY'
-  | 'FAILED'
-  | 'ROLLED_BACK';
-
-export interface SyncV2Migration {
-  migrationId: string;
-  status: SyncV2MigrationStatus;
-  baselineDigest: string;
-  validationDigest: string | null;
-  baselineSequence: number;
-  activatedSequence: number | null;
-  snapshotId: string | null;
-  v1Mode: 'READ_WRITE' | 'READ_ONLY';
-}
-
 export interface SyncV2Pairing {
   accountId: string;
   pairingId: string;

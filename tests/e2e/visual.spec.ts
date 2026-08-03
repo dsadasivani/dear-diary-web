@@ -20,8 +20,6 @@ const setupUnlockedApp = async (page: Page) => {
   await page.getByRole('button', { name: /continue/i }).click();
   await enterPin(page);
   await page.getByRole('button', { name: /confirm pin/i }).click();
-  await page.getByPlaceholder('Enter a memorable answer').fill('Blue');
-  await page.getByRole('button', { name: /save recovery question/i }).click();
   const enterDiary = page.getByRole('button', { name: /enter dear diary/i });
   if ((await enterDiary.count()) && (await enterDiary.isVisible())) await enterDiary.click();
   await expect(page.getByTestId('nav-diaries')).toBeVisible({ timeout: 20_000 });
@@ -81,7 +79,7 @@ const lockApp = async (page: Page) => {
   const profileMenu = page.getByTestId('profile-menu-button');
   if ((await profileMenu.count()) && (await profileMenu.isVisible())) {
     await profileMenu.click();
-    await page.getByTestId('lock-app-button').click();
+    await page.getByRole('button', { name: 'Lock Dear Diary', exact: true }).click();
     return;
   }
   await page.getByRole('button', { name: 'Lock', exact: true }).click();

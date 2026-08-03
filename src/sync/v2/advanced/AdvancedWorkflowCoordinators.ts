@@ -1,7 +1,6 @@
 import type { LocalDataStore } from '../../../platform/storage';
 import type { SyncV2ApiClient } from '../api/SyncV2ApiClient';
 import type {
-  SyncV2MigrationStatus,
   SyncV2Pairing,
   SyncV2UploadInstruction,
 } from '../api/SyncV2ApiTypes';
@@ -28,97 +27,6 @@ export class PersistentWorkflowJournalStore<T> implements WorkflowJournalStore<T
   }
   clear(): Promise<void> {
     return this.storage.removeItem(this.key);
-  }
-}
-
-type MigrationApi = Pick<SyncV2ApiClient, 'beginMigration' | 'advanceMigration' | 'getMigration'>;
-interface MigrationJournal {
-  migrationId: string;
-  deviceId: string;
-  status: SyncV2MigrationStatus;
-  baselineDigest: string;
-  validationDigest?: string;
-  snapshotId?: string;
-}
-
-export class SyncV2MigrationCoordinator {
-  constructor(
-    private readonly api: MigrationApi,
-    private readonly journal: WorkflowJournalStore<MigrationJournal>,
-    private readonly local: {
-      drainV1(): Promise<void>;
-      canonicalDigest(): Promise<string>;
-      baselineSequence(): Promise<number>;
-      createSnapshot(): Promise<{ snapshotId: string }>;
-      verifyTemporaryRestore(snapshotId: string): Promise<string>;
-      activateV2?(): Promise<void>;
-    },
-  ) {}
-
-  async run(deviceId: string): Promise<void> {
-    let state = await this.journal.load();
-    if (!state) {
-      const baselineDigest = await this.local.canonicalDigest();
-      const baselineSequence = await this.local.baselineSequence();
-      const migrationId = crypto.randomUUID();
-      const remote = await this.api.beginMigration({
-        migrationId,
-        deviceId,
-        baselineDigest,
-        baselineSequence,
-      });
-      state = { migrationId, deviceId, baselineDigest, status: remote.status };
-      await this.journal.save(state);
-    }
-    while (state.status !== 'V1_READ_ONLY') {
-      if (state.status === 'FAILED' || state.status === 'ROLLED_BACK')
-        throw new Error(`Migration stopped in ${state.status}.`);
-      const next = await this.nextMigrationState(state);
-      const remote = await this.api.advanceMigration(state.migrationId, {
-        deviceId: state.deviceId,
-        nextStatus: next,
-        validationDigest: state.validationDigest,
-        snapshotId: state.snapshotId,
-      });
-      state.status = remote.status;
-      await this.journal.save(state);
-    }
-    await this.local.activateV2?.();
-    await this.journal.clear();
-  }
-
-  private async nextMigrationState(state: MigrationJournal): Promise<SyncV2MigrationStatus> {
-    switch (state.status) {
-      case 'PRECHECK':
-        return 'DRAINING_V1';
-      case 'DRAINING_V1':
-        await this.local.drainV1();
-        return 'VALIDATING_LOCAL_STATE';
-      case 'VALIDATING_LOCAL_STATE':
-        state.validationDigest = await this.local.canonicalDigest();
-        if (state.validationDigest !== state.baselineDigest)
-          throw new Error('V1 changed while migration was draining.');
-        return 'CREATING_V2_SNAPSHOT';
-      case 'CREATING_V2_SNAPSHOT':
-        state.snapshotId = (await this.local.createSnapshot()).snapshotId;
-        return 'UPLOADING_V2_SNAPSHOT';
-      case 'UPLOADING_V2_SNAPSHOT':
-        return 'REGISTERING_V2_ACCOUNT';
-      case 'REGISTERING_V2_ACCOUNT':
-        return 'VERIFYING_V2_RESTORE';
-      case 'VERIFYING_V2_RESTORE':
-        if (
-          !state.snapshotId ||
-          (await this.local.verifyTemporaryRestore(state.snapshotId)) !== state.baselineDigest
-        ) {
-          throw new Error('V2 restore verification failed.');
-        }
-        return 'V2_ACTIVE';
-      case 'V2_ACTIVE':
-        return 'V1_READ_ONLY';
-      default:
-        throw new Error(`Unsupported migration state ${state.status}.`);
-    }
   }
 }
 

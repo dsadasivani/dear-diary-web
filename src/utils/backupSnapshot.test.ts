@@ -146,7 +146,7 @@ test('validates portable schema v2 without device security metadata', async () =
   assert.equal(validated.payload.security, undefined);
 });
 
-test('round-trips a cached profile avatar through the Drive backup bundle', async () => {
+test('round-trips a cached profile avatar through a portable backup bundle', async () => {
   Object.defineProperty(globalThis, 'localStorage', {
     value: new MemoryStorage(),
     configurable: true,

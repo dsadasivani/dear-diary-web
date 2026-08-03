@@ -14,8 +14,6 @@ import {
   getConfiguredSupabaseUrl,
 } from '../config';
 import { refreshSupabaseSession } from '../supabaseAuth';
-import { downloadDriveSyncObject } from '../driveSyncObjects';
-import { restoreGoogleDriveSession } from '../../utils/googleAuth';
 import {
   clearPendingV2DeviceKeyRotationSecret,
   getAccountRootKeyForEpoch,
@@ -24,6 +22,7 @@ import {
   savePendingV2DeviceKeyRotationSecret,
   saveSyncSecrets,
   withAccountRootKeyForEpoch,
+  withPrimaryRecoveryCredential,
 } from '../syncSecrets';
 import {
   SyncV2RotationCoordinator,
@@ -134,10 +133,69 @@ export const listSyncV2Devices = async (requestingDeviceId: string): Promise<Syn
   return api.listDevices(requestingDeviceId);
 };
 
-export const revokeSyncV2Device = async (input: {
-  targetDeviceId: string;
-  recoveryPassphrase: string;
-}): Promise<void> => {
+const verifyRecoveryCredential = async (
+  passphrase: string,
+  state: NonNullable<Awaited<ReturnType<typeof diaryRepository.getLocalSyncAccountState>>>,
+  secrets: NonNullable<Awaited<ReturnType<typeof loadSyncSecrets>>>,
+): Promise<void> => {
+  const api = createConfiguredSyncV2ApiClient(primaryAccessToken);
+  const recoveryPackage = await api.getLatestRecoveryPackage();
+  if (!recoveryPackage.downloadUrl || !recoveryPackage.sha256 || !recoveryPackage.sizeBytes) {
+    throw new Error('The account recovery package is unavailable.');
+  }
+  const transfer = new BoundedObjectTransfer({ maximumObjectBytes: recoveryPackage.sizeBytes });
+  const [recoveryBytes] = await transfer.download([
+    {
+      downloadUrl: recoveryPackage.downloadUrl,
+      sha256: recoveryPackage.sha256,
+      sizeBytes: recoveryPackage.sizeBytes,
+    },
+  ]);
+  const recovered = await unwrapAccountRootKeysFromRecovery(
+    decodeRecoveryKeyPackage(recoveryBytes),
+    passphrase,
+  );
+  const epoch = state.keyEpoch || 1;
+  const recoveredCurrent = recovered.accountRootKeys[epoch] || recovered.accountRootKey;
+  const localCurrent = getAccountRootKeyForEpoch(secrets, epoch);
+  if (
+    recoveredCurrent.byteLength !== localCurrent.byteLength ||
+    recoveredCurrent.some((value, index) => value !== localCurrent[index])
+  ) {
+    throw new Error('The recovery passphrase does not match this encrypted account.');
+  }
+};
+
+export const hasPrimaryRecoveryCredential = async (): Promise<boolean> => {
+  const [state, secrets] = await Promise.all([
+    diaryRepository.getLocalSyncAccountState(),
+    loadSyncSecrets(),
+  ]);
+  return Boolean(
+    state?.syncProtocolVersion === 2 &&
+    state.deviceRole === 'primary_mobile' &&
+    secrets?.primaryRecoveryCredential?.passphrase,
+  );
+};
+
+export const enrollPrimaryRecoveryCredential = async (passphrase: string): Promise<void> => {
+  const [state, secrets] = await Promise.all([
+    diaryRepository.getLocalSyncAccountState(),
+    loadSyncSecrets(),
+  ]);
+  if (
+    !state ||
+    state.syncProtocolVersion !== 2 ||
+    state.deviceRole !== 'primary_mobile' ||
+    !secrets
+  ) {
+    throw new Error('Only the active primary mobile can finish this security upgrade.');
+  }
+  await verifyRecoveryCredential(passphrase, state, secrets);
+  await saveSyncSecrets(withPrimaryRecoveryCredential(secrets, passphrase));
+};
+
+export const revokeSyncV2Device = async (targetDeviceId: string): Promise<void> => {
   const [state, secrets, security] = await Promise.all([
     diaryRepository.getLocalSyncAccountState(),
     loadSyncSecrets(),
@@ -151,11 +209,15 @@ export const revokeSyncV2Device = async (input: {
   ) {
     throw new Error('Only the active Sync V2 primary mobile can revoke a companion.');
   }
+  const recoveryPassphrase = secrets.primaryRecoveryCredential?.passphrase;
+  if (!recoveryPassphrase) {
+    throw new Error('Finish the security upgrade before removing a linked device.');
+  }
   const pending = await journal.load();
-  if (pending?.revokedDeviceId && pending.revokedDeviceId !== input.targetDeviceId) {
+  if (pending?.revokedDeviceId && pending.revokedDeviceId !== targetDeviceId) {
     throw new Error('A different companion revocation is already in progress.');
   }
-  const targetDeviceId = pending?.revokedDeviceId || input.targetDeviceId;
+  targetDeviceId = pending?.revokedDeviceId || targetDeviceId;
   const api = createConfiguredSyncV2ApiClient(primaryAccessToken);
   const protocol = await api.getProtocol();
   if (!protocol.featureFlags.keyRotationEnabled || !protocol.featureFlags.deviceRevocationEnabled) {
@@ -182,44 +244,7 @@ export const revokeSyncV2Device = async (input: {
   }
   const transfer = new BoundedObjectTransfer({ maximumObjectBytes: protocol.maximumSnapshotBytes });
   if (!pending) {
-    let recoveryBytes: Uint8Array;
-    try {
-      const recoveryPackage = await api.getLatestRecoveryPackage();
-      if (!recoveryPackage.downloadUrl || !recoveryPackage.sha256 || !recoveryPackage.sizeBytes) {
-        throw new Error('The account recovery package is unavailable.');
-      }
-      [recoveryBytes] = await transfer.download([
-        {
-          downloadUrl: recoveryPackage.downloadUrl,
-          sha256: recoveryPackage.sha256,
-          sizeBytes: recoveryPackage.sizeBytes,
-        },
-      ]);
-    } catch (error) {
-      // Accounts migrated before V25 have their current recovery package in
-      // the legacy Drive control plane. Verify that package once; this
-      // rotation publishes the first V2-native recovery package.
-      if (!state.recoveryKeyDriveFileId) throw error;
-      const googleSession = (await restoreGoogleDriveSession(false)) || secrets.googleSession;
-      if (!googleSession)
-        throw new Error(
-          'Google Drive authorization is required to verify the migrated recovery key.',
-        );
-      recoveryBytes = await downloadDriveSyncObject(googleSession, state.recoveryKeyDriveFileId);
-    }
-    const recovered = await unwrapAccountRootKeysFromRecovery(
-      decodeRecoveryKeyPackage(recoveryBytes),
-      input.recoveryPassphrase,
-    );
-    const epoch = state.keyEpoch || 1;
-    const recoveredCurrent = recovered.accountRootKeys[epoch] || recovered.accountRootKey;
-    const localCurrent = getAccountRootKeyForEpoch(secrets, epoch);
-    if (
-      recoveredCurrent.byteLength !== localCurrent.byteLength ||
-      recoveredCurrent.some((value, index) => value !== localCurrent[index])
-    ) {
-      throw new Error('The recovery passphrase does not match this encrypted account.');
-    }
+    await verifyRecoveryCredential(recoveryPassphrase, state, secrets);
   }
   const coordinator = new SyncV2RotationCoordinator(api, journal, {
     createEncryptedAccountKey: async () => {
@@ -237,7 +262,7 @@ export const revokeSyncV2Device = async (input: {
       };
       if (purpose === 'RECOVERY') {
         return encodeRecoveryKeyPackage(
-          await wrapAccountRootKeyForRecovery(rootKey, input.recoveryPassphrase, {
+          await wrapAccountRootKeyForRecovery(rootKey, recoveryPassphrase, {
             accountId: state.accountId,
             keyEpoch: nextEpoch,
             keyVersion: nextEpoch,
@@ -279,11 +304,11 @@ export const revokeSyncV2Device = async (input: {
 };
 
 export const resumePendingSyncV2DeviceRevocation = async (): Promise<
-  'none' | 'completed' | 'needs-passphrase'
+  'none' | 'completed' | 'needs-security-upgrade'
 > => {
   const pending = await journal.load();
   if (!pending?.revokedDeviceId) return 'none';
-  if (!pending.packages) return 'needs-passphrase';
-  await revokeSyncV2Device({ targetDeviceId: pending.revokedDeviceId, recoveryPassphrase: '' });
+  if (!(await hasPrimaryRecoveryCredential())) return 'needs-security-upgrade';
+  await revokeSyncV2Device(pending.revokedDeviceId);
   return 'completed';
 };

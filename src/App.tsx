@@ -62,11 +62,6 @@ import { isValidPin, unlockWithPin } from './domain/security';
 import useResponsiveLayout from './hooks/useResponsiveLayout';
 import { calculateStreak } from './domain/journalCatalog';
 import { shouldLockAfterBackground } from './domain/privacyLock';
-import { loadPendingPrimaryRecovery, resumePendingPrimaryRecovery } from './sync/accountBootstrap';
-import { createConfiguredSupabaseControlPlaneClient } from './sync/config';
-import { resumePendingDeviceKeyRotation } from './sync/deviceKeyRotation';
-import { loadSyncSecrets } from './sync/syncSecrets';
-import { restoreGoogleDriveSession } from './utils/googleAuth';
 import { reportUnexpectedError } from './infrastructure/telemetry/reportUnexpectedError';
 import {
   applyThemePreference,
@@ -481,55 +476,6 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   const resumePendingSyncWorkAfterUnlock = async () => {
     await syncV2Application.resumeAfterUnlock();
-    const activeV2Account = await diaryRepository.getLocalSyncAccountState();
-    if (activeV2Account?.syncProtocolVersion === 2) return activeV2Account;
-    const secrets = await loadSyncSecrets();
-    const pendingRecovery = await loadPendingPrimaryRecovery();
-    const accessToken =
-      secrets?.supabaseSession.accessToken || pendingRecovery?.supabaseSession.accessToken;
-    if (pendingRecovery && !accessToken) {
-      throw new Error(
-        'Primary recovery is pending but sync authorization is unavailable. Reconnect Google and Supabase to finish recovery.',
-      );
-    }
-    if (pendingRecovery && accessToken) {
-      const controlPlane = createConfiguredSupabaseControlPlaneClient(accessToken);
-      const googleSession =
-        (await restoreGoogleDriveSession(false).catch(() => null)) ||
-        secrets?.googleSession ||
-        pendingRecovery.googleSession ||
-        null;
-      const result = await resumePendingPrimaryRecovery({
-        repository: diaryRepository,
-        controlPlane,
-        googleSession,
-      });
-      if (result.status === 'completed' || result.status === 'aborted') {
-        showToast(result.message, 'info');
-        await reloadShellData();
-      }
-    }
-    const refreshedAccount = await diaryRepository.getLocalSyncAccountState();
-    if (!refreshedAccount || refreshedAccount.deviceRole !== 'primary_mobile')
-      return refreshedAccount;
-    const refreshedSecrets = await loadSyncSecrets();
-    if (!refreshedSecrets) return refreshedAccount;
-    const controlPlane = createConfiguredSupabaseControlPlaneClient(
-      refreshedSecrets.supabaseSession.accessToken,
-    );
-    const googleSession =
-      (await restoreGoogleDriveSession(false).catch(() => null)) ||
-      refreshedSecrets.googleSession ||
-      null;
-    const result = await resumePendingDeviceKeyRotation({
-      repository: diaryRepository,
-      controlPlane,
-      googleSession,
-    });
-    if (result.status === 'completed' || result.status === 'aborted') {
-      showToast(result.message, 'info');
-      await reloadShellData();
-    }
     return diaryRepository.getLocalSyncAccountState();
   };
 
@@ -626,7 +572,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           setSyncAuthorizationMessage('');
           await eventSyncEngine.pullPending();
         },
-        'Checking Google Drive and bringing in pending updates.',
+        'Checking encrypted sync and bringing in pending updates.',
       );
       showToast('Encrypted sync reconnected.', 'success');
     } catch (reauthorizationError: any) {

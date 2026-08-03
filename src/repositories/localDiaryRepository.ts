@@ -3,7 +3,7 @@ import type {
   BackupMergePreview,
   BackupMergeResult,
   Diary,
-  DriveBackupSettings,
+  LocalRepositoryMetadata,
   Entry,
   LocalSyncAccountState,
   Note,
@@ -52,7 +52,7 @@ import type {
 } from './DiaryRepository';
 import { syncReminderNotification } from '../mobile/reminders';
 import {
-  createDefaultDriveBackupSettings,
+  createDefaultLocalRepositoryMetadata,
   createDefaultUserProfile,
   DEFAULT_APP_SETTINGS,
   DEFAULT_SECURITY_CONFIG,
@@ -291,13 +291,11 @@ export class LocalDiaryRepository implements DiaryRepository {
         if (notes === null) missingItems[STORAGE_KEYS.notes] = [];
         if (settings === null) missingItems[STORAGE_KEYS.settings] = DEFAULT_APP_SETTINGS;
         if (security === null) missingItems[STORAGE_KEYS.security] = DEFAULT_SECURITY_CONFIG;
-        const backupDefaults = createDefaultDriveBackupSettings();
-        const storedBackup = parseJson<DriveBackupSettings>(driveBackup, {});
-        const normalizedBackup: DriveBackupSettings = {
-          ...backupDefaults,
-          ...storedBackup,
-          schedule: { ...backupDefaults.schedule!, ...storedBackup.schedule },
+        const backupDefaults = createDefaultLocalRepositoryMetadata();
+        const storedBackup = parseJson<LocalRepositoryMetadata>(driveBackup, {});
+        const normalizedBackup: LocalRepositoryMetadata = {
           deviceId: storedBackup.deviceId || backupDefaults.deviceId,
+          contentRevision: storedBackup.contentRevision || 0,
         };
         if (
           driveBackup === null ||
@@ -306,10 +304,7 @@ export class LocalDiaryRepository implements DiaryRepository {
           missingItems[STORAGE_KEYS.driveBackup] = normalizedBackup;
         }
         if (profile === null) {
-          const backupSettings = parseJson<DriveBackupSettings>(driveBackup, {});
-          missingItems[STORAGE_KEYS.userProfile] = createDefaultUserProfile(
-            backupSettings.linkedGoogleEmail,
-          );
+          missingItems[STORAGE_KEYS.userProfile] = createDefaultUserProfile();
         }
         if (Object.keys(missingItems).length > 0) await this.writeManyJson(missingItems);
       }),
@@ -986,11 +981,7 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   async getUserProfile(): Promise<UserProfile> {
     await this.waitForWrites();
-    const driveBackup = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, {});
-    return this.readJson(
-      STORAGE_KEYS.userProfile,
-      createDefaultUserProfile(driveBackup.linkedGoogleEmail),
-    );
+    return this.readJson(STORAGE_KEYS.userProfile, createDefaultUserProfile());
   }
 
   saveUserProfile(profile: UserProfile): Promise<void> {
@@ -1011,33 +1002,28 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   saveSecurityConfig(config: SecurityConfig): Promise<void> {
-    return this.enqueueWrite(() => this.writeJson(STORAGE_KEYS.security, config));
+    return this.enqueueWrite(() =>
+      this.writeJson(STORAGE_KEYS.security, normalizeSecurityConfig(config)),
+    );
   }
 
-  async getDriveBackupSettings(): Promise<DriveBackupSettings> {
+  async getLocalRepositoryMetadata(): Promise<LocalRepositoryMetadata> {
     await this.waitForWrites();
-    const defaults = createDefaultDriveBackupSettings();
-    const stored = await this.readJson<DriveBackupSettings>(STORAGE_KEYS.driveBackup, defaults);
+    const defaults = createDefaultLocalRepositoryMetadata();
+    const stored = await this.readJson<LocalRepositoryMetadata>(STORAGE_KEYS.driveBackup, defaults);
     return {
-      ...defaults,
-      ...stored,
-      schedule: { ...defaults.schedule!, ...stored.schedule },
       deviceId: stored.deviceId || defaults.deviceId,
+      contentRevision: stored.contentRevision || 0,
     };
   }
 
-  saveDriveBackupSettings(settings: DriveBackupSettings): Promise<void> {
+  saveLocalRepositoryMetadata(settings: LocalRepositoryMetadata): Promise<void> {
     return this.enqueueWrite(async () => {
-      const current = await this.readJson<DriveBackupSettings>(
+      const current = await this.readJson<LocalRepositoryMetadata>(
         STORAGE_KEYS.driveBackup,
-        createDefaultDriveBackupSettings(),
+        createDefaultLocalRepositoryMetadata(),
       );
       await this.writeJson(STORAGE_KEYS.driveBackup, {
-        ...current,
-        ...settings,
-        schedule: settings.schedule
-          ? { ...current.schedule!, ...settings.schedule }
-          : current.schedule,
         deviceId: current.deviceId || settings.deviceId,
         contentRevision: Math.max(current.contentRevision || 0, settings.contentRevision || 0),
       });
@@ -1928,9 +1914,9 @@ export class LocalDiaryRepository implements DiaryRepository {
             currentSyncSequence: Math.max(syncState.currentSyncSequence, input.sequence),
           },
         });
-        const backup = await this.readJson<DriveBackupSettings>(
+        const backup = await this.readJson<LocalRepositoryMetadata>(
           STORAGE_KEYS.driveBackup,
-          createDefaultDriveBackupSettings(),
+          createDefaultLocalRepositoryMetadata(),
         );
         const outbox = Object.values(
           await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {}),
@@ -1968,7 +1954,6 @@ export class LocalDiaryRepository implements DiaryRepository {
       settings,
       userProfile,
       security,
-      driveBackupSettings,
       syncRecordVersions,
       syncMediaPointers,
     ] = await Promise.all([
@@ -1978,7 +1963,6 @@ export class LocalDiaryRepository implements DiaryRepository {
       this.getSettings(),
       this.getUserProfile(),
       this.getSecurityConfig(),
-      this.getDriveBackupSettings(),
       this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}),
       this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {}),
     ]);
@@ -1990,7 +1974,6 @@ export class LocalDiaryRepository implements DiaryRepository {
       settings,
       userProfile,
       security,
-      driveBackupSettings,
       syncRecordVersions,
       syncMediaPointers,
     };
@@ -2062,8 +2045,6 @@ export class LocalDiaryRepository implements DiaryRepository {
         items[STORAGE_KEYS.syncMediaPointers] = sanitizedSnapshot.syncMediaPointers;
       if (mode === 'replace' && sanitizedSnapshot.security)
         items[STORAGE_KEYS.security] = sanitizedSnapshot.security;
-      if (mode === 'replace' && sanitizedSnapshot.driveBackupSettings)
-        items[STORAGE_KEYS.driveBackup] = sanitizedSnapshot.driveBackupSettings;
       await this.writePortableItems(items);
       if (mode === 'replace' && sanitizedSnapshot.settings)
         await syncReminderNotification(sanitizedSnapshot.settings);
@@ -2249,9 +2230,9 @@ export class LocalDiaryRepository implements DiaryRepository {
     if (!this.store.commitStructuredRecords) {
       throw new Error('Structured record commits are unavailable for this local data store.');
     }
-    const backup = await this.readJson<DriveBackupSettings>(
+    const backup = await this.readJson<LocalRepositoryMetadata>(
       STORAGE_KEYS.driveBackup,
-      createDefaultDriveBackupSettings(),
+      createDefaultLocalRepositoryMetadata(),
     );
     const contentRevision = (backup.contentRevision || 0) + 1;
     await this.store.commitStructuredRecords({
@@ -2279,9 +2260,9 @@ export class LocalDiaryRepository implements DiaryRepository {
     if (!this.store.commitLocalMutationAndOutbox) {
       return this.writePortableItems(fallbackItems, createChange);
     }
-    const backup = await this.readJson<DriveBackupSettings>(
+    const backup = await this.readJson<LocalRepositoryMetadata>(
       STORAGE_KEYS.driveBackup,
-      createDefaultDriveBackupSettings(),
+      createDefaultLocalRepositoryMetadata(),
     );
     const contentRevision = (backup.contentRevision || 0) + 1;
     await this.store.commitLocalMutationAndOutbox({
@@ -2304,9 +2285,9 @@ export class LocalDiaryRepository implements DiaryRepository {
     items: Record<string, unknown>,
     createChange?: (contentRevision: number) => RepositoryChange,
   ): Promise<number> {
-    const backup = await this.readJson<DriveBackupSettings>(
+    const backup = await this.readJson<LocalRepositoryMetadata>(
       STORAGE_KEYS.driveBackup,
-      createDefaultDriveBackupSettings(),
+      createDefaultLocalRepositoryMetadata(),
     );
     const contentRevision = (backup.contentRevision || 0) + 1;
     await this.writeManyJson({
@@ -2368,9 +2349,9 @@ export class LocalDiaryRepository implements DiaryRepository {
         typeof navigator !== 'undefined' && !navigator.onLine ? 'OFFLINE' : 'ONLINE',
       updatedAt: Date.now(),
     } satisfies SyncHealth);
-    const backup = await this.readJson<DriveBackupSettings>(
+    const backup = await this.readJson<LocalRepositoryMetadata>(
       STORAGE_KEYS.driveBackup,
-      createDefaultDriveBackupSettings(),
+      createDefaultLocalRepositoryMetadata(),
     );
     const revision = contentRevision ?? backup.contentRevision ?? 0;
     this.emitChange(revision, {

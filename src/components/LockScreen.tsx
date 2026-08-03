@@ -27,21 +27,18 @@ import {
   SyncDeviceRole,
 } from '../types';
 import {
-  createCustomRecoveryQuestionId,
   createInitialPin,
-  createInitialPinWithRecovery,
-  getRecoveryQuestionText,
-  hasRecoveryQuestion,
   isValidPin,
-  requiresRecoveryQuestionForDevice,
   resetPinAfterVerifiedRecovery,
-  SECURITY_RECOVERY_QUESTIONS,
   unlockWithPin,
-  withRecoveryQuestion,
-  verifyRecoveryAnswer,
 } from '../domain/security';
 import type { PinLength } from '../domain/security';
-import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
+import {
+  clearGoogleAuthIntent,
+  getPendingGoogleAuthIntent,
+  signOutGoogleAuth,
+  startGoogleAuth,
+} from '../utils/googleAuth';
 import { diaryRepository, syncV2Application } from '../repositories';
 import {
   applyThemePreference,
@@ -77,18 +74,13 @@ const SANCTUARY_QUOTES = [
   'Every page is a fresh start. Every word is a step home.',
 ];
 
-const CUSTOM_QUESTION_SELECT_VALUE = 'custom';
-
 const formatGoogleAuthError = (err: any): string => {
   const message = err?.message || '';
   if (message.includes('VITE_GOOGLE_WEB_CLIENT_ID')) {
-    return 'Google sign-in is not available right now. Try again later or continue without Sync & Backup.';
+    return 'Google sign-in is not available right now. Try again later.';
   }
   if (err?.code === 'SIGN_IN_CANCELED' || message.includes('SIGN_IN_CANCELED')) {
     return 'Google sign-in was cancelled before it completed.';
-  }
-  if (message.includes('Drive access')) {
-    return 'Google did not grant the requested account access. Please reconnect and approve the permission prompt.';
   }
   if (message.includes('native mobile app')) {
     return message;
@@ -96,8 +88,8 @@ const formatGoogleAuthError = (err: any): string => {
   return err?.message || 'Google verification failed.';
 };
 
-type SetupStep = 'welcome' | 'pin' | 'confirm' | 'recovery' | 'complete';
-type RecoveryMode = 'choosing' | 'question' | 'google' | 'newPin' | null;
+type SetupStep = 'welcome' | 'pin' | 'confirm' | 'complete';
+type RecoveryMode = 'google' | 'newPin' | null;
 type SyncSetupProgressKey = 'connect' | 'verify' | 'prepare' | 'restore' | 'finish';
 interface SyncSetupSelection {
   googleSession: GoogleAccountSession;
@@ -165,22 +157,16 @@ export default function LockScreen({
   const [setupStep, setSetupStep] = useState<SetupStep>(
     initialSecurity.isPinCreated ? 'pin' : 'welcome',
   );
-  const [questionId, setQuestionId] = useState(SECURITY_RECOVERY_QUESTIONS[0]?.id || '');
-  const [customRecoveryQuestion, setCustomRecoveryQuestion] = useState('');
-  const [recoveryAnswer, setRecoveryAnswer] = useState('');
-  const [showRecoveryAnswer, setShowRecoveryAnswer] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [showPin, setShowPin] = useState(false);
   const [shakeTrigger, setShakeTrigger] = useState(false);
-  const [requiresRecoverySetup, setRequiresRecoverySetup] = useState(false);
   const [recoveryMode, setRecoveryMode] = useState<RecoveryMode>(null);
   const [isResetting, setIsResetting] = useState(false);
   const [resetPinLength, setResetPinLength] = useState<PinLength>(security.pinLength || 4);
   const [resetNewPin, setResetNewPin] = useState('');
   const [resetConfirmPin, setResetConfirmPin] = useState('');
-  const [recoveryVerifiedBy, setRecoveryVerifiedBy] = useState<'question' | 'google' | null>(null);
-  const [isRecoveryQuestionVerified, setIsRecoveryQuestionVerified] = useState(false);
+  const [recoveryVerifiedBy, setRecoveryVerifiedBy] = useState<'google' | null>(null);
   const [isBiometricUnlocking, setIsBiometricUnlocking] = useState(false);
   const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() =>
     initialSecurity.isPinCreated ? 'ambient' : 'keypad',
@@ -233,6 +219,26 @@ export default function LockScreen({
     applyThemePreference(theme);
   }, [theme]);
 
+  useEffect(() => {
+    if (isNativePlatform() || getPendingGoogleAuthIntent() !== 'pin-reset') return;
+    let active = true;
+    void import('../sync/webGoogleAuth').then(async ({ restoreWebGoogleSyncSession }) => {
+      try {
+        const restored = await restoreWebGoogleSyncSession();
+        if (!active || !restored?.googleSession || !security.linkedGoogleUserId) return;
+        clearGoogleAuthIntent();
+        setScreenMode('keypad');
+        setRecoveryMode('google');
+        await completeGoogleResetVerification(restored.googleSession);
+      } catch (redirectError: any) {
+        if (active) fail(formatGoogleAuthError(redirectError));
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const triggerHaptic = (pattern: number | number[]) => {
     const strength = Array.isArray(pattern) || pattern >= 15 ? 'medium' : 'light';
     void triggerImpact(strength);
@@ -246,19 +252,8 @@ export default function LockScreen({
     setTimeout(() => setShakeTrigger(false), 500);
   };
 
-  const completeUnlock = async (config: SecurityConfig = security, verifiedPin = '') => {
+  const completeUnlock = async (_config: SecurityConfig = security, verifiedPin = '') => {
     const syncAccount = await diaryRepository.getLocalSyncAccountState();
-    if (requiresRecoveryQuestionForDevice(config, syncAccount?.deviceRole)) {
-      setSecurity(config);
-      if (verifiedPin) setPendingSetupPin(verifiedPin);
-      setRequiresRecoverySetup(true);
-      setScreenMode('keypad');
-      setPin('');
-      setError('');
-      setSuccessMsg('PIN verified. Set a recovery question to continue.');
-      return;
-    }
-
     if (!syncAccount) {
       if (!verifiedPin && !pendingSetupPin) {
         setScreenMode('keypad');
@@ -360,57 +355,6 @@ export default function LockScreen({
     }
   };
 
-  const getRecoveryQuestionPayload = () => {
-    if (questionId === CUSTOM_QUESTION_SELECT_VALUE) {
-      return {
-        id: createCustomRecoveryQuestionId(),
-        text: customRecoveryQuestion.trim(),
-      };
-    }
-
-    return { id: questionId, text: undefined };
-  };
-
-  const handleSaveInitialRecovery = async () => {
-    try {
-      const question = getRecoveryQuestionPayload();
-      const configuredSecurity = createInitialPinWithRecovery(
-        security,
-        pendingSetupPin,
-        question.id,
-        recoveryAnswer,
-        question.text,
-      );
-      await diaryRepository.saveSecurityConfig(configuredSecurity);
-      setSecurity(configuredSecurity);
-      onSecurityChange(configuredSecurity);
-      const syncAccount = await diaryRepository.getLocalSyncAccountState();
-      if (syncAccount) {
-        const updated = {
-          ...configuredSecurity,
-          linkedGoogleUserId: syncAccount.googleUserId,
-          linkedGoogleEmail: syncAccount.googleEmail,
-          linkedGoogleBoundAt: Date.now(),
-        };
-        await diaryRepository.saveSecurityConfig(updated);
-        setSecurity(updated);
-        onSecurityChange(updated);
-        setSetupStep('complete');
-        setSuccessMsg('Your private writing space is ready.');
-        return;
-      }
-      setSuccessMsg(
-        'Local PIN recovery is ready. Connect Google to create or restore your encrypted account.',
-      );
-      setSyncSetupSelection(null);
-      setRecoveryPassphrase('');
-      setConfirmRecoveryPassphrase('');
-      setShowBackupChoice(true);
-    } catch (err: any) {
-      fail(err?.message || 'Could not save recovery question.');
-    }
-  };
-
   const resetGoogleSetupSelection = () => {
     setSyncSetupSelection(null);
     setRecoveryPassphrase('');
@@ -488,7 +432,6 @@ export default function LockScreen({
       setSuccessMsg(
         isRecovery ? 'Preparing account recovery...' : 'Preparing encrypted account...',
       );
-      const question = getRecoveryQuestionPayload();
       const completeAccountSetup = isRecovery
         ? syncV2Application.recoverPrimaryAccount.bind(syncV2Application)
         : syncV2Application.createPrimaryAccount.bind(syncV2Application);
@@ -497,11 +440,6 @@ export default function LockScreen({
         supabaseSession: syncSetupSelection.supabaseSession,
         recoveryPassphrase,
         localPin: pendingSetupPin,
-        recoveryQuestion: {
-          questionId: question.id,
-          answer: recoveryAnswer,
-          questionText: question.text,
-        },
         onProgress: setSuccessMsg,
       });
       const updatedSecurity = await diaryRepository.getSecurityConfig();
@@ -527,40 +465,6 @@ export default function LockScreen({
     }
   };
 
-  const handleSaveMigrationRecovery = async () => {
-    try {
-      const question = getRecoveryQuestionPayload();
-      const updated = withRecoveryQuestion(security, question.id, recoveryAnswer, question.text);
-      await diaryRepository.saveSecurityConfig(updated);
-      setSecurity(updated);
-      onSecurityChange(updated);
-      setRequiresRecoverySetup(false);
-      setSuccessMsg('Recovery question saved.');
-      await completeUnlock(updated, pendingSetupPin);
-    } catch (err: any) {
-      fail(err?.message || 'Could not save recovery question.');
-    }
-  };
-
-  const handleVerifySecurityAnswer = () => {
-    if (verifyRecoveryAnswer(security, recoveryAnswer)) {
-      setIsRecoveryQuestionVerified(true);
-      if (security.linkedGoogleUserId) {
-        setRecoveryVerifiedBy(null);
-        setRecoveryMode('google');
-        setSuccessMsg('Security answer verified. Now verify your linked Google account.');
-      } else {
-        setRecoveryVerifiedBy('question');
-        setRecoveryMode('newPin');
-        setSuccessMsg('Security answer verified. Choose a new PIN.');
-      }
-      setRecoveryAnswer('');
-      setError('');
-    } else {
-      fail('Security answer did not match.');
-    }
-  };
-
   const completeGoogleResetVerification = async (credential: GoogleAccountSession) => {
     if (credential.userId !== security.linkedGoogleUserId) {
       await signOutGoogleAuth();
@@ -574,11 +478,6 @@ export default function LockScreen({
 
   const handleVerifyGoogleReset = async () => {
     if (!security.linkedGoogleUserId) return;
-    if (hasRecoveryQuestion(security) && !isRecoveryQuestionVerified) {
-      fail('Answer your security question before Google verification.');
-      setRecoveryMode('question');
-      return;
-    }
     setIsResetting(true);
     setError('');
     setSuccessMsg('Opening Google verification...');
@@ -614,7 +513,6 @@ export default function LockScreen({
       onSecurityChange(updated);
       setRecoveryMode(null);
       setRecoveryVerifiedBy(null);
-      setIsRecoveryQuestionVerified(false);
       setResetNewPin('');
       setResetConfirmPin('');
       setSuccessMsg('PIN reset successfully.');
@@ -660,17 +558,11 @@ export default function LockScreen({
 
   const isCreatingSyncAccount = syncSetupSelection?.mode === 'create';
   const isRecoveringSyncAccount = syncSetupSelection?.mode === 'recover';
-  const isCustomRecoveryQuestion = questionId === CUSTOM_QUESTION_SELECT_VALUE;
-  const canSaveRecoveryQuestion =
-    !!recoveryAnswer.trim() && (!isCustomRecoveryQuestion || !!customRecoveryQuestion.trim());
-  const needsSyncRecoveryQuestion =
-    syncSetupSelection?.mode === 'create' && !hasRecoveryQuestion(security);
   const canSubmitSyncSetup = syncSetupSelection
-    ? (isRecoveringSyncAccount
-        ? Boolean(recoveryPassphrase.trim())
-        : isValidNewRecoveryPassphrase(recoveryPassphrase) &&
-          recoveryPassphrase === confirmRecoveryPassphrase) &&
-      (!needsSyncRecoveryQuestion || canSaveRecoveryQuestion)
+    ? isRecoveringSyncAccount
+      ? Boolean(recoveryPassphrase.trim())
+      : isValidNewRecoveryPassphrase(recoveryPassphrase) &&
+        recoveryPassphrase === confirmRecoveryPassphrase
     : true;
 
   const setupTitle =
@@ -682,69 +574,53 @@ export default function LockScreen({
           : isRecoveringSyncAccount
             ? 'Restore Encrypted Account'
             : 'Create Recovery Passphrase'
-        : requiresRecoverySetup
-          ? 'Add Recovery Question'
-          : setupStep === 'recovery'
-            ? 'Add Recovery Question'
-            : setupStep === 'confirm'
-              ? 'Confirm Security PIN'
-              : setupStep === 'welcome'
-                ? 'Welcome to Dear Diary'
-                : security.isPinCreated
-                  ? 'Enter Security PIN'
-                  : 'Setup Security PIN';
+        : setupStep === 'confirm'
+          ? 'Confirm Security PIN'
+          : setupStep === 'welcome'
+            ? 'Welcome to Dear Diary'
+            : security.isPinCreated
+              ? 'Enter Security PIN'
+              : 'Setup Security PIN';
 
   const setupCopy =
     setupStep === 'complete'
-      ? 'Your PIN, offline recovery, and encrypted account are configured.'
+      ? 'Your PIN and encrypted account are configured.'
       : showBackupChoice
         ? !syncSetupSelection
           ? 'Connect Google to create your private encrypted account.'
           : isRecoveringSyncAccount
             ? `Enter the recovery passphrase previously created for ${syncSetupSelection.googleSession.email || 'this Google account'}.`
             : `Create an ${RECOVERY_PASSPHRASE_DIGIT_LENGTH}-digit recovery passphrase for ${syncSetupSelection.googleSession.email || 'this Google account'}.`
-        : requiresRecoverySetup
-          ? 'Your PIN is verified. Add a security question before continuing.'
-          : setupStep === 'recovery'
-            ? 'This lets you reset your PIN while staying completely offline.'
-            : setupStep === 'confirm'
-              ? `Enter the same ${selectedPinLength}-digit PIN again.`
-              : setupStep === 'welcome'
-                ? 'Set up private access in a few short steps. Your PIN never leaves this device.'
-                : security.isPinCreated
-                  ? deviceRole === 'web_companion'
-                    ? `Enter this browser's ${security.pinLength || '4 or 8'}-digit PIN. If your mobile PIN changed after pairing, use recovery or pair this browser again.`
-                    : `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock your diary.`
-                  : 'Choose a 4-digit or 8-digit PIN.';
+        : setupStep === 'confirm'
+          ? `Enter the same ${selectedPinLength}-digit PIN again.`
+          : setupStep === 'welcome'
+            ? 'Set up private access in a few short steps. Your PIN never leaves this device.'
+            : security.isPinCreated
+              ? deviceRole === 'web_companion'
+                ? `Enter this browser's ${security.pinLength || '4 or 8'}-digit PIN. If your mobile PIN changed after pairing, verify Google or pair this browser again.`
+                : `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock your diary.`
+              : 'Choose a 4-digit or 8-digit PIN.';
   const setupProgressLabel =
-    security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
+    security.isPinCreated && setupStep !== 'complete'
       ? ''
       : setupStep === 'complete'
-        ? 'Step 7 of 7'
+        ? 'Step 6 of 6'
         : showBackupChoice
           ? syncSetupSelection
-            ? 'Step 6 of 7'
-            : 'Step 5 of 7'
-          : requiresRecoverySetup || setupStep === 'recovery'
-            ? 'Step 4 of 7'
-            : setupStep === 'confirm'
-              ? 'Step 3 of 7'
-              : setupStep === 'welcome'
-                ? 'Step 1 of 7'
-                : 'Step 2 of 7';
+            ? 'Step 5 of 6'
+            : 'Step 4 of 6'
+          : setupStep === 'confirm'
+            ? 'Step 3 of 6'
+            : setupStep === 'welcome'
+              ? 'Step 1 of 6'
+              : 'Step 2 of 6';
   const setupProgressStep = setupProgressLabel
     ? Number(setupProgressLabel.match(/\d+/)?.[0] || 0)
     : 0;
 
   const activeBgClass = 'lock-atmosphere bg-brand-bg';
 
-  const showRecoveryForm =
-    !showBackupChoice &&
-    setupStep !== 'complete' &&
-    (requiresRecoverySetup || setupStep === 'recovery');
-  const hasSecurityQuestionRecovery = hasRecoveryQuestion(security);
   const hasGoogleRecovery = Boolean(security.linkedGoogleUserId);
-  const hasAvailablePinRecovery = hasSecurityQuestionRecovery || hasGoogleRecovery;
   const visiblePinLength = security.isPinCreated
     ? security.pinLength || (pin.length > 4 ? 8 : 4)
     : selectedPinLength;
@@ -957,7 +833,7 @@ export default function LockScreen({
                 className="w-full p-4 sm:p-5 lg:p-0 flex flex-col gap-3.5 lg:gap-6 relative overflow-visible"
               >
                 <div className="pointer-events-none absolute inset-x-10 top-0 hidden h-px bg-gradient-to-r from-transparent via-white/80 to-transparent dark:via-white/20" />
-                {security.isPinCreated && !requiresRecoverySetup && (
+                {security.isPinCreated && (
                   <button
                     onClick={() => {
                       triggerHaptic(10);
@@ -982,19 +858,19 @@ export default function LockScreen({
                   <div className="space-y-0.5">
                     <h1 className="font-serif-diary text-xl sm:text-2xl lg:text-3xl text-[#2C1D21] dark:text-[#ECE6E1] font-bold tracking-tight">
                       <span className="lg:hidden">
-                        {security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
+                        {security.isPinCreated && setupStep !== 'complete'
                           ? 'Enter PIN'
                           : setupTitle}
                       </span>
                       <span className="hidden lg:inline">
-                        {security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
+                        {security.isPinCreated && setupStep !== 'complete'
                           ? 'Welcome Back'
                           : setupTitle}
                       </span>
                     </h1>
                     <p className="hidden text-xs font-bold uppercase tracking-[0.25em] text-brand-pink/85 dark:text-brand-pink-dark lg:block lg:text-base lg:font-normal lg:normal-case lg:tracking-normal">
                       <span className="hidden lg:inline text-brand-text-muted dark:text-[#EADCD1]/70">
-                        {security.isPinCreated && !requiresRecoverySetup && setupStep !== 'complete'
+                        {security.isPinCreated && setupStep !== 'complete'
                           ? 'Your sanctuary is currently locked.'
                           : setupCopy}
                       </span>
@@ -1021,7 +897,6 @@ export default function LockScreen({
                 </div>
 
                 {(!security.isPinCreated ||
-                  requiresRecoverySetup ||
                   setupStep === 'complete' ||
                   deviceRole === 'web_companion') && (
                   <div className="border-b border-brand-border/45 py-1 pb-2 text-center lg:hidden">
@@ -1071,8 +946,7 @@ export default function LockScreen({
                             Private from the first page
                           </p>
                           <p className="mt-1 text-xs leading-relaxed text-brand-text-muted">
-                            You will create a device PIN, an offline recovery question, and an
-                            encrypted account recovery key.
+                            You will create a device PIN and an encrypted account recovery key.
                           </p>
                         </div>
                       </div>
@@ -1115,87 +989,6 @@ export default function LockScreen({
                             </button>
                           )}
                         </div>
-                        {needsSyncRecoveryQuestion && (
-                          <div className="flex flex-col gap-2 rounded-2xl border border-brand-pink/20 bg-brand-pink/5 p-3">
-                            <p className="text-left text-xs leading-relaxed text-brand-text-muted">
-                              Finish the offline recovery question for this device before{' '}
-                              {isRecoveringSyncAccount ? 'restoring' : 'creating'} the encrypted
-                              account.
-                            </p>
-                            <label className="flex flex-col gap-1 text-left">
-                              <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">
-                                Security Question
-                              </span>
-                              <select
-                                value={questionId}
-                                onChange={(event) => {
-                                  setQuestionId(event.target.value);
-                                  setError('');
-                                }}
-                                disabled={isLinkingBackup}
-                                className="rounded-xl border border-brand-border bg-white p-2.5 text-xs text-brand-plum focus:border-brand-pink focus:outline-none disabled:opacity-60 dark:bg-[#1A1517]/40 dark:text-brand-text"
-                              >
-                                {SECURITY_RECOVERY_QUESTIONS.map((question) => (
-                                  <option key={question.id} value={question.id}>
-                                    {question.question}
-                                  </option>
-                                ))}
-                                <option value={CUSTOM_QUESTION_SELECT_VALUE}>
-                                  Write my own question
-                                </option>
-                              </select>
-                            </label>
-                            {isCustomRecoveryQuestion && (
-                              <label className="flex flex-col gap-1 text-left">
-                                <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">
-                                  Custom Question
-                                </span>
-                                <input
-                                  type="text"
-                                  value={customRecoveryQuestion}
-                                  onChange={(event) => {
-                                    setCustomRecoveryQuestion(event.target.value);
-                                    setError('');
-                                  }}
-                                  disabled={isLinkingBackup}
-                                  className="rounded-xl border border-brand-border bg-white p-2.5 text-xs text-brand-plum focus:border-brand-pink focus:outline-none disabled:opacity-60 dark:bg-[#1A1517]/40 dark:text-brand-text"
-                                  placeholder="Type your security question"
-                                />
-                              </label>
-                            )}
-                            <label className="flex flex-col gap-1 text-left">
-                              <span className="text-xs font-bold uppercase tracking-wider text-brand-sage">
-                                Security Answer
-                              </span>
-                              <div className="relative">
-                                <input
-                                  type={showRecoveryAnswer ? 'text' : 'password'}
-                                  value={recoveryAnswer}
-                                  onChange={(event) => {
-                                    setRecoveryAnswer(event.target.value);
-                                    setError('');
-                                  }}
-                                  disabled={isLinkingBackup}
-                                  className="w-full rounded-xl border border-brand-border bg-white p-2.5 pr-10 text-xs text-brand-plum focus:border-brand-pink focus:outline-none disabled:opacity-60 dark:bg-[#1A1517]/40 dark:text-brand-text"
-                                  placeholder="Enter a memorable answer"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => setShowRecoveryAnswer((previous) => !previous)}
-                                  disabled={isLinkingBackup}
-                                  className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink disabled:opacity-50"
-                                  title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}
-                                >
-                                  {showRecoveryAnswer ? (
-                                    <EyeOff className="h-4 w-4" />
-                                  ) : (
-                                    <Eye className="h-4 w-4" />
-                                  )}
-                                </button>
-                              </div>
-                            </label>
-                          </div>
-                        )}
                         <label className="flex flex-col gap-1 text-left">
                           <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
                             {isRecoveringSyncAccount
@@ -1374,80 +1167,6 @@ export default function LockScreen({
                       </p>
                     )}
                   </div>
-                ) : showRecoveryForm ? (
-                  <div className="flex flex-col gap-3">
-                    <label className="flex flex-col gap-1 text-left">
-                      <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                        Security Question
-                      </span>
-                      <select
-                        value={questionId}
-                        onChange={(e) => {
-                          setQuestionId(e.target.value);
-                          setError('');
-                        }}
-                        className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
-                      >
-                        {SECURITY_RECOVERY_QUESTIONS.map((q) => (
-                          <option key={q.id} value={q.id}>
-                            {q.question}
-                          </option>
-                        ))}
-                        <option value={CUSTOM_QUESTION_SELECT_VALUE}>Write my own question</option>
-                      </select>
-                    </label>
-                    {isCustomRecoveryQuestion && (
-                      <label className="flex flex-col gap-1 text-left">
-                        <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                          Custom Question
-                        </span>
-                        <input
-                          type="text"
-                          value={customRecoveryQuestion}
-                          onChange={(e) => setCustomRecoveryQuestion(e.target.value)}
-                          className="bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
-                          placeholder="Type your security question"
-                        />
-                      </label>
-                    )}
-                    <label className="flex flex-col gap-1 text-left">
-                      <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                        Answer
-                      </span>
-                      <div className="relative">
-                        <input
-                          type={showRecoveryAnswer ? 'text' : 'password'}
-                          value={recoveryAnswer}
-                          onChange={(e) => setRecoveryAnswer(e.target.value)}
-                          className="w-full bg-white dark:bg-[#1A1517]/40 border border-brand-border rounded-xl p-2.5 pr-10 text-xs text-brand-plum dark:text-brand-text focus:outline-none focus:border-brand-pink"
-                          placeholder="Enter a memorable answer"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowRecoveryAnswer((prev) => !prev)}
-                          className="absolute inset-y-0 right-2 flex items-center text-brand-sage hover:text-brand-pink"
-                          title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}
-                        >
-                          {showRecoveryAnswer ? (
-                            <EyeOff className="w-4 h-4" />
-                          ) : (
-                            <Eye className="w-4 h-4" />
-                          )}
-                        </button>
-                      </div>
-                    </label>
-                    <button
-                      onClick={
-                        requiresRecoverySetup
-                          ? handleSaveMigrationRecovery
-                          : handleSaveInitialRecovery
-                      }
-                      disabled={!canSaveRecoveryQuestion}
-                      className="w-full py-3 rounded-2xl bg-brand-pink text-white font-bold text-xs uppercase tracking-widest shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      Save Recovery Question
-                    </button>
-                  </div>
                 ) : (
                   <>
                     {!security.isPinCreated && setupStep === 'pin' && (
@@ -1605,38 +1324,28 @@ export default function LockScreen({
                   </>
                 )}
 
-                {error && showRecoveryForm && (
-                  <p className="text-xs font-bold text-brand-rose flex justify-center items-center gap-1">
-                    <AlertCircle className="w-3 h-3" />
-                    <span>{error}</span>
-                  </p>
+                {security.isPinCreated && !isResetting && (
+                  <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
+                    <button
+                      onClick={() => {
+                        triggerHaptic(15);
+                        setRecoveryVerifiedBy(null);
+                        if (!hasGoogleRecovery) {
+                          fail(
+                            'PIN recovery is unavailable because this legacy local diary is not linked to a Google account.',
+                          );
+                          return;
+                        }
+                        setRecoveryMode('google');
+                        setError('');
+                        setSuccessMsg('');
+                      }}
+                      className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors"
+                    >
+                      Forgot security passcode PIN?
+                    </button>
+                  </div>
                 )}
-                {successMsg && showRecoveryForm && !error && (
-                  <p className="text-xs font-bold text-brand-sage flex justify-center items-center gap-1">
-                    <Check className="w-3 h-3" />
-                    <span>{successMsg}</span>
-                  </p>
-                )}
-
-                {security.isPinCreated &&
-                  !requiresRecoverySetup &&
-                  !isResetting &&
-                  hasAvailablePinRecovery && (
-                    <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
-                      <button
-                        onClick={() => {
-                          triggerHaptic(15);
-                          setRecoveryMode(hasSecurityQuestionRecovery ? 'question' : 'choosing');
-                          setRecoveryAnswer('');
-                          setRecoveryVerifiedBy(null);
-                          setIsRecoveryQuestionVerified(false);
-                        }}
-                        className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors"
-                      >
-                        Forgot security passcode PIN?
-                      </button>
-                    </div>
-                  )}
 
                 <AnimatePresence>
                   {recoveryMode && (
@@ -1660,85 +1369,10 @@ export default function LockScreen({
                           Reset Passcode PIN
                         </h3>
 
-                        {recoveryMode === 'choosing' && (
-                          <div className="mt-3 flex w-full flex-col gap-3">
-                            <p className="mx-auto mb-3 max-w-[260px] text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">
-                              Choose a verified recovery method to create a new passcode.
-                            </p>
-                            {hasSecurityQuestionRecovery && (
-                              <button
-                                onClick={() => {
-                                  setRecoveryMode('question');
-                                  setRecoveryAnswer('');
-                                }}
-                                className="group w-full rounded-2xl border border-brand-border/65 bg-white/45 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-pink/40 hover:bg-brand-pink/8 dark:border-white/10 dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
-                              >
-                                <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-pink">
-                                  Recovery Method
-                                </span>
-                                <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">
-                                  Answer Security Question
-                                </span>
-                              </button>
-                            )}
-                            {hasGoogleRecovery && !hasSecurityQuestionRecovery && (
-                              <button
-                                onClick={handleVerifyGoogleReset}
-                                disabled={isResetting}
-                                className="group w-full rounded-2xl border border-brand-sage/30 bg-brand-sage/12 px-5 py-4 text-left shadow-sm backdrop-blur-xl transition-all hover:border-brand-sage/55 hover:bg-brand-sage/18 disabled:opacity-50 dark:border-brand-sage/35 dark:bg-brand-sage/10"
-                              >
-                                <span className="block text-xs font-bold uppercase tracking-[0.2em] text-brand-sage dark:text-brand-sage-light">
-                                  Linked Account
-                                </span>
-                                <span className="mt-1 block font-serif-diary text-xl font-bold text-brand-plum dark:text-[#ECE6E1]">
-                                  Verify Google Account
-                                </span>
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        {recoveryMode === 'question' && (
-                          <div className="mt-6 flex w-full flex-col gap-3">
-                            <p className="rounded-2xl border border-brand-border/55 bg-white/35 px-4 py-3 text-sm font-semibold leading-relaxed text-brand-sage backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:text-brand-sage-light">
-                              {getRecoveryQuestionText(security)}
-                            </p>
-                            <div className="relative">
-                              <input
-                                aria-label="Security question answer"
-                                type={showRecoveryAnswer ? 'text' : 'password'}
-                                value={recoveryAnswer}
-                                onChange={(e) => setRecoveryAnswer(e.target.value)}
-                                placeholder="Your answer"
-                                className="h-[3.25rem] w-full rounded-2xl border border-brand-border bg-white/55 p-3 pr-11 text-sm text-brand-plum shadow-sm backdrop-blur-xl transition-all placeholder:text-brand-text-muted/55 focus:border-brand-pink focus:outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-[#ECE6E1]"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setShowRecoveryAnswer((prev) => !prev)}
-                                className="absolute inset-y-0 right-3 flex items-center text-brand-sage transition-colors hover:text-brand-pink"
-                                title={showRecoveryAnswer ? 'Hide answer' : 'Show answer'}
-                              >
-                                {showRecoveryAnswer ? (
-                                  <EyeOff className="w-4 h-4" />
-                                ) : (
-                                  <Eye className="w-4 h-4" />
-                                )}
-                              </button>
-                            </div>
-                            <button
-                              onClick={handleVerifySecurityAnswer}
-                              disabled={!recoveryAnswer.trim()}
-                              className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-md shadow-brand-plum/10 transition-all hover:bg-brand-pink disabled:cursor-not-allowed disabled:opacity-40 dark:bg-[#EADCD1] dark:text-[#21191C]"
-                            >
-                              Verify Answer
-                            </button>
-                          </div>
-                        )}
-
                         {recoveryMode === 'google' && (
                           <div className="mt-6 flex w-full flex-col gap-3">
                             <p className="rounded-2xl border border-brand-sage/30 bg-brand-sage/10 px-4 py-3 text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/75">
-                              Your security answer is correct. Verify{' '}
+                              Verify{' '}
                               <strong>
                                 {security.linkedGoogleEmail || 'your linked Google account'}
                               </strong>{' '}
@@ -1763,9 +1397,7 @@ export default function LockScreen({
                         {recoveryMode === 'newPin' && (
                           <div className="mt-6 flex w-full flex-col gap-3">
                             <p className="text-sm leading-relaxed text-brand-text-muted dark:text-[#EADCD1]/68">
-                              Recovery verified by{' '}
-                              {recoveryVerifiedBy === 'google' ? 'Google' : 'security question'}.
-                              Choose a new 4-digit or 8-digit PIN.
+                              Google account verified. Choose a new 4-digit or 8-digit PIN.
                             </p>
                             <div className="grid grid-cols-2 gap-2 rounded-2xl border border-brand-border/50 bg-white/35 p-1 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
                               {([4, 8] as PinLength[]).map((length) => (

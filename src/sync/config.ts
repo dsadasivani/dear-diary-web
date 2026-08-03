@@ -1,7 +1,3 @@
-import {
-  SupabaseControlPlaneClient,
-  type SupabaseControlPlaneConfig,
-} from './supabaseControlPlane';
 import { SyncV2ApiClient, type SyncV2AccessTokenProvider } from './v2';
 import {
   HttpTelemetryExporter,
@@ -15,8 +11,6 @@ import {
   type CrashReporter,
 } from '../infrastructure/telemetry/CrashReporter';
 import { APP_ENVIRONMENT } from '../config/environment';
-
-export type SupabaseAccessTokenProvider = NonNullable<SupabaseControlPlaneConfig['accessToken']>;
 
 const readViteEnv = (key: string): string => {
   const value = (import.meta.env[key] as string | undefined)?.trim();
@@ -34,19 +28,6 @@ export const getConfiguredSupabaseUrl = (): string => readViteEnv('VITE_SUPABASE
 export const getConfiguredSupabaseAnonKey = (): string => readViteEnv('VITE_SUPABASE_ANON_KEY');
 
 export const getConfiguredSyncV2ApiUrl = (): string => readViteEnv('VITE_SYNC_V2_API_URL');
-
-export const getConfiguredSupabaseControlPlaneConfig = (
-  accessToken: SupabaseAccessTokenProvider,
-): SupabaseControlPlaneConfig => ({
-  url: getConfiguredSupabaseUrl(),
-  anonKey: getConfiguredSupabaseAnonKey(),
-  accessToken,
-});
-
-export const createConfiguredSupabaseControlPlaneClient = (
-  accessToken: SupabaseAccessTokenProvider,
-): SupabaseControlPlaneClient =>
-  new SupabaseControlPlaneClient(getConfiguredSupabaseControlPlaneConfig(accessToken));
 
 export const createConfiguredSyncV2ApiClient = (
   accessToken: SyncV2AccessTokenProvider,

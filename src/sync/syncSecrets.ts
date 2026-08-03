@@ -19,13 +19,19 @@ const PENDING_PRIMARY_ACCOUNT_SETUP_KEY = 'pending_primary_account_setup_v2';
 const PENDING_PRIMARY_ACCOUNT_RECOVERY_KEY = 'pending_primary_account_recovery_v2';
 
 export interface SyncSecrets {
-  version: 1;
+  version: 1 | 2;
   accountId: string;
   accountRootKey: Uint8Array;
   accountRootKeys?: Record<number, Uint8Array>;
   devicePrivateKeyJwk: string;
   supabaseSession: SupabaseAuthSession;
   googleSession?: GoogleAccountSession;
+  /** Primary-only. Never included in snapshots, portable exports, or companion packages. */
+  primaryRecoveryCredential?: {
+    version: 1;
+    passphrase: string;
+    capturedAt: number;
+  };
 }
 
 interface StoredSyncSecrets extends Omit<SyncSecrets, 'accountRootKey' | 'accountRootKeys'> {
@@ -117,7 +123,7 @@ export const loadSyncSecrets = async (
     const stored = JSON.parse(value) as StoredSyncSecrets;
     const accountRootKey = base64ToBytes(stored.accountRootKey);
     if (
-      stored.version !== 1 ||
+      (stored.version !== 1 && stored.version !== 2) ||
       !stored.accountId ||
       accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES
     ) {
@@ -137,6 +143,22 @@ export const loadSyncSecrets = async (
   } catch {
     return null;
   }
+};
+
+export const withPrimaryRecoveryCredential = (
+  secrets: SyncSecrets,
+  passphrase: string,
+): SyncSecrets => {
+  if (!passphrase) throw new Error('Enter your recovery passphrase.');
+  return {
+    ...secrets,
+    version: 2,
+    primaryRecoveryCredential: {
+      version: 1,
+      passphrase,
+      capturedAt: Date.now(),
+    },
+  };
 };
 
 export const getAccountRootKeyForEpoch = (

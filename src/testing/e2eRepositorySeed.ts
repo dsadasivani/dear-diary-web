@@ -15,8 +15,6 @@ export const seedE2eRepositoryIfRequested = async (): Promise<void> => {
       googleUserId: 'e2e-google-user',
       googleEmail: 'e2e@example.test',
       devicePublicKey: 'e2e-public-key',
-      recoveryKeyDriveFileId: 'e2e-recovery-key',
-      latestSnapshotDriveFileId: 'e2e-snapshot',
       currentSyncSequence: 0,
       keyEpoch: 1,
       linkedAt: 1,

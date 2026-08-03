@@ -30,8 +30,6 @@ export type SettingsRepository = Pick<
   | 'saveSettings'
   | 'getUserProfile'
   | 'saveUserProfile'
-  | 'getDriveBackupSettings'
-  | 'saveDriveBackupSettings'
 >;
 export type SecurityRepository = Pick<DiaryRepository, 'getSecurityConfig' | 'saveSecurityConfig'>;
 export type SyncRepository = Pick<

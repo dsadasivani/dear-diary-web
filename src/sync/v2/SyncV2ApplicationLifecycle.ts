@@ -7,12 +7,7 @@ import type {
   SyncDomainEvent,
   SyncRecordType,
 } from '../../types';
-import {
-  createInitialPin,
-  createInitialPinWithRecovery,
-  hasRecoveryQuestion,
-} from '../../domain/security';
-import { createDefaultDriveBackupSettings } from '../../repositories/defaults';
+import { createInitialPin } from '../../domain/security';
 import { populateUserProfileFromGoogle } from '../../utils/googleProfile';
 import {
   getConfiguredSupabaseAnonKey,
@@ -34,6 +29,7 @@ import {
   savePendingPrimaryAccountSetupSecret,
   savePendingPrimaryAccountRecoverySecret,
   saveSyncSecrets,
+  withPrimaryRecoveryCredential,
 } from '../syncSecrets';
 import { decodeCompanionKeyPackage, unwrapRootKeysForCompanion } from '../companionKeyPackage';
 import { exportDeviceSigningPublicKeySpki, generateDeviceKeyPair } from '../deviceKeys';
@@ -69,11 +65,7 @@ import {
   SyncV2RuntimeStore,
   type SyncV2LocalRuntime,
 } from './protocol/ProtocolBootstrap';
-import {
-  isCanaryEnabled,
-  isVersionAtLeast,
-  RuntimeControlStore,
-} from './protocol/RuntimeControlStore';
+import { RuntimeControlStore } from './protocol/RuntimeControlStore';
 import {
   PersistentReplayStore,
   SYNC_V2_RECORDS_KEY,
@@ -86,20 +78,14 @@ import {
 import { RemoteEventPuller } from './replay/RemoteEventPuller';
 import { PersistentSafetyStopStore } from './safety/PersistentSafetyStopStore';
 import { clearRecoverableCompanionSafetyStop } from './safety/companionSafetyRecovery';
-import {
-  PersistentSyncV2SnapshotStore,
-  type SyncV2CanonicalSnapshotState,
-} from './snapshot/PersistentSyncV2SnapshotStore';
+import { PersistentSyncV2SnapshotStore } from './snapshot/PersistentSyncV2SnapshotStore';
 import { AccountKeySyncV2SnapshotCodec } from './snapshot/SyncV2SnapshotCodec';
 import { SyncV2SnapshotCoordinator } from './snapshot/SyncV2SnapshotCoordinator';
 import { SyncV2RuntimeCoordinator, type SyncV2BackgroundWorker } from './SyncV2RuntimeCoordinator';
-import {
-  PersistentWorkflowJournalStore,
-  SyncV2MigrationCoordinator,
-} from './advanced/AdvancedWorkflowCoordinators';
 import { reportUnexpectedError } from '../../infrastructure/telemetry/reportUnexpectedError';
 import { signWithDeviceBundle } from './v2CompanionPairing';
 import { clearSyncV2LocalCache } from './clearSyncV2LocalCache';
+import { signOutGoogleAuth } from '../../utils/googleAuth';
 import {
   repositorySnapshotFromV2State,
   repositorySnapshotToV2State,
@@ -107,8 +93,6 @@ import {
 
 const PROTOCOL_VERSION = 2;
 const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
-const MIGRATION_JOURNAL_KEY = 'deardiary_sync_v2_migration_journal';
-const LEGACY_VERSIONS_KEY = 'deardiary_sync_record_versions';
 const MAX_WORK_PER_FLUSH = 100;
 const COMPANION_AUTHORIZATION_CHECK_INTERVAL_MS = 5_000;
 
@@ -129,28 +113,6 @@ const canonicalJson = (value: unknown): string => {
     .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
     .join(',')}}`;
 };
-
-const stateDigest = async (state: SyncV2CanonicalSnapshotState): Promise<string> =>
-  sha256Hex(new TextEncoder().encode(canonicalJson(state)));
-
-class MemoryDataStore implements LocalDataStore {
-  private readonly values = new Map<string, string>();
-  async getItem(key: string) {
-    return this.values.get(key) || null;
-  }
-  async setItem(key: string, value: string) {
-    this.values.set(key, value);
-  }
-  async setItems(items: Record<string, string>) {
-    Object.entries(items).forEach(([key, value]) => this.values.set(key, value));
-  }
-  async removeItem(key: string) {
-    this.values.delete(key);
-  }
-  async clear() {
-    this.values.clear();
-  }
-}
 
 class IntervalWorker implements SyncV2BackgroundWorker {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -352,7 +314,7 @@ const loadRecord = async (
 };
 
 export interface SyncV2LifecycleStatus {
-  mode: 'NOT_CONFIGURED' | 'V1' | 'MIGRATING' | 'V2';
+  mode: 'NOT_CONFIGURED' | 'V2';
   eligible: boolean;
   reason?: string;
   rolloutPercentage?: number;
@@ -364,7 +326,6 @@ export interface CreatePrimarySyncAccountInput {
   supabaseSession: SupabaseAuthSession;
   recoveryPassphrase: string;
   localPin: string;
-  recoveryQuestion: { questionId: string; answer: string; questionText?: string };
   onProgress?: (message: string) => void;
 }
 
@@ -427,7 +388,7 @@ export class SyncV2ApplicationLifecycle {
     if (!input.supabaseSession.accessToken)
       throw new Error('Account authorization is unavailable. Sign in again.');
     if (await this.repository.getLocalSyncAccountState())
-      throw new Error('Sync & Backup is already configured on this device.');
+      throw new Error('Sync & Devices is already configured on this device.');
     validateExistingRecoveryPassphrase(input.recoveryPassphrase);
 
     const api = createConfiguredSyncV2ApiClient(async () => input.supabaseSession.accessToken);
@@ -528,15 +489,20 @@ export class SyncV2ApplicationLifecycle {
       deardiary_sync_v2_media_pointers: '{}',
       deardiary_sync_v2_applied_events: '[]',
     });
-    await saveSyncSecrets({
-      version: 1,
-      accountId,
-      accountRootKey: recoveredKeys.accountRootKeys[keyEpoch],
-      accountRootKeys: recoveredKeys.accountRootKeys,
-      devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
-      supabaseSession: input.supabaseSession,
-      googleSession: input.googleSession,
-    });
+    await saveSyncSecrets(
+      withPrimaryRecoveryCredential(
+        {
+          version: 2,
+          accountId,
+          accountRootKey: recoveredKeys.accountRootKeys[keyEpoch],
+          accountRootKeys: recoveredKeys.accountRootKeys,
+          devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
+          supabaseSession: input.supabaseSession,
+          googleSession: input.googleSession,
+        },
+        input.recoveryPassphrase,
+      ),
+    );
 
     input.onProgress?.('Restoring your encrypted diary...');
     const transfer = new BoundedObjectTransfer({
@@ -576,9 +542,6 @@ export class SyncV2ApplicationLifecycle {
       googleUserId: input.googleSession.userId,
       googleEmail: input.googleSession.email,
       devicePublicKey: pending.devicePublicKey,
-      recoveryKeyDriveFileId: '',
-      latestSnapshotDriveFileId: '',
-      latestSnapshotSequence: restoredSnapshot.throughSequence,
       currentSyncSequence: restoredSnapshot.throughSequence,
       keyEpoch,
       linkedAt: Date.now(),
@@ -631,23 +594,8 @@ export class SyncV2ApplicationLifecycle {
     const localPinSecurity = existingSecurity.isPinCreated
       ? existingSecurity
       : createInitialPin(existingSecurity, input.localPin);
-    const recoveredSecurity = restoredRepositorySnapshot.security;
-    const recoveryMetadata = hasRecoveryQuestion(localPinSecurity)
-      ? localPinSecurity
-      : recoveredSecurity && hasRecoveryQuestion(recoveredSecurity)
-        ? recoveredSecurity
-        : null;
     const security = {
       ...localPinSecurity,
-      ...(recoveryMetadata
-        ? {
-            recoveryQuestionId: recoveryMetadata.recoveryQuestionId,
-            recoveryQuestionText: recoveryMetadata.recoveryQuestionText,
-            recoveryAnswerHash: recoveryMetadata.recoveryAnswerHash,
-            recoveryAnswerSalt: recoveryMetadata.recoveryAnswerSalt,
-            recoveryAnswerIterations: recoveryMetadata.recoveryAnswerIterations,
-          }
-        : {}),
       isLocked: false,
     };
     await this.repository.saveSecurityConfig({
@@ -656,16 +604,6 @@ export class SyncV2ApplicationLifecycle {
       linkedGoogleEmail: input.googleSession.email,
       linkedGoogleBoundAt: Date.now(),
     });
-    const backup = createDefaultDriveBackupSettings();
-    await this.repository.saveDriveBackupSettings({
-      ...backup,
-      linkedGoogleUserId: input.googleSession.userId,
-      linkedGoogleEmail: input.googleSession.email,
-      linkedGoogleDisplayName: input.googleSession.displayName,
-      linkedAt: Date.now(),
-      cloudWriteBlocked: false,
-    });
-
     const proof = await signWithDeviceBundle(
       pending.devicePrivateKeyJwk,
       `recovery-key-persisted:${pending.attemptId}:${restoredSnapshot.snapshotId}`,
@@ -699,7 +637,7 @@ export class SyncV2ApplicationLifecycle {
     if (!input.supabaseSession.accessToken)
       throw new Error('Account authorization is unavailable. Sign in again.');
     if (await this.repository.getLocalSyncAccountState())
-      throw new Error('Sync & Backup is already configured on this device.');
+      throw new Error('Sync & Devices is already configured on this device.');
     validateRecoveryPassphrase(input.recoveryPassphrase);
 
     const api = createConfiguredSyncV2ApiClient(async () => input.supabaseSession.accessToken);
@@ -765,29 +703,13 @@ export class SyncV2ApplicationLifecycle {
       input.googleSession,
     );
     await this.repository.saveUserProfile(profile);
-    const security = createInitialPinWithRecovery(
-      await this.repository.getSecurityConfig(),
-      input.localPin,
-      input.recoveryQuestion.questionId,
-      input.recoveryQuestion.answer,
-      input.recoveryQuestion.questionText,
-    );
+    const security = createInitialPin(await this.repository.getSecurityConfig(), input.localPin);
     await this.repository.saveSecurityConfig({
       ...security,
       linkedGoogleUserId: input.googleSession.userId,
       linkedGoogleEmail: input.googleSession.email,
       linkedGoogleBoundAt: Date.now(),
     });
-    const backup = createDefaultDriveBackupSettings();
-    await this.repository.saveDriveBackupSettings({
-      ...backup,
-      linkedGoogleUserId: input.googleSession.userId,
-      linkedGoogleEmail: input.googleSession.email,
-      linkedGoogleDisplayName: input.googleSession.displayName,
-      linkedAt: Date.now(),
-      cloudWriteBlocked: false,
-    });
-
     const account: LocalSyncAccountState = {
       accountId: registration.accountId,
       syncProtocolVersion: 2,
@@ -796,8 +718,6 @@ export class SyncV2ApplicationLifecycle {
       googleUserId: input.googleSession.userId,
       googleEmail: input.googleSession.email,
       devicePublicKey: pending.devicePublicKey,
-      recoveryKeyDriveFileId: '',
-      latestSnapshotDriveFileId: '',
       currentSyncSequence: 0,
       keyEpoch: 1,
       linkedAt: Date.now(),
@@ -866,15 +786,20 @@ export class SyncV2ApplicationLifecycle {
     );
     await snapshots.create();
     input.onProgress?.('Finishing secure setup...');
-    await saveSyncSecrets({
-      version: 1,
-      accountId: registration.accountId,
-      accountRootKey,
-      accountRootKeys: { 1: accountRootKey },
-      devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
-      supabaseSession: input.supabaseSession,
-      googleSession: input.googleSession,
-    });
+    await saveSyncSecrets(
+      withPrimaryRecoveryCredential(
+        {
+          version: 2,
+          accountId: registration.accountId,
+          accountRootKey,
+          accountRootKeys: { 1: accountRootKey },
+          devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
+          supabaseSession: input.supabaseSession,
+          googleSession: input.googleSession,
+        },
+        input.recoveryPassphrase,
+      ),
+    );
     await this.repository.saveLocalSyncAccountState(account);
     await clearPendingPrimaryAccountSetupSecret();
     await this.startIfActive();
@@ -890,66 +815,41 @@ export class SyncV2ApplicationLifecycle {
         eligible: false,
         reason: 'Encrypted sync is not configured.',
       };
-    if (await this.store.getItem(MIGRATION_JOURNAL_KEY))
-      return { mode: 'MIGRATING', eligible: true };
     if (account.syncProtocolVersion === 2) return { mode: 'V2', eligible: true };
-    if (account.deviceRole !== 'primary_mobile')
-      return {
-        mode: 'V1',
-        eligible: false,
-        reason: 'Migration must be started on the primary mobile device.',
-      };
-    try {
-      const protocol = await this.client().getProtocol();
-      const eligibility = await this.migrationEligibility(account, protocol);
-      return {
-        mode: 'V1',
-        ...eligibility,
-        rolloutPercentage: protocol.syncV2RolloutPercentage,
-        featureFlags: protocol.featureFlags,
-      };
-    } catch (error) {
-      return {
-        mode: 'V1',
-        eligible: false,
-        reason:
-          error instanceof Error ? error.message : 'Sync V2 availability could not be checked.',
-      };
-    }
+    return {
+      mode: 'NOT_CONFIGURED',
+      eligible: false,
+      reason:
+        'This legacy sync account is no longer supported. Reconnect to create a Sync V2 account.',
+    };
   }
 
-  async migrateToV2(): Promise<void> {
-    if (await this.store.getItem(MIGRATION_JOURNAL_KEY)) {
-      await this.resumeAfterUnlock();
-      return;
+  async unlinkThisCompanion(): Promise<void> {
+    const [account, secrets] = await Promise.all([
+      this.repository.getLocalSyncAccountState(),
+      loadSyncSecrets(),
+    ]);
+    if (
+      !account ||
+      account.syncProtocolVersion !== 2 ||
+      account.deviceRole !== 'web_companion' ||
+      !secrets
+    ) {
+      throw new Error('Only a linked browser companion can unlink itself.');
     }
-    const account = await this.requireV1Primary();
-    const api = this.client();
-    const protocol = await api.getProtocol();
-    const eligibility = await this.migrationEligibility(account, protocol);
-    if (!eligibility.eligible) throw new Error(eligibility.reason);
-    const registration = await this.registerV2Device(account);
-    const v2AccountId = registration.accountId;
-    await this.seedV2State(account, v2AccountId, protocol);
-    await this.runMigration(account, v2AccountId, protocol);
-    await this.startIfActive();
+    const api = createConfiguredSyncV2ApiClient(() => this.accessToken());
+    const possessionSignature = await signWithDeviceBundle(
+      secrets.devicePrivateKeyJwk,
+      `device-revoke-self:${account.deviceId}`,
+    );
+    await api.revokeSelf(account.deviceId, possessionSignature);
+    await signOutGoogleAuth().catch(() => undefined);
+    await this.handleDeviceRevoked();
   }
 
   async resumeAfterUnlock(): Promise<void> {
     let account = await this.repository.getLocalSyncAccountState();
     if (!account) return;
-    if (await this.store.getItem(MIGRATION_JOURNAL_KEY)) {
-      const runtime = await new SyncV2RuntimeStore(this.store).load();
-      if (!runtime)
-        throw new Error('Sync V2 migration state is incomplete. Restart migration from Settings.');
-      const registration = await this.registerV2Device(account);
-      if (registration.accountId !== runtime.accountId) {
-        throw new Error('Sync V2 registration does not match the resumable migration state.');
-      }
-      const protocol = await this.client().getProtocol();
-      await this.runMigration(account, runtime.accountId, protocol);
-      account = await this.repository.getLocalSyncAccountState();
-    }
     if (account?.syncProtocolVersion === 2) await this.startIfActive();
   }
 
@@ -1092,66 +992,6 @@ export class SyncV2ApplicationLifecycle {
     return supabaseSession.accessToken;
   }
 
-  private async requireV1Primary(): Promise<LocalSyncAccountState> {
-    const account = await this.repository.getLocalSyncAccountState();
-    if (!account) throw new Error('Encrypted sync is not configured.');
-    if (account.syncProtocolVersion === 2) throw new Error('This account already uses Sync V2.');
-    if (account.deviceRole !== 'primary_mobile')
-      throw new Error('Migration must be started on the primary mobile device.');
-    return account;
-  }
-
-  private async registerV2Device(account: LocalSyncAccountState) {
-    return this.client().registerDevice({
-      deviceId: account.deviceId,
-      devicePublicKey: await exportDeviceSigningPublicKeySpki(account.devicePublicKey),
-      deviceRole: 'PRIMARY',
-      protocolVersion: PROTOCOL_VERSION,
-      appVersion: APP_VERSION,
-      initialKeyEpoch: account.keyEpoch || 1,
-    });
-  }
-
-  private async migrationEligibility(
-    account: LocalSyncAccountState,
-    protocol: SyncV2Protocol,
-  ): Promise<{ eligible: boolean; reason?: string }> {
-    if (protocol.emergencyMode)
-      return { eligible: false, reason: 'Sync V2 migration is paused by the service.' };
-    if (
-      !(await isCanaryEnabled(
-        account.accountId,
-        protocol.syncV2RolloutPercentage,
-        protocol.rolloutSaltVersion,
-      ))
-    ) {
-      return {
-        eligible: false,
-        reason: `This account is not yet in the ${protocol.syncV2RolloutPercentage}% Sync V2 rollout.`,
-      };
-    }
-    if (
-      !protocol.featureFlags.syncWritesEnabled ||
-      !protocol.featureFlags.remotePullEnabled ||
-      !protocol.featureFlags.snapshotCreationEnabled
-    ) {
-      return {
-        eligible: false,
-        reason: 'The service has not enabled all migration safety controls.',
-      };
-    }
-    if (
-      PROTOCOL_VERSION < protocol.minimumReadProtocolVersion ||
-      PROTOCOL_VERSION < protocol.minimumWriteProtocolVersion
-    ) {
-      return { eligible: false, reason: 'This app must be upgraded before migration.' };
-    }
-    if (!isVersionAtLeast(APP_VERSION, protocol.minimumSupportedAppVersion)) {
-      return { eligible: false, reason: 'This app version is below the service minimum.' };
-    }
-    return { eligible: true };
-  }
-
   private async seedV2State(
     account: LocalSyncAccountState,
     v2AccountId: string,
@@ -1174,116 +1014,6 @@ export class SyncV2ApplicationLifecycle {
       [SYNC_V2_VERSIONS_KEY]: JSON.stringify(state.recordVersions),
       deardiary_sync_v2_media_pointers: '{}',
       deardiary_sync_v2_applied_events: '[]',
-    });
-  }
-
-  private async runMigration(
-    account: LocalSyncAccountState,
-    v2AccountId: string,
-    protocol: SyncV2Protocol,
-  ): Promise<void> {
-    const api = this.client();
-    const transfer = new BoundedObjectTransfer({
-      maximumObjectBytes: protocol.maximumSnapshotBytes,
-    });
-    const safety = new PersistentSafetyStopStore(this.store);
-    const codec = new AccountKeySyncV2SnapshotCodec((epoch) => this.keyForEpoch(epoch));
-    const snapshotStore = new PersistentSyncV2SnapshotStore(this.store);
-    const refreshCanonicalState = async (): Promise<SyncV2CanonicalSnapshotState> => {
-      const state = repositorySnapshotToV2State(await this.repository.exportSnapshot());
-      await this.store.setItems({
-        [SYNC_V2_RECORDS_KEY]: JSON.stringify(state.records),
-        [SYNC_V2_VERSIONS_KEY]: JSON.stringify(state.recordVersions),
-        deardiary_sync_v2_media_pointers: '{}',
-      });
-      return state;
-    };
-    const snapshots = new SyncV2SnapshotCoordinator(api, transfer, snapshotStore, codec, safety, {
-      accountId: v2AccountId,
-      deviceId: account.deviceId,
-      protocolVersion: PROTOCOL_VERSION,
-      snapshotSchemaVersion: protocol.snapshotSchemaVersion,
-      maximumSnapshotBytes: protocol.maximumSnapshotBytes,
-      currentKeyEpoch: async () => account.keyEpoch || 1,
-    });
-    const journal = new PersistentWorkflowJournalStore<any>(this.store, MIGRATION_JOURNAL_KEY);
-    const coordinator = new SyncV2MigrationCoordinator(api, journal, {
-      drainV1: async () => {
-        await this.legacyEngine.flushPendingOutbox();
-        await this.legacyEngine.pullPending();
-        const pending = await this.repository.listSyncOutboxOperations();
-        if (
-          pending.some((operation) => !['applied', 'conflict_preserved'].includes(operation.state))
-        ) {
-          throw new Error(
-            'V1 still has pending or failed changes. Retry encrypted sync before migrating.',
-          );
-        }
-      },
-      canonicalDigest: async () => stateDigest(await refreshCanonicalState()),
-      baselineSequence: async () => account.currentSyncSequence,
-      createSnapshot: async () => {
-        await refreshCanonicalState();
-        return snapshots.create();
-      },
-      verifyTemporaryRestore: async (snapshotId) => {
-        const temporary = new MemoryDataStore();
-        await temporary.setItem(
-          SYNC_V2_RUNTIME_KEY,
-          JSON.stringify({
-            ...(await new SyncV2RuntimeStore(this.store).load())!,
-            lastAppliedSequence: 0,
-            updatedAt: Date.now(),
-          }),
-        );
-        const temporaryStore = new PersistentSyncV2SnapshotStore(temporary);
-        const restore = new SyncV2SnapshotCoordinator(
-          api,
-          transfer,
-          temporaryStore,
-          codec,
-          new PersistentSafetyStopStore(temporary),
-          {
-            accountId: v2AccountId,
-            deviceId: account.deviceId,
-            protocolVersion: PROTOCOL_VERSION,
-            snapshotSchemaVersion: protocol.snapshotSchemaVersion,
-            maximumSnapshotBytes: protocol.maximumSnapshotBytes,
-            currentKeyEpoch: async () => account.keyEpoch || 1,
-          },
-        );
-        await restore.restoreLatest();
-        const latest = await api.getLatestSnapshot(protocol.snapshotSchemaVersion);
-        if (latest.snapshotId !== snapshotId)
-          throw new Error('The migration snapshot is no longer the latest snapshot.');
-        return stateDigest((await temporaryStore.exportAccountState(v2AccountId)).state);
-      },
-      activateV2: async () => this.activateLocalV2(account, v2AccountId),
-    });
-    await coordinator.run(account.deviceId);
-  }
-
-  private async activateLocalV2(
-    account: LocalSyncAccountState,
-    v2AccountId: string,
-  ): Promise<void> {
-    const secrets = await loadSyncSecrets();
-    if (!secrets)
-      throw new Error('Encrypted sync keys are unavailable. Unlock and retry migration.');
-    const activeAccount: LocalSyncAccountState = {
-      ...account,
-      accountId: v2AccountId,
-      v1AccountId: account.v1AccountId || account.accountId,
-      syncProtocolVersion: 2,
-      currentSyncSequence: 0,
-    };
-    // Secure keys move first; the local account marker and its fresh V2 version
-    // space then commit together. A crash before that atomic marker leaves the
-    // migration journal resumable on V1.
-    await saveSyncSecrets({ ...secrets, accountId: v2AccountId });
-    await this.store.setItems({
-      [LEGACY_VERSIONS_KEY]: '{}',
-      deardiary_sync_account: JSON.stringify(activeAccount),
     });
   }
 
@@ -1413,7 +1143,7 @@ export class SyncV2ApplicationLifecycle {
       PROTOCOL_VERSION,
       Date.now,
       APP_VERSION,
-      account.v1AccountId || account.accountId,
+      account.accountId,
       controls,
     );
     const assertAuthorized = async () => {

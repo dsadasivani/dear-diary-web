@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  SyncV2MigrationCoordinator,
   SyncV2PairingCoordinator,
   SyncV2RecoveryCoordinator,
   SyncV2RotationCoordinator,
   type WorkflowJournalStore,
 } from './advanced/AdvancedWorkflowCoordinators';
 import { InjectedSyncCrash, TestSyncFaultInjector } from './faults/SyncFaultInjector';
-import type { SyncV2MigrationStatus, SyncV2Pairing, SyncV2Rotation } from './api/SyncV2ApiTypes';
+import type { SyncV2Pairing, SyncV2Rotation } from './api/SyncV2ApiTypes';
 
 class MemoryJournal<T> implements WorkflowJournalStore<T> {
   value: T | null = null;
@@ -152,112 +151,6 @@ test('pairing completion retains its secure journal until local snapshot activat
   assert.notEqual(journal.value, null);
   await coordinator.complete(async () => undefined);
   assert.equal(completionCalls, 2);
-  assert.equal(journal.value, null);
-});
-
-test('migration resumes after V1 drain crash and only then makes V1 read-only', async () => {
-  const journal = new MemoryJournal<any>();
-  let status: SyncV2MigrationStatus = 'PRECHECK';
-  const seen: string[] = [];
-  const api = {
-    async beginMigration() {
-      return response();
-    },
-    async advanceMigration(_id: string, request: { nextStatus: SyncV2MigrationStatus }) {
-      status = request.nextStatus;
-      seen.push(status);
-      return response();
-    },
-    async getMigration() {
-      return response();
-    },
-  } as any;
-  let drainAttempts = 0;
-  const coordinator = new SyncV2MigrationCoordinator(api, journal, {
-    async drainV1() {
-      if (drainAttempts++ === 0) throw new Error('crash');
-    },
-    async canonicalDigest() {
-      return 'a'.repeat(64);
-    },
-    async baselineSequence() {
-      return 0;
-    },
-    async createSnapshot() {
-      return { snapshotId: 'snapshot-1' };
-    },
-    async verifyTemporaryRestore() {
-      return 'a'.repeat(64);
-    },
-  });
-  await assert.rejects(() => coordinator.run('device-1'));
-  assert.equal(journal.value.status, 'DRAINING_V1');
-  await coordinator.run('device-1');
-  assert.equal(journal.value, null);
-  assert.equal(seen.at(-1), 'V1_READ_ONLY');
-  function response() {
-    return {
-      migrationId: 'migration-1',
-      status,
-      baselineDigest: 'a'.repeat(64),
-      validationDigest: null,
-      baselineSequence: 0,
-      activatedSequence: null,
-      snapshotId: null,
-      v1Mode: status === 'V1_READ_ONLY' ? 'READ_ONLY' : 'READ_WRITE',
-    };
-  }
-});
-
-test('migration keeps its journal until local V2 activation succeeds', async () => {
-  const journal = new MemoryJournal<any>();
-  let status: SyncV2MigrationStatus = 'PRECHECK';
-  let activationAttempts = 0;
-  const response = () => ({
-    migrationId: 'migration-activation',
-    status,
-    baselineDigest: 'b'.repeat(64),
-    validationDigest: null,
-    baselineSequence: 4,
-    activatedSequence: status === 'V1_READ_ONLY' ? 0 : null,
-    snapshotId: 'snapshot-activation',
-    v1Mode: status === 'V1_READ_ONLY' ? 'READ_ONLY' : 'READ_WRITE',
-  });
-  const api = {
-    async beginMigration() {
-      return response();
-    },
-    async advanceMigration(_id: string, request: { nextStatus: SyncV2MigrationStatus }) {
-      status = request.nextStatus;
-      return response();
-    },
-    async getMigration() {
-      return response();
-    },
-  } as any;
-  const local = {
-    async drainV1() {},
-    async canonicalDigest() {
-      return 'b'.repeat(64);
-    },
-    async baselineSequence() {
-      return 4;
-    },
-    async createSnapshot() {
-      return { snapshotId: 'snapshot-activation' };
-    },
-    async verifyTemporaryRestore() {
-      return 'b'.repeat(64);
-    },
-    async activateV2() {
-      if (activationAttempts++ === 0) throw new Error('local persistence interrupted');
-    },
-  };
-  const coordinator = new SyncV2MigrationCoordinator(api, journal, local);
-  await assert.rejects(() => coordinator.run('device-1'), /local persistence interrupted/);
-  assert.equal(journal.value.status, 'V1_READ_ONLY');
-  await coordinator.run('device-1');
-  assert.equal(activationAttempts, 2);
   assert.equal(journal.value, null);
 });
 

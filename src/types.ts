@@ -59,12 +59,7 @@ export interface SecurityConfig {
   isLocked: boolean; // Whether the app is currently locked
   passkeyCredentialId?: string; // Standard WebAuthn registered credential ID
   isBiometricsSimulated?: boolean; // True if the biometric is simulated (due to sandbox/iframe restrictions)
-  recoveryQuestionId?: string; // Preset or custom security question ID for local PIN recovery
-  recoveryQuestionText?: string; // Custom security question text, or cached preset text
-  recoveryAnswerHash?: string; // PBKDF2 hash of normalized recovery answer
-  recoveryAnswerSalt?: string; // Salt used for recovery answer hashing
-  recoveryAnswerIterations?: number; // PBKDF2 iteration count for recovery answers
-  linkedGoogleUserId?: string; // Locally bound Google account for backup and PIN reset
+  linkedGoogleUserId?: string; // Immutable Google subject used for PIN reset and sync identity
   linkedGoogleEmail?: string | null; // Email for the locally bound Google account
   linkedGoogleBoundAt?: number; // Timestamp when the Google account was locally bound
 }
@@ -109,7 +104,6 @@ export interface GoogleAccountSession {
   email: string | null;
   displayName: string | null;
   imageUrl?: string | null;
-  accessToken: string | null;
   idToken?: string | null;
 }
 
@@ -127,46 +121,9 @@ export interface GoogleConnectionState {
   account: GoogleAccountIdentity | null;
 }
 
-export type BackupScheduleMode = 'off' | 'daily' | 'weekly';
-export type BackupNetworkPolicy = 'wifi' | 'any';
-
-export interface BackupSchedulePreference {
-  mode: BackupScheduleMode;
-  localTime: string;
-  weeklyDay: number;
-  network: BackupNetworkPolicy;
-  timezone: string;
-}
-
-export interface DriveBackupState {
-  linkedGoogleUserId?: string;
-  linkedGoogleEmail?: string | null;
-  linkedGoogleDisplayName?: string | null;
-  linkedAt?: number;
-  schedule?: BackupSchedulePreference;
-  lastBackupAt?: number;
-  lastBackupFileId?: string;
-  lastBackupSizeBytes?: number;
-  lastRestoreAt?: number;
-  lastAttemptAt?: number;
-  lastErrorCode?: string | null;
+export interface LocalRepositoryMetadata {
   deviceId?: string;
   contentRevision?: number;
-  stagedContentRevision?: number;
-  uploadedContentRevision?: number;
-  parentBackupFileId?: string;
-  activeDeviceId?: string;
-  cloudWriteBlocked?: boolean;
-  encryption?: BackupEncryptionSettings;
-}
-
-export type DriveBackupSettings = DriveBackupState;
-
-export interface BackupEncryptionSettings {
-  enabled: boolean;
-  keyId?: string;
-  configuredAt?: number;
-  version?: 1;
 }
 
 export interface EncryptedEnvelopeHeader {
@@ -567,21 +524,14 @@ export interface RecoveryKeyPackage {
 
 export interface LocalSyncAccountState {
   accountId: string;
-  v1AccountId?: string;
-  syncProtocolVersion?: 1 | 2;
+  syncProtocolVersion?: 2;
   deviceId: string;
   deviceRole: SyncDeviceRole;
   googleUserId: string;
   googleEmail: string;
   devicePublicKey: string;
-  recoveryKeyDriveFileId: string;
-  latestSnapshotDriveFileId: string;
-  latestSnapshotSequence?: number;
   currentSyncSequence: number;
   keyEpoch?: number;
-  partitionedSyncEnabled?: boolean;
-  latestManifestDriveFileId?: string;
-  latestManifestSequence?: number;
   linkedAt: number;
 }
 

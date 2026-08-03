@@ -2,6 +2,11 @@ package com.deardiary.sync.device;
 
 import com.deardiary.sync.common.ApiException;
 import java.time.OffsetDateTime;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,6 +47,56 @@ public class DeviceManagementService {
                 rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5),
                 rs.getObject(6, OffsetDateTime.class).toInstant(),
                 rs.getObject(7, OffsetDateTime.class).toInstant(), rs.getString(8)), requester.accountId());
+    }
+
+    public SelfRevocationResponse revokeSelf(
+            String ownerSubject, UUID deviceId, SelfRevocationRequest request) {
+        var rows = jdbc.query("""
+            SELECT d.account_id, d.device_role, d.device_status, d.device_public_key
+            FROM sync_devices d
+            JOIN sync_accounts a ON a.account_id = d.account_id
+            WHERE d.device_id = ? AND a.owner_subject = ?
+            """, (rs, row) -> new Object[] {
+                rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getBytes(4)
+            }, deviceId, ownerSubject);
+        if (rows.isEmpty()) throw new ApiException(
+            "DEVICE_NOT_FOUND", HttpStatus.NOT_FOUND, "The device is not registered for this user.");
+        var row = rows.getFirst();
+        if (!"COMPANION".equals(row[1])) throw new ApiException(
+            "SELF_REVOCATION_FORBIDDEN", HttpStatus.FORBIDDEN,
+            "Only a companion can unlink itself.", false, true, Map.of());
+        if (!"ACTIVE".equals(row[2]) && !"REVOKED".equals(row[2])) throw new ApiException(
+            "SELF_REVOCATION_FORBIDDEN", HttpStatus.FORBIDDEN,
+            "Only an active companion can unlink itself.", false, true, Map.of());
+        verify((byte[]) row[3], "device-revoke-self:" + deviceId, request.possessionSignature());
+        if (!"REVOKED".equals(row[2])) {
+            jdbc.update("""
+                UPDATE sync_devices SET device_status = 'REVOKED', revoked_at = CURRENT_TIMESTAMP,
+                    last_seen_at = CURRENT_TIMESTAMP
+                WHERE account_id = ? AND device_id = ? AND device_status = 'ACTIVE'
+                """, row[0], deviceId);
+        }
+        return new SelfRevocationResponse(deviceId, "REVOKED");
+    }
+
+    private void verify(byte[] publicKey, String message, String signature) {
+        try {
+            var verifier = Signature.getInstance("SHA256withECDSA");
+            verifier.initVerify(KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(publicKey)));
+            verifier.update(message.getBytes(StandardCharsets.UTF_8));
+            if (!verifier.verify(Base64.getDecoder().decode(signature))) {
+                throw invalidSignature();
+            }
+        } catch (ApiException error) {
+            throw error;
+        } catch (Exception error) {
+            throw invalidSignature();
+        }
+    }
+
+    private ApiException invalidSignature() {
+        return new ApiException("INVALID_DEVICE_SIGNATURE", HttpStatus.FORBIDDEN,
+            "The device signature is invalid.", false, true, Map.of());
     }
 
     private void requirePrimary(UUID accountId, UUID deviceId) {

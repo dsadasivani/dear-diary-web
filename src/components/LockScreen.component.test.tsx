@@ -8,7 +8,6 @@ import type {
   SecurityConfig,
   SupabaseAuthSession,
 } from '../types';
-import { withRecoveryQuestion } from '../domain/security';
 import * as platform from '../platform';
 import { secureAuthService } from '../platform/security';
 import LockScreen from './LockScreen';
@@ -26,7 +25,6 @@ const mocks = vi.hoisted(() => ({
   getLocalThemePreference: vi.fn(),
   setLocalThemePreference: vi.fn(),
   createInitialPin: vi.fn(),
-  createInitialPinWithRecovery: vi.fn(),
 }));
 
 vi.mock('../repositories', () => ({
@@ -43,6 +41,8 @@ vi.mock('../repositories', () => ({
 }));
 
 vi.mock('../utils/googleAuth', () => ({
+  clearGoogleAuthIntent: vi.fn(),
+  getPendingGoogleAuthIntent: vi.fn(() => null),
   signOutGoogleAuth: vi.fn(),
   startGoogleAuth: mocks.startGoogleAuth,
 }));
@@ -67,7 +67,6 @@ vi.mock('../domain/security', async () => {
   return {
     ...actual,
     createInitialPin: mocks.createInitialPin,
-    createInitialPinWithRecovery: mocks.createInitialPinWithRecovery,
   };
 });
 
@@ -91,10 +90,6 @@ const savedSecurity: SecurityConfig = {
   pinHash: 'hash',
   pinSalt: 'salt',
   isLocked: false,
-  recoveryQuestionId: 'first-pet',
-  recoveryAnswerHash: 'answer-hash',
-  recoveryAnswerSalt: 'answer-salt',
-  recoveryAnswerIterations: 310_000,
 };
 
 const pinOnlySecurity: SecurityConfig = {
@@ -110,7 +105,6 @@ const googleSession: GoogleAccountSession = {
   userId: 'google-1',
   email: 'writer@example.com',
   displayName: 'Writer',
-  accessToken: 'drive-token',
   idToken: 'google-id-token',
 };
 
@@ -166,7 +160,6 @@ describe('LockScreen first-run sync setup', () => {
     mocks.getSecurityConfig.mockResolvedValue(savedSecurity);
     mocks.saveSecurityConfig.mockResolvedValue(undefined);
     mocks.createInitialPin.mockReturnValue(pinOnlySecurity);
-    mocks.createInitialPinWithRecovery.mockReturnValue(savedSecurity);
     mocks.startGoogleAuth.mockResolvedValue(googleSession);
     mocks.exchangeGoogleIdTokenForSupabaseSession.mockResolvedValue(supabaseSession);
     mocks.hasExistingPrimaryAccount.mockResolvedValue(false);
@@ -180,7 +173,7 @@ describe('LockScreen first-run sync setup', () => {
   it('connects Google before asking new users to create an 8 digit passphrase', async () => {
     const user = userEvent.setup();
     renderLockScreen();
-    expect(screen.getByLabelText(/setup progress: step 1 of 7/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/setup progress: step 1 of 6/i)).toBeInTheDocument();
     await finishLocalSetup(user);
 
     expect(mocks.saveSecurityConfig).toHaveBeenCalledWith(pinOnlySecurity);
@@ -191,8 +184,6 @@ describe('LockScreen first-run sync setup', () => {
     await screen.findByText(/Google connected/i);
     const createButton = screen.getByRole('button', { name: /create encrypted account/i });
     expect(createButton).toBeDisabled();
-
-    await user.type(screen.getByLabelText(/security answer/i), 'Blue');
 
     await user.type(screen.getByLabelText(/new 8-digit recovery passphrase/i), '1234567');
     await user.type(screen.getByLabelText(/confirm 8-digit passphrase/i), '1234567');
@@ -217,14 +208,15 @@ describe('LockScreen first-run sync setup', () => {
     );
   }, 15_000);
 
-  it('shows a security answer field when resuming setup from an incomplete saved state', async () => {
+  it('does not ask a security question during encrypted account setup', async () => {
     const user = userEvent.setup();
     renderLockScreen();
     await finishLocalSetup(user);
 
     await user.click(screen.getByRole('button', { name: /connect google account/i }));
 
-    expect(await screen.findByLabelText(/security answer/i)).toBeInTheDocument();
+    await screen.findByLabelText(/new 8-digit recovery passphrase/i);
+    expect(screen.queryByLabelText(/security answer/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /create encrypted account/i })).toBeDisabled();
   }, 15_000);
 
@@ -278,57 +270,6 @@ describe('LockScreen first-run sync setup', () => {
     nativePlatform.mockRestore();
     authenticate.mockRestore();
   });
-
-  it('shows the configured recovery question for question-based PIN recovery', async () => {
-    const user = userEvent.setup();
-    render(
-      <LockScreen
-        initialSettings={initialSettings}
-        initialSecurity={savedSecurity}
-        onSecurityChange={vi.fn()}
-        onUnlock={vi.fn()}
-      />,
-    );
-
-    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
-    await user.click(await screen.findByRole('button', { name: /forgot security passcode pin/i }));
-
-    expect(screen.getByText('What was the name of your first pet?')).toBeInTheDocument();
-    expect(screen.queryByText(/recovery question unavailable/i)).not.toBeInTheDocument();
-  });
-
-  it('requires the security answer before linked Google verification for PIN reset', async () => {
-    const user = userEvent.setup();
-    const sequentialRecoverySecurity = {
-      ...withRecoveryQuestion(pinOnlySecurity, 'first-pet', 'Blue'),
-      linkedGoogleUserId: googleSession.userId,
-      linkedGoogleEmail: googleSession.email,
-    };
-    render(
-      <LockScreen
-        initialSettings={initialSettings}
-        initialSecurity={sequentialRecoverySecurity}
-        onSecurityChange={vi.fn()}
-        onUnlock={vi.fn()}
-      />,
-    );
-
-    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
-    await user.click(await screen.findByRole('button', { name: /forgot security passcode pin/i }));
-
-    expect(
-      screen.queryByRole('button', { name: /verify google account/i }),
-    ).not.toBeInTheDocument();
-    await user.type(screen.getByLabelText(/security question answer/i), 'Blue');
-    await user.click(screen.getByRole('button', { name: /verify answer/i }));
-
-    expect(await screen.findByText(/security answer is correct/i)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /verify google account/i }));
-
-    expect(mocks.startGoogleAuth).toHaveBeenCalledWith('pin-reset');
-    expect(await screen.findByText(/recovery verified by Google/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /reset pin/i })).toBeInTheDocument();
-  }, 15_000);
 
   it('does not offer security-question recovery when only Google recovery is configured', async () => {
     const user = userEvent.setup();

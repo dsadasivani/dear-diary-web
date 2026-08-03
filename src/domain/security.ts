@@ -1,29 +1,31 @@
 import CryptoJS from 'crypto-js';
-import type { GoogleAccountSession, SecurityConfig, SyncDeviceRole } from '../types';
+import type { GoogleAccountSession, SecurityConfig } from '../types';
 import { DEFAULT_SECURITY_CONFIG } from '../repositories/defaults';
 
 export type PinLength = 4 | 8;
 
-export const SECURITY_RECOVERY_QUESTIONS = [
-  { id: 'first-pet', question: 'What was the name of your first pet?' },
-  { id: 'favorite-teacher', question: 'What was the name of your favorite teacher?' },
-  { id: 'childhood-street', question: 'What street did you grow up on?' },
-  { id: 'favorite-book', question: 'What was your favorite childhood book?' },
-  { id: 'memorable-place', question: 'What place always feels like home?' },
-];
-
-const CUSTOM_RECOVERY_QUESTION_PREFIX = 'custom:';
-const RECOVERY_ANSWER_ITERATIONS = 120_000;
-
 export const normalizeSecurityConfig = (
   config?: Partial<SecurityConfig> | null,
-): SecurityConfig => ({ ...DEFAULT_SECURITY_CONFIG, ...(config || {}) });
+): SecurityConfig => ({
+  isPinCreated: config?.isPinCreated ?? DEFAULT_SECURITY_CONFIG.isPinCreated,
+  pinHash: config?.pinHash || DEFAULT_SECURITY_CONFIG.pinHash,
+  pinSalt: config?.pinSalt || DEFAULT_SECURITY_CONFIG.pinSalt,
+  ...(config?.pinLength ? { pinLength: config.pinLength } : {}),
+  isBiometricsEnabled: config?.isBiometricsEnabled ?? DEFAULT_SECURITY_CONFIG.isBiometricsEnabled,
+  isLocked: config?.isLocked ?? DEFAULT_SECURITY_CONFIG.isLocked,
+  ...(config?.passkeyCredentialId ? { passkeyCredentialId: config.passkeyCredentialId } : {}),
+  ...(config?.isBiometricsSimulated !== undefined
+    ? { isBiometricsSimulated: config.isBiometricsSimulated }
+    : {}),
+  ...(config?.linkedGoogleUserId ? { linkedGoogleUserId: config.linkedGoogleUserId } : {}),
+  ...(config?.linkedGoogleEmail !== undefined
+    ? { linkedGoogleEmail: config.linkedGoogleEmail }
+    : {}),
+  ...(config?.linkedGoogleBoundAt ? { linkedGoogleBoundAt: config.linkedGoogleBoundAt } : {}),
+});
 
 export const isValidPin = (pin: string, pinLength?: PinLength): boolean =>
   pinLength ? new RegExp(`^\\d{${pinLength}}$`).test(pin) : /^(\d{4}|\d{8})$/.test(pin);
-
-export const normalizeRecoveryAnswer = (answer: string): string =>
-  answer.trim().replace(/\s+/g, ' ').toLowerCase();
 
 const hashPin = (pin: string, salt: string): string => CryptoJS.SHA256(pin + salt).toString();
 
@@ -37,79 +39,6 @@ const createPinFields = (
     pinLength: pin.length === 8 ? 8 : 4,
   };
 };
-
-const hashRecoveryAnswer = (answer: string, salt: string, iterations: number): string =>
-  CryptoJS.PBKDF2(normalizeRecoveryAnswer(answer), salt, {
-    keySize: 256 / 32,
-    iterations,
-  }).toString();
-
-const isCustomRecoveryQuestionId = (questionId: string): boolean =>
-  questionId.startsWith(CUSTOM_RECOVERY_QUESTION_PREFIX);
-
-const isValidRecoveryQuestion = (questionId: string, questionText?: string): boolean =>
-  SECURITY_RECOVERY_QUESTIONS.some((question) => question.id === questionId) ||
-  (isCustomRecoveryQuestionId(questionId) && Boolean(questionText?.trim()));
-
-const createRecoveryFields = (
-  questionId: string,
-  answer: string,
-  questionText?: string,
-): Pick<
-  SecurityConfig,
-  | 'recoveryQuestionId'
-  | 'recoveryQuestionText'
-  | 'recoveryAnswerHash'
-  | 'recoveryAnswerSalt'
-  | 'recoveryAnswerIterations'
-> => {
-  if (!isValidRecoveryQuestion(questionId, questionText)) {
-    throw new Error('Please choose a valid security question.');
-  }
-  if (!normalizeRecoveryAnswer(answer)) {
-    throw new Error('Please enter a security answer.');
-  }
-
-  const answerSalt = CryptoJS.lib.WordArray.random(16).toString();
-  return {
-    recoveryQuestionId: questionId,
-    recoveryQuestionText:
-      questionText?.trim() ||
-      SECURITY_RECOVERY_QUESTIONS.find((question) => question.id === questionId)?.question,
-    recoveryAnswerHash: hashRecoveryAnswer(answer, answerSalt, RECOVERY_ANSWER_ITERATIONS),
-    recoveryAnswerSalt: answerSalt,
-    recoveryAnswerIterations: RECOVERY_ANSWER_ITERATIONS,
-  };
-};
-
-export const createCustomRecoveryQuestionId = (): string =>
-  `${CUSTOM_RECOVERY_QUESTION_PREFIX}${Date.now()}`;
-
-const resolveRecoveryQuestionText = (config: SecurityConfig): string | undefined =>
-  config.recoveryQuestionText?.trim() ||
-  SECURITY_RECOVERY_QUESTIONS.find((question) => question.id === config.recoveryQuestionId)
-    ?.question;
-
-export const getRecoveryQuestionText = (config: SecurityConfig): string =>
-  resolveRecoveryQuestionText(config) || 'Recovery question unavailable';
-
-export const hasRecoveryQuestion = (config: SecurityConfig): boolean =>
-  Boolean(
-    config.recoveryQuestionId &&
-    resolveRecoveryQuestionText(config) &&
-    config.recoveryAnswerHash &&
-    config.recoveryAnswerSalt &&
-    config.recoveryAnswerIterations,
-  );
-
-export const requiresRecoveryQuestionForDevice = (
-  config: SecurityConfig,
-  deviceRole?: SyncDeviceRole,
-): boolean =>
-  config.isPinCreated &&
-  !hasRecoveryQuestion(config) &&
-  !config.linkedGoogleUserId &&
-  deviceRole !== 'web_companion';
 
 export const verifyPin = (config: SecurityConfig, pin: string): boolean =>
   config.isPinCreated &&
@@ -130,48 +59,6 @@ export const createInitialPin = (config: SecurityConfig, pin: string): SecurityC
     isBiometricsSimulated: undefined,
     isLocked: false,
   };
-};
-
-export const createInitialPinWithRecovery = (
-  config: SecurityConfig,
-  pin: string,
-  questionId: string,
-  answer: string,
-  questionText?: string,
-): SecurityConfig => {
-  if (!isValidPin(pin)) throw new Error('PIN must be exactly 4 or 8 digits.');
-  return {
-    ...config,
-    isPinCreated: true,
-    ...createPinFields(pin),
-    ...createRecoveryFields(questionId, answer, questionText),
-    isBiometricsEnabled: false,
-    passkeyCredentialId: undefined,
-    isBiometricsSimulated: undefined,
-    isLocked: false,
-  };
-};
-
-export const withRecoveryQuestion = (
-  config: SecurityConfig,
-  questionId: string,
-  answer: string,
-  questionText?: string,
-): SecurityConfig => {
-  if (!config.isPinCreated)
-    throw new Error('Please create a PIN before setting a recovery question.');
-  return { ...config, ...createRecoveryFields(questionId, answer, questionText) };
-};
-
-export const verifyRecoveryAnswer = (config: SecurityConfig, answer: string): boolean => {
-  if (!hasRecoveryQuestion(config)) return false;
-  return (
-    hashRecoveryAnswer(
-      answer,
-      config.recoveryAnswerSalt || '',
-      config.recoveryAnswerIterations || RECOVERY_ANSWER_ITERATIONS,
-    ) === config.recoveryAnswerHash
-  );
 };
 
 export const updatePinWithCurrentPin = (

@@ -58,8 +58,7 @@ public class SyncObservabilityAspect {
         return observe(joinPoint, "sync_object_storage_request_total", "sync_object_storage_request_duration");
     }
 
-    @Around("execution(public * com.deardiary.sync.migration.MigrationService.*(..)) || "
-        + "execution(public * com.deardiary.sync.pairing.PairingService.*(..)) || "
+    @Around("execution(public * com.deardiary.sync.pairing.PairingService.*(..)) || "
         + "execution(public * com.deardiary.sync.recovery.RecoveryService.*(..)) || "
         + "execution(public * com.deardiary.sync.rotation.RotationService.*(..))")
     public Object advancedWorkflow(ProceedingJoinPoint joinPoint) throws Throwable {
