@@ -14,6 +14,7 @@ import {
   getPendingSyncV2CompanionPairing,
   requestSyncV2CompanionPairing,
 } from '../sync/v2/v2CompanionPairing';
+import type { SyncV2Pairing } from '../sync/v2/api/SyncV2ApiTypes';
 import {
   restoreWebGoogleSyncSession,
   startWebGoogleSyncSignIn,
@@ -32,6 +33,9 @@ interface WebCompanionLinkProps {
 let pairingInitializationPromise: Promise<PendingWebCompanion | null> | null = null;
 let pairingCompletionPromise: ReturnType<typeof completeSyncV2CompanionPairing> | null = null;
 const APPROVAL_POLL_INTERVAL_MS = 1_000;
+
+export const canCompleteWebCompanionPairing = (status: SyncV2Pairing['status']): boolean =>
+  status === 'KEY_PACKAGE_AVAILABLE' || status === 'COMPLETED';
 
 const initializePairing = (): Promise<PendingWebCompanion | null> => {
   if (!pairingInitializationPromise) {
@@ -117,10 +121,11 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
         ) {
           throw new Error('Pairing request expired.');
         }
-        if (details.pairing.status === 'REQUESTED') {
+        if (!canCompleteWebCompanionPairing(details.pairing.status)) {
           return;
         }
         if (active) {
+          setError('');
           setIsRestoring(true);
           setStatus('Companion approved. Restoring your encrypted diary...');
         }
