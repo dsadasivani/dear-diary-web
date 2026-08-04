@@ -5,6 +5,8 @@ import type { EventSyncEngine } from '../sync/eventSyncEngine';
 import { LocalDiaryRepository } from './localDiaryRepository';
 import { createSyncingDiaryRepository } from './syncingDiaryRepository';
 import { setSyncTelemetrySink, type SyncTelemetryEvent } from '../sync/syncTelemetry';
+import { createSyncDomainEvent } from '../sync/domainEvents';
+import type { Diary } from '../types';
 
 class MemoryDataStore implements LocalDataStore {
   private values = new Map<string, string>();
@@ -64,6 +66,141 @@ test('syncing repository saves locally and requests background flush without awa
   assert.equal((await localRepository.getNote(note.id))?.title, 'Offline note');
   assert.equal((await localRepository.listSyncOutboxOperations(['prepared'])).length, 1);
   assert.equal(requestedFlush, 1);
+});
+
+test('account-wide reset tombstones local and archived work before creating one blank journal', async () => {
+  const store = new MemoryDataStore();
+  const localRepository = new LocalDiaryRepository(store);
+  await localRepository.initialize();
+  const originalDiary = (await localRepository.listDiaries())[0];
+  const entry = await localRepository.createEntry({
+    diaryId: originalDiary.id,
+    date: '2026-08-03',
+    title: 'Delete me',
+    body: '<p>Private writing.</p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+  });
+  const note = await localRepository.createNote({
+    title: 'Delete this note',
+    body: '<p>Private note.</p>',
+    isPinned: false,
+    tags: [],
+  });
+  await localRepository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    currentSyncSequence: 8,
+    linkedAt: 1,
+  });
+  await store.setItem(
+    'deardiary_sync_record_versions',
+    JSON.stringify({
+      [`diary:${originalDiary.id}`]: 2,
+      [`entry:${entry.id}`]: 3,
+      [`note:${note.id}`]: 1,
+      'entry:archived-entry': 4,
+      'profile:profile': 5,
+    }),
+  );
+  const replica = new LocalDiaryRepository(new MemoryDataStore());
+  await replica.initialize();
+  await replica.importSnapshot(await localRepository.exportSnapshot(), 'replace');
+  await replica.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-2',
+    deviceRole: 'web_companion',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    currentSyncSequence: 8,
+    linkedAt: 1,
+  });
+  let pulls = 0;
+  let requestedFlushes = 0;
+  const repository = createSyncingDiaryRepository(localRepository, {
+    pullPending: async () => {
+      pulls += 1;
+    },
+    requestOutboxFlush: () => {
+      requestedFlushes += 1;
+    },
+  } as unknown as EventSyncEngine);
+
+  await repository.resetContent();
+
+  assert.equal(pulls, 1);
+  assert.equal(requestedFlushes, 1);
+  assert.deepEqual(await localRepository.listEntries(), []);
+  assert.deepEqual(await localRepository.listNotes(), []);
+  const remainingDiaries = await localRepository.listDiaries();
+  assert.equal(remainingDiaries.length, 1);
+  assert.equal(remainingDiaries[0].name, 'My Diary');
+  assert.notEqual(remainingDiaries[0].id, originalDiary.id);
+
+  const operations = await localRepository.listSyncOutboxOperations();
+  const deleted = operations
+    .filter((operation) => operation.operation === 'delete')
+    .map((operation) => `${operation.recordType}:${operation.recordId}`)
+    .sort();
+  assert.deepEqual(
+    deleted,
+    [
+      `diary:${originalDiary.id}`,
+      'entry:archived-entry',
+      `entry:${entry.id}`,
+      `note:${note.id}`,
+    ].sort(),
+  );
+  assert.equal(
+    operations.find((operation) => operation.recordId === 'archived-entry')?.baseRecordVersion,
+    4,
+  );
+  assert.equal(
+    operations.some(
+      (operation) => operation.recordType === 'profile' && operation.operation === 'delete',
+    ),
+    false,
+  );
+  assert.equal(
+    operations.some(
+      (operation) =>
+        operation.recordType === 'diary' &&
+        operation.recordId === remainingDiaries[0].id &&
+        operation.operation === 'upsert',
+    ),
+    true,
+  );
+
+  let sequence = 8;
+  for (const operation of operations) {
+    sequence += 1;
+    await replica.applySyncEvent(
+      createSyncDomainEvent({
+        accountId: operation.accountId,
+        deviceId: operation.deviceId,
+        eventId: operation.operationId,
+        recordType: operation.recordType,
+        recordId: operation.recordId,
+        operation: operation.operation || 'upsert',
+        baseRecordVersion: operation.baseRecordVersion || 0,
+        payload: operation.operation === 'delete' ? null : (operation.payload as Diary),
+      }),
+      sequence,
+    );
+  }
+  assert.deepEqual(await replica.listEntries(), []);
+  assert.deepEqual(await replica.listNotes(), []);
+  assert.deepEqual(
+    (await replica.listDiaries()).map((diary) => diary.id),
+    [remainingDiaries[0].id],
+  );
 });
 
 test('expected background flush failures are handled at the repository call site', async () => {

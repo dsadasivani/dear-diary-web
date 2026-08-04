@@ -182,6 +182,20 @@ test('companion safety recovery does not clear a stop when a local write is pend
   assert.ok(await new PersistentSafetyStopStore(store).get('account-1'));
 });
 
+test('legacy unknown pull safety stop can retry without clearing integrity stops', async () => {
+  const store = new MemoryDataStore();
+  const safety = new PersistentSafetyStopStore(store);
+
+  await safety.engage('account-1', 'UNKNOWN', 'pull:UNKNOWN');
+  assert.equal(await safety.clearRecoverableUnknownPull('account-1'), true);
+  assert.equal(await safety.get('account-1'), null);
+  assert.equal(await safety.clearRecoverableUnknownPull('account-1'), false);
+
+  await safety.engage('account-1', 'HASH_MISMATCH', 'pull:HASH_MISMATCH');
+  assert.equal(await safety.clearRecoverableUnknownPull('account-1'), false);
+  assert.equal((await safety.get('account-1'))?.errorCode, 'HASH_MISMATCH');
+});
+
 const operation = (patch: Partial<SyncOutboxOperationV2> = {}): SyncOutboxOperationV2 => ({
   operationId: 'operation-1',
   accountId: 'account-1',

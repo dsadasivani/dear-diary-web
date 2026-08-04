@@ -6,7 +6,8 @@ import test from 'node:test';
 import request from 'supertest';
 
 process.env.DEAR_DIARY_DISABLE_SERVER_AUTOSTART = 'true';
-const { contentSecurityPolicy, createApp } = await import('./server.ts');
+const { contentSecurityPolicy, createApp, resolveServerMode, resolveViteMode } =
+  await import('./server.ts');
 
 const createDist = async () => {
   const distPath = await mkdtemp(path.join(os.tmpdir(), 'dear-diary-dist-'));
@@ -62,6 +63,12 @@ test('development policy permits Vite runtime features without weakening product
   assert.doesNotMatch(productionPolicy, /connect-src[^;]+localhost:8080/);
   assert.doesNotMatch(productionPolicy, /connect-src[^;]+localhost:9000/);
   assert.doesNotMatch(productionPolicy, /script-src[^;]*'unsafe-inline'/);
+});
+
+test('local Vite mode can use staging configuration', () => {
+  assert.equal(resolveViteMode('staging'), 'staging');
+  assert.equal(resolveViteMode('  '), 'development');
+  assert.equal(resolveServerMode(undefined, 'dev:staging'), 'development');
 });
 
 test('unknown API routes return JSON 404 instead of the SPA shell', async () => {

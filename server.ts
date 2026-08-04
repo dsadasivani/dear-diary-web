@@ -7,14 +7,18 @@ dotenv.config();
 
 export interface CreateAppOptions {
   mode?: 'development' | 'production';
+  viteMode?: string;
   distPath?: string;
   jsonLimit?: string;
 }
 
-const resolveMode = (): 'development' | 'production' => {
-  if (process.env.NODE_ENV === 'development') return 'development';
-  if (process.env.NODE_ENV === 'production') return 'production';
-  return process.env.npm_lifecycle_event === 'dev' ? 'development' : 'production';
+export const resolveServerMode = (
+  nodeEnvironment = process.env.NODE_ENV,
+  lifecycleEvent = process.env.npm_lifecycle_event,
+): 'development' | 'production' => {
+  if (nodeEnvironment === 'development') return 'development';
+  if (nodeEnvironment === 'production') return 'production';
+  return lifecycleEvent?.startsWith('dev') ? 'development' : 'production';
 };
 
 const parsePort = (value: string | undefined): number => {
@@ -25,11 +29,13 @@ const parsePort = (value: string | undefined): number => {
   return port;
 };
 
+export const resolveViteMode = (value = process.env.VITE_MODE): string =>
+  value?.trim() || 'development';
+
 export const contentSecurityPolicy = (
   mode: 'development' | 'production',
   developmentApiUrl = process.env.VITE_SYNC_V2_API_URL,
-  developmentObjectStoreUrl =
-    process.env.SYNC_OBJECT_STORE_ENDPOINT || 'http://localhost:9000',
+  developmentObjectStoreUrl = process.env.SYNC_OBJECT_STORE_ENDPOINT || 'http://localhost:9000',
 ): string => {
   const connectSources = [
     "'self'",
@@ -121,7 +127,7 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, next) => {
 
 export const createApp = async (options: CreateAppOptions = {}): Promise<express.Express> => {
   const app = express();
-  const mode = options.mode || resolveMode();
+  const mode = options.mode || resolveServerMode();
 
   app.disable('x-powered-by');
   app.use(securityHeaders(mode));
@@ -134,6 +140,7 @@ export const createApp = async (options: CreateAppOptions = {}): Promise<express
 
   if (mode === 'development') {
     const vite = await createViteServer({
+      mode: options.viteMode || resolveViteMode(),
       server: {
         middlewareMode: true,
         hmr: process.env.DISABLE_HMR !== 'true',

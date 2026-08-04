@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "dev:staging": "cross-env VITE_MODE=staging tsx server.ts",
     "build": "cross-env VITE_MODE=production vite build --mode production && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs && cross-env VITE_MODE=production node scripts/validate-production-config.mjs",
     "build:staging": "cross-env VITE_MODE=staging vite build --mode staging && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs && cross-env VITE_MODE=staging node scripts/validate-production-config.mjs",
     "build:release": "cross-env DEAR_DIARY_RELEASE_BUILD=true npm run build",
@@ -85,6 +86,7 @@
     "fflate": "^0.8.3",
     "iconoir-react": "^7.11.1",
     "motion": "^12.23.24",
+    "qrcode.react": "^4.2.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1"
   },
