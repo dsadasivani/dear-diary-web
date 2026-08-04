@@ -4,6 +4,7 @@ interface ImportMetaEnv {
   readonly [key: string]: string | undefined;
   readonly VITE_APP_ENV?: 'development' | 'staging' | 'production';
   readonly VITE_GOOGLE_WEB_CLIENT_ID?: string;
+  readonly VITE_ANDROID_APP_URL?: string;
   readonly VITE_SUPABASE_URL?: string;
   readonly VITE_SUPABASE_ANON_KEY?: string;
   readonly VITE_SYNC_V2_API_URL?: string;
