@@ -3,23 +3,29 @@
   "uid": "deardiary-release",
   "schemaVersion": 39,
   "version": 1,
+  "templating": {
+    "list": [{ "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" }]
+  },
   "panels": [
     {
       "id": 1,
       "type": "timeseries",
       "title": "Client push outcomes",
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
       "targets": [{ "expr": "sum by (error_code) (rate(deardiary_sync_push_failure_total[5m]))" }]
     },
     {
       "id": 2,
       "type": "timeseries",
       "title": "Client pull outcomes",
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
       "targets": [{ "expr": "sum by (error_code) (rate(deardiary_sync_pull_failure_total[5m]))" }]
     },
     {
       "id": 3,
       "type": "stat",
       "title": "Crash-free sessions",
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
       "targets": [
         {
           "expr": "1 - (sum(rate(deardiary_session_crash_total[1h])) / clamp_min(sum(rate(deardiary_session_start_total[1h])), 0.001))"

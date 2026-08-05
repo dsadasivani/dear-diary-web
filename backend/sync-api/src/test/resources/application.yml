@@ -6,6 +6,29 @@ spring:
   flyway:
     enabled: false
 management:
+  tracing:
+    enabled: false
+  otlp:
+    logging:
+      export:
+        enabled: false
+    metrics:
+      export:
+        enabled: false
+    tracing:
+      export:
+        enabled: false
   health:
     defaults:
       enabled: false
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+sync:
+  observability:
+    prometheus-public-enabled: true

@@ -1,0 +1,80 @@
+{
+  "title": "Dear Diary Observability Overview",
+  "uid": "deardiary-observability",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      { "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" },
+      { "name": "logs", "label": "Logs", "type": "datasource", "query": "loki" },
+      { "name": "traces", "label": "Traces", "type": "datasource", "query": "tempo" }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Sync API uptime",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "expr": "max(process_uptime_seconds{application=\"dear-diary-sync-api\"})" }]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "HTTP requests / second",
+      "gridPos": { "h": 8, "w": 10, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "targets": [
+        {
+          "expr": "sum by (method, uri, status) (rate(http_server_requests_seconds_count{application=\"dear-diary-sync-api\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "HTTP latency p95",
+      "gridPos": { "h": 8, "w": 10, "x": 14, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application=\"dear-diary-sync-api\"}[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "Sync API logs",
+      "gridPos": { "h": 12, "w": 14, "x": 0, "y": 8 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "targets": [
+        {
+          "expr": "{service_name=\"dear-diary-sync-api\"} | json",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "traces",
+      "title": "Recent sync API traces",
+      "gridPos": { "h": 12, "w": 10, "x": 14, "y": 8 },
+      "datasource": { "type": "tempo", "uid": "${traces}" },
+      "targets": [
+        {
+          "query": "{ resource.service.name = \"dear-diary-sync-api\" }",
+          "queryType": "traceql",
+          "refId": "A",
+          "limit": 20,
+          "tableType": "traces"
+        }
+      ]
+    }
+  ]
+}

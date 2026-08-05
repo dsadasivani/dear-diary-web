@@ -3,6 +3,8 @@ package com.deardiary.sync;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +23,13 @@ class BackendFoundationTest {
         mockMvc.perform(get("/actuator/health"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("UP"));
+    }
+
+    @Test
+    void exposesPrometheusMetricsWhenExplicitlyEnabled() throws Exception {
+        mockMvc.perform(get("/actuator/prometheus"))
+            .andExpect(status().isOk())
+            .andExpect(content().string(containsString("jvm_info")));
     }
 
     @Test

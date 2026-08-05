@@ -7,5 +7,13 @@
             <includeMdcKeyName>correlationId</includeMdcKeyName>
         </encoder>
     </appender>
-    <root level="INFO"><appender-ref ref="JSON"/></root>
+    <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
+        <captureMdcAttributes>traceId,spanId,correlationId</captureMdcAttributes>
+        <captureCodeAttributes>false</captureCodeAttributes>
+        <captureMarkerAttribute>false</captureMarkerAttribute>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="JSON"/>
+        <appender-ref ref="OTEL"/>
+    </root>
 </configuration>

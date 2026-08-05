@@ -4,11 +4,15 @@
   "schemaVersion": 39,
   "version": 1,
   "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [{ "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" }]
+  },
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Commit success rate",
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
       "targets": [
         {
           "expr": "sum(rate(sync_operation_commit_total{outcome=\"success\"}[5m])) / clamp_min(sum(rate(sync_operation_commit_total[5m])), 0.001)"
@@ -19,12 +23,14 @@
       "id": 2,
       "type": "timeseries",
       "title": "Sequence lag",
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
       "targets": [{ "expr": "sync_sequence_lag" }]
     },
     {
       "id": 3,
       "type": "timeseries",
       "title": "Notification outbox depth",
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
       "targets": [{ "expr": "sync_notification_outbox_depth" }]
     }
   ]

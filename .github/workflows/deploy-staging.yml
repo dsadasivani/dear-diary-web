@@ -384,6 +384,8 @@ jobs:
           task-definition: ${{ env.ECS_TASK_DEFINITION }}
           container-name: ${{ env.ECS_CONTAINER_NAME }}
           image: ${{ steps.image.outputs.image }}
+          environment-variables: |
+            SYNC_RELEASE_VERSION=${{ github.sha }}
 
       - name: Deploy backend to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2

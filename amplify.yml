@@ -6,6 +6,7 @@ frontend:
         - npm ci
     build:
       commands:
+        - export VITE_TELEMETRY_RELEASE_VERSION="${AWS_COMMIT_ID:-staging}"
         - npm run build:web:release:staging
   artifacts:
     baseDirectory: dist

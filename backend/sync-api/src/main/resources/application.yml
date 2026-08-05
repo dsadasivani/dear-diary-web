@@ -24,16 +24,39 @@ server:
     include-stacktrace: never
 
 management:
+  opentelemetry:
+    resource-attributes:
+      service.namespace: dear-diary
+      service.version: ${SYNC_RELEASE_VERSION:development}
+      deployment.environment: ${SYNC_DEPLOYMENT_ENVIRONMENT:local}
   tracing:
     enabled: ${SYNC_TRACING_ENABLED:true}
     sampling:
       probability: ${SYNC_TRACING_SAMPLE_PROBABILITY:0.1}
   otlp:
+    logging:
+      export:
+        enabled: ${SYNC_OTLP_LOGS_ENABLED:false}
+      endpoint: ${SYNC_OTLP_BASE_ENDPOINT:http://localhost:4318}/v1/logs
+      headers:
+        Authorization: ${SYNC_OTLP_AUTHORIZATION_HEADER:}
+    metrics:
+      export:
+        enabled: ${SYNC_OTLP_METRICS_ENABLED:false}
+        url: ${SYNC_OTLP_BASE_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: ${SYNC_OTLP_METRICS_INTERVAL:30s}
+        headers:
+          Authorization: ${SYNC_OTLP_AUTHORIZATION_HEADER:}
     tracing:
-      endpoint: ${SYNC_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
+      export:
+        enabled: ${SYNC_TRACING_ENABLED:true}
+      endpoint: ${SYNC_OTLP_BASE_ENDPOINT:http://localhost:4318}/v1/traces
+      headers:
+        Authorization: ${SYNC_OTLP_AUTHORIZATION_HEADER:}
   metrics:
     tags:
       application: ${spring.application.name}
+      environment: ${SYNC_DEPLOYMENT_ENVIRONMENT:local}
   endpoints:
     web:
       exposure:
@@ -52,6 +75,7 @@ sync:
     allowed-origins: ${SYNC_CORS_ALLOWED_ORIGINS:}
   observability:
     gauge-interval: ${SYNC_OBSERVABILITY_GAUGE_INTERVAL:30s}
+    prometheus-public-enabled: ${SYNC_PROMETHEUS_PUBLIC_ENABLED:false}
   garbage-collection:
     enabled: ${SYNC_GC_WORKER_ENABLED:false}
     dry-run: ${SYNC_GC_DRY_RUN:true}

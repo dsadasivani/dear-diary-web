@@ -46,6 +46,7 @@ For details, see:
 - [Android and Capacitor](docs/mobile-capacitor.md)
 - [Performance measurement](docs/performance.md)
 - [Production sync operations](docs/production-operations.md)
+- [Observability](docs/observability.md)
 - [Testing](docs/testing.md)
 
 ## Local development
@@ -140,9 +141,9 @@ The main client settings are:
 - `VITE_GOOGLE_WEB_CLIENT_ID` for Google identity and legacy Drive compatibility flows.
 - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth and Sync V2.
 - `VITE_SYNC_V2_API_URL` for the Spring Boot Sync V2 service.
-- `VITE_TELEMETRY_ENDPOINT` and `VITE_CRASH_REPORT_ENDPOINT` for optional privacy-safe reporting.
+- `VITE_GRAFANA_FARO_URL` for privacy-restricted Grafana Cloud Frontend Observability.
 
-Backend database, JWT, object-store, notification, garbage-collection, tracing, and CORS settings are documented
+Backend database, JWT, object-store, notification, garbage-collection, Grafana Cloud OTLP, and CORS settings are documented
 inline in [.env.example](.env.example). Select `development`, `staging`, or `production` with
 `SPRING_PROFILES_ACTIVE`. Environment variables and SSM-injected secrets take precedence over the corresponding
 Spring profile. Production release builds validate required frontend configuration and fail closed when it is

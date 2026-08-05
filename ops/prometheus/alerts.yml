@@ -28,10 +28,21 @@ groups:
         annotations: { summary: 'Database corruption was detected' }
   - name: dear-diary-operational
     rules:
+      - alert: SyncApiUnavailable
+        expr: absent_over_time(process_uptime_seconds{application="dear-diary-sync-api"}[5m])
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: 'The Sync API stopped sending metrics to Grafana Cloud' }
       - alert: SyncCommitSuccessRateLow
-        expr: sum(rate(sync_operation_commit_total{outcome="success"}[15m])) / clamp_min(sum(rate(sync_operation_commit_total[15m])), 0.001) < 0.99
+        expr: (sum(rate(sync_operation_commit_total{outcome="success"}[15m])) / clamp_min(sum(rate(sync_operation_commit_total[15m])), 0.001) < 0.99) and (sum(rate(sync_operation_commit_total[15m])) > 0.01)
         for: 10m
         labels: { severity: warning }
+        annotations: { summary: 'Sync commit success rate is below 99%' }
+      - alert: SyncHttpServerErrorRateHigh
+        expr: (sum(rate(http_server_requests_seconds_count{status=~"5.."}[10m])) / clamp_min(sum(rate(http_server_requests_seconds_count[10m])), 0.001) > 0.01) and (sum(rate(http_server_requests_seconds_count[10m])) > 0.01)
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: 'Sync API HTTP 5xx rate is above 1%' }
       - alert: SyncNotificationBacklog
         expr: sync_notification_outbox_depth > 1000
         for: 15m

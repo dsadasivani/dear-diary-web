@@ -85,7 +85,27 @@
         },
         {
           "name": "SYNC_TRACING_ENABLED",
-          "value": "false"
+          "value": "true"
+        },
+        {
+          "name": "SYNC_TRACING_SAMPLE_PROBABILITY",
+          "value": "0.1"
+        },
+        {
+          "name": "SYNC_OTLP_METRICS_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "SYNC_OTLP_LOGS_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "SYNC_DEPLOYMENT_ENVIRONMENT",
+          "value": "staging"
+        },
+        {
+          "name": "SYNC_RELEASE_VERSION",
+          "value": "staging"
         }
       ],
       "secrets": [
@@ -100,6 +120,14 @@
         {
           "name": "SYNC_DB_USERNAME",
           "valueFrom": "arn:aws:ssm:ap-south-1:908027418886:parameter/dear-diary/staging/sync-db-username"
+        },
+        {
+          "name": "SYNC_OTLP_BASE_ENDPOINT",
+          "valueFrom": "arn:aws:ssm:ap-south-1:908027418886:parameter/dear-diary/staging/grafana-otlp-endpoint"
+        },
+        {
+          "name": "SYNC_OTLP_AUTHORIZATION_HEADER",
+          "valueFrom": "arn:aws:ssm:ap-south-1:908027418886:parameter/dear-diary/staging/grafana-otlp-authorization"
         }
       ],
       "logConfiguration": {
