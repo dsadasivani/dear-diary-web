@@ -9,7 +9,7 @@ import {
 
 const password = 'a-correct-horse-battery-staple';
 
-test('encrypts and authenticates a Dear Diary backup envelope', async () => {
+test('encrypts and authenticates a Loredays backup envelope', async () => {
   const original = new TextEncoder().encode('private journal payload');
   const encrypted = await encryptBackupWithPassphrase(original, password);
   assert.equal(isEncryptedBackupEnvelope(encrypted), true);

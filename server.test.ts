@@ -13,7 +13,7 @@ const createDist = async () => {
   const distPath = await mkdtemp(path.join(os.tmpdir(), 'dear-diary-dist-'));
   await writeFile(
     path.join(distPath, 'index.html'),
-    '<!doctype html><title>Dear Diary</title><div id="root"></div>',
+    '<!doctype html><title>Loredays</title><div id="root"></div>',
   );
   await writeFile(path.join(distPath, 'app.js'), 'window.__dearDiaryTest = true;');
   return distPath;
@@ -87,14 +87,14 @@ test('production app serves static assets and falls back to the SPA shell', asyn
   assert.match(asset.text, /__dearDiaryTest/);
 
   const fallback = await request(app).get('/diaries/today').expect(200);
-  assert.match(fallback.text, /Dear Diary/);
+  assert.match(fallback.text, /Loredays/);
 });
 
 test('static serving does not expose files outside the dist directory', async () => {
   const app = await createApp({ mode: 'production', distPath: await createDist() });
   const response = await request(app).get('/..%2Fpackage.json').expect(200);
 
-  assert.match(response.text, /Dear Diary/);
+  assert.match(response.text, /Loredays/);
   assert.doesNotMatch(response.text, /"dependencies"/);
 });
 

@@ -1,4 +1,4 @@
-# Dear Diary Sync API
+# Loredays Sync API
 
 Spring Boot modular-monolith foundation for the Sync V2 control plane.
 

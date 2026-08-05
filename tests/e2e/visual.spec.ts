@@ -20,7 +20,7 @@ const setupUnlockedApp = async (page: Page) => {
   await page.getByRole('button', { name: /continue/i }).click();
   await enterPin(page);
   await page.getByRole('button', { name: /confirm pin/i }).click();
-  const enterDiary = page.getByRole('button', { name: /enter dear diary/i });
+  const enterDiary = page.getByRole('button', { name: /enter loredays/i });
   if ((await enterDiary.count()) && (await enterDiary.isVisible())) await enterDiary.click();
   await expect(page.getByTestId('nav-diaries')).toBeVisible({ timeout: 20_000 });
 };
@@ -29,6 +29,11 @@ const settle = async (page: Page) => {
   await page.waitForLoadState('networkidle');
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(120);
+};
+
+const finishPageTransition = async (page: Page) => {
+  await page.evaluate(() => document.getAnimations().forEach((animation) => animation.finish()));
+  await page.waitForTimeout(50);
 };
 
 const capture = async (page: Page, name: string) => {
@@ -70,7 +75,7 @@ const returnToRootNavigation = async (page: Page) => {
 const leaveReaderForRootNavigation = async (page: Page) => {
   const notesDestination = page.getByTestId('nav-notes');
   if (!(await notesDestination.isVisible())) {
-    await page.getByRole('button', { name: /Back to journals|Back to library/ }).click();
+    await page.getByRole('button', { name: /Back to collections|Back to library/ }).click();
     await expect(page.getByTestId('nav-notes')).toBeVisible();
   }
 };
@@ -79,19 +84,20 @@ const lockApp = async (page: Page) => {
   const profileMenu = page.getByTestId('profile-menu-button');
   if ((await profileMenu.count()) && (await profileMenu.isVisible())) {
     await profileMenu.click();
-    await page.getByRole('button', { name: 'Lock Dear Diary', exact: true }).click();
+    await page.getByRole('button', { name: 'Lock Loredays', exact: true }).click();
     return;
   }
   await page.getByRole('button', { name: 'Lock', exact: true }).click();
 };
 
-test('Living Memories responsive visual matrix', async ({ page, browserName }) => {
+test('Loredays responsive visual matrix', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'Chromium baselines cover the responsive visual matrix.');
   await setupUnlockedApp(page);
 
   await capture(page, 'home-light');
 
   await page.getByTestId('nav-diaries').click();
+  await finishPageTransition(page);
   await expect(
     page.getByTestId('diary-card').filter({ hasText: 'E2E Open Diary' }).first(),
   ).toBeVisible();
@@ -103,12 +109,14 @@ test('Living Memories responsive visual matrix', async ({ page, browserName }) =
   await expect(page.getByTestId('entry-title-input')).toBeVisible();
   await capture(page, 'editor-light');
   await page
-    .getByRole('button', { name: /close editor|my journal/i })
+    .getByRole('button', { name: /close editor|new entry/i })
     .first()
     .click();
+  await finishPageTransition(page);
   await leaveReaderForRootNavigation(page);
 
   await page.getByTestId('nav-notes').click();
+  await finishPageTransition(page);
   await capture(page, 'notes-light');
   await openSearch(page);
   await capture(page, 'search-light');
@@ -116,6 +124,7 @@ test('Living Memories responsive visual matrix', async ({ page, browserName }) =
   await capture(page, 'settings-light');
   await returnToRootNavigation(page);
   await page.getByTestId('nav-stats').click();
+  await finishPageTransition(page);
   await expect(page.getByRole('heading', { name: 'Writing consistency' })).toBeVisible();
   await capture(page, 'insights-light');
 
@@ -124,8 +133,10 @@ test('Living Memories responsive visual matrix', async ({ page, browserName }) =
     document.documentElement.classList.add('dark');
   });
   await page.getByTestId('nav-home').click();
+  await finishPageTransition(page);
   await capture(page, 'home-dark');
   await page.getByTestId('nav-diaries').click();
+  await finishPageTransition(page);
   await expect(
     page.getByTestId('diary-card').filter({ hasText: 'E2E Open Diary' }).first(),
   ).toBeVisible();
@@ -136,11 +147,13 @@ test('Living Memories responsive visual matrix', async ({ page, browserName }) =
   await expect(page.getByTestId('entry-title-input')).toBeVisible();
   await capture(page, 'editor-dark');
   await page
-    .getByRole('button', { name: /close editor|my journal/i })
+    .getByRole('button', { name: /close editor|new entry/i })
     .first()
     .click();
+  await finishPageTransition(page);
   await leaveReaderForRootNavigation(page);
   await page.getByTestId('nav-home').click();
+  await finishPageTransition(page);
   await openSettings(page);
   await capture(page, 'settings-dark');
 

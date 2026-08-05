@@ -388,7 +388,7 @@ export class SyncV2ApplicationLifecycle {
     input: CreatePrimarySyncAccountInput,
   ): Promise<LocalSyncAccountState> {
     if (!input.googleSession.email)
-      throw new Error('Google must return an email address to restore your Dear Diary account.');
+      throw new Error('Google must return an email address to restore your Loredays account.');
     if (!input.supabaseSession.accessToken)
       throw new Error('Account authorization is unavailable. Sign in again.');
     if (await this.repository.getLocalSyncAccountState())
@@ -637,7 +637,7 @@ export class SyncV2ApplicationLifecycle {
 
   async createPrimaryAccount(input: CreatePrimarySyncAccountInput): Promise<LocalSyncAccountState> {
     if (!input.googleSession.email)
-      throw new Error('Google must return an email address to create a Dear Diary account.');
+      throw new Error('Google must return an email address to create a Loredays account.');
     if (!input.supabaseSession.accessToken)
       throw new Error('Account authorization is unavailable. Sign in again.');
     if (await this.repository.getLocalSyncAccountState())

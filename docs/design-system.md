@@ -1,6 +1,6 @@
 # Living Memories design system
 
-Dear Diary uses a semantic, light-first visual system with a deliberate dark counterpart. The product should feel emotionally warm and tactile without sacrificing clarity, contrast, or data density.
+Loredays uses a semantic, light-first visual system with a deliberate dark counterpart. The product should feel emotionally warm and tactile without sacrificing clarity, contrast, or data density.
 
 ## Colour roles
 

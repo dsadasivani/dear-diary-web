@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { parseDearDiaryDeepLink } from './deepLinks';
 
-test('parses Dear Diary custom-scheme navigation links', () => {
+test('parses the legacy Loredays custom-scheme navigation links', () => {
   assert.deepEqual(parseDearDiaryDeepLink('deardiary://home'), { kind: 'home' });
   assert.deepEqual(parseDearDiaryDeepLink('deardiary://diaries'), { kind: 'diaries' });
   assert.deepEqual(parseDearDiaryDeepLink('deardiary://diaries/diary-1'), {

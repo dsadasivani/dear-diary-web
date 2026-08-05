@@ -136,7 +136,7 @@ export const isEncryptedBackupEnvelope = (bytes: Uint8Array): boolean =>
 
 export const inspectEncryptedEnvelope = (bytes: Uint8Array): EncryptedEnvelopeHeader => {
   if (!isEncryptedBackupEnvelope(bytes) || bytes.length < MAGIC.length + HEADER_LENGTH_BYTES) {
-    throw new Error('This file is not an encrypted Dear Diary archive.');
+    throw new Error('This file is not an encrypted Loredays archive.');
   }
   const headerLength = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(
     MAGIC.length,

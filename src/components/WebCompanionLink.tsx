@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Book as BookOpen,
   Check,
   Computer,
   Copy as Clipboard,
@@ -26,6 +25,8 @@ import {
   startWebGoogleSyncSignIn,
   type WebGoogleSyncSession,
 } from '../sync/webGoogleAuth';
+import BrandMark from './BrandMark';
+import { BRAND } from '../config/brand';
 
 interface PendingWebCompanion {
   pairing: Awaited<ReturnType<typeof requestSyncV2CompanionPairing>>;
@@ -76,12 +77,12 @@ const initializePairing = (): Promise<PendingWebCompanion | null> => {
 const setupSteps = [
   {
     title: 'Install on Android',
-    description: 'Get the official app from Google Play to keep your diary private and secure.',
+    description: 'Get the official app from Google Play to keep your memories private and secure.',
     icon: Download,
   },
   {
-    title: 'Set up your diary',
-    description: 'Create or restore your encrypted diary on your primary phone.',
+    title: `Set up ${BRAND.name}`,
+    description: 'Create or restore your encrypted account on your primary phone.',
     icon: Lock,
   },
   {
@@ -137,7 +138,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
         if (existingLinkedState?.syncProtocolVersion === 2) {
           pairingInitializationPromise = null;
           setIsRestoring(true);
-          setStatus('Companion approved. Opening your encrypted diary...');
+          setStatus('Companion approved. Opening your encrypted memories...');
           await onLinked(existingLinkedState);
           return;
         }
@@ -155,7 +156,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
         if (active) {
           setError('');
           setIsRestoring(true);
-          setStatus('Companion approved. Restoring your encrypted diary...');
+          setStatus('Companion approved. Restoring your encrypted memories...');
         }
         if (!pairingCompletionPromise) {
           pairingCompletionPromise = completeSyncV2CompanionPairing(context.auth).finally(() => {
@@ -166,7 +167,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
         if (linked && active) {
           pairingInitializationPromise = null;
           setIsRestoring(true);
-          setStatus('Companion approved. Opening your encrypted diary...');
+          setStatus('Companion approved. Opening your encrypted memories...');
           await onLinked(linked);
         }
       } catch (approvalError: any) {
@@ -182,7 +183,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           if (linkedState) {
             pairingInitializationPromise = null;
             setIsRestoring(true);
-            setStatus('Companion approved. Opening your encrypted diary...');
+            setStatus('Companion approved. Opening your encrypted memories...');
             await onLinked(linkedState);
             return;
           }
@@ -236,16 +237,16 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       <div className="mx-auto grid min-h-[calc(100dvh-4rem)] w-full max-w-[1280px] items-center gap-x-12 gap-y-9 lg:min-h-[calc(100dvh-5rem)] lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)] xl:gap-x-20">
         <header className="lg:col-start-1 lg:self-end">
           <div className="flex items-center gap-3">
-            <span className="flex h-12 w-12 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-secondary-container)] text-[var(--color-secondary-on-container)]">
-              <BookOpen aria-hidden="true" className="h-5 w-5" />
+            <span className="h-12 w-12 overflow-hidden rounded-[var(--radius-control)] shadow-sm">
+              <BrandMark className="h-full w-full object-cover" />
             </span>
-            <p className="app-eyebrow tracking-[0.24em]">Living memories</p>
+            <p className="app-eyebrow tracking-[0.24em]">{BRAND.tagline}</p>
           </div>
           <h1 className="type-display mt-6 text-[var(--color-secondary-on-container)] sm:text-[4.25rem] lg:text-[4.75rem]">
-            Dear Diary
+            {BRAND.wordmark}
           </h1>
           <h2 className="type-section-title mt-5 font-semibold">
-            Your diary starts on your phone.
+            Your story starts on your phone.
           </h2>
           <p className="type-supporting mt-3 max-w-xl text-base">
             Write, protect, and keep your memories on Android. Use the web later as a trusted
@@ -255,13 +256,13 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
 
         <section
           className="order-3 lg:order-none lg:col-start-1 lg:self-start"
-          aria-label="How Dear Diary works"
+          aria-label={`How ${BRAND.name} works`}
         >
           <div className="grid gap-7 md:grid-cols-[220px_minmax(0,1fr)] md:items-center lg:grid-cols-[240px_minmax(0,1fr)]">
             <figure className="hidden overflow-hidden rounded-[1.75rem] border border-[var(--border-strong)] bg-surface shadow-[var(--shadow-floating)] md:block">
               <img
                 src={mobileAppPreview}
-                alt="Dear Diary Android app Today screen"
+                alt={`${BRAND.name} Android app Today screen`}
                 className="block aspect-[390/844] w-full object-cover object-top"
               />
               <figcaption className="flex items-center justify-center gap-2 border-t border-[var(--border-subtle)] bg-surface-subtle px-3 py-3 text-xs font-bold text-accent-strong">
@@ -323,20 +324,20 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
                       bgColor="#ffffff"
                       fgColor="#69445e"
                       level="M"
-                      title="QR code for the Dear Diary Google Play listing"
+                      title={`QR code for the ${BRAND.name} Google Play listing`}
                     />
                   </div>
                   <div>
                     <p className="text-sm font-bold text-ink">Scan with your phone</p>
                     <p className="mt-1 text-xs leading-relaxed text-ink-secondary">
-                      Open your camera and scan to view Dear Diary on Google Play.
+                      Open your camera and scan to view {BRAND.name} on Google Play.
                     </p>
                   </div>
                 </div>
 
                 <div className="my-7 h-px bg-[var(--border-subtle)]" />
                 <p className="text-center text-sm font-semibold text-ink-secondary">
-                  Already use Dear Diary on mobile?
+                  Already use {BRAND.name} on mobile?
                 </p>
                 <button
                   type="button"

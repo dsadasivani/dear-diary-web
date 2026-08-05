@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   WarningCircle as AlertCircle,
   ArrowLeft,
-  Book as BookOpen,
   Calendar as CalendarDays,
   Check,
   Erase as Delete,
@@ -56,6 +55,8 @@ import {
 import { triggerImpact } from '../mobile/haptics';
 import { isNativePlatform } from '../platform';
 import { secureAuthService } from '../platform/security';
+import BrandMark from './BrandMark';
+import { BRAND } from '../config/brand';
 
 interface LockScreenProps {
   initialSecurity: SecurityConfig;
@@ -259,7 +260,7 @@ export default function LockScreen({
         setScreenMode('keypad');
         setPin('');
         setError('');
-        setSuccessMsg('Enter your PIN to connect this diary to its encrypted account.');
+        setSuccessMsg('Enter your PIN to connect this space to its encrypted account.');
         return;
       }
       setPendingSetupPin(verifiedPin || pendingSetupPin);
@@ -267,7 +268,7 @@ export default function LockScreen({
       setScreenMode('keypad');
       setPin('');
       setError('');
-      setSuccessMsg('Local diary verified. Connect it to your encrypted account.');
+      setSuccessMsg('Local space verified. Connect it to your encrypted account.');
       return;
     }
 
@@ -391,7 +392,7 @@ export default function LockScreen({
       setSuccessMsg(
         hasExistingAccount
           ? 'Encrypted account found. Enter your existing recovery passphrase.'
-          : 'Google connected. Create an 8-digit recovery passphrase for your encrypted diary.',
+          : 'Google connected. Create an 8-digit recovery passphrase for your encrypted memories.',
       );
     } catch (err: any) {
       const message = err?.message || '';
@@ -567,7 +568,7 @@ export default function LockScreen({
 
   const setupTitle =
     setupStep === 'complete'
-      ? 'Your Diary Is Ready'
+      ? `${BRAND.name} Is Ready`
       : showBackupChoice
         ? !syncSetupSelection
           ? 'Connect Google Account'
@@ -577,7 +578,7 @@ export default function LockScreen({
         : setupStep === 'confirm'
           ? 'Confirm Security PIN'
           : setupStep === 'welcome'
-            ? 'Welcome to Dear Diary'
+            ? `Welcome to ${BRAND.name}`
             : security.isPinCreated
               ? 'Enter Security PIN'
               : 'Setup Security PIN';
@@ -598,7 +599,7 @@ export default function LockScreen({
             : security.isPinCreated
               ? deviceRole === 'web_companion'
                 ? `Enter this browser's ${security.pinLength || '4 or 8'}-digit PIN. If your mobile PIN changed after pairing, verify Google or pair this browser again.`
-                : `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock your diary.`
+                : `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock ${BRAND.name}.`
               : 'Choose a 4-digit or 8-digit PIN.';
   const setupProgressLabel =
     security.isPinCreated && setupStep !== 'complete'
@@ -701,9 +702,9 @@ export default function LockScreen({
 
       <header className="open-page-lock-header w-full max-w-sm lg:absolute lg:left-8 lg:right-auto lg:top-8 lg:max-w-none xl:left-10 flex justify-between items-center z-10">
         <div className="flex items-center gap-2 bg-white/55 dark:bg-white/[0.06] backdrop-blur-xl px-3.5 py-1.5 rounded-full border border-brand-border/50 dark:border-white/10 shadow-sm">
-          <BookOpen className="w-3.5 h-3.5 text-brand-pink" />
+          <BrandMark className="h-5 w-5 rounded-md object-cover" />
           <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#3E2429] dark:text-[#EADCD1]">
-            Dear Diary
+            {BRAND.wordmark}
           </span>
         </div>
         <motion.button
@@ -757,8 +758,8 @@ export default function LockScreen({
               </div>
 
               <div className="hidden flex-col items-center gap-2 lg:flex">
-                <span className="flex h-[3.25rem] w-[3.25rem] items-center justify-center rounded-2xl border border-brand-border/55 bg-white/50 text-brand-pink shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
-                  <BookOpen className="h-5 w-5" />
+                <span className="h-[3.25rem] w-[3.25rem] overflow-hidden rounded-2xl border border-brand-border/55 shadow-sm">
+                  <BrandMark className="h-full w-full object-cover" />
                 </span>
                 <h1 className="font-serif-diary text-3xl font-semibold text-brand-plum dark:text-[#ECE6E1]">
                   Locked
@@ -849,8 +850,8 @@ export default function LockScreen({
                 )}
 
                 <div className="text-center space-y-1 sm:space-y-1.5 flex flex-col items-center mt-1">
-                  <div className="relative w-12 h-12 sm:w-14 sm:h-14 lg:h-20 lg:w-20 lg:rounded-full rounded-2xl bg-white/70 dark:bg-white/[0.06] border border-brand-border/60 dark:border-white/10 shadow-sm flex items-center justify-center backdrop-blur-md">
-                    <BookOpen className="w-5.5 h-5.5 sm:w-6.5 sm:h-6.5 text-brand-pink" />
+                  <div className="relative h-12 w-12 overflow-visible rounded-2xl border border-brand-border/60 shadow-sm sm:h-14 sm:w-14 lg:h-20 lg:w-20 lg:rounded-full">
+                    <BrandMark className="h-full w-full rounded-[inherit] object-cover" />
                     <span className="absolute -right-1 -top-1 hidden h-7 w-7 items-center justify-center rounded-full bg-brand-plum text-white shadow-md dark:bg-[#151214] lg:flex">
                       <Lock className="h-3.5 w-3.5" />
                     </span>
@@ -931,7 +932,7 @@ export default function LockScreen({
                       onClick={() => void onUnlock()}
                       className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-bold uppercase tracking-widest text-white shadow-md hover:bg-brand-pink dark:bg-[#EADCD1] dark:text-[#21191C]"
                     >
-                      Enter Dear Diary
+                      Enter {BRAND.name}
                     </button>
                   </div>
                 ) : setupStep === 'welcome' ? (
@@ -967,8 +968,8 @@ export default function LockScreen({
                   <div className="flex flex-col gap-3">
                     {!syncSetupSelection ? (
                       <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage/8 p-3 text-left text-xs leading-relaxed text-brand-text-muted">
-                        Dear Diary uses Google only to identify your account. Your diary remains
-                        encrypted before it is synchronized.
+                        {BRAND.name} uses Google only to identify your account. Your memories remain
+                        encrypted before they are synchronized.
                       </div>
                     ) : (
                       <>
@@ -1067,7 +1068,7 @@ export default function LockScreen({
                         <div className="rounded-2xl border border-brand-pink/15 bg-brand-pink/5 p-3 text-left text-xs leading-relaxed text-brand-text-muted">
                           {isRecoveringSyncAccount
                             ? 'Use the recovery passphrase from the original setup. After the encrypted restore is verified, this device becomes the only active primary and the previous primary and companions are revoked.'
-                            : 'This 8-digit recovery passphrase protects your encrypted diary. Keep it somewhere safe.'}
+                            : 'This 8-digit recovery passphrase protects your encrypted memories. Keep it somewhere safe.'}
                         </div>
                       </>
                     )}
@@ -1316,7 +1317,7 @@ export default function LockScreen({
                       className={`open-page-pin-submit w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}
                     >
                       {security.isPinCreated
-                        ? 'Unlock Diary'
+                        ? `Unlock ${BRAND.name}`
                         : setupStep === 'confirm'
                           ? 'Confirm PIN'
                           : 'Continue'}
@@ -1332,7 +1333,7 @@ export default function LockScreen({
                         setRecoveryVerifiedBy(null);
                         if (!hasGoogleRecovery) {
                           fail(
-                            'PIN recovery is unavailable because this legacy local diary is not linked to a Google account.',
+                            'PIN recovery is unavailable because this legacy local space is not linked to a Google account.',
                           );
                           return;
                         }
@@ -1493,7 +1494,7 @@ export default function LockScreen({
           <span>Protected Access</span>
         </div>
         <p className="text-xs sm:text-xs text-brand-text-muted max-w-[260px] leading-normal font-medium lg:hidden">
-          Your recovery passphrase protects your diary before encrypted backup begins.
+          Your recovery passphrase protects your memories before encrypted backup begins.
         </p>
       </footer>
     </div>

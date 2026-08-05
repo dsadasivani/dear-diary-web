@@ -185,7 +185,7 @@ export default function DiariesScreen({
   if (creating) {
     const preview: Diary = {
       id: 'preview',
-      name: name || 'Untitled journal',
+      name: name || 'Untitled collection',
       emoji,
       color,
       isLocked: locked,
@@ -197,7 +197,7 @@ export default function DiariesScreen({
     return (
       <form onSubmit={createJournal} className="mx-auto w-full max-w-5xl pb-10">
         <header className="surface-glass-strong sticky top-0 z-30 -mx-1 flex items-center justify-between gap-3 rounded-[var(--radius-modal)] px-2 py-2">
-          <IconButton label="Back to journals" onClick={closeCreator}>
+          <IconButton label="Back to collections" onClick={closeCreator}>
             <ArrowLeft className="h-5 w-5" />
           </IconButton>
           <div className="min-w-0 text-center">
@@ -208,7 +208,7 @@ export default function DiariesScreen({
           </div>
           {creationStep === 3 ? (
             <AppButton type="submit" tone="primary" disabled={!name.trim() || saving}>
-              {saving ? 'Creating…' : 'Create Journal'}
+              {saving ? 'Creating…' : 'Create Collection'}
             </AppButton>
           ) : (
             <span className="w-11" aria-hidden="true" />
@@ -218,7 +218,7 @@ export default function DiariesScreen({
         <ProgressIndicator
           value={creationStep + 1}
           max={4}
-          label={`Journal setup: ${STEP_LABELS[creationStep]}`}
+          label={`Collection setup: ${STEP_LABELS[creationStep]}`}
           className="mx-auto mt-5 max-w-md px-2"
         />
 
@@ -230,7 +230,7 @@ export default function DiariesScreen({
           >
             <JournalCover diary={preview} variant="preview" className="w-44 md:w-52" />
             <p className="type-metadata mt-4 hidden max-w-52 text-center sm:block">
-              Your journal stays on this device and follows your encrypted sync settings.
+              Your collection stays on this device and follows your encrypted sync settings.
             </p>
           </div>
 
@@ -238,7 +238,7 @@ export default function DiariesScreen({
             {creationStep === 0 && (
               <PaperSurface className="space-y-5 p-5 md:p-7">
                 <label className="block text-sm font-bold text-ink">
-                  Journal name
+                  Collection name
                   <input
                     value={name}
                     onChange={(event) => setName(event.target.value)}
@@ -249,7 +249,7 @@ export default function DiariesScreen({
                 </label>
                 <label className="flex min-h-14 items-center justify-between gap-4 border-t border-[var(--border-subtle)] pt-4">
                   <span>
-                    <span className="block text-sm font-bold">Private journal lock</span>
+                    <span className="block text-sm font-bold">Private collection lock</span>
                     <span className="mt-1 block text-xs leading-relaxed text-ink-secondary">
                       Ask for PIN or biometrics when opened.
                     </span>
@@ -317,14 +317,14 @@ export default function DiariesScreen({
                 <fieldset>
                   <legend className="text-sm font-bold">Personal emblem</legend>
                   <p className="type-supporting mt-1 hidden sm:block">
-                    Choose one quiet mark for the journal spine.
+                    Choose one quiet mark for this collection.
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {EMOJI_OPTIONS.map((option) => (
                       <button
                         key={option}
                         type="button"
-                        aria-label={`Use ${option} as journal emblem`}
+                        aria-label={`Use ${option} as collection emblem`}
                         aria-pressed={emoji === option}
                         onClick={() => setEmoji(option)}
                         className={`h-11 w-11 rounded-full text-xl ${emoji === option ? 'border-2 border-accent bg-accent-soft' : 'border border-[var(--border-subtle)] bg-surface'}`}
@@ -367,9 +367,9 @@ export default function DiariesScreen({
 
             {creationStep === 3 && (
               <PaperSurface className="p-5 md:p-7">
-                <p className="app-eyebrow hidden sm:block">Ready for the shelf</p>
+                <p className="app-eyebrow hidden sm:block">Ready to gather</p>
                 <h2 className="mt-2 font-serif-diary text-3xl font-semibold">
-                  {name || 'Untitled journal'}
+                  {name || 'Untitled collection'}
                 </h2>
                 <dl className="mt-6 divide-y divide-[var(--border-subtle)] text-sm">
                   <div className="flex justify-between py-3">
@@ -399,7 +399,7 @@ export default function DiariesScreen({
               <div className="flex flex-wrap justify-end gap-2">
                 {creationStep === 0 && (
                   <AppButton type="submit" tone="quiet" disabled={!name.trim() || saving}>
-                    Create Journal
+                    Create Collection
                   </AppButton>
                 )}
                 {creationStep < 3 && (
@@ -417,7 +417,7 @@ export default function DiariesScreen({
                 )}
                 {creationStep === 3 && (
                   <AppButton type="submit" tone="primary" disabled={!name.trim() || saving}>
-                    {saving ? 'Creating…' : 'Create Journal'}
+                    {saving ? 'Creating…' : 'Create Collection'}
                   </AppButton>
                 )}
               </div>
@@ -431,7 +431,7 @@ export default function DiariesScreen({
   const libraryControls = (
     <>
       <label className="block text-sm font-bold" htmlFor="journal-sort">
-        Sort journals
+        Sort collections
         <select
           id="journal-sort"
           value={sortBy}
@@ -446,7 +446,7 @@ export default function DiariesScreen({
       </label>
       {layout === 'mobile' ? (
         <fieldset className="mt-5">
-          <legend className="text-sm font-bold">Show journals</legend>
+          <legend className="text-sm font-bold">Show collections</legend>
           <div className="mt-2 flex flex-wrap gap-2">
             {(['all', 'locked', 'unlocked', 'empty'] as DiaryFilter[]).map((filter) => (
               <FilterChip
@@ -491,7 +491,7 @@ export default function DiariesScreen({
             <p className="open-page-library-eyebrow">Private memory library</p>
             <h1>Memories</h1>
             <p className="open-page-library-summary">
-              {diaries.length} journals · {totalEntries} entries
+              {diaries.length} collections · {totalEntries} entries
               {latest ? ` · Updated ${latest.lastUpdated}` : ''}
             </p>
           </div>
@@ -499,20 +499,20 @@ export default function DiariesScreen({
             type="button"
             className="open-page-library-create"
             onClick={() => setCreating(true)}
-            aria-label="New Journal"
+            aria-label="New Collection"
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
             New
           </button>
         </header>
 
-        <section aria-label="Journal search and filters" className="open-page-library-search">
+        <section aria-label="Collection search and filters" className="open-page-library-search">
           <SearchField
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onClear={() => setQuery('')}
-            placeholder="Search your journals"
-            label="Search journals"
+            placeholder="Search your collections"
+            label="Search collections"
           />
           <button
             type="button"
@@ -524,14 +524,14 @@ export default function DiariesScreen({
           </button>
         </section>
 
-        <section aria-label="Journal gallery" className="open-page-library-list">
+        <section aria-label="Collection gallery" className="open-page-library-list">
           <div className="open-page-library-heading">
-            <h2>{query || filterBy !== 'all' ? 'Matching journals' : 'Your journals'}</h2>
+            <h2>{query || filterBy !== 'all' ? 'Matching collections' : 'Your collections'}</h2>
             <div className="open-page-library-heading-actions">
               <span>
                 {visible.length} {visible.length === 1 ? 'space' : 'spaces'}
               </span>
-              <div className="open-page-library-view-switch" aria-label="Journal view">
+              <div className="open-page-library-view-switch" aria-label="Collection view">
                 <button
                   type="button"
                   aria-label="Gallery view"
@@ -554,9 +554,9 @@ export default function DiariesScreen({
 
           {visible.length === 0 ? (
             <div className="open-page-library-empty">
-              <p>No journals match this view.</p>
+              <p>No collections match this view.</p>
               <button type="button" onClick={() => setFilterBy('all')}>
-                Show every journal
+                Show every collection
               </button>
             </div>
           ) : viewMode === 'list' ? (
@@ -654,7 +654,7 @@ export default function DiariesScreen({
       <header className="flex flex-wrap items-end justify-between gap-4">
         <>
           <div>
-            <h1 className="type-page-title">Your journals</h1>
+            <h1 className="type-page-title">Your collections</h1>
             <p className="type-supporting mt-2">
               {diaries.length} private spaces · {totalEntries} entries
               {latest ? ` · Updated ${latest.lastUpdated}` : ''}
@@ -663,12 +663,12 @@ export default function DiariesScreen({
         </>
         <AppButton tone="primary" onClick={() => setCreating(true)}>
           <Plus className="h-4 w-4" />
-          New Journal
+          New Collection
         </AppButton>
       </header>
 
       <section
-        aria-label="Journal search and filters"
+        aria-label="Collection search and filters"
         className="space-y-3 border-y border-[var(--border-subtle)] py-4"
       >
         <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_auto_auto]">
@@ -676,8 +676,8 @@ export default function DiariesScreen({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onClear={() => setQuery('')}
-            placeholder="Find a journal"
-            label="Search journals"
+            placeholder="Find a collection"
+            label="Search collections"
           />
           <AppButton className="md:hidden" onClick={() => setShowLibraryControls(true)}>
             <SlidersHorizontal className="h-4 w-4" />
@@ -685,7 +685,7 @@ export default function DiariesScreen({
           </AppButton>
           <div className="hidden md:block">
             <label className="sr-only" htmlFor="journal-sort-desktop">
-              Sort journals
+              Sort collections
             </label>
             <select
               id="journal-sort-desktop"
@@ -720,7 +720,7 @@ export default function DiariesScreen({
         </div>
         <div
           className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-1"
-          aria-label="Filter journals"
+          aria-label="Filter collections"
         >
           <SlidersHorizontal
             className="mr-1 h-4 w-4 shrink-0 text-ink-tertiary"
@@ -740,17 +740,17 @@ export default function DiariesScreen({
 
       {visible.length === 0 ? (
         <EmptyState
-          title="No matching journals"
-          description="Try another search or filter."
+          title="No matching collections"
+          description="Try another search or filter, or start a new collection."
           action={
             <AppButton tone="primary" onClick={() => setCreating(true)}>
-              New Journal
+              New Collection
             </AppButton>
           }
         />
       ) : viewMode === 'list' ? (
         <section
-          aria-label="Journal list"
+          aria-label="Collection list"
           className="divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]"
         >
           {visible.map((diary) => (
@@ -783,10 +783,10 @@ export default function DiariesScreen({
           ))}
         </section>
       ) : (
-        <section aria-label="Journal gallery">
+        <section aria-label="Collection gallery">
           <SectionHeader
             eyebrow={layout === 'desktop' ? 'Library' : undefined}
-            title={query || filterBy !== 'all' ? 'Matching journals' : 'On your shelf'}
+            title={query || filterBy !== 'all' ? 'Matching collections' : 'Your collections'}
             className="mb-5"
           />
           <div className="grid grid-cols-2 gap-x-5 gap-y-8 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
@@ -820,7 +820,7 @@ export default function DiariesScreen({
                   {diary.isLocked && (
                     <Lock
                       className="mt-1 h-3.5 w-3.5 shrink-0 text-ink-tertiary"
-                      aria-label="Locked journal"
+                      aria-label="Locked collection"
                     />
                   )}
                 </span>

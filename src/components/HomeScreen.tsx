@@ -267,15 +267,15 @@ export default function HomeScreen({
   );
 
   const RecentJournals = () => (
-    <section aria-label="Recent journals">
+    <section aria-label="Recent collections">
       <SectionHeader
-        title="Recent journals"
+        title="Recent collections"
         action={
           <button
             type="button"
             onClick={() => onNavigate('diaries')}
             className="icon-button"
-            aria-label="View all journals"
+            aria-label="View all collections"
           >
             <ChevronRight className="h-5 w-5" />
           </button>
@@ -309,7 +309,9 @@ export default function HomeScreen({
           </motion.button>
         ))}
         {recentDiaries.length === 0 && (
-          <p className="type-supporting py-5">Create a journal to give your writing a home.</p>
+          <p className="type-supporting py-5">
+            Your story starts here. Create a collection for the moments you want to keep.
+          </p>
         )}
       </div>
     </section>
@@ -517,7 +519,9 @@ export default function HomeScreen({
           {greeting}
         </h1>
         <p className="mt-2 text-sm font-medium text-ink-secondary">
-          Welcome back, {profile.name || 'Writer'}. What would you like to remember?
+          {profile.name
+            ? `${profile.name}, what’s worth remembering today?`
+            : 'What’s worth remembering today?'}
         </p>
       </motion.header>
       {summaryError && (

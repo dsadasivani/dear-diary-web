@@ -1,6 +1,6 @@
 # Grafana Cloud observability
 
-Grafana Cloud is the single monitoring and investigation surface for Dear Diary. No Grafana,
+Grafana Cloud is the single monitoring and investigation surface for Loredays. No Grafana,
 Prometheus, Loki, Tempo, or Alertmanager service is hosted on a developer machine.
 
 ## Signal path

@@ -29,7 +29,7 @@ describe('redesigned application shell', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Today' })).toBeInTheDocument();
-    expect(screen.getByText('Dear Diary')).toBeVisible();
+    expect(screen.getByText('loredays.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Search' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open profile and settings' })).toBeVisible();
   });
@@ -76,8 +76,8 @@ describe('redesigned application shell', () => {
     );
 
     expect(screen.getByRole('dialog', { name: 'Write' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /New Journal Entry/ })).toBeDisabled();
-    expect(screen.getAllByText('Create a journal first').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /New Entry/ })).toBeDisabled();
+    expect(screen.getAllByText('Create a collection first').length).toBeGreaterThan(0);
     await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledOnce();
   });

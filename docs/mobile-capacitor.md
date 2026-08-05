@@ -1,6 +1,6 @@
 # Android and Capacitor
 
-Dear Diary uses Capacitor to package the Vite React client. Android is the maintained native target. The iOS dependency and scripts are present, but the iOS project must be generated and validated on macOS.
+Loredays uses Capacitor to package the Vite React client. Android is the maintained native target. The iOS dependency and scripts are present, but the iOS project must be generated and validated on macOS.
 
 ## Development workflow
 

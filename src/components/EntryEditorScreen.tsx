@@ -1920,7 +1920,7 @@ export default function EntryEditorScreen({
               </h2>
               {recordingOverlayMode === 'voice-dictation' && (
                 <p className="text-xs sm:text-xs text-brand-text-muted font-medium px-2">
-                  Record an audio memory and save it with this diary moment.
+                  Record an audio memory and keep it with this moment.
                 </p>
               )}
 
@@ -2629,7 +2629,7 @@ export default function EntryEditorScreen({
               className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage transition-colors hover:text-brand-pink"
             >
               <ArrowLeft className="h-4 w-4" />
-              My Journal
+              New Entry
             </button>
             <h1 className="mt-2 font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
               {isEditing ? 'Edit Reflection' : 'New Entry'}
@@ -2784,7 +2784,7 @@ export default function EntryEditorScreen({
                   {showDiarySelector && diaries.length > 0 && (
                     <label className="mb-7 flex flex-col gap-2">
                       <span className="text-xs font-bold uppercase tracking-[0.18em] text-brand-sage">
-                        Destination journal
+                        Collection
                       </span>
                       <select
                         value={diaryId}
@@ -3158,7 +3158,7 @@ export default function EntryEditorScreen({
         {isEditing && (
           <section className="max-w-4xl rounded-[24px] border border-red-100 bg-red-50/45 px-5 py-4">
             <p className="text-sm font-semibold text-red-700">
-              Deleting this journal entry is irreversible.
+              This entry will be permanently removed.
             </p>
             {!showConfirmDelete ? (
               <button
@@ -3250,11 +3250,11 @@ export default function EntryEditorScreen({
             {showDiarySelector && diaries.length > 0 && (
               <div className="flex flex-col gap-1.5 pb-3 border-b border-brand-border/20">
                 <label className="text-xs font-extrabold text-brand-pink uppercase tracking-widest pl-0.5 select-none">
-                  Choose Destination Journal
+                  Choose Collection
                 </label>
                 <div className="relative">
                   <select
-                    aria-label="Destination journal"
+                    aria-label="Destination collection"
                     value={diaryId}
                     onChange={(e) => setDiaryId(e.target.value)}
                     className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
@@ -3275,7 +3275,7 @@ export default function EntryEditorScreen({
                         }}
                       />
                       <span className="font-serif-diary italic text-sm truncate pr-1">
-                        {diaries.find((d) => d.id === diaryId)?.name || 'Select a Journal'}
+                        {diaries.find((d) => d.id === diaryId)?.name || 'Select a Collection'}
                       </span>
                     </div>
                     <ChevronDown className="w-3.5 h-3.5 text-brand-sage flex-shrink-0" />
@@ -3864,7 +3864,7 @@ export default function EntryEditorScreen({
             <div className="max-w-md mx-auto flex flex-col gap-3">
               <div className="flex justify-between items-center">
                 <span className="text-xs font-bold text-brand-sage uppercase tracking-widest">
-                  Select Diary Tags
+                  Select Entry Tags
                 </span>
                 <button onClick={() => setShowTagPicker(false)} className="text-brand-sage">
                   <X className="w-4 h-4" />
@@ -3898,7 +3898,7 @@ export default function EntryEditorScreen({
       {isEditing && (
         <div className="bg-red-50/50 p-5 rounded-3xl border border-red-100 flex flex-col gap-3 mt-4">
           <p className="text-xs text-red-600/90 leading-relaxed">
-            Need to clear this reflection? Deleting this journal entry is irreversible.
+            Delete this entry? It will be permanently removed.
           </p>
 
           {!showConfirmDelete ? (

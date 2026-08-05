@@ -11,7 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
-  throw 'AWS CLI is required and must be authenticated for the Dear Diary AWS account.'
+  throw 'AWS CLI is required and must be authenticated for the Loredays AWS account.'
 }
 
 if (-not $OtlpEndpoint) {

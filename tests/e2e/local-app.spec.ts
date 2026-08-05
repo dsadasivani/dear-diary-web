@@ -20,7 +20,7 @@ const createFirstPin = async (page: Page) => {
   await enterPin(page, APP_PIN);
   await page.getByRole('button', { name: /confirm pin/i }).click();
 
-  const enterDiaryButton = page.getByRole('button', { name: /enter dear diary/i });
+  const enterDiaryButton = page.getByRole('button', { name: /enter loredays/i });
   if ((await enterDiaryButton.count()) && (await enterDiaryButton.isVisible())) {
     await enterDiaryButton.click();
   }
@@ -36,7 +36,7 @@ const unlockWithPin = async (page: Page) => {
   }
   await expect(firstDigit).toBeVisible();
   await enterPin(page, APP_PIN);
-  await page.getByRole('button', { name: /unlock diary/i }).click();
+  await page.getByRole('button', { name: /unlock loredays/i }).click();
 };
 
 const setupUnlockedLocalApp = async (page: Page) => {
@@ -63,7 +63,7 @@ const lockFromProfileMenu = async (page: Page) => {
   if ((await profileMenuButton.count()) && (await profileMenuButton.isVisible())) {
     await profileMenuButton.click();
   }
-  await page.getByRole('button', { name: 'Lock Dear Diary', exact: true }).click();
+  await page.getByRole('button', { name: 'Lock Loredays', exact: true }).click();
 };
 
 const openSettings = async (page: Page) => {
@@ -204,12 +204,12 @@ test('local app creates, edits, and deletes a quick note through the UI', async 
   await expect(page.getByText(updatedTitle)).toHaveCount(0);
 });
 
-test('local app creates a journal without requiring appearance customization', async ({
+test('local app creates a collection without requiring appearance customization', async ({
   page,
 }, testInfo) => {
   await setupUnlockedLocalApp(page);
   await page.getByTestId('nav-diaries').click();
-  await page.getByRole('button', { name: 'New Journal', exact: true }).click();
+  await page.getByRole('button', { name: 'New Collection', exact: true }).click();
   if (testInfo.project.name.includes('mobile')) {
     await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
   }
@@ -218,7 +218,7 @@ test('local app creates a journal without requiring appearance customization', a
     page.getByRole('button', { name: /Customize appearance \(optional\)/i }),
   ).toBeVisible();
   await page.getByPlaceholder('e.g., Evening Reflections').fill('E2E Minimal Journal');
-  await page.getByRole('button', { name: 'Create Journal', exact: true }).click();
+  await page.getByRole('button', { name: 'Create Collection', exact: true }).click();
 
   await expect(
     page.getByTestId('diary-card').filter({ hasText: 'E2E Minimal Journal' }).first(),
@@ -239,7 +239,7 @@ test('local app creates, edits, and deletes a diary entry through the UI', async
   await page.getByTestId('entry-title-input').fill(entryTitle);
   await fillEditor(page.getByTestId('entry-body-editor'), 'Created entry body from Playwright.');
   await page
-    .getByRole('button', { name: /close editor|my journal/i })
+    .getByRole('button', { name: /close editor|new entry/i })
     .first()
     .click();
   await expect(page.getByRole('dialog', { name: /leave this entry/i })).toBeVisible();
@@ -262,7 +262,7 @@ test('local app creates, edits, and deletes a diary entry through the UI', async
       .first(),
   ).toBeVisible({ timeout: 10_000 });
   await page
-    .getByRole('button', { name: /close editor|my journal/i })
+    .getByRole('button', { name: /close editor|new entry/i })
     .first()
     .click();
   await expect(page.getByText(updatedTitle).first()).toBeVisible();
@@ -316,7 +316,7 @@ test('settings uses responsive section navigation and isolates section content',
   await sectionNavigation.getByRole('button', { name: /Data & Storage/ }).click();
   await expect(page.getByText('Cloud storage', { exact: true })).toHaveCount(0);
   await expect(page.getByText('On this device', { exact: true })).toBeVisible();
-  await expect(page.getByText('Delete all journal data')).toBeVisible();
+  await expect(page.getByText('Delete all saved content')).toBeVisible();
   await expect(page.getByText(/deletion syncs to every linked device/i)).toBeVisible();
   await page.getByRole('button', { name: 'Review clear action' }).click();
   await expect(page.getByText(/This cannot be undone/)).toBeVisible();
@@ -396,10 +396,10 @@ test('@accessibility authenticated primary destinations have no serious or criti
 
   const destinations = [
     { name: 'Today', open: async () => undefined },
-    { name: 'Journals', open: async () => page.getByTestId('nav-diaries').click() },
+    { name: 'Collections', open: async () => page.getByTestId('nav-diaries').click() },
     {
-      name: 'New Journal',
-      open: async () => page.getByRole('button', { name: 'New Journal' }).click(),
+      name: 'New Collection',
+      open: async () => page.getByRole('button', { name: 'New Collection' }).click(),
     },
     { name: 'Notes', open: async () => page.getByTestId('nav-notes').click() },
     { name: 'Insights', open: async () => page.getByTestId('nav-stats').click() },
@@ -421,8 +421,8 @@ test('@accessibility authenticated primary destinations have no serious or criti
   for (const destination of destinations) {
     await destination.open();
     await expectCurrentScreenAccessible(destination.name);
-    if (destination.name === 'New Journal') {
-      await page.getByRole('button', { name: 'Back to journals' }).click();
+    if (destination.name === 'New Collection') {
+      await page.getByRole('button', { name: 'Back to collections' }).click();
     }
   }
 
@@ -432,7 +432,7 @@ test('@accessibility authenticated primary destinations have no serious or criti
   }
   await page.getByTestId('nav-diaries').click();
   await page.getByTestId('diary-card').filter({ hasText: 'E2E Open Diary' }).first().click();
-  await expectCurrentScreenAccessible('Journal reader');
+  await expectCurrentScreenAccessible('Collection reader');
   await page.getByTestId('diary-new-entry-button').first().click();
   await expectCurrentScreenAccessible('Entry editor');
 });

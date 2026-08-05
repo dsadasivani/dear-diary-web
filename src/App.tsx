@@ -4,7 +4,7 @@ import {
   WarningCircle as AlertCircle,
   ArrowLeft,
   StatsUpSquare as BarChart2,
-  Book as BookOpen,
+  ClockRotateRight,
   Check,
   TaskList as ClipboardList,
   Eye,
@@ -75,6 +75,8 @@ import {
 import type { AccentThemeId } from './design/accentThemes';
 import { measureAsync } from './utils/performance';
 import { pageMotion } from './components/ui/motion';
+import BrandMark from './components/BrandMark';
+import { BRAND } from './config/brand';
 import {
   legacyNavigationTarget,
   resolveNavigationTarget,
@@ -481,7 +483,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   const handleUnlock = async () => {
     await runWithGlobalLoader(
-      'Unlocking your diary',
+      'Unlocking your private space',
       async () => {
         await measureAsync('app.pinUnlock', () => reloadShellData());
         setUnlockedDiaryIds(new Set());
@@ -739,7 +741,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     const targetDiary = diaries[0];
     if (!targetDiary) {
       handleNavigate('diaries');
-      showToast('Create a journal before adding your first entry.', 'info');
+      showToast('Create a collection before adding your first entry.', 'info');
       return;
     }
     handleNavigate(
@@ -760,7 +762,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       notes: 'Notes',
       search: 'Search',
       stats: currentScreen === 'appSettings' ? 'Settings' : 'Insights',
-    })[activeTab] || 'Dear Diary';
+    })[activeTab] || BRAND.name;
 
   const navigateToDeepLink = useCallback(async (target: DearDiaryDeepLinkTarget) => {
     switch (target.kind) {
@@ -780,7 +782,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           diaryId = entry?.diaryId || '';
         }
         if (!diaryId) {
-          showToast('That diary link is no longer available.', 'warning');
+          showToast('That collection link is no longer available.', 'warning');
           return;
         }
         handleNavigate('diaries', 'diaryDetail', diaryId, target.entryId);
@@ -809,12 +811,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     (url: string) => {
       const target = parseDearDiaryDeepLink(url);
       if (!target) {
-        showToast('That Dear Diary link could not be opened.', 'warning');
+        showToast(`That ${BRAND.name} link could not be opened.`, 'warning');
         return;
       }
       if (!isAuthenticated) {
         pendingDeepLinkRef.current = target;
-        showToast('Unlock Dear Diary to continue.', 'info');
+        showToast(`Unlock ${BRAND.name} to continue.`, 'info');
         return;
       }
       void navigateToDeepLink(target);
@@ -944,7 +946,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         return;
       }
       if (isAuthenticated && shouldLockAfterBackground({ backgroundedAt, resumedAt: Date.now() })) {
-        showToast('Dear Diary locked after being in the background.', 'info');
+        showToast(`${BRAND.name} locked after being in the background.`, 'info');
         handleLockApp();
       } else if (isAuthenticated) {
         eventSyncEngine.requestOutboxFlush();
@@ -1105,12 +1107,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 type="button"
                 onClick={() => handleNavigate('diaries', 'list')}
                 className="flex h-9 w-9 items-center justify-center rounded-full text-brand-sage transition-all hover:bg-brand-blush-light hover:text-brand-plum active:scale-95"
-                title="Back to diaries"
+                title="Back to collections"
               >
                 <ArrowLeft className="w-5 h-5" />
               </button>
               <span className="rounded-full bg-brand-pink/10 px-4 py-1.5 text-[9px] font-black uppercase tracking-[0.22em] text-brand-pink">
-                Locked Diary
+                Private Collection
               </span>
             </div>
 
@@ -1204,7 +1206,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 disabled={!canSubmitPin}
                 className="w-full rounded-xl bg-brand-sage py-3.5 text-xs font-extrabold uppercase tracking-wider text-white shadow-sm transition-all hover:bg-brand-sage-dark disabled:cursor-not-allowed disabled:bg-brand-sage/45 disabled:text-white/90"
               >
-                Unlock Diary
+                Unlock Collection
               </button>
             </form>
 
@@ -1523,7 +1525,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     if (activeTab === 'diaries' && currentScreen === 'entryEditor')
       return selectedEntryId ? 'Edit Entry' : 'New Entry';
     if (activeTab === 'diaries' && currentScreen === 'diaryDetail') {
-      return diaries.find((diary) => diary.id === selectedDiaryId)?.name || 'My Journal';
+      return diaries.find((diary) => diary.id === selectedDiaryId)?.name || 'My Collection';
     }
     return (
       {
@@ -1531,7 +1533,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         diaries: 'Memories',
         notes: 'Notes',
         search: 'Search',
-      }[activeTab] || 'Dear Diary'
+      }[activeTab] || BRAND.name
     );
   };
 
@@ -1555,7 +1557,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       {
         id: 'diaries',
         label: 'Memories',
-        icon: BookOpen,
+        icon: ClockRotateRight,
         onClick: () => handleNavigate('diaries'),
         active: activeTab === 'diaries',
       },
@@ -1593,12 +1595,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         <div className="relative z-10 flex h-screen min-h-0">
           <aside className="flex h-screen w-[232px] shrink-0 flex-col border-r border-brand-border/70 bg-gradient-to-b from-brand-blush-light/78 via-brand-blush-light/48 to-white/35 px-4 py-5 shadow-[18px_0_70px_rgba(62,36,41,0.06)] backdrop-blur-xl dark:from-brand-card-bg/78 dark:via-brand-card-bg/55 dark:to-brand-bg/45 xl:w-64 xl:px-5 xl:py-7">
             <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-brand-border bg-white text-brand-sage shadow-sm dark:bg-brand-bg/40 xl:h-12 xl:w-12">
-                <BookOpen className="h-5 w-5 xl:h-6 xl:w-6" />
+              <div className="h-10 w-10 overflow-hidden rounded-2xl border border-brand-border shadow-sm xl:h-12 xl:w-12">
+                <BrandMark className="h-full w-full object-cover" />
               </div>
               <div className="min-w-0">
                 <h1 className="font-serif-diary text-2xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-3xl">
-                  Dear Diary
+                  {BRAND.wordmark}
                 </h1>
                 <p className="mt-0.5 text-xs font-semibold text-brand-text-muted">
                   {visibleStreak} Day Streak
@@ -1714,7 +1716,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             </header>
 
             <main className="min-h-0 flex-1 overflow-y-auto px-5 py-5 xl:px-10 xl:py-7">
-              <AnimatePresence mode="wait">
+              <AnimatePresence mode={prefersReducedMotion ? 'sync' : 'wait'}>
                 <motion.div
                   key={`${activeTab}-${currentScreen}`}
                   {...pageMotion(prefersReducedMotion)}

@@ -28,7 +28,7 @@ type SettingsSection = 'general' | 'appearance' | 'danger';
 const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
-  { id: 'danger', label: 'Delete journal' },
+  { id: 'danger', label: 'Delete collection' },
 ];
 
 const EMOJIS = ['📔', '✈️', '💼', '🌙', '🎨', '🌿', '☕', '🏠', '🔑', '📝', '🌸', '✨'];
@@ -142,7 +142,7 @@ export default function DiarySettingsScreen({
 
   const sectionNavigation = (vertical: boolean) => (
     <nav
-      aria-label="Journal settings sections"
+      aria-label="Collection settings sections"
       className={vertical ? 'sticky top-24 h-fit' : 'overflow-x-auto pb-1'}
     >
       <p
@@ -175,11 +175,11 @@ export default function DiarySettingsScreen({
     <div className="mx-auto w-full max-w-6xl space-y-5 pb-12">
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-brand-border bg-brand-bg/95 py-3 backdrop-blur">
         <div className="flex items-center gap-3">
-          <IconButton label="Back from journal settings" onClick={requestBack}>
+          <IconButton label="Back from collection settings" onClick={requestBack}>
             <ArrowLeft className="h-5 w-5" />
           </IconButton>
           <div>
-            <h1 className="font-serif-diary text-2xl font-semibold">Journal Settings</h1>
+            <h1 className="font-serif-diary text-2xl font-semibold">Collection Settings</h1>
             {dirty && (
               <p role="status" className="text-xs font-bold text-amber-700">
                 Unsaved changes
@@ -221,7 +221,7 @@ export default function DiarySettingsScreen({
               Name and privacy
             </h2>
             <label className="block text-sm font-bold">
-              Journal name
+              Collection name
               <input
                 value={draft.name}
                 onChange={(event) =>
@@ -385,11 +385,11 @@ export default function DiarySettingsScreen({
               id="journal-settings-danger-title"
               className="font-serif-diary text-xl font-semibold text-red-800 dark:text-red-200"
             >
-              Delete journal
+              Delete collection
             </h2>
             <p className="mt-2 text-sm text-red-700 dark:text-red-200">
-              Deletes this journal and its downloaded entries and media from this device. If Sync is
-              connected, deletion is also synchronized.
+              Deletes this collection and its downloaded entries and media from this device. If Sync
+              is connected, deletion is also synchronized.
             </p>
             <AppButton
               className="mt-4"
@@ -423,7 +423,7 @@ export default function DiarySettingsScreen({
       <AppDialog
         open={leaveOpen}
         title="Discard unsaved changes?"
-        description="Your journal settings have changed."
+        description="Your collection settings have changed."
         onClose={() => setLeaveOpen(false)}
         footer={
           <>
@@ -452,7 +452,7 @@ export default function DiarySettingsScreen({
               onClick={() => void remove()}
               disabled={busy || !deleteNameMatches || (requiresDeletePin && !pin)}
             >
-              Delete journal
+              Delete collection
             </AppButton>
           </>
         }

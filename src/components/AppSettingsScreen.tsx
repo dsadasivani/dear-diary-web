@@ -34,6 +34,7 @@ import {
   UserProfile,
 } from '../types';
 import { PREDEFINED_TAGS, PREDEFINED_MOODS, PREDEFINED_COLORS } from '../domain/journalCatalog';
+import { BRAND } from '../config/brand';
 import { isValidPin, updatePinWithCurrentPin } from '../domain/security';
 import type { PinLength } from '../domain/security';
 import { isNativePlatform } from '../platform';
@@ -354,7 +355,7 @@ export default function AppSettingsScreen({
     );
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'dear-diary-sync-diagnostics.json';
+    link.download = 'loredays-sync-diagnostics.json';
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -721,16 +722,16 @@ export default function AppSettingsScreen({
       setShowConfirmReset(false);
       onShowToast?.(
         syncPending
-          ? 'Journal data was deleted here. Other devices will update when sync reconnects.'
+          ? 'Your saved content was deleted here. Other devices will update when sync reconnects.'
           : syncConfigured
-            ? 'Journal data was deleted from this account and synced devices.'
-            : 'Journal data was deleted from this device.',
+            ? 'Your saved content was deleted from this account and synced devices.'
+            : 'Your saved content was deleted from this device.',
         syncPending ? 'warning' : 'success',
       );
     } catch (error) {
       const message = syncAuthorizationMessage(
         error,
-        'Could not delete journal data. Connect to the internet and try again.',
+        'Could not delete your saved content. Connect to the internet and try again.',
       );
       setResetContentError(message);
       onShowToast?.(message, 'error');
@@ -998,7 +999,7 @@ export default function AppSettingsScreen({
 
                   {/* Member badge info */}
                   <div className="flex justify-between items-center text-xs text-brand-sage font-semibold border-t border-brand-border/40 pt-3">
-                    <span>Journaling Journey Started</span>
+                    <span>Your Story Began</span>
                     <span className="text-brand-plum dark:text-brand-text font-bold uppercase tracking-wider">
                       {profile.joinedDate || 'June 2026'}
                     </span>
@@ -1020,11 +1021,9 @@ export default function AppSettingsScreen({
                     </span>
                     <div>
                       <h3 className="text-xl font-semibold text-brand-plum dark:text-brand-text">
-                        Dear Diary
+                        {BRAND.name}
                       </h3>
-                      <p className="text-sm text-brand-text-muted">
-                        Your private, local-first journaling space.
-                      </p>
+                      <p className="text-sm text-brand-text-muted">{BRAND.tagline}</p>
                     </div>
                   </div>
                   <div className="mt-5 space-y-3 text-sm leading-6 text-brand-text-muted">
@@ -1033,7 +1032,7 @@ export default function AppSettingsScreen({
                       account and recovery controls separate from your public profile.
                     </p>
                     <p>
-                      Dear Diary does not use your entries for advertising. On-device suggestions
+                      {BRAND.name} does not use your entries for advertising. On-device suggestions
                       are identified wherever they appear.
                     </p>
                   </div>
@@ -1583,7 +1582,7 @@ export default function AppSettingsScreen({
                     </h3>
                     <p className="mt-2 text-sm leading-relaxed text-red-600 dark:text-red-400">
                       Stops sync, revokes this browser, and permanently clears its local encrypted
-                      journal data and keys. Your other devices are unaffected.
+                      saved content and keys. Your other devices are unaffected.
                     </p>
                     {!showConfirmUnlink ? (
                       <button
@@ -1657,7 +1656,7 @@ export default function AppSettingsScreen({
                         'Writing & settings',
                         localStorageUsage?.writingBytes,
                         localStorageUsage
-                          ? `${localStorageUsage.journalCount} journals · ${localStorageUsage.entryCount} entries · ${localStorageUsage.noteCount} notes`
+                          ? `${localStorageUsage.journalCount} collections · ${localStorageUsage.entryCount} entries · ${localStorageUsage.noteCount} notes`
                           : '',
                       ],
                       [
@@ -1699,10 +1698,10 @@ export default function AppSettingsScreen({
                 </div>
                 <div className="rounded-3xl border border-red-200 bg-red-50/70 p-5 dark:border-red-900/40 dark:bg-red-950/10">
                   <h3 className="text-sm font-bold text-red-700 dark:text-red-300">
-                    Delete all journal data
+                    Delete all saved content
                   </h3>
                   <p className="mt-2 text-sm leading-relaxed text-red-600 dark:text-red-400">
-                    Permanently deletes journals, entries, notes, and attached media from this
+                    Permanently deletes collections, entries, notes, and attached media from this
                     account. The deletion syncs to every linked device. Your profile, security
                     settings, and device links remain.
                   </p>

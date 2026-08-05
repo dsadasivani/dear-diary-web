@@ -132,7 +132,7 @@ if ($adb) {
   }
 }
 
-Write-Host 'Dear Diary local Sync V2 stack is ready:'
+Write-Host 'Loredays local Sync V2 stack is ready:'
 Write-Host '  App:           http://localhost:3000'
 Write-Host '  Backend:       http://localhost:8080/actuator/health'
 Write-Host '  MinIO console: http://localhost:9001'
