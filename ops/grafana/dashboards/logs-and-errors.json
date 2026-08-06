@@ -1,0 +1,197 @@
+{
+  "title": "Loredays Logs & Errors",
+  "uid": "deardiary-logs-errors",
+  "schemaVersion": 39,
+  "version": 2,
+  "time": { "from": "now-3h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      { "name": "logs", "label": "Logs", "type": "datasource", "query": "loki" },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": { "type": "loki", "uid": "${logs}" },
+        "query": "label_values({service_name=\"dear-diary-sync-api\"}, deployment_environment)",
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1
+      },
+      {
+        "name": "severity",
+        "label": "Severity",
+        "type": "custom",
+        "query": "trace,debug,info,warn,error,fatal",
+        "includeAll": true,
+        "allValue": ".*"
+      },
+      {
+        "name": "correlation",
+        "label": "Correlation ID regex",
+        "type": "textbox",
+        "query": ".*",
+        "current": { "text": ".*", "value": ".*" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Log records",
+      "description": "All backend log records in the selected time range.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"}[$__range]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error and fatal logs",
+      "description": "Logs whose OpenTelemetry severity is error or fatal.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} | detected_level=~\"(?i)error|fatal\" [$__range])) or on() vector(0)",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "HTTP 5xx responses",
+      "description": "Completed HTTP requests with a server-error status.",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" | httpStatus >= 500 [$__range])) or on() vector(0)",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "HTTP duration p95",
+      "description": "95th-percentile request duration calculated from structured HTTP logs.",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "quantile_over_time(0.95, {service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" | unwrap durationMs | __error__=\"\" [$__range])",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Log volume by severity",
+      "description": "Log rate grouped by Grafana's detected OpenTelemetry severity.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (detected_level) (rate({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"}[$__auto]))",
+          "legendFormat": "{{detected_level}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "HTTP responses by status and route",
+      "description": "Request rate grouped by the structured httpStatus and httpRoute fields.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (httpStatus, httpRoute) (rate({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" [$__auto]))",
+          "legendFormat": "{{httpStatus}} {{httpRoute}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Slow requests (at least 1 second)",
+      "description": "Completed requests whose structured durationMs field is at least 1000 ms.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "options": { "showTime": true, "showLabels": false, "wrapLogMessage": false },
+      "targets": [
+        {
+          "expr": "{service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" | durationMs >= 1000 | line_format \"{{.httpMethod}} {{.httpRoute}} status={{.httpStatus}} duration={{.durationMs}}ms correlation={{.correlationId}}\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "logs",
+      "title": "Searchable backend logs",
+      "description": "Filter by environment, severity, and an exact or regex correlation ID. Click a row to inspect trace_id, span_id, and all structured fields.",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 23 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "enableLogDetails": true
+      },
+      "targets": [
+        {
+          "expr": "{service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} | detected_level=~\"(?i)${severity:regex}\" | correlationId=~\"${correlation:raw}\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

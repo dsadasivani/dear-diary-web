@@ -32,9 +32,10 @@ error type are sent. The collector still needs exact CORS origins and an appropr
    policy token with only metrics, logs, and traces write scopes. Copy the values of
    `OTEL_EXPORTER_OTLP_ENDPOINT` and the `Authorization` header. Do not commit either credential.
 2. Open **Observability > Frontend**, create `dear-diary-web-staging`, and allow exactly
-   `https://staging.d33b4rjnv35mrn.amplifyapp.com`, `https://localhost` (Android WebView), and
-   `capacitor://localhost` (iOS WebView). Copy its collector URL. Create a separate production
-   application and exact production web origin before production rollout.
+   `https://staging.d33b4rjnv35mrn.amplifyapp.com` and `https://localhost` (Android WebView). Grafana
+   Cloud accepts only HTTP(S) origins, so the default iOS `capacitor://localhost` origin requires a
+   separately authenticated HTTPS telemetry proxy before it can be enabled. Copy the collector URL.
+   Create a separate production application and exact production web origin before production rollout.
 3. Store the backend values in AWS Systems Manager Parameter Store and the public Faro collector URL in
    the Amplify branch configuration:
 
@@ -50,7 +51,8 @@ error type are sent. The collector still needs exact CORS origins and an appropr
 4. Confirm `DearDiaryEcsTaskExecutionRole` can call `ssm:GetParameters` and `kms:Decrypt` for those two
    parameters. The task definition injects them only at runtime.
 5. Import the JSON dashboards from `ops/grafana/dashboards`. Each dashboard prompts for the Grafana
-   Cloud Metrics data source; the overview also prompts for Logs and Traces.
+   Cloud Metrics data source; the overview also prompts for Logs and Traces, while **Loredays Logs &
+   Errors** prompts only for Logs.
 6. Import `ops/prometheus/alerts.yml` into Grafana Cloud Metrics alerting, select a notification contact
    point, and run a synthetic staging failure before enabling paging.
 7. In **Connections > AWS**, connect AWS account `908027418886` in `ap-south-1` and enable ECS,
@@ -69,7 +71,7 @@ Redeploy both staging components after the one-time setup. The ECS task enables 
 Verify the data path in this order:
 
 1. In Grafana Explore (Metrics), query
-   `process_uptime_seconds{application="dear-diary-sync-api",environment="staging"}`.
+   `process_uptime_seconds{job="dear-diary/dear-diary-sync-api",deployment_environment="staging"}`.
 2. Send a safe correlation ID to staging and find it in Explore (Logs):
 
    ```powershell

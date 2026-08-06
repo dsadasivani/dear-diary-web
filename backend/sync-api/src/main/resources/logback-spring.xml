@@ -9,6 +9,7 @@
     </appender>
     <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
         <captureMdcAttributes>traceId,spanId,correlationId</captureMdcAttributes>
+        <captureLogstashStructuredArguments>true</captureLogstashStructuredArguments>
         <captureCodeAttributes>false</captureCodeAttributes>
         <captureMarkerAttribute>false</captureMarkerAttribute>
     </appender>
