@@ -1,4 +1,5 @@
 import type { DiaryRepository } from '../repositories/DiaryRepository';
+import type { GoogleAccountSession, SupabaseAuthSession } from '../types';
 import { createConfiguredSyncV2ApiClient } from './config';
 import {
   encodeRecoveryKeyPackage,
@@ -21,13 +22,17 @@ const sha256 = async (bytes: Uint8Array): Promise<string> => {
 
 export const rotateRecoveryPassphrase = async (input: {
   newPassphrase: string;
+  googleSession: GoogleAccountSession;
+  supabaseSession: SupabaseAuthSession;
   repository: DiaryRepository;
   syncEngine: EventSyncEngine;
 }): Promise<void> => {
   validateRecoveryPassphrase(input.newPassphrase);
-  await input.syncEngine.pullPending();
-  const state = await input.repository.getLocalSyncAccountState();
-  const secrets = await loadSyncSecrets();
+  const [state, security, secrets] = await Promise.all([
+    input.repository.getLocalSyncAccountState(),
+    input.repository.getSecurityConfig(),
+    loadSyncSecrets(),
+  ]);
   if (
     !state ||
     state.syncProtocolVersion !== 2 ||
@@ -37,23 +42,59 @@ export const rotateRecoveryPassphrase = async (input: {
   ) {
     throw new Error('Only the active primary mobile can change the recovery passphrase.');
   }
+  if (
+    !input.googleSession.userId ||
+    !input.googleSession.idToken ||
+    input.googleSession.userId !== state.googleUserId ||
+    security.linkedGoogleUserId !== state.googleUserId
+  ) {
+    throw new Error(`Verify ${state.googleEmail} with Google before resetting the passphrase.`);
+  }
+  if (!input.supabaseSession.accessToken) {
+    throw new Error(
+      'Google account authorization is unavailable. Verify the linked account again.',
+    );
+  }
 
-  const api = createConfiguredSyncV2ApiClient(async () => secrets.supabaseSession.accessToken);
+  const refreshedSecrets = {
+    ...secrets,
+    googleSession: input.googleSession,
+    supabaseSession: input.supabaseSession,
+  };
+  await saveSyncSecrets(refreshedSecrets);
+  await input.syncEngine.pullPending();
+
+  const latestState = await input.repository.getLocalSyncAccountState();
+  const latestSecrets = await loadSyncSecrets();
+  if (
+    !latestState ||
+    latestState.syncProtocolVersion !== 2 ||
+    latestState.deviceRole !== 'primary_mobile' ||
+    latestState.googleUserId !== input.googleSession.userId ||
+    !latestSecrets ||
+    latestSecrets.accountId !== latestState.accountId
+  ) {
+    throw new Error('This device is no longer the active primary mobile.');
+  }
+
+  const api = createConfiguredSyncV2ApiClient(
+    async () => latestSecrets.supabaseSession.accessToken,
+  );
   const protocol = await api.getProtocol();
-  const keyEpoch = state.keyEpoch || 1;
-  const activeRootKey = getAccountRootKeyForEpoch(secrets, keyEpoch);
+  const keyEpoch = latestState.keyEpoch || 1;
+  const activeRootKey = getAccountRootKeyForEpoch(latestSecrets, keyEpoch);
   const keyPackage = await wrapAccountRootKeyForRecovery(activeRootKey, input.newPassphrase, {
-    accountId: state.accountId,
+    accountId: latestState.accountId,
     keyEpoch,
     keyVersion: Date.now(),
-    accountRootKeys: { ...(secrets.accountRootKeys || {}), [keyEpoch]: activeRootKey },
+    accountRootKeys: { ...(latestSecrets.accountRootKeys || {}), [keyEpoch]: activeRootKey },
   });
   const bytes = encodeRecoveryKeyPackage(keyPackage);
   const keyPackageId = crypto.randomUUID();
   const initiated = await api.initiateKeyPackage({
     keyPackageId,
-    creatorDeviceId: state.deviceId,
-    targetDeviceId: state.deviceId,
+    creatorDeviceId: latestState.deviceId,
+    targetDeviceId: latestState.deviceId,
     keyEpoch,
     purpose: 'RECOVERY',
     sha256: await sha256(bytes),
@@ -63,6 +104,6 @@ export const rotateRecoveryPassphrase = async (input: {
   if (!initiated.upload) throw new Error('Recovery package upload was not issued.');
   const transfer = new BoundedObjectTransfer({ maximumObjectBytes: protocol.maximumSnapshotBytes });
   await transfer.upload([{ objectKey: initiated.upload.objectKey, bytes }], [initiated.upload]);
-  await api.registerKeyPackage(keyPackageId, state.deviceId);
-  await saveSyncSecrets(withPrimaryRecoveryCredential(secrets, input.newPassphrase));
+  await api.registerKeyPackage(keyPackageId, latestState.deviceId);
+  await saveSyncSecrets(withPrimaryRecoveryCredential(latestSecrets, input.newPassphrase));
 };

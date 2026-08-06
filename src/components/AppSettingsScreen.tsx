@@ -27,8 +27,10 @@ import {
 } from 'iconoir-react';
 import {
   AppSettings,
+  GoogleAccountSession,
   LocalSyncAccountState,
   SecurityConfig,
+  SupabaseAuthSession,
   Mood,
   ResponsiveLayout,
   UserProfile,
@@ -58,6 +60,9 @@ import {
   RECOVERY_PASSPHRASE_DIGIT_LENGTH,
 } from '../sync/e2eeKeyPackage';
 import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
+import { getConfiguredSupabaseAnonKey, getConfiguredSupabaseUrl } from '../sync/config';
+import { exchangeGoogleIdTokenForSupabaseSession } from '../sync/supabaseAuth';
+import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
 import type { PreservedSyncConflict, SyncStatusSummary } from '../repositories';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 import { pageMotion } from './ui/motion';
@@ -245,6 +250,11 @@ export default function AppSettingsScreen({
   const [confirmNewRecoveryPassphrase, setConfirmNewRecoveryPassphrase] = useState('');
   const [syncRecoveryError, setSyncRecoveryError] = useState('');
   const [isRotatingRecoveryPassphrase, setIsRotatingRecoveryPassphrase] = useState(false);
+  const [isVerifyingRecoveryAccount, setIsVerifyingRecoveryAccount] = useState(false);
+  const [verifiedRecoveryAuth, setVerifiedRecoveryAuth] = useState<{
+    googleSession: GoogleAccountSession;
+    supabaseSession: SupabaseAuthSession;
+  } | null>(null);
   const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
   const [isLocalStorageUsageLoading, setIsLocalStorageUsageLoading] = useState(false);
   const [localStorageUsageError, setLocalStorageUsageError] = useState('');
@@ -435,6 +445,10 @@ export default function AppSettingsScreen({
   const handleRotateRecoveryPassphrase = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();
     setSyncRecoveryError('');
+    if (!verifiedRecoveryAuth) {
+      setSyncRecoveryError('Verify the linked Google account before resetting the passphrase.');
+      return;
+    }
     if (newRecoveryPassphrase !== confirmNewRecoveryPassphrase) {
       setSyncRecoveryError('Recovery passphrases do not match.');
       return;
@@ -443,18 +457,69 @@ export default function AppSettingsScreen({
     try {
       await rotateRecoveryPassphrase({
         newPassphrase: newRecoveryPassphrase,
+        googleSession: verifiedRecoveryAuth.googleSession,
+        supabaseSession: verifiedRecoveryAuth.supabaseSession,
         repository: diaryRepository,
         syncEngine: eventSyncEngine,
       });
       setNewRecoveryPassphrase('');
       setConfirmNewRecoveryPassphrase('');
       setShowSyncRecoveryForm(false);
+      setVerifiedRecoveryAuth(null);
       setSyncAccountState(await diaryRepository.getLocalSyncAccountState());
       onShowToast?.('Account recovery passphrase changed.', 'success');
     } catch (error: any) {
       setSyncRecoveryError(error?.message || 'Recovery passphrase could not be changed.');
     } finally {
       setIsRotatingRecoveryPassphrase(false);
+    }
+  };
+
+  const closeSyncRecoveryForm = (): void => {
+    setShowSyncRecoveryForm(false);
+    setVerifiedRecoveryAuth(null);
+    setNewRecoveryPassphrase('');
+    setConfirmNewRecoveryPassphrase('');
+    setSyncRecoveryError('');
+  };
+
+  const handleVerifyRecoveryAccount = async (): Promise<void> => {
+    if (!syncAccountState || syncAccountState.deviceRole !== 'primary_mobile') return;
+    if (!isNativePlatform()) {
+      setSyncRecoveryError('Recovery passphrases can only be reset on the active primary mobile.');
+      return;
+    }
+    setIsVerifyingRecoveryAccount(true);
+    setSyncRecoveryError('');
+    try {
+      const googleSession = await startGoogleAuth('recovery-passphrase-reset');
+      if (
+        googleSession.userId !== syncAccountState.googleUserId ||
+        googleSession.userId !== security.linkedGoogleUserId
+      ) {
+        await signOutGoogleAuth();
+        throw new Error(
+          `Use ${syncAccountState.googleEmail || security.linkedGoogleEmail || 'the linked Google account'} to reset this passphrase.`,
+        );
+      }
+      if (!googleSession.idToken) {
+        throw new Error(
+          'Google did not return an ID token. Select the linked account and try again.',
+        );
+      }
+      const supabaseSession = await exchangeGoogleIdTokenForSupabaseSession({
+        supabaseUrl: getConfiguredSupabaseUrl(),
+        anonKey: getConfiguredSupabaseAnonKey(),
+        googleIdToken: googleSession.idToken,
+      });
+      setVerifiedRecoveryAuth({ googleSession, supabaseSession });
+    } catch (error: any) {
+      setVerifiedRecoveryAuth(null);
+      setSyncRecoveryError(
+        syncAuthorizationMessage(error, 'The linked Google account could not be verified.'),
+      );
+    } finally {
+      setIsVerifyingRecoveryAccount(false);
     }
   };
 
@@ -1234,79 +1299,107 @@ export default function AppSettingsScreen({
                       <button
                         type="button"
                         onClick={() => {
-                          setShowSyncRecoveryForm((value) => !value);
-                          setSyncRecoveryError('');
+                          if (showSyncRecoveryForm) closeSyncRecoveryForm();
+                          else {
+                            setShowSyncRecoveryForm(true);
+                            setSyncRecoveryError('');
+                          }
                         }}
                         className="shrink-0 px-4 py-2 bg-brand-bg hover:bg-brand-rose-light text-xs font-bold text-brand-sage-dark rounded-full border border-brand-border transition-colors"
                       >
-                        {showSyncRecoveryForm ? 'Close' : 'Change'}
+                        {showSyncRecoveryForm ? 'Close' : 'Reset with Google'}
                       </button>
                     </div>
 
                     {showSyncRecoveryForm && (
-                      <form
-                        onSubmit={handleRotateRecoveryPassphrase}
-                        className="mt-2 pt-3 border-t border-brand-border flex flex-col gap-3"
-                      >
-                        <label className="flex flex-col gap-1">
-                          <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                            New 8-Digit Passphrase
-                          </span>
-                          <input
-                            type="password"
-                            inputMode="numeric"
-                            autoComplete="new-password"
-                            maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
-                            value={newRecoveryPassphrase}
-                            onChange={(event) =>
-                              setNewRecoveryPassphrase(
-                                event.target.value
-                                  .replace(/\D/g, '')
-                                  .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH),
-                              )
-                            }
-                            className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
-                          />
-                        </label>
-                        <label className="flex flex-col gap-1">
-                          <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                            Confirm 8-Digit Passphrase
-                          </span>
-                          <input
-                            type="password"
-                            inputMode="numeric"
-                            autoComplete="new-password"
-                            maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
-                            value={confirmNewRecoveryPassphrase}
-                            onChange={(event) =>
-                              setConfirmNewRecoveryPassphrase(
-                                event.target.value
-                                  .replace(/\D/g, '')
-                                  .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH),
-                              )
-                            }
-                            className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
-                          />
-                        </label>
+                      <div className="mt-2 pt-3 border-t border-brand-border flex flex-col gap-3">
+                        {!verifiedRecoveryAuth ? (
+                          <>
+                            <p className="text-xs leading-relaxed text-brand-text-muted">
+                              Verify the linked Google account before choosing a new recovery
+                              passphrase. The forgotten passphrase is not required on this primary
+                              device.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => void handleVerifyRecoveryAccount()}
+                              disabled={isVerifyingRecoveryAccount}
+                              className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
+                            >
+                              {isVerifyingRecoveryAccount
+                                ? 'Verifying Google Account...'
+                                : `Verify ${syncAccountState.googleEmail} with Google`}
+                            </button>
+                          </>
+                        ) : (
+                          <form
+                            onSubmit={handleRotateRecoveryPassphrase}
+                            className="flex flex-col gap-3"
+                          >
+                            <p className="flex items-center gap-1 text-xs font-bold text-brand-sage">
+                              <Check className="h-4 w-4" /> Google account verified
+                            </p>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
+                                New 8-Digit Passphrase
+                              </span>
+                              <input
+                                type="password"
+                                inputMode="numeric"
+                                autoComplete="new-password"
+                                maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
+                                value={newRecoveryPassphrase}
+                                onChange={(event) =>
+                                  setNewRecoveryPassphrase(
+                                    event.target.value
+                                      .replace(/\D/g, '')
+                                      .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH),
+                                  )
+                                }
+                                className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
+                              />
+                            </label>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
+                                Confirm 8-Digit Passphrase
+                              </span>
+                              <input
+                                type="password"
+                                inputMode="numeric"
+                                autoComplete="new-password"
+                                maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
+                                value={confirmNewRecoveryPassphrase}
+                                onChange={(event) =>
+                                  setConfirmNewRecoveryPassphrase(
+                                    event.target.value
+                                      .replace(/\D/g, '')
+                                      .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH),
+                                  )
+                                }
+                                className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
+                              />
+                            </label>
+                            <button
+                              type="submit"
+                              disabled={
+                                isRotatingRecoveryPassphrase ||
+                                !isValidNewRecoveryPassphrase(newRecoveryPassphrase) ||
+                                newRecoveryPassphrase !== confirmNewRecoveryPassphrase
+                              }
+                              className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
+                            >
+                              {isRotatingRecoveryPassphrase
+                                ? 'Resetting...'
+                                : 'Reset Recovery Passphrase'}
+                            </button>
+                          </form>
+                        )}
                         {syncRecoveryError && (
                           <p className="text-xs font-bold text-brand-pink-dark">
                             {syncRecoveryError}
                           </p>
                         )}
-                        <button
-                          type="submit"
-                          disabled={
-                            isRotatingRecoveryPassphrase ||
-                            !isValidNewRecoveryPassphrase(newRecoveryPassphrase) ||
-                            newRecoveryPassphrase !== confirmNewRecoveryPassphrase
-                          }
-                          className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
-                        >
-                          {isRotatingRecoveryPassphrase
-                            ? 'Changing...'
-                            : 'Change Recovery Passphrase'}
-                        </button>
-                      </form>
+                      </div>
                     )}
                   </div>
                 )}

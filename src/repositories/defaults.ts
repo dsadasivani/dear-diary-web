@@ -1,9 +1,4 @@
-import type {
-  AppSettings,
-  LocalRepositoryMetadata,
-  SecurityConfig,
-  UserProfile,
-} from '../types';
+import type { AppSettings, LocalRepositoryMetadata, SecurityConfig, UserProfile } from '../types';
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   remindersEnabled: false,
@@ -18,6 +13,8 @@ export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
   pinSalt: '',
   isBiometricsEnabled: false,
   isLocked: true,
+  pinLockoutStage: 0,
+  failedPinAttempts: 0,
 };
 
 export const createDefaultLocalRepositoryMetadata = (): LocalRepositoryMetadata => ({

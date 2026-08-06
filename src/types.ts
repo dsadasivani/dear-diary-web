@@ -62,6 +62,9 @@ export interface SecurityConfig {
   linkedGoogleUserId?: string; // Immutable Google subject used for PIN reset and sync identity
   linkedGoogleEmail?: string | null; // Email for the locally bound Google account
   linkedGoogleBoundAt?: number; // Timestamp when the Google account was locally bound
+  pinLockoutStage?: 0 | 1 | 2 | 3 | 4; // Current device-local PIN escalation stage
+  failedPinAttempts?: number; // Failed attempts accumulated within the current stage
+  pinLockedUntil?: number; // Absolute device timestamp until PIN entry is disabled
 }
 
 export interface Mood {

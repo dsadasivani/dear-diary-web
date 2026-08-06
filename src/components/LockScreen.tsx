@@ -27,10 +27,12 @@ import {
   SyncDeviceRole,
 } from '../types';
 import {
+  attemptPinUnlock,
+  clearPinLockout,
   createInitialPin,
+  getPinLockoutStatus,
   isValidPin,
   resetPinAfterVerifiedRecovery,
-  unlockWithPin,
 } from '../domain/security';
 import type { PinLength } from '../domain/security';
 import {
@@ -169,6 +171,8 @@ export default function LockScreen({
   const [resetConfirmPin, setResetConfirmPin] = useState('');
   const [recoveryVerifiedBy, setRecoveryVerifiedBy] = useState<'google' | null>(null);
   const [isBiometricUnlocking, setIsBiometricUnlocking] = useState(false);
+  const [isSubmittingPin, setIsSubmittingPin] = useState(false);
+  const [pinLockoutNow, setPinLockoutNow] = useState(Date.now());
   const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() =>
     initialSecurity.isPinCreated ? 'ambient' : 'keypad',
   );
@@ -199,6 +203,7 @@ export default function LockScreen({
   useEffect(() => {
     const updateTime = () => {
       const now = new Date();
+      setPinLockoutNow(now.getTime());
       setTime(`${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`);
       setDate(
         now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }),
@@ -208,6 +213,15 @@ export default function LockScreen({
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!security.pinLockedUntil || security.pinLockedUntil > pinLockoutNow) return;
+    const updated = { ...security, pinLockedUntil: undefined };
+    setSecurity(updated);
+    onSecurityChange(updated);
+    setError('');
+    void diaryRepository.saveSecurityConfig(updated);
+  }, [onSecurityChange, pinLockoutNow, security]);
 
   useEffect(() => {
     const quoteInterval = setInterval(() => {
@@ -278,6 +292,7 @@ export default function LockScreen({
   };
 
   const handleKeyPress = (num: string) => {
+    if (getPinLockoutStatus(security).isLockedOut) return;
     triggerHaptic(10);
     const maxLength = security.isPinCreated ? security.pinLength || 8 : selectedPinLength;
     if (pin.length < maxLength) {
@@ -298,6 +313,7 @@ export default function LockScreen({
   };
 
   const handleSubmit = async () => {
+    if (getPinLockoutStatus(security).isLockedOut || isSubmittingPin) return;
     const requiredLength = security.isPinCreated ? security.pinLength : selectedPinLength;
     if (!isValidPin(pin, requiredLength)) {
       fail(`PIN must be exactly ${requiredLength || '4 or 8'} digits.`);
@@ -339,19 +355,27 @@ export default function LockScreen({
         return;
       }
     } else {
-      const unlockedSecurity = unlockWithPin(security, pin);
-      if (unlockedSecurity) {
-        await diaryRepository.saveSecurityConfig(unlockedSecurity);
-        setSecurity(unlockedSecurity);
-        onSecurityChange(unlockedSecurity);
-        await completeUnlock(unlockedSecurity, pin);
-      } else {
-        setPin('');
-        fail(
-          deviceRole === 'web_companion'
-            ? 'Incorrect PIN for this browser. If your mobile PIN changed after pairing, use recovery or pair this browser again.'
-            : 'Incorrect security PIN.',
-        );
+      setIsSubmittingPin(true);
+      try {
+        const attempt = attemptPinUnlock(security, pin);
+        await diaryRepository.saveSecurityConfig(attempt.config);
+        setSecurity(attempt.config);
+        onSecurityChange(attempt.config);
+        if (attempt.status === 'unlocked') {
+          await completeUnlock(attempt.config, pin);
+        } else if (attempt.status === 'incorrect') {
+          setPin('');
+          fail(
+            deviceRole === 'web_companion'
+              ? `Incorrect PIN for this browser. ${attempt.attemptsRemaining} attempt${attempt.attemptsRemaining === 1 ? '' : 's'} remaining before a timed lock.`
+              : `Incorrect security PIN. ${attempt.attemptsRemaining} attempt${attempt.attemptsRemaining === 1 ? '' : 's'} remaining before a timed lock.`,
+          );
+        } else if (attempt.status === 'lockout-started') {
+          setPin('');
+          fail('Too many incorrect PIN attempts. PIN entry is temporarily locked.');
+        }
+      } finally {
+        setIsSubmittingPin(false);
       }
     }
   };
@@ -536,7 +560,7 @@ export default function LockScreen({
         fail('Biometric identity was not confirmed. Use your app PIN.');
         return;
       }
-      const unlockedSecurity = { ...security, isLocked: false };
+      const unlockedSecurity = { ...clearPinLockout(security), isLocked: false };
       await diaryRepository.saveSecurityConfig(unlockedSecurity);
       setSecurity(unlockedSecurity);
       onSecurityChange(unlockedSecurity);
@@ -622,9 +646,17 @@ export default function LockScreen({
   const activeBgClass = 'lock-atmosphere bg-brand-bg';
 
   const hasGoogleRecovery = Boolean(security.linkedGoogleUserId);
+  const pinLockoutStatus = getPinLockoutStatus(security, pinLockoutNow);
+  const isPinLockedOut = security.isPinCreated && pinLockoutStatus.isLockedOut;
+  const remainingLockoutSeconds = Math.ceil(pinLockoutStatus.remainingMs / 1000);
+  const pinLockoutCountdown = `${String(Math.floor(remainingLockoutSeconds / 60)).padStart(2, '0')}:${String(remainingLockoutSeconds % 60).padStart(2, '0')}`;
   const visiblePinLength = security.isPinCreated
     ? security.pinLength || (pin.length > 4 ? 8 : 4)
     : selectedPinLength;
+  const canSubmitPin =
+    !isPinLockedOut &&
+    !isSubmittingPin &&
+    isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength);
   const accountSetupProgressMessage = successMsg || 'Opening Google account...';
   const accountSetupProgressKey = syncSetupProgressKeyForMessage(accountSetupProgressMessage);
   const accountSetupProgressIndex = Math.max(
@@ -1213,6 +1245,19 @@ export default function LockScreen({
                       </div>
                       <div className="min-h-[16px] text-center flex flex-col items-center mt-1">
                         <AnimatePresence mode="wait">
+                          {isPinLockedOut && (
+                            <motion.p
+                              initial={{ opacity: 0, y: -4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                              role="status"
+                              aria-live="polite"
+                              className="text-xs font-bold text-brand-rose flex items-center gap-1"
+                            >
+                              <Lock className="w-3 h-3 flex-shrink-0" />
+                              <span>PIN locked. Try again in {pinLockoutCountdown}.</span>
+                            </motion.p>
+                          )}
                           {error && (
                             <motion.p
                               initial={{ opacity: 0, y: -4 }}
@@ -1246,7 +1291,8 @@ export default function LockScreen({
                           type="button"
                           whileTap={{ scale: 0.9 }}
                           onClick={() => handleKeyPress(num)}
-                          className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
+                          disabled={isPinLockedOut}
+                          className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-35 lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
                         >
                           <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">
                             {num}
@@ -1273,7 +1319,8 @@ export default function LockScreen({
                         onClick={() => {
                           pin.length > 0 ? handleClear() : setShowPin(!showPin);
                         }}
-                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5"
+                        disabled={isPinLockedOut}
+                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-35 lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5"
                       >
                         {pin.length > 0 ? (
                           <X className="h-5 w-5 text-brand-pink" />
@@ -1287,7 +1334,8 @@ export default function LockScreen({
                         type="button"
                         whileTap={{ scale: 0.9 }}
                         onClick={() => handleKeyPress('0')}
-                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
+                        disabled={isPinLockedOut}
+                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-35 lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
                       >
                         <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">
                           0
@@ -1299,7 +1347,7 @@ export default function LockScreen({
                         title="Erase last PIN digit"
                         whileTap={{ scale: 0.9 }}
                         onClick={handleBackspace}
-                        disabled={pin.length === 0}
+                        disabled={pin.length === 0 || isPinLockedOut}
                         className={`w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5 ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
                       >
                         <Delete className="h-5 w-5" />
@@ -1308,13 +1356,8 @@ export default function LockScreen({
 
                     <button
                       onClick={handleSubmit}
-                      disabled={
-                        !isValidPin(
-                          pin,
-                          security.isPinCreated ? security.pinLength : selectedPinLength,
-                        )
-                      }
-                      className={`open-page-pin-submit w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}
+                      disabled={!canSubmitPin}
+                      className={`open-page-pin-submit w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${canSubmitPin ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}
                     >
                       {security.isPinCreated
                         ? `Unlock ${BRAND.name}`

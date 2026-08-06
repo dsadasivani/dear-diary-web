@@ -256,6 +256,9 @@ describe('LockScreen first-run sync setup', () => {
           ...savedSecurity,
           isBiometricsEnabled: true,
           passkeyCredentialId: 'native-biometric',
+          pinLockoutStage: 3,
+          failedPinAttempts: 1,
+          pinLockedUntil: Date.now() + 60_000,
         }}
         onSecurityChange={vi.fn()}
         onUnlock={onUnlock}
@@ -266,9 +269,105 @@ describe('LockScreen first-run sync setup', () => {
     await user.click(screen.getByRole('button', { name: /unlock with biometrics/i }));
 
     expect(authenticate).toHaveBeenCalledWith('native-biometric');
+    expect(mocks.saveSecurityConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pinLockoutStage: 0,
+        failedPinAttempts: 0,
+        pinLockedUntil: undefined,
+      }),
+    );
     await waitFor(() => expect(onUnlock).toHaveBeenCalledOnce());
     nativePlatform.mockRestore();
     authenticate.mockRestore();
+  });
+
+  it('persists failed lock-screen PIN attempts', async () => {
+    const user = userEvent.setup();
+    const lockedSecurity: SecurityConfig = {
+      isPinCreated: true,
+      pinHash: CryptoJS.SHA256('1234device-salt').toString(),
+      pinSalt: 'device-salt',
+      pinLength: 4,
+      isBiometricsEnabled: false,
+      isLocked: true,
+      pinLockoutStage: 0,
+      failedPinAttempts: 0,
+    };
+    mocks.getLocalSyncAccountState.mockResolvedValue({ deviceRole: 'primary_mobile' });
+
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={lockedSecurity}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    await screen.findByRole('button', { name: /^9$/ });
+    await clickPin(user, '9999');
+    await user.click(screen.getByRole('button', { name: /unlock loredays/i }));
+
+    await waitFor(() =>
+      expect(mocks.saveSecurityConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ pinLockoutStage: 0, failedPinAttempts: 1 }),
+      ),
+    );
+    expect(screen.getByText(/9 attempts remaining before a timed lock/i)).toBeInTheDocument();
+  });
+
+  it('restores an active lockout with disabled PIN controls and available Google recovery', async () => {
+    const user = userEvent.setup();
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={{
+          ...pinOnlySecurity,
+          isLocked: true,
+          linkedGoogleUserId: googleSession.userId,
+          linkedGoogleEmail: googleSession.email,
+          pinLockoutStage: 1,
+          failedPinAttempts: 0,
+          pinLockedUntil: Date.now() + 15 * 60 * 1000,
+        }}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    expect(await screen.findByText(/PIN locked\. Try again in \d{2}:\d{2}/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^1$/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /unlock loredays/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /forgot security passcode pin/i })).toBeEnabled();
+  });
+
+  it('re-enables PIN entry when the persisted lockout deadline expires', async () => {
+    const user = userEvent.setup();
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={{
+          ...pinOnlySecurity,
+          isLocked: true,
+          pinLockoutStage: 1,
+          failedPinAttempts: 0,
+          pinLockedUntil: Date.now() + 1_100,
+        }}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    expect(await screen.findByText(/PIN locked\. Try again in/i)).toBeInTheDocument();
+    const oneButton = screen.getByRole('button', { name: /^1$/ });
+    expect(oneButton).toBeDisabled();
+
+    await waitFor(() => expect(oneButton).toBeEnabled(), { timeout: 3_000 });
+    expect(mocks.saveSecurityConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ pinLockoutStage: 1, pinLockedUntil: undefined }),
+    );
   });
 
   it('does not offer security-question recovery when only Google recovery is configured', async () => {

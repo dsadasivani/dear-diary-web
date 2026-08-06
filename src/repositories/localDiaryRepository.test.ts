@@ -912,10 +912,32 @@ test('initializes settings, profile, security, and local revision metadata', asy
 
   assert.equal((await repository.getSettings()).theme, 'light');
   assert.equal((await repository.getUserProfile()).name, 'Writer');
-  assert.equal((await repository.getSecurityConfig()).isPinCreated, false);
+  const security = await repository.getSecurityConfig();
+  assert.equal(security.isPinCreated, false);
+  assert.equal(security.pinLockoutStage, 0);
+  assert.equal(security.failedPinAttempts, 0);
   const backup = await repository.getLocalRepositoryMetadata();
   assert.ok(backup.deviceId);
   assert.equal(backup.contentRevision, 0);
+});
+
+test('persists device-local PIN lockout state', async () => {
+  const repository = await createRepository();
+  const lockedUntil = Date.now() + 15 * 60 * 1000;
+  await repository.saveSecurityConfig({
+    ...(await repository.getSecurityConfig()),
+    isPinCreated: true,
+    pinHash: 'hash',
+    pinSalt: 'salt',
+    pinLockoutStage: 1,
+    failedPinAttempts: 0,
+    pinLockedUntil: lockedUntil,
+  });
+
+  const restored = await repository.getSecurityConfig();
+  assert.equal(restored.pinLockoutStage, 1);
+  assert.equal(restored.failedPinAttempts, 0);
+  assert.equal(restored.pinLockedUntil, lockedUntil);
 });
 
 test('portable restore preserves local security, reminders, theme, and backup identity', async () => {
@@ -935,6 +957,8 @@ test('portable restore preserves local security, reminders, theme, and backup id
     pinSalt: 'new-device-salt',
     isBiometricsEnabled: true,
     isLocked: false,
+    pinLockoutStage: 0,
+    failedPinAttempts: 0,
   };
   await target.saveSecurityConfig(targetSecurity);
   await target.saveSettings({ remindersEnabled: true, reminderTime: '07:15', theme: 'light' });
