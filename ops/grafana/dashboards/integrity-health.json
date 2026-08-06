@@ -2,35 +2,214 @@
   "title": "Loredays Integrity Health",
   "uid": "deardiary-integrity",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "30s",
   "templating": {
-    "list": [{ "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" }]
+    "list": [
+      { "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" },
+      { "name": "logs", "label": "Logs", "type": "datasource", "query": "loki" },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "custom",
+        "query": "staging,production",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "staging", "value": "staging" }
+      }
+    ]
   },
   "panels": [
     {
       "id": 1,
       "type": "stat",
-      "title": "Hash mismatches",
+      "title": "Backend hash mismatches",
+      "description": "API requests rejected because encrypted object or snapshot hashes did not match.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
-      "targets": [{ "expr": "sum(increase(deardiary_sync_integrity_hash_mismatch_total[24h]))" }]
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sync_api_error_total{environment=~\"${environment:regex}\", error_code=\"HASH_MISMATCH\"}[$__range])) or on() vector(0)",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 2,
       "type": "stat",
-      "title": "Invariant failures",
+      "title": "Backend missing objects",
+      "description": "API requests that referenced encrypted objects missing from object storage.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
       "targets": [
-        { "expr": "sum(increase(deardiary_sync_integrity_invariant_failure_total[24h]))" }
+        {
+          "expr": "sum(increase(sync_api_error_total{environment=~\"${environment:regex}\", error_code=\"OBJECT_MISSING\"}[$__range])) or on() vector(0)",
+          "refId": "A"
+        }
       ]
     },
     {
       "id": 3,
       "type": "stat",
-      "title": "Missing objects",
+      "title": "Backend sequence violations",
+      "description": "Sequence gaps, cursor regressions, or stale snapshot sequences rejected by the API.",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
-          "expr": "sum(increase(sync_object_validation_failure_total{error_code=\"OBJECT_MISSING\"}[24h]))"
+          "expr": "sum(increase(sync_api_error_total{environment=~\"${environment:regex}\", error_code=~\"SEQUENCE_GAP|CURSOR_REGRESSION|SNAPSHOT_SEQUENCE_STALE\"}[$__range])) or on() vector(0)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Database corruption signals",
+      "description": "Explicit database-corruption detections. Any non-zero value is an incident.",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sync_database_corruption_total{environment=~\"${environment:regex}\"}[$__range])) or on() vector(0)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Client hash mismatches",
+      "description": "Privacy-safe Faro measurements emitted when downloaded encrypted data fails hash validation.",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 5 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(sum_over_time({kind=~\"measurement|measurements\"} | json | app_name=\"dear-diary-client\" | app_environment=~\"${environment:regex}\" | type=\"deardiary.sync.integrity.hash_mismatch\" | unwrap value_value | __error__=\"\" [$__range])) or on() vector(0)",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Client invariant failures",
+      "description": "Client synchronization state-machine invariant failures reported through Faro.",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 5 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(sum_over_time({kind=~\"measurement|measurements\"} | json | app_name=\"dear-diary-client\" | app_environment=~\"${environment:regex}\" | type=\"deardiary.sync.integrity.invariant_failure\" | unwrap value_value | __error__=\"\" [$__range])) or on() vector(0)",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Client decryption failures",
+      "description": "Unexpected decryption failures reported by the client. Any non-zero value requires investigation.",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 5 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(sum_over_time({kind=~\"measurement|measurements\"} | json | app_name=\"dear-diary-client\" | app_environment=~\"${environment:regex}\" | type=\"deardiary.sync.integrity.decryption_failure\" | unwrap value_value | __error__=\"\" [$__range])) or on() vector(0)",
+          "queryType": "instant",
+          "refId": "A"
         }
       ]
     }

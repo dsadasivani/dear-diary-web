@@ -4,7 +4,7 @@ The Sync V2 backend sends metrics, structured logs, and sampled traces to Grafan
 Logs contain correlation, trace, and span identifiers;
 request bodies, signed object URLs, tokens, and diary content are never observability attributes.
 
-Import `ops/prometheus/alerts.yml` and the five dashboards under `ops/grafana/dashboards` into Grafana
+Import `ops/prometheus/alerts.yml` and all six dashboards under `ops/grafana/dashboards` into Grafana
 Cloud. Critical
 integrity alerts page immediately. Operational alerts should page only after their configured window.
 Keep `SYNC_PROMETHEUS_PUBLIC_ENABLED=false`; the hosted service pushes metrics over authenticated OTLP.

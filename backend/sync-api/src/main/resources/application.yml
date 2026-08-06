@@ -57,6 +57,12 @@ management:
     tags:
       application: ${spring.application.name}
       environment: ${SYNC_DEPLOYMENT_ENVIRONMENT:local}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        sync_database_transaction_duration: true
+        sync_object_storage_request_duration: true
+        sync_operation_commit_duration: true
   endpoints:
     web:
       exposure:

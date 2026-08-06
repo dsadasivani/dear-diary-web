@@ -2,7 +2,7 @@
   "title": "Loredays Logs & Errors",
   "uid": "deardiary-logs-errors",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "time": { "from": "now-3h", "to": "now" },
   "refresh": "30s",
   "templating": {
@@ -46,7 +46,7 @@
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         {
-          "expr": "sum(count_over_time({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"}[$__range]))",
+          "expr": "sum(count_over_time({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"}[$__range])) or on() vector(0)",
           "queryType": "instant",
           "refId": "A"
         }

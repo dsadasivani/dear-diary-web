@@ -2,13 +2,23 @@
   "title": "Loredays Observability Overview",
   "uid": "deardiary-observability",
   "schemaVersion": 39,
-  "version": 1,
-  "time": { "from": "now-1h", "to": "now" },
+  "version": 2,
+  "time": { "from": "now-3h", "to": "now" },
+  "refresh": "30s",
   "templating": {
     "list": [
       { "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" },
       { "name": "logs", "label": "Logs", "type": "datasource", "query": "loki" },
-      { "name": "traces", "label": "Traces", "type": "datasource", "query": "tempo" }
+      { "name": "traces", "label": "Traces", "type": "datasource", "query": "tempo" },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "custom",
+        "query": "staging,production",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "staging", "value": "staging" }
+      }
     ]
   },
   "panels": [
@@ -16,12 +26,14 @@
       "id": 1,
       "type": "stat",
       "title": "Sync API uptime",
+      "description": "Process uptime for the selected environment. No data means the metrics path needs investigation.",
       "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
       "targets": [
         {
-          "expr": "max(process_uptime_seconds{job=\"dear-diary/dear-diary-sync-api\"})"
+          "expr": "max(process_uptime_seconds{application=\"dear-diary-sync-api\", environment=~\"${environment:regex}\"})",
+          "refId": "A"
         }
       ]
     },
@@ -29,11 +41,15 @@
       "id": 2,
       "type": "timeseries",
       "title": "HTTP requests / second",
+      "description": "Inbound request rate grouped by method, route, and status.",
       "gridPos": { "h": 8, "w": 10, "x": 4, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
       "targets": [
         {
-          "expr": "sum by (method, uri, status) (rate(http_server_requests_seconds_count{job=\"dear-diary/dear-diary-sync-api\"}[5m]))"
+          "expr": "sum by (method, uri, status) (rate(http_server_requests_seconds_count{application=\"dear-diary-sync-api\", environment=~\"${environment:regex}\"}[$__rate_interval]))",
+          "legendFormat": "{{method}} {{uri}} {{status}}",
+          "refId": "A"
         }
       ]
     },
@@ -41,12 +57,15 @@
       "id": 3,
       "type": "timeseries",
       "title": "HTTP latency p95",
+      "description": "Server request latency from the Micrometer histogram.",
       "gridPos": { "h": 8, "w": 10, "x": 14, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{job=\"dear-diary/dear-diary-sync-api\"}[5m])))"
+          "expr": "histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application=\"dear-diary-sync-api\", environment=~\"${environment:regex}\"}[$__rate_interval])))",
+          "legendFormat": "{{uri}}",
+          "refId": "A"
         }
       ]
     },
@@ -54,11 +73,18 @@
       "id": 4,
       "type": "logs",
       "title": "Sync API logs",
+      "description": "Structured backend logs. Expand a row for correlation, trace, span, HTTP, and release fields.",
       "gridPos": { "h": 12, "w": 14, "x": 0, "y": 8 },
       "datasource": { "type": "loki", "uid": "${logs}" },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "enableLogDetails": true
+      },
       "targets": [
         {
-          "expr": "{service_name=\"dear-diary-sync-api\"}",
+          "expr": "{service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"}",
           "queryType": "range",
           "refId": "A"
         }
@@ -68,11 +94,12 @@
       "id": 5,
       "type": "traces",
       "title": "Recent sync API traces",
+      "description": "Sampled server traces for the selected environment.",
       "gridPos": { "h": 12, "w": 10, "x": 14, "y": 8 },
       "datasource": { "type": "tempo", "uid": "${traces}" },
       "targets": [
         {
-          "query": "{ resource.service.name = \"dear-diary-sync-api\" }",
+          "query": "{ resource.service.name = \"dear-diary-sync-api\" && resource.deployment.environment =~ \"${environment:regex}\" }",
           "queryType": "traceql",
           "refId": "A",
           "limit": 20,

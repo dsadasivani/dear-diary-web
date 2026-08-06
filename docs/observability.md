@@ -50,11 +50,16 @@ error type are sent. The collector still needs exact CORS origins and an appropr
 
 4. Confirm `DearDiaryEcsTaskExecutionRole` can call `ssm:GetParameters` and `kms:Decrypt` for those two
    parameters. The task definition injects them only at runtime.
-5. Import the JSON dashboards from `ops/grafana/dashboards`. Each dashboard prompts for the Grafana
-   Cloud Metrics data source; the overview also prompts for Logs and Traces, while **Loredays Logs &
-   Errors** prompts only for Logs.
-6. Import `ops/prometheus/alerts.yml` into Grafana Cloud Metrics alerting, select a notification contact
-   point, and run a synthetic staging failure before enabling paging.
+5. Import all six JSON dashboards from `ops/grafana/dashboards`. Choose the requested Grafana Cloud
+   Metrics, Logs, and Traces data sources during import. **Release Health** and **Integrity Health**
+   intentionally combine backend Prometheus metrics with privacy-safe Faro measurements stored in
+   Loki; Grafana stores Faro custom measurements as logs rather than Prometheus series.
+6. Import `ops/prometheus/alerts.yml` into Grafana Cloud Metrics alerting for backend integrity,
+   availability, latency, authentication, database, and object-storage alerts. In **Frontend
+   Observability > Alerts**, enable the managed frontend error alerts and create Grafana-managed Loki
+   alerts from the three client integrity queries in **Integrity Health**. Client Faro measurements
+   are Loki records, so a Prometheus-only rule cannot alert on them. Select a notification contact
+   point and run a synthetic staging failure before enabling paging.
 7. In **Connections > AWS**, connect AWS account `908027418886` in `ap-south-1` and enable ECS,
    Application/Network Load Balancer, S3, RDS/PostgreSQL, and CloudWatch Logs integrations. This adds
    infrastructure and AWS service health to the same Grafana stack.
@@ -71,7 +76,7 @@ Redeploy both staging components after the one-time setup. The ECS task enables 
 Verify the data path in this order:
 
 1. In Grafana Explore (Metrics), query
-   `process_uptime_seconds{job="dear-diary/dear-diary-sync-api",deployment_environment="staging"}`.
+   `process_uptime_seconds{application="dear-diary-sync-api",environment="staging"}`.
 2. Send a safe correlation ID to staging and find it in Explore (Logs):
 
    ```powershell
@@ -86,6 +91,22 @@ Verify the data path in this order:
 4. Open **Observability > Frontend**, load the staging web app, perform a sync, and confirm the
    `dear-diary-client` application receives a new session and measurement.
 5. Open **Infrastructure > AWS > ECS** and confirm the staging service and task appear.
+
+The checked-in dashboards divide investigation by question:
+
+- **Observability Overview**: Is the API publishing metrics, logs, and traces?
+- **Logs & Errors**: What happened for a status, route, severity, correlation ID, or slow request?
+- **Sync Health**: Are commits successful, timely, and keeping cursors and notifications current?
+- **Integrity Health**: Did either the API or client detect hash, sequence, invariant, decryption, or
+  corruption failures?
+- **Dependency Health**: Are PostgreSQL and encrypted object storage healthy?
+- **Release Health**: Did backend and frontend telemetry remain healthy after a release?
+
+Treat `No data` differently from zero. Traffic-derived latency and success-rate panels can correctly
+show `No data` before staging traffic exists. Safety counters use explicit zero fallbacks so a healthy
+quiet system displays `0`. Uptime and continuously published gauges should never remain `No data` after
+two OTLP export intervals; investigate the metrics endpoint, token scopes, and dashboard data-source
+selection if they do.
 
 If the backend task will not start, check that both SSM parameters exist and that the ECS execution role
 can decrypt them. A healthy task with no signals usually means an endpoint/header was copied partially;

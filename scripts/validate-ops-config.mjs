@@ -1,13 +1,16 @@
 import { access, readFile } from 'node:fs/promises';
 
-const dashboards = [
-  'release-health',
-  'sync-health',
-  'integrity-health',
-  'dependency-health',
-  'observability-overview',
-];
-for (const name of dashboards) {
+const dashboards = {
+  'release-health': ['metrics', 'logs'],
+  'sync-health': ['metrics'],
+  'integrity-health': ['metrics', 'logs'],
+  'dependency-health': ['metrics'],
+  'observability-overview': ['metrics', 'logs', 'traces'],
+  'logs-and-errors': ['logs'],
+};
+const dashboardUids = new Set();
+const dashboardTitles = new Set();
+for (const [name, requiredDataSources] of Object.entries(dashboards)) {
   const path = `ops/grafana/dashboards/${name}.json`;
   const dashboard = JSON.parse(await readFile(path, 'utf8'));
   if (
@@ -18,24 +21,90 @@ for (const name of dashboards) {
   ) {
     throw new Error(`Invalid Grafana dashboard: ${path}`);
   }
-  if (!dashboard.templating?.list?.some(({ name }) => name === 'metrics')) {
-    throw new Error(`Grafana Cloud metrics data source variable is missing: ${path}`);
+  if (dashboardUids.has(dashboard.uid) || dashboardTitles.has(dashboard.title)) {
+    throw new Error(`Duplicate Grafana dashboard UID or title: ${path}`);
+  }
+  dashboardUids.add(dashboard.uid);
+  dashboardTitles.add(dashboard.title);
+
+  if (!dashboard.time?.from || !dashboard.time?.to || !dashboard.refresh) {
+    throw new Error(`Grafana dashboard time range or refresh interval is missing: ${path}`);
+  }
+  const variables = new Set(dashboard.templating?.list?.map(({ name }) => name) ?? []);
+  for (const dataSource of requiredDataSources) {
+    if (!variables.has(dataSource)) {
+      throw new Error(`Grafana ${dataSource} data source variable is missing: ${path}`);
+    }
+  }
+  if (!variables.has('environment')) {
+    throw new Error(`Grafana environment filter is missing: ${path}`);
+  }
+
+  const panelIds = new Set();
+  for (const panel of dashboard.panels) {
+    if (
+      !panel.id ||
+      panelIds.has(panel.id) ||
+      !panel.title ||
+      !panel.description ||
+      !panel.gridPos
+    ) {
+      throw new Error(`Grafana panel metadata or layout is invalid in ${path}`);
+    }
+    panelIds.add(panel.id);
+    if (!Array.isArray(panel.targets) || panel.targets.length === 0) {
+      throw new Error(`Grafana panel has no query targets in ${path}: ${panel.title}`);
+    }
+    for (const target of panel.targets) {
+      if (!target.refId || (!target.expr && !target.query)) {
+        throw new Error(`Grafana query target is incomplete in ${path}: ${panel.title}`);
+      }
+    }
+  }
+
+  const serialized = JSON.stringify(dashboard);
+  for (const retiredMetric of [
+    'deardiary_sync_push_failure_total',
+    'deardiary_sync_pull_failure_total',
+    'deardiary_session_crash_total',
+    'deardiary_session_start_total',
+    'deardiary_sync_integrity_hash_mismatch_total',
+    'deardiary_sync_integrity_invariant_failure_total',
+  ]) {
+    if (serialized.includes(retiredMetric)) {
+      throw new Error(
+        `Grafana dashboard references a metric the application does not emit: ${retiredMetric}`,
+      );
+    }
   }
 }
 
 const alerts = await readFile('ops/prometheus/alerts.yml', 'utf8');
+for (const retiredMetric of [
+  'deardiary_sync_integrity_hash_mismatch_total',
+  'deardiary_sync_integrity_invariant_failure_total',
+  'deardiary_sync_integrity_decryption_failure_total',
+  'deardiary_sync_pull_failure_total',
+  'deardiary_outbox_oldest_age_ms_bucket',
+  'deardiary_session_crash_total',
+  'deardiary_session_start_total',
+  'deardiary_database_open_failure_total',
+]) {
+  if (alerts.includes(retiredMetric)) {
+    throw new Error(
+      `Prometheus alerts reference a metric the application does not emit: ${retiredMetric}`,
+    );
+  }
+}
 for (const alert of [
   'SyncHashMismatch',
-  'SyncInvariantViolation',
   'SyncSequenceRegression',
-  'SyncUnexpectedDecryptionFailure',
   'SyncCommittedObjectMissing',
   'SyncDatabaseCorruption',
   'SyncApiUnavailable',
   'SyncCommitSuccessRateLow',
   'SyncHttpServerErrorRateHigh',
   'SyncNotificationBacklog',
-  'SyncOutboxAgeHigh',
 ]) {
   if (!alerts.includes(`alert: ${alert}`)) throw new Error(`Missing Prometheus alert: ${alert}`);
 }

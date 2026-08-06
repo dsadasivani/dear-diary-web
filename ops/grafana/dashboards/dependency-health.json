@@ -2,35 +2,150 @@
   "title": "Loredays Dependency Health",
   "uid": "deardiary-dependencies",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
   "templating": {
-    "list": [{ "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" }]
+    "list": [
+      { "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "custom",
+        "query": "staging,production",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "staging", "value": "staging" }
+      }
+    ]
   },
   "panels": [
     {
       "id": 1,
-      "type": "timeseries",
-      "title": "Object storage latency p95",
+      "type": "stat",
+      "title": "Database pool active",
+      "description": "Current number of active database connections.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(sync_object_storage_request_duration_seconds_bucket[10m])))"
+          "expr": "max(sync_database_pool_active{environment=~\"${environment:regex}\"})",
+          "refId": "A"
         }
       ]
     },
     {
       "id": 2,
-      "type": "timeseries",
-      "title": "Database pool active",
+      "type": "stat",
+      "title": "Database pool pending",
+      "description": "Threads waiting for a database connection. Sustained non-zero values indicate pool pressure.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
-      "targets": [{ "expr": "hikaricp_connections_active" }]
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max(sync_database_pool_pending{environment=~\"${environment:regex}\"})",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 3,
-      "type": "timeseries",
-      "title": "Database pool pending",
+      "type": "stat",
+      "title": "Object storage errors",
+      "description": "Object-storage requests that failed during the selected time range.",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
-      "targets": [{ "expr": "hikaricp_connections_pending" }]
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sync_object_storage_error_total{environment=~\"${environment:regex}\"}[$__range])) or on() vector(0)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Database deadlocks",
+      "description": "Detected pessimistic-locking failures during the selected time range.",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sync_database_deadlock_total{environment=~\"${environment:regex}\"}[$__range])) or on() vector(0)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Object storage latency p95",
+      "description": "95th-percentile encrypted object-storage request duration.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sync_object_storage_request_duration_seconds_bucket{environment=~\"${environment:regex}\"}[$__rate_interval])))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Database transaction latency p95",
+      "description": "95th-percentile service database transaction duration.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sync_database_transaction_duration_seconds_bucket{environment=~\"${environment:regex}\"}[$__rate_interval])))",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }
