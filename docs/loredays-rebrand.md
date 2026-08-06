@@ -7,7 +7,7 @@ This inventory records the boundary between the Loredays brand layer and legacy 
 - Product shell, bootstrap, lock/setup, web companion, settings, notifications, biometric prompts, error copy, and accessibility labels.
 - Browser title, description, Open Graph/X metadata, favicon, Apple touch icon, Capacitor display name, and Android display labels.
 - Home, entry, memory, search, note conversion, and multi-collection copy.
-- Existing book-and-feather mark retained across the web favicon, app shell, splash artwork, and Android adaptive/legacy launcher assets.
+- Product icons, logos, launcher artwork, splash artwork, and image assets remain on the `main` branch baseline and are outside the rebrand scope.
 - Public README introductions, product-facing technical documentation, and operator-facing dashboard titles.
 
 ## Stable identifiers intentionally retained
@@ -24,8 +24,8 @@ The following are compatibility contracts, not brand copy. Renaming them would r
 
 ## Data migration decision
 
-No data migration is required. The rebrand changes display metadata, copy, and replaceable assets only. Existing storage keys, databases, encryption material, authentication identity, sync protocols, media paths, API contracts, and deep links continue to resolve exactly as before.
+No data migration is required. The rebrand changes display metadata and copy only. Existing storage keys, databases, encryption material, authentication identity, sync protocols, media paths, API contracts, and deep links continue to resolve exactly as before.
 
 ## Asset status
 
-Loredays intentionally retains the established warm-gold book-and-feather mark on charcoal. The original icon, splash artwork, and generated Android asset family remain unchanged; the web brand component references a copy of that same source icon through `BRAND_ASSETS`.
+The rebrand does not introduce or replace icons, logos, launcher artwork, splash artwork, or other product imagery. Those files and placements retain the visual treatment from `main`.

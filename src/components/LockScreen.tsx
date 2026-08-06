@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   WarningCircle as AlertCircle,
   ArrowLeft,
+  Book as BookOpen,
   Calendar as CalendarDays,
   Check,
   Erase as Delete,
@@ -55,7 +56,6 @@ import {
 import { triggerImpact } from '../mobile/haptics';
 import { isNativePlatform } from '../platform';
 import { secureAuthService } from '../platform/security';
-import BrandMark from './BrandMark';
 import { BRAND } from '../config/brand';
 
 interface LockScreenProps {
@@ -702,7 +702,7 @@ export default function LockScreen({
 
       <header className="open-page-lock-header w-full max-w-sm lg:absolute lg:left-8 lg:right-auto lg:top-8 lg:max-w-none xl:left-10 flex justify-between items-center z-10">
         <div className="flex items-center gap-2 bg-white/55 dark:bg-white/[0.06] backdrop-blur-xl px-3.5 py-1.5 rounded-full border border-brand-border/50 dark:border-white/10 shadow-sm">
-          <BrandMark className="h-5 w-5 rounded-md object-cover" />
+          <BookOpen className="w-3.5 h-3.5 text-brand-pink" />
           <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#3E2429] dark:text-[#EADCD1]">
             {BRAND.wordmark}
           </span>
@@ -758,8 +758,8 @@ export default function LockScreen({
               </div>
 
               <div className="hidden flex-col items-center gap-2 lg:flex">
-                <span className="h-[3.25rem] w-[3.25rem] overflow-hidden rounded-2xl border border-brand-border/55 shadow-sm">
-                  <BrandMark className="h-full w-full object-cover" />
+                <span className="flex h-[3.25rem] w-[3.25rem] items-center justify-center rounded-2xl border border-brand-border/55 bg-white/50 text-brand-pink shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
+                  <BookOpen className="h-5 w-5" />
                 </span>
                 <h1 className="font-serif-diary text-3xl font-semibold text-brand-plum dark:text-[#ECE6E1]">
                   Locked
@@ -850,8 +850,8 @@ export default function LockScreen({
                 )}
 
                 <div className="text-center space-y-1 sm:space-y-1.5 flex flex-col items-center mt-1">
-                  <div className="relative h-12 w-12 overflow-visible rounded-2xl border border-brand-border/60 shadow-sm sm:h-14 sm:w-14 lg:h-20 lg:w-20 lg:rounded-full">
-                    <BrandMark className="h-full w-full rounded-[inherit] object-cover" />
+                  <div className="relative w-12 h-12 sm:w-14 sm:h-14 lg:h-20 lg:w-20 lg:rounded-full rounded-2xl bg-white/70 dark:bg-white/[0.06] border border-brand-border/60 dark:border-white/10 shadow-sm flex items-center justify-center backdrop-blur-md">
+                    <BookOpen className="w-5.5 h-5.5 sm:w-6.5 sm:h-6.5 text-brand-pink" />
                     <span className="absolute -right-1 -top-1 hidden h-7 w-7 items-center justify-center rounded-full bg-brand-plum text-white shadow-md dark:bg-[#151214] lg:flex">
                       <Lock className="h-3.5 w-3.5" />
                     </span>

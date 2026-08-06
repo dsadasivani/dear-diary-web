@@ -1,8 +1,8 @@
 import {
   ArrowLeft,
   StatsUpSquare as BarChart2,
-  Archive as CollectionPlus,
-  ClockRotateRight,
+  BookStack as BookPlus,
+  Book as BookOpen,
   Camera,
   TaskList as ClipboardList,
   Home,
@@ -22,7 +22,6 @@ import { BottomSheet } from './ui/BottomSheet';
 import { motion, useReducedMotion } from 'motion/react';
 import { triggerImpact } from '../mobile/haptics';
 import { motionTransitions } from './ui/motion';
-import BrandMark from './BrandMark';
 import { BRAND } from '../config/brand';
 
 export type PrimaryDestination = 'home' | 'diaries' | 'notes' | 'stats';
@@ -34,7 +33,7 @@ export const isRootDestinationScreen = (activeTab: string, currentScreen: string
 
 const destinations = [
   { id: 'home' as const, label: 'Today', icon: Home, testId: 'nav-home' },
-  { id: 'diaries' as const, label: 'Memories', icon: ClockRotateRight, testId: 'nav-diaries' },
+  { id: 'diaries' as const, label: 'Memories', icon: BookOpen, testId: 'nav-diaries' },
   { id: 'notes' as const, label: 'Notes', icon: ClipboardList, testId: 'nav-notes' },
   { id: 'stats' as const, label: 'Insights', icon: BarChart2, testId: 'nav-stats' },
 ];
@@ -118,8 +117,8 @@ export function NavigationRail({
 }: RailProps) {
   return (
     <aside className="navigation-rail" aria-label="Application navigation">
-      <div className="h-12 w-12 overflow-hidden rounded-2xl shadow-sm">
-        <BrandMark className="h-full w-full object-cover" />
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-sage text-white">
+        <BookOpen />
       </div>
       <nav aria-label="Primary" className="mt-6 flex flex-1 flex-col gap-2">
         {destinations.map(({ id, label, icon: Icon, testId }) => (
@@ -196,6 +195,9 @@ export function AppHeader({
         ) : null}
         <div className="app-header-copy">
           <p className="app-header-eyebrow">
+            {!onBack && (
+              <BookOpen className="app-header-eyebrow-icon" aria-hidden="true" />
+            )}
             <span>{BRAND.wordmark}</span>
           </p>
           <h1 className={brandOnly ? 'sr-only' : 'app-header-title'}>{title}</h1>
@@ -335,7 +337,7 @@ export function CreateActionSheet({
     {
       label: 'New Collection',
       description: 'Group moments that belong together',
-      icon: CollectionPlus,
+      icon: BookPlus,
       onClick: onNewJournal,
     },
   ];

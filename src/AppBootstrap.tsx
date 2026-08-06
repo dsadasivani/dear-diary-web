@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Refresh as RefreshCw } from 'iconoir-react';
+import { Book as BookOpen, Refresh as RefreshCw } from 'iconoir-react';
 import type { AppSettings, LocalSyncAccountState, SecurityConfig, UserProfile } from './types';
 import { diaryRepository } from './repositories';
 import { hydrateNativeUiPreferences } from './mobile/nativeStorageBridge';
@@ -11,7 +11,6 @@ import WebCompanionLink from './components/WebCompanionLink';
 import { measureAsync } from './utils/performance';
 import { seedE2eRepositoryIfRequested } from './testing/e2eRepositorySeed';
 import { AppButton, LoadingSkeleton, StatusNotice } from './components/UiPrimitives';
-import BrandMark from './components/BrandMark';
 import { BRAND } from './config/brand';
 
 interface BootstrapData {
@@ -98,8 +97,8 @@ export default function AppBootstrap() {
   return (
     <main className="app-canvas flex min-h-screen min-h-[100dvh] items-center justify-center px-6 py-10 text-center">
       <section className="w-full max-w-sm" aria-labelledby="bootstrap-title">
-        <div className="mx-auto h-16 w-16 overflow-hidden rounded-[1.35rem] shadow-[var(--shadow-floating)]">
-          <BrandMark className="h-full w-full object-cover" />
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[1.35rem] bg-accent text-[var(--color-on-primary)] shadow-[var(--shadow-floating)]">
+          <BookOpen aria-hidden="true" className="h-7 w-7" />
         </div>
         <p className="app-eyebrow mt-6">{BRAND.tagline}</p>
         <h1 id="bootstrap-title" className="type-page-title mt-1 font-semibold">

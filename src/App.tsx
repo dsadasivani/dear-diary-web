@@ -4,7 +4,7 @@ import {
   WarningCircle as AlertCircle,
   ArrowLeft,
   StatsUpSquare as BarChart2,
-  ClockRotateRight,
+  Book as BookOpen,
   Check,
   TaskList as ClipboardList,
   Eye,
@@ -75,7 +75,6 @@ import {
 import type { AccentThemeId } from './design/accentThemes';
 import { measureAsync } from './utils/performance';
 import { pageMotion } from './components/ui/motion';
-import BrandMark from './components/BrandMark';
 import { BRAND } from './config/brand';
 import {
   legacyNavigationTarget,
@@ -1557,7 +1556,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       {
         id: 'diaries',
         label: 'Memories',
-        icon: ClockRotateRight,
+        icon: BookOpen,
         onClick: () => handleNavigate('diaries'),
         active: activeTab === 'diaries',
       },
@@ -1595,8 +1594,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         <div className="relative z-10 flex h-screen min-h-0">
           <aside className="flex h-screen w-[232px] shrink-0 flex-col border-r border-brand-border/70 bg-gradient-to-b from-brand-blush-light/78 via-brand-blush-light/48 to-white/35 px-4 py-5 shadow-[18px_0_70px_rgba(62,36,41,0.06)] backdrop-blur-xl dark:from-brand-card-bg/78 dark:via-brand-card-bg/55 dark:to-brand-bg/45 xl:w-64 xl:px-5 xl:py-7">
             <div className="flex items-start gap-3">
-              <div className="h-10 w-10 overflow-hidden rounded-2xl border border-brand-border shadow-sm xl:h-12 xl:w-12">
-                <BrandMark className="h-full w-full object-cover" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-brand-border bg-white text-brand-sage shadow-sm dark:bg-brand-bg/40 xl:h-12 xl:w-12">
+                <BookOpen className="h-5 w-5 xl:h-6 xl:w-6" />
               </div>
               <div className="min-w-0">
                 <h1 className="font-serif-diary text-2xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-3xl">

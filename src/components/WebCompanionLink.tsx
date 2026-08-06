@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Book as BookOpen,
   Check,
   Computer,
   Copy as Clipboard,
@@ -25,7 +26,6 @@ import {
   startWebGoogleSyncSignIn,
   type WebGoogleSyncSession,
 } from '../sync/webGoogleAuth';
-import BrandMark from './BrandMark';
 import { BRAND } from '../config/brand';
 
 interface PendingWebCompanion {
@@ -237,8 +237,8 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       <div className="mx-auto grid min-h-[calc(100dvh-4rem)] w-full max-w-[1280px] items-center gap-x-12 gap-y-9 lg:min-h-[calc(100dvh-5rem)] lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)] xl:gap-x-20">
         <header className="lg:col-start-1 lg:self-end">
           <div className="flex items-center gap-3">
-            <span className="h-12 w-12 overflow-hidden rounded-[var(--radius-control)] shadow-sm">
-              <BrandMark className="h-full w-full object-cover" />
+            <span className="flex h-12 w-12 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-secondary-container)] text-[var(--color-secondary-on-container)]">
+              <BookOpen aria-hidden="true" className="h-5 w-5" />
             </span>
             <p className="app-eyebrow tracking-[0.24em]">{BRAND.tagline}</p>
           </div>

@@ -7,7 +7,3 @@ export const BRAND = {
   description:
     'Loredays is your private space to capture thoughts, memories and everyday moments — the days that became you.',
 } as const;
-
-export const BRAND_ASSETS = {
-  mark: '/brand/loredays-mark.png',
-} as const;
