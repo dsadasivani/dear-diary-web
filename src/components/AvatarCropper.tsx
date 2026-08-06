@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface AvatarCropperProps {
   file: File;
@@ -49,7 +49,8 @@ export default function AvatarCropper({
   onCancel,
   onChoose,
 }: AvatarCropperProps) {
-  const imageRef = useRef<HTMLImageElement>(null);
+  const imageRef = useRef<ImageBitmap | null>(null);
+  const previewRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ pointerX: number; pointerY: number; pan: PanPoint } | null>(null);
   const [imageSize, setImageSize] = useState<ImageSize>({ width: 1, height: 1 });
@@ -57,9 +58,43 @@ export default function AvatarCropper({
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<PanPoint>({ x: 0, y: 0 });
   const [preparing, setPreparing] = useState(false);
-  const sourceUrl = useMemo(() => URL.createObjectURL(file), [file]);
+  const [imageReady, setImageReady] = useState(false);
+  const [imageError, setImageError] = useState('');
 
-  useEffect(() => () => URL.revokeObjectURL(sourceUrl), [sourceUrl]);
+  useEffect(() => {
+    let active = true;
+    let decoded: ImageBitmap | null = null;
+    setImageReady(false);
+    setImageError('');
+
+    void createImageBitmap(file)
+      .then((bitmap) => {
+        decoded = bitmap;
+        if (!active) {
+          bitmap.close();
+          return;
+        }
+        const canvas = previewRef.current;
+        if (!canvas) throw new Error('Profile photo preview is unavailable.');
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Profile photo preview is unavailable.');
+        context.drawImage(bitmap, 0, 0);
+        imageRef.current = bitmap;
+        setImageSize({ width: bitmap.width, height: bitmap.height });
+        setImageReady(true);
+      })
+      .catch(() => {
+        if (active) setImageError('This image could not be opened. Choose a PNG, JPEG, WebP, or BMP file.');
+      });
+
+    return () => {
+      active = false;
+      decoded?.close();
+      if (imageRef.current === decoded) imageRef.current = null;
+    };
+  }, [file]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -80,7 +115,7 @@ export default function AvatarCropper({
 
   const renderSelection = async (mode: 'crop' | 'full') => {
     const image = imageRef.current;
-    if (!image || !image.complete || image.naturalWidth < 1) return;
+    if (!image || image.width < 1) return;
     setPreparing(true);
     try {
       const canvas = document.createElement('canvas');
@@ -122,7 +157,7 @@ export default function AvatarCropper({
     }
   };
 
-  const unavailable = busy || preparing;
+  const unavailable = busy || preparing || !imageReady;
 
   return (
     <div className="avatar-cropper">
@@ -163,17 +198,10 @@ export default function AvatarCropper({
           dragStart.current = null;
         }}
       >
-        <img
-          ref={imageRef}
-          src={sourceUrl}
-          alt="Profile crop preview"
-          draggable={false}
-          onLoad={(event) =>
-            setImageSize({
-              width: event.currentTarget.naturalWidth,
-              height: event.currentTarget.naturalHeight,
-            })
-          }
+        <canvas
+          ref={previewRef}
+          role="img"
+          aria-label="Profile crop preview"
           className="pointer-events-none absolute left-1/2 top-1/2 max-w-none select-none"
           style={{
             width: displayedWidth,
@@ -186,6 +214,11 @@ export default function AvatarCropper({
           aria-hidden="true"
         />
       </div>
+      {imageError ? (
+        <p role="alert" className="mt-3 text-sm font-semibold text-danger-text">
+          {imageError}
+        </p>
+      ) : null}
       <label className="mt-5 block text-xs font-bold uppercase tracking-wider text-brand-sage">
         Zoom
         <input
