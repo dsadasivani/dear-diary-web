@@ -15,9 +15,9 @@ import {
   Search,
   Settings,
   Notes as StickyNote,
-  User,
 } from 'iconoir-react';
 import type { UserProfile } from '../types';
+import ProfileAvatar from './ProfileAvatar';
 import { BottomSheet } from './ui/BottomSheet';
 import { motion, useReducedMotion } from 'motion/react';
 import { triggerImpact } from '../mobile/haptics';
@@ -195,9 +195,7 @@ export function AppHeader({
         ) : null}
         <div className="app-header-copy">
           <p className="app-header-eyebrow">
-            {!onBack && (
-              <BookOpen className="app-header-eyebrow-icon" aria-hidden="true" />
-            )}
+            {!onBack && <BookOpen className="app-header-eyebrow-icon" aria-hidden="true" />}
             <span>{BRAND.wordmark}</span>
           </p>
           <h1 className={brandOnly ? 'sr-only' : 'app-header-title'}>{title}</h1>
@@ -222,9 +220,9 @@ export function AppHeader({
           className="app-header-action app-header-profile"
           aria-label="Open profile and settings"
           title={`Signed in as ${profile.name}`}
-          style={{ backgroundColor: 'var(--color-secondary)' }}
+          style={{ backgroundColor: profile.avatarColor }}
         >
-          <User className="h-5 w-5" aria-hidden="true" />
+          <ProfileAvatar profile={profile} />
         </button>
       </div>
     </header>

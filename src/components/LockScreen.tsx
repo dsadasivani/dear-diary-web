@@ -1239,7 +1239,7 @@ export default function LockScreen({
                       </div>
                     </div>
 
-                    <div className="open-page-pin-grid grid grid-cols-3 gap-y-2 gap-x-4 mt-0.5 justify-items-center lg:mx-auto lg:mt-9 lg:w-[300px] lg:gap-x-8 lg:gap-y-8">
+                    <div className="open-page-pin-grid mx-auto grid w-full max-w-[248px] grid-cols-3 justify-items-center gap-x-5 gap-y-2.5 lg:mt-9 lg:w-[300px] lg:max-w-none lg:gap-x-8 lg:gap-y-8">
                       {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
                         <motion.button
                           key={num}

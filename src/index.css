@@ -1050,6 +1050,83 @@ button:disabled {
   margin-bottom: 0.25rem;
 }
 
+.rich-text-editor ul[data-checklist='true'] {
+  list-style: none !important;
+  padding-left: 0 !important;
+}
+
+.rich-text-editor ul[data-checklist='true'] > li {
+  position: relative;
+  min-height: 1.75rem;
+  padding-left: 2rem;
+}
+
+.rich-text-editor ul[data-checklist='true'] > li::before {
+  position: absolute;
+  top: 0.32em;
+  left: 0.1rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  border: 1.5px solid var(--color-primary);
+  border-radius: 0.3rem;
+  content: '';
+}
+
+.rich-text-editor ul[data-checklist='true'] > li[data-checked='true'] {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.rich-text-editor ul[data-checklist='true'] > li[data-checked='true']::before {
+  background: var(--color-primary);
+  box-shadow: inset 0 0 0 3px var(--surface-raised);
+}
+
+.quick-note-tools {
+  display: flex;
+  margin-top: 1.25rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.quick-note-checklist-button {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: var(--radius-pill);
+  color: var(--color-primary-hover);
+  font-family: var(--font-interface);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.quick-note-checklist-button:hover {
+  background: var(--color-primary-container);
+}
+
+.quick-note-checkbox-icon {
+  width: 1rem;
+  height: 1rem;
+  border: 1.5px solid currentColor;
+  border-radius: 0.25rem;
+}
+
+.quick-note-writing-area {
+  margin-top: 0.8rem;
+  padding: 0.25rem 0.15rem 1rem;
+  border: 0;
+  caret-color: var(--color-primary);
+}
+
+.quick-note-writing-area:focus,
+.quick-note-writing-area:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 /* Signature ink effect is opt-in for journal-opening moments only. */
 @keyframes ink-bleed {
   0% {
@@ -2205,6 +2282,14 @@ button:disabled {
     font-weight: 560;
   }
 
+  .open-page-note-editor-paper > input:focus,
+  .open-page-note-editor-paper > input:focus-visible,
+  .open-page-note-editor-paper [contenteditable='true']:focus,
+  .open-page-note-editor-paper [contenteditable='true']:focus-visible {
+    outline: 0;
+    box-shadow: none;
+  }
+
   .open-page-insights {
     gap: 0;
     padding-bottom: 1rem;
@@ -2678,8 +2763,10 @@ button:disabled {
   }
 
   .open-page-pin-grid {
-    gap: 0.5rem 2.2rem;
+    width: min(100%, 15.5rem);
+    gap: 0.65rem 1.25rem;
     margin-top: 0.65rem;
+    margin-inline: auto;
   }
 
   .open-page-pin-grid > button {

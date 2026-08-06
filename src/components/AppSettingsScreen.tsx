@@ -51,6 +51,7 @@ import {
   type ReminderCapability,
 } from '../mobile/reminders';
 import ProfileAvatar from './ProfileAvatar';
+import AvatarCropper from './AvatarCropper';
 import CompanionApprovalPanel from './CompanionApprovalPanel';
 import {
   isValidNewRecoveryPassphrase,
@@ -219,6 +220,7 @@ export default function AppSettingsScreen({
   const [showAvatarEditor, setShowAvatarEditor] = useState(false);
   const [isSavingAvatar, setIsSavingAvatar] = useState(false);
   const [avatarError, setAvatarError] = useState('');
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // Custom Tags and Moods
@@ -646,20 +648,28 @@ export default function AppSettingsScreen({
     }
   };
 
-  const handleAvatarFile = async (file?: File): Promise<void> => {
+  const handleAvatarFile = (file?: File): void => {
     if (!file) return;
+    setAvatarError('');
+    if (!isSupportedImageMimeType(file.type)) {
+      setAvatarError('Choose a JPEG, PNG, WebP, or BMP image.');
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+      return;
+    }
+    setPendingAvatarFile(file);
+    if (avatarInputRef.current) avatarInputRef.current.value = '';
+  };
+
+  const handleAvatarSelection = async (image: Blob): Promise<void> => {
     setIsSavingAvatar(true);
     setAvatarError('');
     try {
-      if (!isSupportedImageMimeType(file.type)) {
-        throw new Error('Choose a JPEG, PNG, WebP, or BMP image.');
-      }
-      setProfileAvatarUri(await persistOptimizedImageFile(file, 'avatar'));
+      setProfileAvatarUri(await persistOptimizedImageFile(image, 'avatar'));
+      setPendingAvatarFile(null);
     } catch (error: any) {
       setAvatarError(error?.message || 'Profile photo could not be saved.');
     } finally {
       setIsSavingAvatar(false);
-      if (avatarInputRef.current) avatarInputRef.current.value = '';
     }
   };
 
@@ -2006,121 +2016,148 @@ export default function AppSettingsScreen({
       )}
       <BottomSheet
         open={showAvatarEditor}
-        title="Edit profile image"
-        description="Choose a photo or keep a personal emblem as your fallback."
+        title={pendingAvatarFile ? 'Position your photo' : 'Edit profile image'}
+        description={
+          pendingAvatarFile
+            ? 'Choose a crop or keep the whole image visible.'
+            : 'Choose a photo or keep a personal emblem as your fallback.'
+        }
         onClose={() => {
-          if (!isSavingAvatar) setShowAvatarEditor(false);
+          if (!isSavingAvatar) {
+            setPendingAvatarFile(null);
+            setShowAvatarEditor(false);
+          }
         }}
         footer={
-          <button
-            type="button"
-            onClick={() => setShowAvatarEditor(false)}
-            disabled={isSavingAvatar}
-            className="min-h-11 rounded-xl bg-brand-sage px-5 text-sm font-bold text-white"
-          >
-            Done
-          </button>
+          !pendingAvatarFile ? (
+            <button
+              type="button"
+              onClick={() => setShowAvatarEditor(false)}
+              disabled={isSavingAvatar}
+              className="min-h-11 rounded-xl bg-brand-sage px-5 text-sm font-bold text-white"
+            >
+              Done
+            </button>
+          ) : undefined
         }
       >
-        <div className="flex justify-center">
-          <span
-            className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border-2 border-brand-border text-5xl shadow-sm"
-            style={{ backgroundColor: profileColor }}
-          >
-            <ProfileAvatar
-              profile={{
-                ...profile,
-                name: profileName,
-                avatarEmoji: profileEmoji,
-                avatarColor: profileColor,
-                avatarUri: profileAvatarUri,
-              }}
-            />
-          </span>
-        </div>
         <input
           ref={avatarInputRef}
           type="file"
           accept="image/jpeg,image/png,image/webp,image/bmp"
           className="sr-only"
-          onChange={(event) => void handleAvatarFile(event.target.files?.[0])}
+          onChange={(event) => handleAvatarFile(event.target.files?.[0])}
         />
-        <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => avatarInputRef.current?.click()}
-            disabled={isSavingAvatar}
-            className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white disabled:opacity-50"
-          >
-            <ImagePlus className="h-4 w-4" />
-            {isSavingAvatar
-              ? 'Preparing photo…'
-              : profileAvatarUri
-                ? 'Change photo'
-                : 'Choose photo'}
-          </button>
-          {profileAvatarUri && (
-            <button
-              type="button"
-              onClick={() => {
-                setProfileAvatarUri(undefined);
-                setAvatarError('');
-              }}
-              disabled={isSavingAvatar}
-              className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-200 px-4 text-sm font-bold text-red-600 disabled:opacity-50 dark:border-red-900/50 dark:text-red-300"
-            >
-              <Trash2 className="h-4 w-4" />
-              Remove photo
-            </button>
-          )}
-        </div>
-        {avatarError && (
-          <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
-            {avatarError}
-          </p>
-        )}
-        <fieldset className="mt-6">
-          <legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">
-            Emblem
-          </legend>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {['🌸', '☕', '🦊', '🥑', '🌿', '🎒', '🛹', '🎨', '✨', '🧘', '🦄', '🐳', '🐾'].map(
-              (emo) => (
-                <button
-                  key={emo}
-                  type="button"
-                  aria-label={`Use ${emo} profile emblem`}
-                  aria-pressed={profileEmoji === emo}
-                  onClick={() => {
-                    setProfileEmoji(emo);
-                    setProfileAvatarUri(undefined);
-                  }}
-                  className={`h-11 w-11 rounded-full text-xl ${profileEmoji === emo ? 'border-2 border-brand-pink bg-brand-pink/10' : 'border border-brand-border'}`}
-                >
-                  {emo}
-                </button>
-              ),
+        {pendingAvatarFile ? (
+          <>
+            <AvatarCropper
+              file={pendingAvatarFile}
+              busy={isSavingAvatar}
+              onCancel={() => avatarInputRef.current?.click()}
+              onChoose={handleAvatarSelection}
+            />
+            {avatarError && (
+              <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+                {avatarError}
+              </p>
             )}
-          </div>
-        </fieldset>
-        <fieldset className="mt-6">
-          <legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">
-            Background
-          </legend>
-          <div className="mt-3 flex flex-wrap gap-3">
-            {PREDEFINED_COLORS.map((col) => (
+          </>
+        ) : (
+          <>
+            <div className="flex justify-center">
+              <span
+                className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border-2 border-brand-border text-5xl shadow-sm"
+                style={{ backgroundColor: profileColor }}
+              >
+                <ProfileAvatar
+                  profile={{
+                    ...profile,
+                    name: profileName,
+                    avatarEmoji: profileEmoji,
+                    avatarColor: profileColor,
+                    avatarUri: profileAvatarUri,
+                  }}
+                />
+              </span>
+            </div>
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
               <button
-                key={col.hex}
                 type="button"
-                aria-label={`Use ${col.name} avatar color`}
-                aria-pressed={profileColor === col.hex}
-                onClick={() => setProfileColor(col.hex)}
-                className={`h-10 w-10 rounded-full border border-black/10 ${profileColor === col.hex ? 'ring-2 ring-brand-pink ring-offset-2' : ''}`}
-                style={{ backgroundColor: col.hex }}
-              />
-            ))}
-          </div>
-        </fieldset>
+                onClick={() => avatarInputRef.current?.click()}
+                disabled={isSavingAvatar}
+                className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white disabled:opacity-50"
+              >
+                <ImagePlus className="h-4 w-4" />
+                {isSavingAvatar
+                  ? 'Preparing photo…'
+                  : profileAvatarUri
+                    ? 'Change photo'
+                    : 'Choose photo'}
+              </button>
+              {profileAvatarUri && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileAvatarUri(undefined);
+                    setAvatarError('');
+                  }}
+                  disabled={isSavingAvatar}
+                  className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-200 px-4 text-sm font-bold text-red-600 disabled:opacity-50 dark:border-red-900/50 dark:text-red-300"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Remove photo
+                </button>
+              )}
+            </div>
+            {avatarError && (
+              <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+                {avatarError}
+              </p>
+            )}
+            <fieldset className="mt-6">
+              <legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">
+                Emblem
+              </legend>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {['🌸', '☕', '🦊', '🥑', '🌿', '🎒', '🛹', '🎨', '✨', '🧘', '🦄', '🐳', '🐾'].map(
+                  (emo) => (
+                    <button
+                      key={emo}
+                      type="button"
+                      aria-label={`Use ${emo} profile emblem`}
+                      aria-pressed={profileEmoji === emo}
+                      onClick={() => {
+                        setProfileEmoji(emo);
+                        setProfileAvatarUri(undefined);
+                      }}
+                      className={`h-11 w-11 rounded-full text-xl ${profileEmoji === emo ? 'border-2 border-brand-pink bg-brand-pink/10' : 'border border-brand-border'}`}
+                    >
+                      {emo}
+                    </button>
+                  ),
+                )}
+              </div>
+            </fieldset>
+            <fieldset className="mt-6">
+              <legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">
+                Background
+              </legend>
+              <div className="mt-3 flex flex-wrap gap-3">
+                {PREDEFINED_COLORS.map((col) => (
+                  <button
+                    key={col.hex}
+                    type="button"
+                    aria-label={`Use ${col.name} avatar color`}
+                    aria-pressed={profileColor === col.hex}
+                    onClick={() => setProfileColor(col.hex)}
+                    className={`h-10 w-10 rounded-full border border-black/10 ${profileColor === col.hex ? 'ring-2 ring-brand-pink ring-offset-2' : ''}`}
+                    style={{ backgroundColor: col.hex }}
+                  />
+                ))}
+              </div>
+            </fieldset>
+          </>
+        )}
       </BottomSheet>
     </div>
   );

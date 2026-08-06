@@ -102,3 +102,14 @@ test('converts rich text to visible plain text for search', () => {
   assert.equal(plain.toLowerCase().includes('strong'), false);
   assert.equal(plain.toLowerCase().includes('script'), false);
 });
+
+test('preserves safe checklist state while removing unrelated attributes', () => {
+  const sanitized = sanitizeRichTextHtml(
+    '<ul data-checklist="true" onclick="alert(1)"><li data-checked="true" style="color:red">Done</li><li data-checked="false">Next</li></ul>',
+  );
+
+  assert.equal(
+    sanitized,
+    '<ul data-checklist="true"><li data-checked="true">Done</li><li data-checked="false">Next</li></ul>',
+  );
+});

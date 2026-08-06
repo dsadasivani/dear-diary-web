@@ -82,7 +82,15 @@ const sanitizeWithFallback = (html: string): string => {
       if (!closing) output += '<br>';
       continue;
     }
-    output += closing ? `</${tag}>` : `<${tag}>`;
+    if (!closing && tag === 'ul' && /data-checklist\s*=\s*["']?true/i.test(token)) {
+      output += '<ul data-checklist="true">';
+    } else if (!closing && tag === 'li' && /data-checked\s*=\s*["']?true/i.test(token)) {
+      output += '<li data-checked="true">';
+    } else if (!closing && tag === 'li' && /data-checked\s*=\s*["']?false/i.test(token)) {
+      output += '<li data-checked="false">';
+    } else {
+      output += closing ? `</${tag}>` : `<${tag}>`;
+    }
   }
 
   return output;
@@ -104,7 +112,7 @@ export const sanitizeRichTextHtml = (html: string | null | undefined): string =>
   );
   return purifier.sanitize(String(html), {
     ALLOWED_TAGS: [...ALLOWED_TAGS],
-    ALLOWED_ATTR: [],
+    ALLOWED_ATTR: ['data-checklist', 'data-checked'],
     FORBID_ATTR: ['style', 'class', 'id'],
     KEEP_CONTENT: true,
     RETURN_TRUSTED_TYPE: false,

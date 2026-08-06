@@ -20,6 +20,7 @@ describe('redesigned application shell', () => {
           bio: '',
           avatarEmoji: '🌸',
           avatarColor: '#97415f',
+          avatarUri: 'data:image/png;base64,aGVsbG8=',
           writingGoal: 250,
           joinedDate: '07/2026',
         }}
@@ -32,6 +33,10 @@ describe('redesigned application shell', () => {
     expect(screen.getByText('loredays.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Search' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open profile and settings' })).toBeVisible();
+    expect(screen.getByRole('img', { name: 'Writer profile' })).toHaveAttribute(
+      'src',
+      'data:image/png;base64,aGVsbG8=',
+    );
   });
 
   it('only classifies primary list screens as root destinations', () => {

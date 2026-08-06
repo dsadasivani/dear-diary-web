@@ -313,7 +313,8 @@ export default function NotesScreen({
           placeholder="Write a quick thought…"
           testId={editingId ? 'note-edit-editor' : 'quick-note-editor'}
           autoFocus={!editingId}
-          className="mt-7 min-h-[300px] flex-1 font-serif-diary text-lg leading-[1.75] text-brand-plum dark:text-brand-text"
+          enableChecklist
+          className="quick-note-writing-area rich-text-editor min-h-[300px] flex-1 font-serif-diary text-lg leading-[1.75] text-brand-plum dark:text-brand-text"
         />
 
         <details className="mt-8 border-y border-brand-border/60 py-3">
