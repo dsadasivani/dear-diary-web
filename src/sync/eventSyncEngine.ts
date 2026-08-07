@@ -1,6 +1,8 @@
 import type { DiaryRepository } from '../repositories/DiaryRepository';
 import type { Diary, Entry, UserProfile } from '../types';
 import { parseSyncMediaReference } from './syncMedia';
+import { isNativePlatform } from '../platform';
+import { isDeviceLocalMediaUri } from './portableMedia';
 
 /**
  * The application now has one sync runtime: Sync V2.  This facade remains so
@@ -82,12 +84,8 @@ export class EventSyncEngine {
     return Promise.all(
       entries.map(async (entry) => ({
         ...entry,
-        photoUris: await Promise.all(
-          entry.photoUris.map((uri) => this.hydrateMediaReference(uri)),
-        ),
-        audioUri: entry.audioUri
-          ? await this.hydrateMediaReference(entry.audioUri)
-          : undefined,
+        photoUris: await Promise.all(entry.photoUris.map((uri) => this.hydrateMediaReference(uri))),
+        audioUri: entry.audioUri ? await this.hydrateMediaReference(entry.audioUri) : undefined,
         blocks: entry.blocks
           ? await Promise.all(
               entry.blocks.map(async (block) => ({
@@ -109,6 +107,7 @@ export class EventSyncEngine {
 
   async hydrateMediaReference(reference: string, _label = 'media'): Promise<string> {
     void _label;
+    if (!isNativePlatform() && isDeviceLocalMediaUri(reference)) return '';
     const parsed = parseSyncMediaReference(reference);
     if (!parsed) return reference;
     const pointer = parsed.sequence
@@ -126,5 +125,4 @@ export class EventSyncEngine {
   stopPolling(): void {
     void this.runtimeDelegate?.stop();
   }
-
 }

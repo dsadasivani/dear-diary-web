@@ -53,6 +53,7 @@ test('development policy permits Vite runtime features without weakening product
     'production',
     'http://localhost:8080/api/v2/sync',
     'http://localhost:9000/dear-diary-sync',
+    'https://faro-collector-prod-ap-south-1.grafana.net/collect/example',
   );
 
   assert.match(developmentPolicy, /connect-src[^;]+ws:/);
@@ -62,6 +63,10 @@ test('development policy permits Vite runtime features without weakening product
   assert.doesNotMatch(productionPolicy, /connect-src[^;]+ ws:/);
   assert.doesNotMatch(productionPolicy, /connect-src[^;]+localhost:8080/);
   assert.doesNotMatch(productionPolicy, /connect-src[^;]+localhost:9000/);
+  assert.match(
+    productionPolicy,
+    /connect-src[^;]+https:\/\/faro-collector-prod-ap-south-1\.grafana\.net/,
+  );
   assert.doesNotMatch(productionPolicy, /script-src[^;]*'unsafe-inline'/);
 });
 

@@ -20,6 +20,7 @@ const SAFE_MESSAGES: Record<SyncErrorCode, string> = {
   OBJECT_UPLOAD_FAILED: 'An encrypted object could not be uploaded.',
   OBJECT_DOWNLOAD_FAILED: 'An encrypted object could not be downloaded.',
   OBJECT_MISSING: 'A required encrypted object is missing.',
+  PAIRING_NOT_FOUND: 'The companion pairing request no longer exists.',
   OBJECT_SIZE_MISMATCH: 'An encrypted object failed its size check.',
   HASH_MISMATCH: 'An encrypted object failed its integrity check.',
   DECRYPTION_FAILED: 'An encrypted object could not be opened safely.',

@@ -6,7 +6,7 @@ import { LocalDiaryRepository } from './localDiaryRepository';
 import { createSyncingDiaryRepository } from './syncingDiaryRepository';
 import { setSyncTelemetrySink, type SyncTelemetryEvent } from '../sync/syncTelemetry';
 import { createSyncDomainEvent } from '../sync/domainEvents';
-import type { Diary } from '../types';
+import type { Diary, UserProfile } from '../types';
 
 class MemoryDataStore implements LocalDataStore {
   private values = new Map<string, string>();
@@ -66,6 +66,36 @@ test('syncing repository saves locally and requests background flush without awa
   assert.equal((await localRepository.getNote(note.id))?.title, 'Offline note');
   assert.equal((await localRepository.listSyncOutboxOperations(['prepared'])).length, 1);
   assert.equal(requestedFlush, 1);
+});
+
+test('syncing repository keeps native profile media locally but excludes it from the outbox', async () => {
+  const localRepository = new LocalDiaryRepository(new MemoryDataStore());
+  await localRepository.initialize();
+  await localRepository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    currentSyncSequence: 0,
+    linkedAt: 1,
+  });
+  const repository = createSyncingDiaryRepository(localRepository, {
+    requestOutboxFlush: () => undefined,
+  } as unknown as EventSyncEngine);
+  const nativeAvatar =
+    'http://localhost/_capacitor_file_/data/user/0/com.deardiary.app/files/media/avatar.png';
+  const profile: UserProfile = {
+    ...(await localRepository.getUserProfile()),
+    avatarUri: nativeAvatar,
+  };
+
+  await repository.saveUserProfile(profile);
+
+  assert.equal((await localRepository.getUserProfile()).avatarUri, nativeAvatar);
+  const [operation] = await localRepository.listSyncOutboxOperations(['prepared']);
+  assert.equal((operation.payload as UserProfile).avatarUri, undefined);
 });
 
 test('account-wide reset tombstones local and archived work before creating one blank journal', async () => {

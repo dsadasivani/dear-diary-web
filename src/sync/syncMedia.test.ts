@@ -10,6 +10,14 @@ import {
   parseSyncMediaReference,
   readMediaUri,
 } from './syncMedia';
+import {
+  isDeviceLocalMediaUri,
+  toPortableDiary,
+  toPortableEntry,
+  toPortableUserProfile,
+} from './portableMedia';
+import { EventSyncEngine } from './eventSyncEngine';
+import type { DiaryRepository } from '../repositories/DiaryRepository';
 
 test('round-trips binary media payloads without base64 expansion', () => {
   const bytes = Uint8Array.from([0, 1, 2, 128, 255]);
@@ -46,4 +54,68 @@ test('reads audio data URIs with media type parameters', async () => {
 
   assert.equal(media.mimeType, 'audio/webm;codecs=opus');
   assert.equal(new TextDecoder().decode(media.bytes), 'hello');
+});
+
+test('removes device-local media while retaining portable references', () => {
+  const nativeAvatar =
+    'http://localhost/_capacitor_file_/data/user/0/com.deardiary.app/files/media/avatar.png';
+  assert.equal(isDeviceLocalMediaUri(nativeAvatar), true);
+  assert.equal(isDeviceLocalMediaUri('ddmedia:v2:media-1:object-1'), false);
+
+  assert.equal(
+    toPortableUserProfile({
+      name: 'Writer',
+      email: 'writer@example.com',
+      bio: '',
+      avatarEmoji: '🌸',
+      avatarColor: '#8A3D55',
+      avatarUri: nativeAvatar,
+      writingGoal: 500,
+      joinedDate: '08/2026',
+    }).avatarUri,
+    undefined,
+  );
+  assert.equal(
+    toPortableDiary({
+      id: 'diary-1',
+      name: 'Diary',
+      emoji: '📖',
+      color: '#fff',
+      isLocked: false,
+      entryCount: 1,
+      lastUpdated: 'Today',
+      coverImage: 'file:///private/cover.jpg',
+    }).coverImage,
+    undefined,
+  );
+
+  const entry = toPortableEntry({
+    id: 'entry-1',
+    diaryId: 'diary-1',
+    date: '2026-08-07',
+    title: 'Portable',
+    body: '',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [nativeAvatar, 'ddmedia:v2:media-1:object-1'],
+    photoCount: 2,
+    wordCount: 0,
+    audioUri: 'content://recording/1',
+    createdAt: 1,
+    updatedAt: 1,
+    blocks: [{ id: 'block-1', time: '10:00', body: '', audioUri: 'blob:local-audio' }],
+  });
+  assert.deepEqual(entry.photoUris, ['ddmedia:v2:media-1:object-1']);
+  assert.equal(entry.photoCount, 1);
+  assert.equal(entry.audioUri, undefined);
+  assert.equal(entry.blocks?.[0].audioUri, undefined);
+});
+
+test('web hydration suppresses a device-local URL cached by an older client', async () => {
+  const engine = new EventSyncEngine({} as DiaryRepository);
+  const nativeAvatar =
+    'http://localhost/_capacitor_file_/data/user/0/com.deardiary.app/files/media/avatar.png';
+
+  assert.equal(await engine.hydrateMediaReference(nativeAvatar), '');
 });

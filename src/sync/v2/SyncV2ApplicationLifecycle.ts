@@ -90,6 +90,7 @@ import {
   repositorySnapshotFromV2State,
   repositorySnapshotToV2State,
 } from './RepositorySnapshotAdapter';
+import { toPortableSyncPayload } from '../portableMedia';
 
 const PROTOCOL_VERSION = 2;
 const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
@@ -236,13 +237,20 @@ class RepositoryReplayStore implements SyncV2ReplayStore {
     return this.persistent.hasAppliedEvent(eventId);
   }
   async applyBatch(events: ReplayBatchEvent[]): Promise<number> {
-    for (const { envelope, event } of events) {
+    const portableEvents = events.map(({ envelope, event }) => ({
+      envelope,
+      event: {
+        ...event,
+        payload: toPortableSyncPayload(recordTypeToLegacy[event.recordType], event.payload),
+      },
+    }));
+    for (const { envelope, event } of portableEvents) {
       await this.repository.applySyncEvent(
         toDomainEvent(envelope.deviceId, envelope.eventId, event),
         envelope.sequence,
       );
     }
-    return this.persistent.applyBatch(events);
+    return this.persistent.applyBatch(portableEvents);
   }
 }
 

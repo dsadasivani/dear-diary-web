@@ -262,6 +262,23 @@ test('API client does not mislabel recovery state conflicts as record version co
   );
 });
 
+test('API client identifies a stale companion pairing without treating it as missing sync data', async () => {
+  const client = new SyncV2ApiClient({
+    baseUrl: 'https://sync.invalid/',
+    accessToken: async () => 'access-token',
+    fetch: async () =>
+      new Response(JSON.stringify({ code: 'PAIRING_NOT_FOUND', retryable: false }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+
+  await assert.rejects(
+    client.getPairing('stale-pairing', 'stale-device'),
+    (error: unknown) => error instanceof SyncError && error.code === 'PAIRING_NOT_FOUND',
+  );
+});
+
 test('API client calls the native global fetch with the Window-compatible receiver', async () => {
   const originalFetch = globalThis.fetch;
   try {

@@ -3,6 +3,7 @@ import type { DiaryRepository, NewDiary, NewEntry, NewNote } from './DiaryReposi
 import type { EventSyncEngine } from '../sync/eventSyncEngine';
 import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
 import { reportUnexpectedError } from '../infrastructure/telemetry/reportUnexpectedError';
+import { toPortableDiary, toPortableEntry, toPortableUserProfile } from '../sync/portableMedia';
 
 const createId = (prefix: string): string => {
   const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -121,6 +122,7 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: profile,
+          syncPayload: toPortableUserProfile(profile),
         });
         requestBackgroundFlush(syncEngine);
       };
@@ -142,6 +144,7 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: diary,
+          syncPayload: toPortableDiary(diary),
         });
         requestBackgroundFlush(syncEngine);
         return saved as Diary;
@@ -158,6 +161,7 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: diary,
+          syncPayload: toPortableDiary(diary),
         });
         requestBackgroundFlush(syncEngine);
         return saved ? syncEngine.hydrateDiary(saved as Diary) : null;
@@ -200,6 +204,7 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: entry,
+          syncPayload: toPortableEntry(entry),
         });
         requestBackgroundFlush(syncEngine);
         return saved as Entry;
@@ -223,6 +228,7 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: updated,
+          syncPayload: toPortableEntry(updated),
         });
         requestBackgroundFlush(syncEngine);
         return saved ? (await syncEngine.hydrateEntries([saved as Entry]))[0] : null;

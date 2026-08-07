@@ -18,7 +18,10 @@ import type {
   InitiateSyncV2SnapshotResponse,
   SyncV2Snapshot,
 } from './api/SyncV2ApiTypes';
-import { repositorySnapshotFromV2State } from './RepositorySnapshotAdapter';
+import {
+  repositorySnapshotFromV2State,
+  repositorySnapshotToV2State,
+} from './RepositorySnapshotAdapter';
 
 class MemoryStore implements LocalDataStore {
   readonly values = new Map<string, string>();
@@ -41,6 +44,31 @@ class MemoryStore implements LocalDataStore {
     this.values.clear();
   }
 }
+
+test('repository snapshot adapter never exports or restores device-local avatar URLs', () => {
+  const avatarUri = 'http://localhost/_capacitor_file_/data/user/0/avatar.png';
+  const snapshot = {
+    diaries: [],
+    entries: [],
+    notes: [],
+    userProfile: {
+      name: 'Writer',
+      email: 'writer@example.com',
+      bio: '',
+      avatarEmoji: '🌸',
+      avatarColor: '#8A3D55',
+      avatarUri,
+      writingGoal: 500,
+      joinedDate: '08/2026',
+    },
+  };
+
+  const state = repositorySnapshotToV2State(snapshot);
+  assert.equal((state.records['PROFILE:profile'] as { avatarUri?: string }).avatarUri, undefined);
+
+  state.records['PROFILE:profile'] = snapshot.userProfile;
+  assert.equal(repositorySnapshotFromV2State(state).userProfile?.avatarUri, undefined);
+});
 
 class SnapshotApi {
   private request?: InitiateSyncV2SnapshotRequest;

@@ -156,6 +156,11 @@ for (const privacyControl of ['instrumentations: []', 'metas: []', 'trackGeoloca
   }
 }
 
+const webHeaders = await readFile('customHttp.yml', 'utf8');
+if (!webHeaders.includes('https://*.grafana.net')) {
+  throw new Error('The web Content Security Policy must allow the Grafana Faro collector.');
+}
+
 const stagingWorkflow = await readFile('.github/workflows/deploy-staging.yml', 'utf8');
 for (const requiredDeploymentSetting of [
   '--platform linux/arm64',
