@@ -890,7 +890,7 @@ export default function AppSettingsScreen({
               type="button"
               onClick={() => openSection(section.id)}
               aria-current={hasSidebar && isActive ? 'page' : undefined}
-              className={`${hasSidebar ? 'mb-1 rounded-2xl px-3 py-3' : 'min-h-14 border-b border-brand-border/60 px-4 py-2 last:border-b-0'} group flex w-full items-center gap-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-sage ${hasSidebar && isActive ? 'bg-brand-sage text-white' : 'text-brand-plum hover:bg-brand-blush-light/60 dark:text-brand-text dark:hover:bg-white/5'}`}
+              className={`${hasSidebar ? 'mb-1 rounded-2xl px-3 py-3' : 'min-h-14 border-b border-brand-border/60 px-4 py-2 last:border-b-0'} group flex w-full items-center gap-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-sage ${hasSidebar && isActive ? 'bg-brand-sage text-[var(--color-on-primary)]' : 'text-brand-plum hover:bg-brand-blush-light/60 dark:text-brand-text dark:hover:bg-white/5'}`}
             >
               <span
                 className={`${hasSidebar && isActive ? 'bg-white/15 text-[var(--color-on-primary)]' : 'bg-brand-sage/10 text-brand-sage'} flex h-10 w-10 shrink-0 items-center justify-center rounded-xl`}
