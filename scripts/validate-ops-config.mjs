@@ -150,7 +150,11 @@ for (const path of ['/v1/metrics', '/v1/logs', '/v1/traces']) {
 }
 
 const faroAdapter = await readFile('src/infrastructure/telemetry/GrafanaFaro.ts', 'utf8');
-for (const privacyControl of ['instrumentations: []', 'metas: []', 'trackGeolocation: false']) {
+for (const privacyControl of [
+  'instrumentations: [new SessionInstrumentation()]',
+  'metas: []',
+  'trackGeolocation: false',
+]) {
   if (!faroAdapter.includes(privacyControl)) {
     throw new Error(`Grafana Faro privacy control is missing: ${privacyControl}`);
   }

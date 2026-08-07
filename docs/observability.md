@@ -22,9 +22,11 @@ Client requests retain one `X-Correlation-Id` across retries. The API returns th
 with the active trace and span IDs. Never add diary content, titles, tags, object paths, access tokens,
 signed URLs, or raw account/device identifiers to a telemetry attribute.
 
-The Faro client deliberately disables automatic instrumentations, page/browser metadata, persistent
-sessions, and geolocation. Only names and attributes allowlisted by `Telemetry.ts` and the sanitized
-error type are sent. The collector still needs exact CORS origins and an appropriate retention policy.
+The Faro client enables only the session lifecycle instrumentation required for the collector's
+session header. Automatic console, error, performance, navigation, and web-vitals instrumentation,
+page/browser metadata, persistent sessions, and geolocation remain disabled. Application signals
+still use only names and attributes allowlisted by `Telemetry.ts` and the sanitized error type. The
+collector still needs exact CORS origins and an appropriate retention policy.
 
 ## One-time Grafana Cloud setup
 

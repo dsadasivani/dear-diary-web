@@ -1,4 +1,9 @@
-import { initializeFaro, type Faro } from '@grafana/faro-web-sdk';
+import {
+  initializeFaro,
+  SessionInstrumentation,
+  type BrowserConfig,
+  type Faro,
+} from '@grafana/faro-web-sdk';
 import type { CrashReportContext } from './CrashReporter';
 import type { TelemetryEnvelope, TelemetryExporter } from './Telemetry';
 
@@ -11,23 +16,29 @@ const stringifyAttributes = (
       .map(([key, value]) => [key, String(value)]),
   );
 
+export const createGrafanaFaroConfig = (
+  url: string,
+  environment: string,
+  releaseVersion: string,
+): BrowserConfig => ({
+  url,
+  app: {
+    name: 'dear-diary-client',
+    namespace: 'dear-diary',
+    environment,
+    version: releaseVersion,
+  },
+  // The collector requires a Faro session id. Keep only the session lifecycle instrumentation;
+  // diary routes, console messages, errors, performance entries, and browser metadata stay off.
+  instrumentations: [new SessionInstrumentation()],
+  metas: [],
+  preventGlobalExposure: true,
+  sessionTracking: { enabled: true, persistent: false },
+  trackGeolocation: false,
+});
+
 export const createGrafanaFaro = (url: string, environment: string, releaseVersion: string): Faro =>
-  initializeFaro({
-    url,
-    app: {
-      name: 'dear-diary-client',
-      namespace: 'dear-diary',
-      environment,
-      version: releaseVersion,
-    },
-    // Diary routes, console messages, and browser metadata can contain private context. Only the
-    // explicitly allowlisted signals below are sent to Grafana Cloud.
-    instrumentations: [],
-    metas: [],
-    preventGlobalExposure: true,
-    sessionTracking: { enabled: true, persistent: false },
-    trackGeolocation: false,
-  });
+  initializeFaro(createGrafanaFaroConfig(url, environment, releaseVersion));
 
 export class GrafanaFaroTelemetryExporter implements TelemetryExporter {
   constructor(private readonly faro: Faro) {}
