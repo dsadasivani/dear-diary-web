@@ -33,6 +33,8 @@ export interface Entry {
   photoUris: string[]; // Attached photo references (Base64 data URIs or object URLs on web)
   photoCount: number;
   wordCount: number;
+  /** Positive words added on each authoring-device local calendar day. */
+  wordsWrittenByDate?: Record<string, number>;
   audioUri?: string; // Base64 raw audio data
   createdAt: number;
   updatedAt: number;

@@ -173,6 +173,7 @@ const entryProjection = (entry: Entry): LocalEntryProjection => ({
   photoUris: [...(entry.photoUris || [])],
   photoCount: entry.photoCount || 0,
   wordCount: entry.wordCount || 0,
+  wordsWrittenByDate: entry.wordsWrittenByDate ? { ...entry.wordsWrittenByDate } : undefined,
   createdAt: entry.createdAt,
   updatedAt: entry.updatedAt,
 });

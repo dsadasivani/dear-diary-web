@@ -14,6 +14,15 @@ export interface SyncRuntimeDelegate {
   pullPending(): Promise<void>;
   flushPendingOutbox(): Promise<void>;
   requestOutboxFlush(delayMs?: number): void;
+  hydrateMediaReference?(reference: string): Promise<string>;
+}
+
+export interface SyncCatchUpProgress {
+  phase: 'starting' | 'pulling' | 'complete' | 'failed';
+  appliedSequence: number;
+  targetSequence?: number;
+  error?: string;
+  recoverable?: boolean;
 }
 
 export interface EventSyncEngineDependencies {
@@ -33,6 +42,7 @@ export class SyncConflictError extends Error {
 
 export class EventSyncEngine {
   private runtimeDelegate: SyncRuntimeDelegate | null = null;
+  private readonly catchUpListeners = new Set<(progress: SyncCatchUpProgress) => void>();
 
   constructor(
     private readonly repository: DiaryRepository,
@@ -45,6 +55,24 @@ export class EventSyncEngine {
     if (this.runtimeDelegate === delegate) return;
     if (this.runtimeDelegate) void this.runtimeDelegate.stop();
     this.runtimeDelegate = delegate;
+  }
+
+  subscribeCatchUpProgress(listener: (progress: SyncCatchUpProgress) => void): () => void {
+    this.catchUpListeners.add(listener);
+    return () => this.catchUpListeners.delete(listener);
+  }
+
+  reportCatchUpProgress(progress: SyncCatchUpProgress): void {
+    void this.repository
+      .updateSyncCatchUpStatus({
+        catchUpPhase: progress.phase,
+        appliedSequence: progress.appliedSequence,
+        targetSequence: progress.targetSequence,
+        catchUpError: progress.error,
+        catchUpRecoverable: progress.recoverable,
+      })
+      .catch(() => undefined);
+    this.catchUpListeners.forEach((listener) => listener(progress));
   }
 
   pullPending(): Promise<void> {
@@ -115,7 +143,8 @@ export class EventSyncEngine {
       : parsed.driveFileId
         ? await this.repository.getSyncMediaPointerByDriveFileId(parsed.driveFileId)
         : await this.repository.getSyncMediaPointerByMediaId(parsed.mediaId);
-    return pointer?.localUri || reference;
+    if (pointer?.localUri) return pointer.localUri;
+    return this.runtimeDelegate?.hydrateMediaReference?.(reference) || reference;
   }
 
   startPolling(): void {

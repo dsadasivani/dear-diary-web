@@ -85,6 +85,12 @@ public class OperationInitiationService {
             throw new ApiException("INVALID_OPERATION_OBJECTS", HttpStatus.BAD_REQUEST,
                 "Exactly one encrypted event object is required.");
         }
+        if ((!retained(request).isEmpty()
+                || request.objects().stream().anyMatch(object -> !"EVENT".equals(object.objectKind())))
+                && !protocol.featureFlags().mediaUploadEnabled()) {
+            throw new ApiException("MEDIA_UPLOAD_DISABLED", HttpStatus.SERVICE_UNAVAILABLE,
+                "Encrypted media synchronization is temporarily disabled.", true, false, Map.of());
+        }
         for (var object : request.objects()) {
             final ObjectKey key;
             try {
@@ -100,6 +106,19 @@ public class OperationInitiationService {
             if (object.sizeBytes() > maximum) {
                 throw new ApiException("OBJECT_TOO_LARGE", HttpStatus.PAYLOAD_TOO_LARGE,
                     "The encrypted object exceeds the configured size limit.");
+            }
+        }
+        for (var object : retained(request)) {
+            final ObjectKey key;
+            try {
+                key = new ObjectKey(object.objectKey());
+            } catch (IllegalArgumentException error) {
+                throw new ApiException("INVALID_OBJECT_KEY", HttpStatus.BAD_REQUEST,
+                    "The retained media object key is invalid.");
+            }
+            if (!objectKeys.belongsTo(accountId, key)) {
+                throw new ApiException("INVALID_OBJECT_KEY", HttpStatus.BAD_REQUEST,
+                    "The retained media object key is invalid.");
             }
         }
     }
@@ -138,6 +157,28 @@ public class OperationInitiationService {
                 """, accountId, request.operationId(), object.objectKey(), object.objectKind(),
                 object.sha256(), object.sizeBytes(), now);
         }
+        for (var retained : retained(request)) {
+            var matches = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM sync_object_references reference
+                JOIN sync_objects object ON object.account_id = reference.account_id
+                    AND object.object_key = reference.object_key
+                WHERE reference.account_id = ? AND reference.object_key = ?
+                  AND reference.owner_record_type = ? AND reference.owner_record_id = ?
+                  AND reference.reference_kind = ? AND reference.deleted_sequence IS NULL
+                  AND object.storage_status = 'COMMITTED' AND object.object_kind = ?
+                """, Long.class, accountId, retained.objectKey(), request.recordType(),
+                request.recordId(), retained.objectKind(), retained.objectKind());
+            if (matches == null || matches != 1L) {
+                throw new ApiException("INVALID_MEDIA_REFERENCE", HttpStatus.CONFLICT,
+                    "A retained media object is not a live attachment of this record.");
+            }
+            jdbc.update("""
+                INSERT INTO sync_operation_retained_media (
+                    account_id, operation_id, object_key, object_kind, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """, accountId, request.operationId(), retained.objectKey(),
+                retained.objectKind(), now);
+        }
         return new PersistedOperation("OBJECTS_PENDING", false, sorted(request.objects()));
     }
 
@@ -165,7 +206,9 @@ public class OperationInitiationService {
             && existing.partitionKey().equals(request.partitionKey());
         var objectsMatch = loadObjects(accountId, request.operationId())
             .equals(sorted(request.objects()));
-        if (!metadataMatches || !objectsMatch) {
+        var retainedMatches = loadRetainedMedia(accountId, request.operationId())
+            .equals(sortedRetained(request));
+        if (!metadataMatches || !objectsMatch || !retainedMatches) {
             throw new ApiException("IDEMPOTENCY_MISMATCH", HttpStatus.CONFLICT,
                 "The operation identifier is already associated with different metadata.");
         }
@@ -178,6 +221,24 @@ public class OperationInitiationService {
             ORDER BY object_key
             """, (rs, row) -> new OperationObjectRequest(
                 rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4)), accountId, operationId);
+    }
+
+    private List<RetainedMediaObjectRequest> loadRetainedMedia(UUID accountId, UUID operationId) {
+        return jdbc.query("""
+            SELECT object_key, object_kind FROM sync_operation_retained_media
+            WHERE account_id = ? AND operation_id = ? ORDER BY object_key
+            """, (rs, row) -> new RetainedMediaObjectRequest(rs.getString(1), rs.getString(2)),
+            accountId, operationId);
+    }
+
+    private List<RetainedMediaObjectRequest> retained(InitiateOperationRequest request) {
+        return request.retainedMediaObjects() == null ? List.of() : request.retainedMediaObjects();
+    }
+
+    private List<RetainedMediaObjectRequest> sortedRetained(InitiateOperationRequest request) {
+        return retained(request).stream()
+            .sorted(Comparator.comparing(RetainedMediaObjectRequest::objectKey))
+            .toList();
     }
 
     private List<OperationObjectRequest> sorted(List<OperationObjectRequest> objects) {

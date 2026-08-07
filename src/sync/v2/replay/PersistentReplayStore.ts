@@ -21,7 +21,11 @@ const RUNTIME_KEY = SYNC_V2_RUNTIME_KEY;
 
 export interface DecryptedSyncV2Event extends DecryptedSyncV2EventMetadata {
   payload: unknown | null;
-  mediaPointers?: Array<{ mediaId: string; objectKey: string }>;
+  mediaPointers?: Array<{
+    mediaId: string;
+    objectKey: string;
+    thumbnailObjectKey?: string;
+  }>;
 }
 
 export interface ReplayBatchEvent {

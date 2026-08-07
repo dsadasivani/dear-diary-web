@@ -54,6 +54,11 @@ export interface SyncV2OperationObject {
   sizeBytes: number;
 }
 
+export interface SyncV2RetainedMediaObject {
+  objectKey: string;
+  objectKind: 'MEDIA' | 'THUMBNAIL';
+}
+
 export interface InitiateSyncV2OperationRequest {
   operationId: string;
   deviceId: string;
@@ -66,6 +71,7 @@ export interface InitiateSyncV2OperationRequest {
   keyEpoch: number;
   partitionKey: string;
   objects: SyncV2OperationObject[];
+  retainedMediaObjects?: SyncV2RetainedMediaObject[];
 }
 
 export interface SyncV2UploadInstruction {
@@ -112,6 +118,16 @@ export interface SyncV2RemoteEvent {
   sha256: string;
   sizeBytes: number;
   eventSchemaVersion: number;
+  downloadUrl: string;
+  downloadExpiresAt: string;
+}
+
+export interface SyncV2MediaDownload {
+  objectId: string;
+  objectKind: 'MEDIA' | 'THUMBNAIL';
+  sha256: string;
+  sizeBytes: number;
+  keyEpoch: number;
   downloadUrl: string;
   downloadExpiresAt: string;
 }

@@ -97,6 +97,25 @@ test('persists sync health across repository restarts without exposing it only t
   assert.equal(health.lastErrorCode, 'AUTH_EXPIRED');
 });
 
+test('exposes current catch-up progress and recoverable failure state in sync status', async () => {
+  const repository = new LocalDiaryRepository(new MemoryDataStore());
+  await repository.initialize();
+  await repository.updateSyncCatchUpStatus({
+    catchUpPhase: 'failed',
+    appliedSequence: 40,
+    targetSequence: 75,
+    catchUpError: 'Network unavailable',
+    catchUpRecoverable: true,
+  });
+
+  const status = await repository.getSyncStatusSummary();
+  assert.equal(status.catchUpPhase, 'failed');
+  assert.equal(status.appliedSequence, 40);
+  assert.equal(status.targetSequence, 75);
+  assert.equal(status.catchUpError, 'Network unavailable');
+  assert.equal(status.catchUpRecoverable, true);
+});
+
 type StructuredTestRecord = { id: string };
 
 const cloneTestValue = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;

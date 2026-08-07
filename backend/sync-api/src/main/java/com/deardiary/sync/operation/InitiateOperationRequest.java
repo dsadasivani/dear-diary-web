@@ -22,5 +22,22 @@ public record InitiateOperationRequest(
     @Min(1) @Max(1000) int eventSchemaVersion,
     @Min(1) int keyEpoch,
     @NotBlank @Size(max = 128) String partitionKey,
-    @NotEmpty @Size(max = 128) List<@Valid OperationObjectRequest> objects
-) {}
+    @NotEmpty @Size(max = 128) List<@Valid OperationObjectRequest> objects,
+    @Size(max = 128) List<@Valid RetainedMediaObjectRequest> retainedMediaObjects
+) {
+    public InitiateOperationRequest(
+            UUID operationId,
+            UUID deviceId,
+            String recordType,
+            String recordId,
+            String operationType,
+            long baseRecordVersion,
+            int protocolVersion,
+            int eventSchemaVersion,
+            int keyEpoch,
+            String partitionKey,
+            List<OperationObjectRequest> objects) {
+        this(operationId, deviceId, recordType, recordId, operationType, baseRecordVersion,
+            protocolVersion, eventSchemaVersion, keyEpoch, partitionKey, objects, List.of());
+    }
+}

@@ -9,6 +9,7 @@ import type { DecryptedSyncV2Event, SyncV2ReplayStore } from './PersistentReplay
 import { NOOP_TELEMETRY, type Telemetry } from '../../../infrastructure/telemetry/Telemetry';
 import { NOOP_SYNC_FAULT_INJECTOR, type SyncFaultInjector } from '../faults/SyncFaultInjector';
 import { InjectedSyncCrash } from '../faults/SyncFaultInjector';
+import type { SyncCatchUpProgress } from '../../eventSyncEngine';
 
 export interface SyncV2EventDecryptor {
   hasKeyEpoch(keyEpoch: number): Promise<boolean>;
@@ -22,6 +23,7 @@ export interface RemoteEventPullerOptions {
   pageSize?: number;
   replayBatchSize?: number;
   now?: () => number;
+  onProgress?: (progress: SyncCatchUpProgress) => void;
 }
 
 export class RemoteEventPuller {
@@ -54,8 +56,14 @@ export class RemoteEventPuller {
     const span = this.telemetry.startSpan('events.pull');
     try {
       let after = await this.replay.getLastAppliedSequence();
+      this.options.onProgress?.({ phase: 'starting', appliedSequence: after });
       while (true) {
         const page = await this.api.pullEvents(after, this.pageSize);
+        this.options.onProgress?.({
+          phase: 'pulling',
+          appliedSequence: after,
+          targetSequence: page.currentSequence,
+        });
         this.validator.validateSequences(after, page.currentSequence);
         this.validator.validateReplayPage(page.events, after);
         for (let index = 0; index < page.events.length; index += this.replayBatchSize) {
@@ -77,6 +85,11 @@ export class RemoteEventPuller {
           );
           await this.faults.hit('DURING_EVENT_APPLY');
           after = await this.replay.applyBatch(decoded);
+          this.options.onProgress?.({
+            phase: 'pulling',
+            appliedSequence: after,
+            targetSequence: page.currentSequence,
+          });
           await this.faults.hit('AFTER_LOCAL_COMMIT_BEFORE_SERVER_ACK');
           await this.api.acknowledgeCursor(this.options.deviceId, after);
         }
@@ -90,6 +103,11 @@ export class RemoteEventPuller {
         localSequence: after,
         lastSuccessfulPullAt: this.now(),
         integrityState: 'HEALTHY',
+      });
+      this.options.onProgress?.({
+        phase: 'complete',
+        appliedSequence: after,
+        targetSequence: after,
       });
       this.telemetry.counter('deardiary.sync.pull.success', 1);
       this.telemetry.gauge('deardiary.sync.sequence_lag', 0, { sequence_lag_bucket: '0' });
@@ -116,6 +134,12 @@ export class RemoteEventPuller {
         integrityState: typed.safetyRelevant ? 'SAFETY_STOP' : 'WARNING',
         lastErrorCode: typed.code,
         lastErrorAt: this.now(),
+      });
+      this.options.onProgress?.({
+        phase: 'failed',
+        appliedSequence: await this.replay.getLastAppliedSequence().catch(() => 0),
+        error: typed.message,
+        recoverable: typed.retryable || typed.userActionRequired,
       });
       throw typed;
     }

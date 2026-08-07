@@ -150,6 +150,11 @@ export interface SyncStatusSummary {
   isOffline: boolean;
   reauthorizationRequired?: boolean;
   conflictCount?: number;
+  catchUpPhase?: 'starting' | 'pulling' | 'complete' | 'failed';
+  appliedSequence?: number;
+  targetSequence?: number;
+  catchUpError?: string;
+  catchUpRecoverable?: boolean;
 }
 
 export interface PreservedSyncConflict {
@@ -285,6 +290,7 @@ export interface DiaryRepository {
   getSyncMediaPointer(sequence: number): Promise<SyncMediaPointer | null>;
   getSyncMediaPointerByMediaId(mediaId: string): Promise<SyncMediaPointer | null>;
   getSyncMediaPointerByDriveFileId(driveFileId: string): Promise<SyncMediaPointer | null>;
+  getSyncMediaPointerByLocalUri(localUri: string): Promise<SyncMediaPointer | null>;
   saveSyncMediaPointer(pointer: SyncMediaPointer): Promise<void>;
   replaceSyncMediaPointers(pointers: SyncMediaPointer[]): Promise<void>;
   exportPartitionSnapshot(partitionKey: SyncPartitionKey | string): Promise<RepositorySnapshot>;
@@ -307,6 +313,12 @@ export interface DiaryRepository {
   listSyncOutboxOperations(states?: SyncOutboxOperation['state'][]): Promise<SyncOutboxOperation[]>;
   removeSyncOutboxOperation(operationId: string): Promise<void>;
   getSyncStatusSummary(): Promise<SyncStatusSummary>;
+  updateSyncCatchUpStatus(
+    status: Pick<
+      SyncStatusSummary,
+      'catchUpPhase' | 'appliedSequence' | 'targetSequence' | 'catchUpError' | 'catchUpRecoverable'
+    >,
+  ): Promise<void>;
   getSyncHealth(): Promise<SyncHealth>;
   updateSyncHealth(patch: SyncHealthPatch): Promise<SyncHealth>;
   listPreservedSyncConflicts(): Promise<PreservedSyncConflict[]>;

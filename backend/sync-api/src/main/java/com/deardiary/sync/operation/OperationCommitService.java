@@ -68,6 +68,7 @@ public class OperationCommitService {
         validateAccountAndProtocol(account, operation);
         requireActiveOperationDevice(account.accountId(), operation.deviceId());
         var objects = loadObjects(account.accountId(), operationId);
+        var retainedMedia = loadRetainedMedia(account.accountId(), operationId);
         verifyObjects(objects);
 
         var nextSequence = account.currentSequence() + 1;
@@ -116,6 +117,17 @@ public class OperationCommitService {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, account.accountId(), object.objectKey(), operation.recordType(), operation.recordId(),
                 referenceKind(object.kind()), nextSequence, now);
+        }
+        if (!"DELETE".equals(operation.operationType())) {
+            for (var retained : retainedMedia) {
+                jdbc.update("""
+                    INSERT INTO sync_object_references (
+                        account_id, object_key, owner_record_type, owner_record_id,
+                        reference_kind, created_sequence, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, account.accountId(), retained.objectKey(), operation.recordType(),
+                    operation.recordId(), retained.kind(), nextSequence, now);
+            }
         }
         jdbc.update("""
             UPDATE sync_operations SET operation_status = 'COMMITTED', committed_sequence = ?,
@@ -209,6 +221,19 @@ public class OperationCommitService {
             FROM sync_operation_objects WHERE account_id = ? AND operation_id = ?
             ORDER BY object_key
             """, (rs, row) -> new ObjectRow(rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4)),
+            accountId, operationId);
+    }
+
+    private List<ObjectRow> loadRetainedMedia(UUID accountId, UUID operationId) {
+        return jdbc.query("""
+            SELECT retained.object_key, retained.object_kind, object.sha256, object.size_bytes
+            FROM sync_operation_retained_media retained
+            JOIN sync_objects object ON object.account_id = retained.account_id
+                AND object.object_key = retained.object_key
+            WHERE retained.account_id = ? AND retained.operation_id = ?
+            ORDER BY retained.object_key
+            """, (rs, row) -> new ObjectRow(
+                rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4)),
             accountId, operationId);
     }
 

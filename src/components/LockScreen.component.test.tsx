@@ -174,14 +174,23 @@ describe('LockScreen first-run sync setup', () => {
     const user = userEvent.setup();
     renderLockScreen();
     expect(screen.getByLabelText(/setup progress: step 1 of 6/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /forgot security passcode pin/i }),
+    ).not.toBeInTheDocument();
     await finishLocalSetup(user);
 
     expect(mocks.saveSecurityConfig).toHaveBeenCalledWith(pinOnlySecurity);
+    expect(
+      screen.queryByRole('button', { name: /forgot security passcode pin/i }),
+    ).not.toBeInTheDocument();
 
     expect(screen.queryByLabelText(/new 8-digit recovery passphrase/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /connect google account/i }));
 
     await screen.findByText(/Google connected/i);
+    expect(
+      screen.queryByRole('button', { name: /forgot security passcode pin/i }),
+    ).not.toBeInTheDocument();
     const createButton = screen.getByRole('button', { name: /create encrypted account/i });
     expect(createButton).toBeDisabled();
 

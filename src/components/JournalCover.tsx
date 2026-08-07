@@ -15,6 +15,7 @@ import type { ComponentType, CSSProperties, SVGProps } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { Diary } from '../types';
 import { motionTransitions } from './ui/motion';
+import SyncedImage from './SyncedImage';
 
 interface JournalCoverProps {
   diary: Pick<Diary, 'name' | 'emoji' | 'color' | 'coverImage' | 'foilIcons' | 'isLocked'> &
@@ -71,7 +72,7 @@ export default function JournalCover({
           '--cover-color': diary.color,
           backgroundColor: diary.color,
           backgroundImage: diary.coverImage
-            ? `linear-gradient(155deg,rgba(24,14,18,.08),rgba(24,14,18,.5)),url(${diary.coverImage})`
+            ? undefined
             : `linear-gradient(145deg,color-mix(in srgb,${diary.color} 82%,white),${diary.color} 52%,color-mix(in srgb,${diary.color} 76%,black))`,
           backgroundPosition: 'center',
           backgroundSize: 'cover',
@@ -79,6 +80,17 @@ export default function JournalCover({
       }
       aria-hidden="true"
     >
+      {diary.coverImage && (
+        <span className="absolute inset-0">
+          <SyncedImage
+            src={diary.coverImage}
+            alt=""
+            label="journal cover"
+            className="h-full w-full object-cover"
+          />
+          <span className="pointer-events-none absolute inset-0 bg-[linear-gradient(155deg,rgba(24,14,18,.08),rgba(24,14,18,.5))]" />
+        </span>
+      )}
       <span
         className={`absolute inset-y-0 left-0 ${large ? 'w-4' : 'w-2'} bg-gradient-to-r from-black/30 via-black/8 to-white/8`}
       />

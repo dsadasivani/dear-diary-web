@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
 import type { UserProfile } from '../types';
+import SyncedImage from './SyncedImage';
 
 interface ProfileAvatarProps {
   profile: UserProfile;
@@ -10,19 +10,15 @@ export default function ProfileAvatar({
   profile,
   imageClassName = 'absolute inset-0 w-full h-full object-cover',
 }: ProfileAvatarProps) {
-  const [imageFailed, setImageFailed] = useState(false);
-
-  useEffect(() => setImageFailed(false), [profile.avatarUri]);
-
   return (
     <>
       <span aria-hidden="true">{profile.avatarEmoji}</span>
-      {profile.avatarUri && !imageFailed && (
-        <img
+      {profile.avatarUri && (
+        <SyncedImage
           src={profile.avatarUri}
           alt={`${profile.name || 'User'} profile`}
           className={imageClassName}
-          onError={() => setImageFailed(true)}
+          label="profile image"
         />
       )}
     </>

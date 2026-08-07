@@ -7,6 +7,8 @@ import {
 } from '../../outbox';
 import type { SyncV2ApiClient } from '../api/SyncV2ApiClient';
 import type { SyncV2CommitResult, SyncV2OperationObject } from '../api/SyncV2ApiTypes';
+import type { PreparedMediaPointerV2 } from '../../outbox/SyncOutboxOperationV2';
+import type { SyncV2RetainedMediaObject } from '../api/SyncV2ApiTypes';
 import type { SyncInvariantValidator } from '../domain/SyncInvariantValidator';
 import type { PersistentSafetyStopStore } from '../safety/PersistentSafetyStopStore';
 import { BoundedObjectTransfer, sha256Hex, type TransferObject } from './BoundedObjectTransfer';
@@ -20,6 +22,9 @@ export interface PreparedSyncV2Operation {
   keyEpoch: number;
   eventSchemaVersion: number;
   objects: Array<TransferObject & { objectKind: SyncV2OperationObject['objectKind'] }>;
+  canonicalPayload?: unknown | null;
+  mediaPointers?: PreparedMediaPointerV2[];
+  retainedMediaObjects?: SyncV2RetainedMediaObject[];
 }
 
 export interface SyncV2OperationPreparer {
@@ -45,6 +50,16 @@ const patchWithoutState = (
 ) => {
   const { state: _state, ...rest } = patch;
   return rest;
+};
+
+const bytesToBase64 = (bytes: Uint8Array): string => {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return typeof btoa === 'function'
+    ? btoa(binary)
+    : Buffer.from(binary, 'binary').toString('base64');
 };
 
 export class SyncV2OperationProcessor {
@@ -157,6 +172,18 @@ export class SyncV2OperationProcessor {
             encryptedEventSchemaVersion: prepared.eventSchemaVersion,
             keyEpoch: prepared.keyEpoch,
             partitionKey: prepared.partitionKey,
+            preparedCanonicalPayload: prepared.canonicalPayload,
+            preparedMediaPointers: prepared.mediaPointers || [],
+            retainedMediaObjects: prepared.retainedMediaObjects || [],
+            preparedObjects: await Promise.all(
+              prepared.objects.map(async (object) => ({
+                objectKey: object.objectKey,
+                objectKind: object.objectKind,
+                sha256: await sha256Hex(object.bytes),
+                sizeBytes: object.bytes.byteLength,
+                encryptedBase64: bytesToBase64(object.bytes),
+              })),
+            ),
           },
           this.options.workerId,
         );
@@ -182,6 +209,7 @@ export class SyncV2OperationProcessor {
         keyEpoch: prepared.keyEpoch,
         partitionKey: prepared.partitionKey,
         objects,
+        retainedMediaObjects: prepared.retainedMediaObjects || [],
       });
       await this.faults.hit('AFTER_UPLOAD_INITIATE');
       await this.faults.hit('DURING_OBJECT_UPLOAD');

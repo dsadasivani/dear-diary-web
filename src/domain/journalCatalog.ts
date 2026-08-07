@@ -62,11 +62,29 @@ export const PREDEFINED_COLORS = [
   },
 ];
 
-export const getTodayWordCount = (entries: Array<Pick<Entry, 'date' | 'wordCount'>>): number => {
-  const today = toLocalDateKey();
-  return entries
-    .filter((entry) => entry.date === today)
-    .reduce((sum, entry) => sum + (entry.wordCount || 0), 0);
+export const recordPositiveDailyWordDelta = (
+  previous: Pick<Entry, 'wordCount' | 'wordsWrittenByDate'> | null,
+  nextWordCount: number,
+  now: Date | number = new Date(),
+): Record<string, number> => {
+  const activity = { ...(previous?.wordsWrittenByDate || {}) };
+  const added = Math.max(0, nextWordCount - (previous?.wordCount || 0));
+  if (added > 0) {
+    const today = toLocalDateKey(now);
+    activity[today] = (activity[today] || 0) + added;
+  }
+  return activity;
+};
+
+export const getTodayWordCount = (
+  entries: Array<Pick<Entry, 'wordsWrittenByDate'>>,
+  now: Date | number = new Date(),
+): number => {
+  const today = toLocalDateKey(now);
+  return entries.reduce(
+    (sum, entry) => sum + Math.max(0, entry.wordsWrittenByDate?.[today] || 0),
+    0,
+  );
 };
 
 export const calculateStreak = (entries: Array<Pick<Entry, 'date'>>): number =>

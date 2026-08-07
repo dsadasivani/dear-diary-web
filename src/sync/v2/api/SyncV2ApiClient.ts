@@ -17,6 +17,7 @@ import type {
   SyncV2Rotation,
   SyncV2DeviceRegistration,
   SyncV2Device,
+  SyncV2MediaDownload,
 } from './SyncV2ApiTypes';
 
 export type SyncV2AccessTokenProvider = () => Promise<string>;
@@ -53,6 +54,8 @@ const API_CODE_MAP: Record<string, ConstructorParameters<typeof SyncError>[0]['c
   SNAPSHOT_NOT_FOUND: 'OBJECT_MISSING',
   SNAPSHOT_SEQUENCE_STALE: 'SEQUENCE_CONFLICT',
   SNAPSHOT_CREATION_DISABLED: 'SERVER_UNAVAILABLE',
+  MEDIA_UPLOAD_DISABLED: 'SERVER_UNAVAILABLE',
+  INVALID_MEDIA_REFERENCE: 'OBJECT_MISSING',
   SNAPSHOT_PARTITION_UNSUPPORTED: 'PROTOCOL_INCOMPATIBLE',
   SNAPSHOT_DEVICE_MISMATCH: 'DEVICE_REVOKED',
 };
@@ -124,6 +127,10 @@ export class SyncV2ApiClient {
 
   pullEvents(after: number, limit: number): Promise<PullSyncV2EventsResponse> {
     return this.json(`/api/v2/sync/events?after=${after}&limit=${limit}`, { method: 'GET' });
+  }
+
+  getMediaDownload(objectId: string): Promise<SyncV2MediaDownload> {
+    return this.json(`/api/v2/sync/media/${encodeURIComponent(objectId)}`, { method: 'GET' });
   }
 
   async acknowledgeCursor(deviceId: string, lastAppliedSequence: number): Promise<void> {

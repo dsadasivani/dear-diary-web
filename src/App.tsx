@@ -23,6 +23,7 @@ import {
 
 import OverlayPortal from './components/OverlayPortal';
 import ProfileAvatar from './components/ProfileAvatar';
+import SyncCatchUpOverlay, { type InitialSyncGate } from './components/SyncCatchUpOverlay';
 import {
   AppHeader,
   CreateActionSheet,
@@ -36,6 +37,7 @@ import {
   AppSettings,
   Diary,
   Entry,
+  LocalSyncAccountState,
   PartitionHydrationState,
   ResponsiveLayout,
   SecurityConfig,
@@ -248,6 +250,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     type: 'success' | 'error' | 'info' | 'warning';
   } | null>(null);
   const [globalLoading, setGlobalLoading] = useState<GlobalLoadingState | null>(null);
+  const [initialSyncGate, setInitialSyncGate] = useState<InitialSyncGate | null>(null);
   const loadingDepthRef = React.useRef(0);
   const pendingDeepLinkRef = React.useRef<DearDiaryDeepLinkTarget | null>(null);
 
@@ -475,34 +478,65 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setDiaries(storedDiaries);
   };
 
-  const resumePendingSyncWorkAfterUnlock = async () => {
-    await syncV2Application.resumeAfterUnlock();
-    return diaryRepository.getLocalSyncAccountState();
+  const completeInitialCatchUp = async (syncAccount: LocalSyncAccountState) => {
+    setInitialSyncGate({
+      phase: 'starting',
+      appliedSequence: syncAccount.currentSyncSequence,
+      allowOffline: syncAccount.currentSyncSequence > 0,
+    });
+    try {
+      await syncV2Application.resumeAfterUnlock();
+      await reloadShellData();
+      setUnlockedDiaryIds(new Set());
+      setIsAuthenticated(true);
+      setInitialSyncGate(null);
+      eventSyncEngine.requestOutboxFlush();
+      eventSyncEngine.startPolling();
+    } catch (err: any) {
+      setIsAuthenticated(true);
+      setInitialSyncGate((current) => ({
+        phase: 'failed',
+        appliedSequence: current?.appliedSequence || syncAccount.currentSyncSequence,
+        targetSequence: current?.targetSequence,
+        allowOffline: syncAccount.currentSyncSequence > 0,
+        error: err?.message || 'Encrypted sync could not load the latest data.',
+      }));
+    }
   };
 
   const handleUnlock = async () => {
+    let syncAccount: LocalSyncAccountState | null = null;
     await runWithGlobalLoader(
       'Unlocking your private space',
       async () => {
         await measureAsync('app.pinUnlock', () => reloadShellData());
-        setUnlockedDiaryIds(new Set());
-        setIsAuthenticated(true);
+        syncAccount = await diaryRepository.getLocalSyncAccountState();
       },
       'Loading your latest local data.',
     );
-    if (isE2eAppMode()) return;
-    void resumePendingSyncWorkAfterUnlock()
-      .then((syncAccount) => {
-        if (syncAccount) {
-          eventSyncEngine.requestOutboxFlush();
-          eventSyncEngine.startPolling();
-        }
-      })
-      .catch((err) => {
-        showToast(err?.message || 'Encrypted sync could not resume after unlock.', 'warning');
-        console.warn('Unable to start sync polling after unlock:', err);
-      });
+    if (isE2eAppMode() || !syncAccount) {
+      setUnlockedDiaryIds(new Set());
+      setIsAuthenticated(true);
+      return;
+    }
+    await completeInitialCatchUp(syncAccount);
   };
+
+  const retryInitialCatchUp = () => {
+    void diaryRepository.getLocalSyncAccountState().then((account) => {
+      if (account) void completeInitialCatchUp(account);
+    });
+  };
+
+  useEffect(
+    () =>
+      eventSyncEngine.subscribeCatchUpProgress((progress) => {
+        setInitialSyncGate((current) =>
+          current ? { ...progress, allowOffline: current.allowOffline } : current,
+        );
+      }),
+    [],
+  );
 
   // On mount: load initial state
   useEffect(() => {
@@ -1580,6 +1614,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       <div className="app-canvas min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-hidden">
         {renderSyncAuthorizationBanner()}
         <GlobalLoaderOverlay loading={globalLoading} />
+        <SyncCatchUpOverlay
+          gate={initialSyncGate}
+          onRetry={retryInitialCatchUp}
+          onContinueOffline={() => setInitialSyncGate(null)}
+        />
         {renderDesktopBackground()}
         {!isOnline && (
           <div
@@ -1754,6 +1793,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       {renderSyncAuthorizationBanner()}
       {renderSyncStatusBadge()}
       <GlobalLoaderOverlay loading={globalLoading} />
+      <SyncCatchUpOverlay
+        gate={initialSyncGate}
+        onRetry={retryInitialCatchUp}
+        onContinueOffline={() => setInitialSyncGate(null)}
+      />
       {renderDesktopBackground()}
       {!isOnline && (
         <div
@@ -1785,6 +1829,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           />
         </Suspense>
         <GlobalLoaderOverlay loading={globalLoading} />
+        <SyncCatchUpOverlay
+          gate={initialSyncGate}
+          onRetry={retryInitialCatchUp}
+          onContinueOffline={() => setInitialSyncGate(null)}
+        />
       </>
     );
   }
@@ -1796,6 +1845,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         {renderSyncAuthorizationBanner()}
         {renderSyncStatusBadge()}
         <GlobalLoaderOverlay loading={globalLoading} />
+        <SyncCatchUpOverlay
+          gate={initialSyncGate}
+          onRetry={retryInitialCatchUp}
+          onContinueOffline={() => setInitialSyncGate(null)}
+        />
         {!isOnline && (
           <div
             className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg"
@@ -1826,6 +1880,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       {renderSyncAuthorizationBanner()}
       {renderSyncStatusBadge()}
       <GlobalLoaderOverlay loading={globalLoading} />
+      <SyncCatchUpOverlay
+        gate={initialSyncGate}
+        onRetry={retryInitialCatchUp}
+        onContinueOffline={() => setInitialSyncGate(null)}
+      />
       {layout === 'tablet' && (
         <NavigationRail
           active={activeTab}

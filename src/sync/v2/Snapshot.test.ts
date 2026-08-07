@@ -70,6 +70,50 @@ test('repository snapshot adapter never exports or restores device-local avatar 
   assert.equal(repositorySnapshotFromV2State(state).userProfile?.avatarUri, undefined);
 });
 
+test('repository snapshot adapter replaces authoritative local media with stable references', () => {
+  const localUri = 'file:///data/user/0/dear-diary/photo.jpg';
+  const objectKey =
+    'accounts/0123456789abcdef0123456789abcdef/objects/11111111-1111-4111-8111-111111111111';
+  const state = repositorySnapshotToV2State({
+    diaries: [],
+    entries: [
+      {
+        id: 'entry-1',
+        diaryId: 'diary-1',
+        date: '2026-08-01',
+        title: 'Memory',
+        body: '',
+        moodName: '',
+        moodEmoji: '',
+        tags: [],
+        photoUris: [localUri],
+        photoCount: 1,
+        wordCount: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+    notes: [],
+    syncMediaPointers: {
+      'media:media-1': {
+        mediaId: 'media-1',
+        sequence: 4,
+        driveFileId: objectKey,
+        sha256: 'hash',
+        sizeBytes: 10,
+        createdByDeviceId: 'device-1',
+        createdAt: new Date(0).toISOString(),
+        localUri,
+      },
+    },
+  });
+
+  assert.deepEqual((state.records['ENTRY:entry-1'] as { photoUris: string[] }).photoUris, [
+    'ddmedia:v2:media-1:11111111-1111-4111-8111-111111111111',
+  ]);
+  assert.equal(state.mediaPointers['media-1'], objectKey);
+});
+
 class SnapshotApi {
   private request?: InitiateSyncV2SnapshotRequest;
   private objectKey?: string;

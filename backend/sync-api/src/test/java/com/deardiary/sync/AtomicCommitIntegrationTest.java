@@ -12,10 +12,12 @@ import com.deardiary.sync.event.EventPullService;
 import com.deardiary.sync.objectstore.InMemoryEncryptedObjectStore;
 import com.deardiary.sync.objectstore.ObjectKey;
 import com.deardiary.sync.objectstore.ObjectKeyFactory;
+import com.deardiary.sync.media.MediaDownloadService;
 import com.deardiary.sync.operation.InitiateOperationRequest;
 import com.deardiary.sync.operation.OperationCommitService;
 import com.deardiary.sync.operation.OperationInitiationService;
 import com.deardiary.sync.operation.OperationObjectRequest;
+import com.deardiary.sync.operation.RetainedMediaObjectRequest;
 import com.deardiary.sync.operation.OperationQueryService;
 import com.deardiary.sync.protocol.ProtocolService;
 import com.deardiary.sync.notification.NotificationOutboxWorker;
@@ -54,6 +56,7 @@ class AtomicCommitIntegrationTest {
     private ObjectKeyFactory keys;
     private EventPullService pulls;
     private CursorService cursors;
+    private MediaDownloadService mediaDownloads;
     private UUID accountId;
     private UUID deviceId;
 
@@ -95,6 +98,55 @@ class AtomicCommitIntegrationTest {
         queries = new OperationQueryService(jdbc, accounts);
         pulls = new EventPullService(jdbc, accounts, objectStore);
         cursors = new CursorService(jdbc, transactionManager, deviceAuthorization, Clock.systemUTC());
+        mediaDownloads = new MediaDownloadService(jdbc, accounts, keys, objectStore);
+    }
+
+    @Test
+    void retainedMediaRemainsDownloadableUntilARecordRemovesIt() {
+        var recordId = UUID.randomUUID().toString();
+        var firstOperationId = UUID.randomUUID();
+        var firstEvent = keys.create(accountId);
+        var media = keys.create(accountId);
+        initiation.initiate("commit-user", new InitiateOperationRequest(
+            firstOperationId, deviceId, "ENTRY", recordId, "UPSERT", 0,
+            2, 2, 1, "account", List.of(
+                new OperationObjectRequest(firstEvent.value(), "EVENT", "a".repeat(64), 512),
+                new OperationObjectRequest(media.value(), "MEDIA", "b".repeat(64), 1024)),
+            List.of()));
+        objectStore.markUploaded(firstEvent);
+        objectStore.markUploaded(media);
+        commits.commit("commit-user", firstOperationId);
+
+        var objectId = UUID.fromString(media.value().substring(media.value().lastIndexOf('/') + 1));
+        var download = mediaDownloads.get("commit-user", objectId);
+        assertThat(download.sha256()).isEqualTo("b".repeat(64));
+        assertThat(download.sizeBytes()).isEqualTo(1024);
+        assertThat(download.keyEpoch()).isEqualTo(1);
+        assertThat(download.downloadUrl().toString()).contains("/download/");
+        assertThat(download.downloadExpiresAt()).isAfter(java.time.Instant.now());
+        assertApiCode(() -> mediaDownloads.get("another-user", objectId), "ACCOUNT_NOT_FOUND");
+
+        var retainedOperationId = UUID.randomUUID();
+        var retainedEvent = keys.create(accountId);
+        initiation.initiate("commit-user", new InitiateOperationRequest(
+            retainedOperationId, deviceId, "ENTRY", recordId, "UPSERT", 1,
+            2, 2, 1, "account", List.of(
+                new OperationObjectRequest(retainedEvent.value(), "EVENT", "c".repeat(64), 512)),
+            List.of(new RetainedMediaObjectRequest(media.value(), "MEDIA"))));
+        objectStore.markUploaded(retainedEvent);
+        commits.commit("commit-user", retainedOperationId);
+        assertThat(mediaDownloads.get("commit-user", objectId).objectKind()).isEqualTo("MEDIA");
+
+        var removeOperationId = UUID.randomUUID();
+        var removeEvent = keys.create(accountId);
+        initiation.initiate("commit-user", new InitiateOperationRequest(
+            removeOperationId, deviceId, "ENTRY", recordId, "UPSERT", 2,
+            2, 2, 1, "account", List.of(
+                new OperationObjectRequest(removeEvent.value(), "EVENT", "d".repeat(64), 512)),
+            List.of()));
+        objectStore.markUploaded(removeEvent);
+        commits.commit("commit-user", removeOperationId);
+        assertApiCode(() -> mediaDownloads.get("commit-user", objectId), "OBJECT_MISSING");
     }
 
     @Test

@@ -55,6 +55,7 @@ export type LocalEntryProjection = Pick<
   | 'photoUris'
   | 'photoCount'
   | 'wordCount'
+  | 'wordsWrittenByDate'
   | 'createdAt'
   | 'updatedAt'
 >;

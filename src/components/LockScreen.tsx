@@ -1368,28 +1368,32 @@ export default function LockScreen({
                   </>
                 )}
 
-                {security.isPinCreated && !isResetting && (
-                  <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
-                    <button
-                      onClick={() => {
-                        triggerHaptic(15);
-                        setRecoveryVerifiedBy(null);
-                        if (!hasGoogleRecovery) {
-                          fail(
-                            'PIN recovery is unavailable because this legacy local space is not linked to a Google account.',
-                          );
-                          return;
-                        }
-                        setRecoveryMode('google');
-                        setError('');
-                        setSuccessMsg('');
-                      }}
-                      className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors"
-                    >
-                      Forgot security passcode PIN?
-                    </button>
-                  </div>
-                )}
+                {security.isPinCreated &&
+                  setupStep === 'pin' &&
+                  !showBackupChoice &&
+                  !recoveryMode &&
+                  !isResetting && (
+                    <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
+                      <button
+                        onClick={() => {
+                          triggerHaptic(15);
+                          setRecoveryVerifiedBy(null);
+                          if (!hasGoogleRecovery) {
+                            fail(
+                              'PIN recovery is unavailable because this legacy local space is not linked to a Google account.',
+                            );
+                            return;
+                          }
+                          setRecoveryMode('google');
+                          setError('');
+                          setSuccessMsg('');
+                        }}
+                        className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors"
+                      >
+                        Forgot security passcode PIN?
+                      </button>
+                    </div>
+                  )}
 
                 <AnimatePresence>
                   {recoveryMode && (

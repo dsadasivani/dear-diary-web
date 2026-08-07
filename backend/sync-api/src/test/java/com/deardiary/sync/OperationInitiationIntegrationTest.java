@@ -12,6 +12,7 @@ import com.deardiary.sync.objectstore.ObjectKeyFactory;
 import com.deardiary.sync.operation.InitiateOperationRequest;
 import com.deardiary.sync.operation.OperationInitiationService;
 import com.deardiary.sync.operation.OperationObjectRequest;
+import com.deardiary.sync.operation.RetainedMediaObjectRequest;
 import com.deardiary.sync.protocol.ProtocolService;
 import java.security.KeyPairGenerator;
 import java.time.Clock;
@@ -101,6 +102,27 @@ class OperationInitiationIntegrationTest {
                 UUID.randomUUID(), UUID.randomUUID(), disabledKey, 512)),
             "SYNC_WRITES_DISABLED");
         jdbc.update("UPDATE sync_kill_switches SET engaged = FALSE, reason_code = NULL WHERE switch_name = 'SYNC_WRITES'");
+    }
+
+    @Test
+    void mediaInitiationHonorsTheFeatureFlagAndRejectsNonLiveRetainedObjects() {
+        var eventKey = keys.create(accountId).value();
+        var mediaKey = keys.create(accountId).value();
+        jdbc.update("UPDATE sync_kill_switches SET engaged = TRUE, reason_code = 'TEST' WHERE switch_name = 'MEDIA_UPLOAD'");
+        assertApiCode(() -> operations.initiate("operation-user", new InitiateOperationRequest(
+            UUID.randomUUID(), deviceId, "ENTRY", UUID.randomUUID().toString(), "UPSERT", 0,
+            2, 2, 1, "account", List.of(
+                new OperationObjectRequest(eventKey, "EVENT", "a".repeat(64), 512),
+                new OperationObjectRequest(mediaKey, "MEDIA", "b".repeat(64), 1024)),
+            List.of())), "MEDIA_UPLOAD_DISABLED");
+        jdbc.update("UPDATE sync_kill_switches SET engaged = FALSE, reason_code = NULL WHERE switch_name = 'MEDIA_UPLOAD'");
+
+        assertApiCode(() -> operations.initiate("operation-user", new InitiateOperationRequest(
+            UUID.randomUUID(), deviceId, "ENTRY", UUID.randomUUID().toString(), "UPSERT", 0,
+            2, 2, 1, "account", List.of(
+                new OperationObjectRequest(keys.create(accountId).value(), "EVENT", "c".repeat(64), 512)),
+            List.of(new RetainedMediaObjectRequest(keys.create(accountId).value(), "MEDIA")))),
+            "INVALID_MEDIA_REFERENCE");
     }
 
     @Test
