@@ -104,9 +104,11 @@ test('Loredays responsive visual matrix', async ({ page, browserName }) => {
   await capture(page, 'journals-light');
   await page.getByTestId('diary-card').filter({ hasText: 'E2E Open Diary' }).first().click();
   await expect(page.getByTestId('entry-edit-button').first()).toBeVisible();
+  await finishPageTransition(page);
   await capture(page, 'reader-light');
   await page.getByTestId('entry-edit-button').first().click();
   await expect(page.getByTestId('entry-title-input')).toBeVisible();
+  await finishPageTransition(page);
   await capture(page, 'editor-light');
   await page
     .getByRole('button', { name: /close editor|new entry/i })

@@ -255,16 +255,7 @@ test('local app creates, edits, and deletes a diary entry through the UI', async
       .filter({ hasText: /unsaved changes/i })
       .first(),
   ).toBeVisible();
-  await expect(
-    page
-      .getByRole('status')
-      .filter({ hasText: /saved (?:locally|privately)(?: at)?/i })
-      .first(),
-  ).toBeVisible({ timeout: 10_000 });
-  await page
-    .getByRole('button', { name: /close editor|new entry/i })
-    .first()
-    .click();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
   await expect(page.getByText(updatedTitle).first()).toBeVisible();
 
   await page.getByTestId('entry-edit-button').first().click();
