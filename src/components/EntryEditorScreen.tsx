@@ -55,6 +55,8 @@ import {
   toggleUnorderedList,
 } from '../utils/richTextSelection';
 import EntrySaveStatus, { type EntrySaveState } from './editor/EntrySaveStatus';
+import type { SyncV2Quota } from '../sync/v2/api/SyncV2ApiTypes';
+import { DEFAULT_ACCOUNT_QUOTA, entryMediaCounts } from '../domain/quota';
 
 interface EntryEditorScreenProps {
   diaries: Diary[];
@@ -75,6 +77,7 @@ interface EntryEditorScreenProps {
     detail?: string,
   ) => Promise<void>;
   showDiarySelector?: boolean;
+  quota?: SyncV2Quota;
 }
 
 interface ComposedEntryDraft {
@@ -99,6 +102,7 @@ export default function EntryEditorScreen({
   initialPrompt,
   onShowToast,
   showDiarySelector = false,
+  quota = DEFAULT_ACCOUNT_QUOTA,
 }: EntryEditorScreenProps) {
   // Find current entry if editing
   const isEditing = !!entryId;
@@ -131,6 +135,10 @@ export default function EntryEditorScreen({
   const [isPhotoDragActive, setIsPhotoDragActive] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
   const [audioUri, setAudioUri] = useState<string | undefined>(undefined);
+  const recordingCount = useMemo(
+    () => (audioUri ? 1 : 0) + blocks.filter((block) => Boolean(block.audioUri)).length,
+    [audioUri, blocks],
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [autosaveError, setAutosaveError] = useState('');
@@ -142,6 +150,7 @@ export default function EntryEditorScreen({
   const [showAddTools, setShowAddTools] = useState(false);
   const [showFormattingTools, setShowFormattingTools] = useState(false);
   const baselineFingerprintRef = useRef<string | null>(null);
+  const persistedMediaCountsRef = useRef({ photoCount: 0, recordingCount: 0 });
   const workingEntryIdRef = useRef<string | undefined>(entryId);
   const originalEntryRef = useRef<Entry | null>(null);
   const isLeavingRef = useRef(false);
@@ -150,6 +159,14 @@ export default function EntryEditorScreen({
   const [showTagPicker, setShowTagPicker] = useState<boolean>(false);
   const [fontFamily, setFontFamily] = useState<'serif' | 'sans' | 'mono'>('serif');
   const [isFocusMode, setIsFocusMode] = useState<boolean>(initialFocusMode);
+
+  const maximumAllowedPhotos = () =>
+    Math.max(quota.limits.maximumPhotosPerEntry, persistedMediaCountsRef.current.photoCount);
+  const maximumAllowedRecordings = () =>
+    Math.max(
+      quota.limits.maximumRecordingsPerEntry,
+      persistedMediaCountsRef.current.recordingCount,
+    );
 
   // Convert "HH:MM" to "HH:MM AM/PM"
   const formatTime12 = (time24?: string) => {
@@ -1432,6 +1449,13 @@ export default function EntryEditorScreen({
     if (showRecordingOverlay) {
       stopRecording();
     } else {
+      if (mode === 'voice-dictation' && recordingCount >= maximumAllowedRecordings()) {
+        onShowToast?.(
+          `This plan allows ${quota.limits.maximumRecordingsPerEntry} recordings per entry.`,
+          'warning',
+        );
+        return;
+      }
       startRecording(false, mode);
     }
   };
@@ -1470,6 +1494,7 @@ export default function EntryEditorScreen({
         if (cancelled) return;
         if (entryObj) {
           originalEntryRef.current = entryObj;
+          persistedMediaCountsRef.current = entryMediaCounts(entryObj);
           setDiaryId(entryObj.diaryId);
           setDate(entryObj.date);
 
@@ -1518,6 +1543,7 @@ export default function EntryEditorScreen({
           }
         }
       } else {
+        persistedMediaCountsRef.current = { photoCount: 0, recordingCount: 0 };
         const now = new Date();
         setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
 
@@ -1631,6 +1657,15 @@ export default function EntryEditorScreen({
   };
 
   const persistEntryDraft = async (draft: ComposedEntryDraft): Promise<void> => {
+    const draftRecordingCount = draft.finalBlocks.filter((block) => Boolean(block.audioUri)).length;
+    const allowedPhotos = maximumAllowedPhotos();
+    const allowedRecordings = maximumAllowedRecordings();
+    if (photoUris.length > allowedPhotos) {
+      throw new Error(`Remove photos until this entry has at most ${allowedPhotos}.`);
+    }
+    if (draftRecordingCount > allowedRecordings) {
+      throw new Error(`Remove recordings until this entry has at most ${allowedRecordings}.`);
+    }
     const existingId = workingEntryIdRef.current;
     if (existingId) {
       const existing = await diaryRepository.getEntry(existingId);
@@ -1652,6 +1687,10 @@ export default function EntryEditorScreen({
         updatedAt: Date.now(),
         blocks: draft.finalBlocks,
       });
+      persistedMediaCountsRef.current = {
+        photoCount: photoUris.length,
+        recordingCount: draftRecordingCount,
+      };
       return;
     }
     const created = await diaryRepository.createEntry({
@@ -1668,6 +1707,10 @@ export default function EntryEditorScreen({
       blocks: draft.finalBlocks,
     });
     workingEntryIdRef.current = created.id;
+    persistedMediaCountsRef.current = {
+      photoCount: photoUris.length,
+      recordingCount: draftRecordingCount,
+    };
   };
 
   useEffect(() => {
@@ -1695,13 +1738,28 @@ export default function EntryEditorScreen({
   }, [draftFingerprint, isDirty, isEditorReady, isSaving, isAutosaving]);
 
   const attachPhotoFiles = async (files: File[]) => {
-    const selectedFiles = files.filter((file) => file.type.startsWith('image/'));
-    if (selectedFiles.length === 0) {
+    const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+    if (imageFiles.length === 0) {
       onShowToast?.('Drop an image file to attach it to this entry.', 'warning');
       return;
     }
-    if (selectedFiles.length !== files.length) {
+    if (imageFiles.length !== files.length) {
       onShowToast?.('Only image files were attached.', 'info');
+    }
+    const remaining = Math.max(0, maximumAllowedPhotos() - photoUris.length);
+    if (remaining === 0) {
+      onShowToast?.(
+        `This plan allows ${quota.limits.maximumPhotosPerEntry} photos per entry.`,
+        'warning',
+      );
+      return;
+    }
+    const selectedFiles = imageFiles.slice(0, remaining);
+    if (selectedFiles.length < imageFiles.length) {
+      onShowToast?.(
+        `Only ${remaining} more photo${remaining === 1 ? '' : 's'} can be attached.`,
+        'info',
+      );
     }
 
     await (async () => {
@@ -1842,6 +1900,13 @@ export default function EntryEditorScreen({
   };
 
   const triggerPhotoInput = () => {
+    if (photoUris.length >= maximumAllowedPhotos()) {
+      onShowToast?.(
+        `This plan allows ${quota.limits.maximumPhotosPerEntry} photos per entry.`,
+        'warning',
+      );
+      return;
+    }
     fileInputRef.current?.click();
   };
 
@@ -3008,6 +3073,9 @@ export default function EntryEditorScreen({
                 <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">
                   Scrapbook
                 </h2>
+                <span className="text-xs text-brand-text-muted">
+                  {photoUris.length}/{quota.limits.maximumPhotosPerEntry}
+                </span>
                 <button
                   type="button"
                   onClick={triggerPhotoInput}
@@ -3070,6 +3138,9 @@ export default function EntryEditorScreen({
               <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">
                 Voice Memo
               </h2>
+              <p className="mt-1 text-xs text-brand-text-muted">
+                {recordingCount}/{quota.limits.maximumRecordingsPerEntry} saved recordings
+              </p>
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <button
                   type="button"
@@ -3581,7 +3652,7 @@ export default function EntryEditorScreen({
         {photoUris.length > 0 && (
           <div className="flex flex-col gap-1.5 border-t border-brand-border/40 pt-3 mt-2">
             <p className="text-xs font-bold text-brand-sage uppercase tracking-widest">
-              Attached Photos
+              Attached Photos ({photoUris.length}/{quota.limits.maximumPhotosPerEntry})
             </p>
             <div className="flex overflow-x-auto gap-3 py-1">
               {photoUris.map((photo, idx) => (
@@ -3636,7 +3707,7 @@ export default function EntryEditorScreen({
             className="flex min-h-20 flex-col items-start justify-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg p-4 text-left text-sm font-bold"
           >
             <Mic className="h-5 w-5 text-brand-pink" />
-            Audio note
+            Audio note ({recordingCount}/{quota.limits.maximumRecordingsPerEntry})
           </button>
           <button
             type="button"

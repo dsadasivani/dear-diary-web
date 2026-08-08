@@ -75,6 +75,8 @@ import {
 import { DEFAULT_ACCENT_THEME_ID, type AccentThemeId } from '../design/accentThemes';
 import AccentThemeSelector from './AccentThemeSelector';
 import { calculateLocalStorageUsage, type LocalStorageUsage } from '../utils/localStorageUsage';
+import type { SyncV2Quota } from '../sync/v2/api/SyncV2ApiTypes';
+import { DEFAULT_ACCOUNT_QUOTA } from '../domain/quota';
 
 interface AppSettingsScreenProps {
   initialSettings: AppSettings;
@@ -89,6 +91,8 @@ interface AppSettingsScreenProps {
   onThemeChange?: (theme: 'light' | 'dark') => void;
   accentTheme?: AccentThemeId;
   onAccentThemeChange?: (accentTheme: AccentThemeId) => void;
+  quota?: SyncV2Quota;
+  onRefreshQuota?: () => Promise<void>;
 }
 
 export type SettingsSection =
@@ -192,6 +196,8 @@ export default function AppSettingsScreen({
   onThemeChange,
   accentTheme = DEFAULT_ACCENT_THEME_ID,
   onAccentThemeChange,
+  quota = DEFAULT_ACCOUNT_QUOTA,
+  onRefreshQuota,
 }: AppSettingsScreenProps) {
   useScreenPerformance('settings');
   const prefersReducedMotion = useReducedMotion();
@@ -258,6 +264,7 @@ export default function AppSettingsScreen({
   const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
   const [isLocalStorageUsageLoading, setIsLocalStorageUsageLoading] = useState(false);
   const [localStorageUsageError, setLocalStorageUsageError] = useState('');
+  const [isQuotaRefreshing, setIsQuotaRefreshing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
   const [syncHealth, setSyncHealth] = useState<SyncHealth | null>(null);
   const [syncStatusError, setSyncStatusError] = useState('');
@@ -1502,6 +1509,75 @@ export default function AppSettingsScreen({
                 {...pageMotion(prefersReducedMotion)}
                 className="flex flex-col gap-5"
               >
+                {syncAccountState && (
+                  <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
+                          Encrypted cloud · {quota.planName}
+                        </h3>
+                        <p className="mt-1 text-sm text-brand-text-muted">
+                          {formatBytes(quota.usage.storageBytesUsed)} of{' '}
+                          {formatBytes(quota.limits.maximumStorageBytes)} used
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!onRefreshQuota) return;
+                          setIsQuotaRefreshing(true);
+                          void onRefreshQuota().finally(() => setIsQuotaRefreshing(false));
+                        }}
+                        disabled={!onRefreshQuota || isQuotaRefreshing}
+                        className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-brand-border text-brand-sage disabled:opacity-40"
+                        aria-label="Refresh cloud quota usage"
+                      >
+                        <RefreshCw
+                          className={`h-4 w-4 ${isQuotaRefreshing ? 'animate-spin' : ''}`}
+                        />
+                      </button>
+                    </div>
+                    <div
+                      className="mt-4 h-2 overflow-hidden rounded-full bg-brand-bg"
+                      role="progressbar"
+                      aria-label="Encrypted cloud storage used"
+                      aria-valuemin={0}
+                      aria-valuemax={quota.limits.maximumStorageBytes}
+                      aria-valuenow={Math.min(
+                        quota.usage.storageBytesUsed,
+                        quota.limits.maximumStorageBytes,
+                      )}
+                    >
+                      <div
+                        className="h-full rounded-full bg-brand-sage transition-[width]"
+                        style={{
+                          width: `${Math.min(100, (quota.usage.storageBytesUsed / quota.limits.maximumStorageBytes) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                      {[
+                        [
+                          'Companions',
+                          `${quota.usage.companionSlotsUsed}/${quota.limits.maximumCompanions}`,
+                        ],
+                        ['Photos per entry', String(quota.limits.maximumPhotosPerEntry)],
+                        ['Recordings per entry', String(quota.limits.maximumRecordingsPerEntry)],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-xl bg-brand-bg/50 p-3">
+                          <span className="block text-xs text-brand-text-muted">{label}</span>
+                          <span className="mt-1 block text-sm font-bold text-brand-plum dark:text-brand-text">
+                            {value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-3 text-xs leading-relaxed text-brand-text-muted">
+                      Usage includes retained encrypted objects and uploads reserved but not yet
+                      completed. On-device-only files do not use this allowance.
+                    </p>
+                  </div>
+                )}
                 <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex min-w-0 items-center gap-3">
@@ -1726,6 +1802,22 @@ export default function AppSettingsScreen({
                 {...pageMotion(prefersReducedMotion)}
                 className="flex flex-col gap-5"
               >
+                {syncAccountState && (
+                  <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                    <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
+                      {quota.planName} cloud plan
+                    </h3>
+                    <p className="mt-2 text-2xl font-semibold text-brand-plum dark:text-brand-text">
+                      {formatBytes(quota.usage.storageBytesUsed)} /{' '}
+                      {formatBytes(quota.limits.maximumStorageBytes)}
+                    </p>
+                    <p className="mt-2 text-sm text-brand-text-muted">
+                      {quota.usage.companionSlotsUsed}/{quota.limits.maximumCompanions} companion
+                      slots · {quota.limits.maximumPhotosPerEntry} photos and{' '}
+                      {quota.limits.maximumRecordingsPerEntry} recordings per entry
+                    </p>
+                  </div>
+                )}
                 <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
                   <div className="flex items-start justify-between gap-3">
                     <div>

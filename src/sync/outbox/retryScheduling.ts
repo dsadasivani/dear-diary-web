@@ -15,6 +15,12 @@ export const stateForSyncError = (error: SyncError): SyncOutboxStateV2 => {
   if (error.code === 'DEVICE_REVOKED') return 'BLOCKED_DEVICE';
   if (error.code === 'PROTOCOL_INCOMPATIBLE' || error.code === 'SCHEMA_INCOMPATIBLE')
     return 'BLOCKED_UPGRADE';
+  if (
+    error.code === 'STORAGE_QUOTA_EXCEEDED' ||
+    error.code === 'ENTRY_MEDIA_LIMIT_EXCEEDED' ||
+    error.code === 'COMPANION_LIMIT_EXCEEDED'
+  )
+    return 'BLOCKED_QUOTA';
   if (error.safetyRelevant) return 'SAFETY_STOP';
   return error.retryable ? 'RETRY_WAIT' : 'SAFETY_STOP';
 };

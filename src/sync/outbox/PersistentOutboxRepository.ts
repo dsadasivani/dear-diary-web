@@ -47,6 +47,7 @@ export class PersistentOutboxRepository implements OutboxRepository {
               'BLOCKED_AUTH',
               'BLOCKED_DEVICE',
               'BLOCKED_UPGRADE',
+              'BLOCKED_QUOTA',
               'SAFETY_STOP',
             ].includes(operation.state),
         )

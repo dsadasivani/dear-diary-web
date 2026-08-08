@@ -51,6 +51,8 @@ import {
 } from '../outbox';
 import { SyncV2ApiClient } from './api/SyncV2ApiClient';
 import type { SyncV2Protocol } from './api/SyncV2ApiTypes';
+import type { SyncV2Quota } from './api/SyncV2ApiTypes';
+import { DEFAULT_ACCOUNT_QUOTA } from '../../domain/quota';
 import { PersistentSyncConflictStore } from './conflict/PersistentSyncConflictStore';
 import { SyncInvariantValidator } from './domain/SyncInvariantValidator';
 import { BoundedObjectTransfer, sha256Hex } from './operation/BoundedObjectTransfer';
@@ -97,7 +99,8 @@ import { toPortableSyncPayload } from '../portableMedia';
 import { toPortableDiary, toPortableEntry, toPortableUserProfile } from '../portableMedia';
 import { parseSyncMediaReference } from '../syncMedia';
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
+const SYNC_V2_QUOTA_CACHE_KEY = 'deardiary_sync_quota_v1';
 const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
 const MAX_WORK_PER_FLUSH = 100;
 const COMPANION_AUTHORIZATION_CHECK_INTERVAL_MS = 5_000;
@@ -896,6 +899,48 @@ export class SyncV2ApplicationLifecycle {
       reason:
         'This legacy sync account is no longer supported. Reconnect to create a Sync V2 account.',
     };
+  }
+
+  async getQuota(options: { refresh?: boolean } = {}): Promise<SyncV2Quota> {
+    const account = await this.repository.getLocalSyncAccountState();
+    if (!account) return structuredClone(DEFAULT_ACCOUNT_QUOTA);
+
+    const loadCached = async (): Promise<SyncV2Quota | null> => {
+      const raw = await this.store.getItem(SYNC_V2_QUOTA_CACHE_KEY);
+      if (!raw) return null;
+      try {
+        const cached = JSON.parse(raw) as { accountId?: string; quota?: SyncV2Quota };
+        return cached.accountId === account.accountId && cached.quota ? cached.quota : null;
+      } catch {
+        return null;
+      }
+    };
+
+    if (!options.refresh) {
+      const cached = await loadCached();
+      if (cached) return cached;
+    }
+    try {
+      const quota = await this.client().getQuota();
+      await this.store.setItem(
+        SYNC_V2_QUOTA_CACHE_KEY,
+        JSON.stringify({ accountId: account.accountId, quota }),
+      );
+      for (const operation of await this.outbox.listByAccount(account.accountId)) {
+        if (operation.state !== 'BLOCKED_QUOTA') continue;
+        await this.outbox.transition(operation.operationId, 'BLOCKED_QUOTA', 'PREPARING', {
+          lastErrorCode: undefined,
+          lastErrorAt: undefined,
+          nextAttemptAt: 0,
+        });
+      }
+      this.legacyEngine.requestOutboxFlush();
+      return quota;
+    } catch (error) {
+      const cached = await loadCached();
+      if (cached) return cached;
+      throw error;
+    }
   }
 
   async unlinkThisCompanion(): Promise<void> {

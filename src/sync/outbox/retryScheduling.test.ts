@@ -35,6 +35,14 @@ test('maps typed failures to deterministic user-action and safety states', () =>
     stateForSyncError(new SyncError({ code: 'HASH_MISMATCH', safetyRelevant: true })),
     'SAFETY_STOP',
   );
+  assert.equal(
+    stateForSyncError(new SyncError({ code: 'STORAGE_QUOTA_EXCEEDED' })),
+    'BLOCKED_QUOTA',
+  );
+  assert.equal(
+    stateForSyncError(new SyncError({ code: 'ENTRY_MEDIA_LIMIT_EXCEEDED' })),
+    'BLOCKED_QUOTA',
+  );
 });
 
 test('schedules retryable failures with bounded jitter and clears the lease', () => {

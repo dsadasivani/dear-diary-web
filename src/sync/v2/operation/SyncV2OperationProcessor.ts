@@ -35,6 +35,27 @@ export interface SyncV2ConflictRecorder {
   record(operation: SyncOutboxOperationV2, remoteVersion: number): Promise<void>;
 }
 
+const entryMediaCounts = (
+  operation: SyncOutboxOperationV2,
+  payload: unknown | null | undefined,
+): { photoCount: number; recordingCount: number } | undefined => {
+  if (operation.recordType !== 'ENTRY' || operation.operationType !== 'UPSERT') return undefined;
+  const entry = (payload || {}) as {
+    photoUris?: unknown[];
+    audioUri?: unknown;
+    blocks?: Array<{ audioUri?: unknown }>;
+  };
+  return {
+    photoCount: Array.isArray(entry.photoUris) ? entry.photoUris.length : 0,
+    recordingCount:
+      (typeof entry.audioUri === 'string' && entry.audioUri ? 1 : 0) +
+      (Array.isArray(entry.blocks)
+        ? entry.blocks.filter((block) => typeof block?.audioUri === 'string' && block.audioUri)
+            .length
+        : 0),
+  };
+};
+
 export interface SyncV2OperationProcessorOptions {
   accountId: string;
   deviceId: string;
@@ -210,6 +231,7 @@ export class SyncV2OperationProcessor {
         partitionKey: prepared.partitionKey,
         objects,
         retainedMediaObjects: prepared.retainedMediaObjects || [],
+        entryMediaCounts: entryMediaCounts(operation, prepared.canonicalPayload),
       });
       await this.faults.hit('AFTER_UPLOAD_INITIATE');
       await this.faults.hit('DURING_OBJECT_UPLOAD');

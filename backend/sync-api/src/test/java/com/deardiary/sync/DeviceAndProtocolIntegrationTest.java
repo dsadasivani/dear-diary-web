@@ -107,7 +107,7 @@ class DeviceAndProtocolIntegrationTest {
     void protocolConfigurationCombinesPersistentFlagsWithKillSwitches() {
         var protocol = protocols.current();
 
-        assertThat(protocol.currentProtocolVersion()).isEqualTo(2);
+        assertThat(protocol.currentProtocolVersion()).isEqualTo(3);
           assertThat(protocol.maximumEventBytes()).isEqualTo(10_485_760);
           assertThat(protocol.maximumSnapshotBytes()).isEqualTo(104_857_600);
         assertThat(protocol.featureFlags().syncWritesEnabled()).isTrue();

@@ -17,6 +17,8 @@ const SAFE_MESSAGES: Record<SyncErrorCode, string> = {
   DEVICE_REVOKED: 'This device is no longer authorized to synchronize.',
   RATE_LIMITED: 'Synchronization is temporarily rate limited.',
   STORAGE_QUOTA_EXCEEDED: 'Cloud storage is full.',
+  COMPANION_LIMIT_EXCEEDED: 'This account has reached its companion limit.',
+  ENTRY_MEDIA_LIMIT_EXCEEDED: 'This entry exceeds the media limits for its plan.',
   OBJECT_UPLOAD_FAILED: 'An encrypted object could not be uploaded.',
   OBJECT_DOWNLOAD_FAILED: 'An encrypted object could not be downloaded.',
   OBJECT_MISSING: 'A required encrypted object is missing.',

@@ -8,6 +8,7 @@ import com.deardiary.sync.objectstore.ObjectKeyFactory;
 import com.deardiary.sync.objectstore.ObjectStoreException;
 import com.deardiary.sync.objectstore.UploadObjectCommand;
 import com.deardiary.sync.protocol.ProtocolService;
+import com.deardiary.sync.quota.QuotaService;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
@@ -29,6 +30,7 @@ public class OperationInitiationService {
     private final ObjectKeyFactory objectKeys;
     private final EncryptedObjectStore objectStore;
     private final Clock clock;
+    private final QuotaService quotas;
 
     public OperationInitiationService(
             JdbcTemplate jdbc,
@@ -37,7 +39,8 @@ public class OperationInitiationService {
             ProtocolService protocols,
             ObjectKeyFactory objectKeys,
             EncryptedObjectStore objectStore,
-            Clock clock) {
+            Clock clock,
+            QuotaService quotas) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(transactionManager);
         this.devices = devices;
@@ -45,6 +48,7 @@ public class OperationInitiationService {
         this.objectKeys = objectKeys;
         this.objectStore = objectStore;
         this.clock = clock;
+        this.quotas = quotas;
     }
 
     public InitiateOperationResponse initiate(String ownerSubject, InitiateOperationRequest request) {
@@ -80,6 +84,15 @@ public class OperationInitiationService {
         if (request.keyEpoch() != currentKeyEpoch) {
             throw new ApiException("KEY_EPOCH_MISMATCH", HttpStatus.CONFLICT,
                 "The operation uses an unavailable key epoch.", false, true, Map.of());
+        }
+        if ("ENTRY".equals(request.recordType()) && "UPSERT".equals(request.operationType())) {
+            if (request.entryMediaCounts() == null) {
+                throw new ApiException("ENTRY_MEDIA_COUNTS_REQUIRED", HttpStatus.BAD_REQUEST,
+                    "Entry media counts are required for this write protocol.");
+            }
+        } else if (request.entryMediaCounts() != null) {
+            throw new ApiException("ENTRY_MEDIA_COUNTS_UNEXPECTED", HttpStatus.BAD_REQUEST,
+                "Entry media counts are only valid for entry upserts.");
         }
         if (request.objects().stream().filter(object -> "EVENT".equals(object.objectKind())).count() != 1) {
             throw new ApiException("INVALID_OPERATION_OBJECTS", HttpStatus.BAD_REQUEST,
@@ -132,16 +145,27 @@ public class OperationInitiationService {
             assertMatches(accountId, existing, request);
             return new PersistedOperation(existing.status(), true, loadObjects(accountId, request.operationId()));
         }
+        if (request.entryMediaCounts() != null) {
+            quotas.requireEntryMediaCounts(accountId, request.recordId(), request.baseRecordVersion(),
+                request.entryMediaCounts().photoCount(), request.entryMediaCounts().recordingCount());
+        }
+        quotas.requireStorageCapacity(accountId,
+            request.objects().stream().mapToLong(OperationObjectRequest::sizeBytes).sum(),
+            "DELETE".equals(request.operationType()));
         var now = OffsetDateTime.now(clock);
         jdbc.update("""
             INSERT INTO sync_operations (
                 account_id, operation_id, device_id, record_type, record_id, operation_type,
                 base_record_version, operation_status, protocol_version, event_schema_version,
-                key_epoch, partition_key, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'OBJECTS_PENDING', ?, ?, ?, ?, ?, ?)
+                key_epoch, partition_key, entry_photo_count, entry_recording_count,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'OBJECTS_PENDING', ?, ?, ?, ?, ?, ?, ?, ?)
             """, accountId, request.operationId(), request.deviceId(), request.recordType(), request.recordId(),
             request.operationType(), request.baseRecordVersion(), request.protocolVersion(),
-            request.eventSchemaVersion(), request.keyEpoch(), request.partitionKey(), now, now);
+            request.eventSchemaVersion(), request.keyEpoch(), request.partitionKey(),
+            request.entryMediaCounts() == null ? null : request.entryMediaCounts().photoCount(),
+            request.entryMediaCounts() == null ? null : request.entryMediaCounts().recordingCount(),
+            now, now);
         for (var object : request.objects()) {
             jdbc.update("""
                 INSERT INTO sync_objects (
@@ -185,12 +209,14 @@ public class OperationInitiationService {
     private ExistingOperation loadExisting(UUID accountId, UUID operationId) {
         var rows = jdbc.query("""
             SELECT device_id, record_type, record_id, operation_type, base_record_version,
-                   protocol_version, event_schema_version, key_epoch, partition_key, operation_status
+                   protocol_version, event_schema_version, key_epoch, partition_key, operation_status,
+                   entry_photo_count, entry_recording_count
             FROM sync_operations WHERE account_id = ? AND operation_id = ? FOR UPDATE
             """, (rs, row) -> new ExistingOperation(
                 rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
                 rs.getString(4), rs.getLong(5), rs.getInt(6), rs.getInt(7), rs.getInt(8),
-                rs.getString(9), rs.getString(10)), accountId, operationId);
+                rs.getString(9), rs.getString(10), nullableInteger(rs, 11), nullableInteger(rs, 12)),
+                accountId, operationId);
         return rows.isEmpty() ? null : rows.getFirst();
     }
 
@@ -203,7 +229,11 @@ public class OperationInitiationService {
             && existing.protocolVersion() == request.protocolVersion()
             && existing.eventSchemaVersion() == request.eventSchemaVersion()
             && existing.keyEpoch() == request.keyEpoch()
-            && existing.partitionKey().equals(request.partitionKey());
+            && existing.partitionKey().equals(request.partitionKey())
+            && java.util.Objects.equals(existing.entryPhotoCount(),
+                request.entryMediaCounts() == null ? null : request.entryMediaCounts().photoCount())
+            && java.util.Objects.equals(existing.entryRecordingCount(),
+                request.entryMediaCounts() == null ? null : request.entryMediaCounts().recordingCount());
         var objectsMatch = loadObjects(accountId, request.operationId())
             .equals(sorted(request.objects()));
         var retainedMatches = loadRetainedMedia(accountId, request.operationId())
@@ -245,10 +275,16 @@ public class OperationInitiationService {
         return objects.stream().sorted(Comparator.comparing(OperationObjectRequest::objectKey)).toList();
     }
 
+    private Integer nullableInteger(java.sql.ResultSet rs, int index) throws java.sql.SQLException {
+        var value = rs.getInt(index);
+        return rs.wasNull() ? null : value;
+    }
+
     private record ExistingOperation(
         UUID deviceId, String recordType, String recordId, String operationType,
         long baseRecordVersion, int protocolVersion, int eventSchemaVersion,
-        int keyEpoch, String partitionKey, String status
+        int keyEpoch, String partitionKey, String status,
+        Integer entryPhotoCount, Integer entryRecordingCount
     ) {}
 
     private record PersistedOperation(String status, boolean existing, List<OperationObjectRequest> objects) {}

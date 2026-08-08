@@ -78,6 +78,8 @@ import type { AccentThemeId } from './design/accentThemes';
 import { measureAsync } from './utils/performance';
 import { pageMotion } from './components/ui/motion';
 import { BRAND } from './config/brand';
+import { DEFAULT_ACCOUNT_QUOTA } from './domain/quota';
+import type { SyncV2Quota } from './sync/v2/api/SyncV2ApiTypes';
 import {
   legacyNavigationTarget,
   resolveNavigationTarget,
@@ -295,6 +297,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
   const [archiveMonths, setArchiveMonths] = useState<PartitionHydrationState[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
+  const [accountQuota, setAccountQuota] = useState<SyncV2Quota>(DEFAULT_ACCOUNT_QUOTA);
   const [homeStreak, setHomeStreak] = useState(0);
   const [homeSummary, setHomeSummary] = useState<HomeSummary | null>(null);
 
@@ -560,6 +563,21 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       cancelled = true;
     };
   }, [isAuthenticated]);
+
+  const refreshAccountQuota = useCallback(async (): Promise<void> => {
+    const quota = await syncV2Application.getQuota({ refresh: true });
+    setAccountQuota(quota);
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void refreshAccountQuota().catch(() =>
+      syncV2Application
+        .getQuota()
+        .then(setAccountQuota)
+        .catch(() => setAccountQuota(DEFAULT_ACCOUNT_QUOTA)),
+    );
+  }, [isAuthenticated, refreshAccountQuota]);
 
   useEffect(() => {
     const handleAuthorizationRequired = (event: Event) => {
@@ -1348,6 +1366,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               onRefreshEntries={refreshEntries}
               onFocusModeChange={setIsEditorFocusMode}
               initialFocusMode={isEditorFocusMode}
+              quota={accountQuota}
               onShowToast={showToast}
               onRunWithLoader={runWithGlobalLoader}
             />
@@ -1421,6 +1440,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               onThemeChange={handleLocalThemeChange}
               accentTheme={accentTheme}
               onAccentThemeChange={handleLocalAccentThemeChange}
+              quota={accountQuota}
+              onRefreshQuota={refreshAccountQuota}
             />
           );
         }

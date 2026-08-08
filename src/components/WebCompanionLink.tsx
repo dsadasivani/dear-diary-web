@@ -207,7 +207,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       context
         ? JSON.stringify({
             version: 2,
-            protocolVersion: 2,
+            protocolVersion: 3,
             sessionId: context.pairing.pairingId,
             pairingCode: context.pairing.pairingCode,
           })

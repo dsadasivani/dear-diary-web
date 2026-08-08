@@ -85,7 +85,8 @@ class AdvancedWorkflowIntegrationTest {
     void cryptographicPairingActivatesCompanionOnlyAfterVerifiedPackageAndPossessionProof() throws Exception {
         var objectStore = new InMemoryEncryptedObjectStore();
         var pairings = new PairingService(jdbc, transactions, accounts, devices, new ProtocolService(jdbc),
-            new ObjectKeyFactory(), objectStore, clock);
+            new ObjectKeyFactory(), objectStore, clock,
+            new com.deardiary.sync.quota.QuotaService(jdbc, accounts));
         var companionKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
         var pairingId = UUID.randomUUID();
         var companionId = UUID.randomUUID();
@@ -139,6 +140,17 @@ class AdvancedWorkflowIntegrationTest {
             new SelfRevocationRequest(signature)).deviceStatus()).isEqualTo("REVOKED");
         assertApiCode(() -> management.revokeSelf("another-user", companionId,
             new SelfRevocationRequest(signature)), "DEVICE_NOT_FOUND");
+
+        jdbc.update("UPDATE sync_plans SET maximum_companions = 0 WHERE plan_id = 'default'");
+        try {
+            assertApiCode(() -> pairings.create("advanced-user", new PairingRequests.Create(
+                UUID.randomUUID(), UUID.randomUUID(),
+                Base64.getEncoder().encodeToString(companionKey.getPublic().getEncoded()),
+                "f".repeat(32), "test", codeHash,
+                Base64.getEncoder().encodeToString(challenge))), "COMPANION_LIMIT_EXCEEDED");
+        } finally {
+            jdbc.update("UPDATE sync_plans SET maximum_companions = 3 WHERE plan_id = 'default'");
+        }
     }
 
     @Test
@@ -147,7 +159,8 @@ class AdvancedWorkflowIntegrationTest {
         var objectStore = new InMemoryEncryptedObjectStore();
         var protocols = new ProtocolService(jdbc);
         var packages = new KeyPackageService(jdbc, transactions, devices, accounts,
-            new ObjectKeyFactory(), objectStore, clock, protocols);
+            new ObjectKeyFactory(), objectStore, clock, protocols,
+            new com.deardiary.sync.quota.QuotaService(jdbc, accounts));
         createAndRegisterPackage(packages, objectStore, UUID.randomUUID(), primaryDeviceId, 1,
             "RECOVERY", null);
         var recovery = new RecoveryService(jdbc, transactions, accounts, protocols, packages, clock);
@@ -190,7 +203,8 @@ class AdvancedWorkflowIntegrationTest {
         var objectStore = new InMemoryEncryptedObjectStore();
         var protocols = new ProtocolService(jdbc);
         var packages = new KeyPackageService(jdbc, transactions, devices, accounts,
-            new ObjectKeyFactory(), objectStore, clock, protocols);
+            new ObjectKeyFactory(), objectStore, clock, protocols,
+            new com.deardiary.sync.quota.QuotaService(jdbc, accounts));
         var recovery = new RecoveryService(jdbc, transactions, accounts, protocols, packages, clock);
         var staleKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
         var staleDevice = UUID.randomUUID();
@@ -229,7 +243,8 @@ class AdvancedWorkflowIntegrationTest {
         var objectStore = new InMemoryEncryptedObjectStore();
         var protocols = new ProtocolService(jdbc);
         var packages = new KeyPackageService(jdbc, transactions, devices, accounts,
-            new ObjectKeyFactory(), objectStore, clock, protocols);
+            new ObjectKeyFactory(), objectStore, clock, protocols,
+            new com.deardiary.sync.quota.QuotaService(jdbc, accounts));
         var rotations = new RotationService(jdbc, transactions, devices, protocols, clock);
         var rotationId = UUID.randomUUID();
         rotations.begin("advanced-user", new RotationRequests.Begin(rotationId, primaryDeviceId));
@@ -279,7 +294,8 @@ class AdvancedWorkflowIntegrationTest {
         var objectStore = new InMemoryEncryptedObjectStore();
         var protocols = new ProtocolService(jdbc);
         var packages = new KeyPackageService(jdbc, transactions, devices, accounts,
-            new ObjectKeyFactory(), objectStore, clock, protocols);
+            new ObjectKeyFactory(), objectStore, clock, protocols,
+            new com.deardiary.sync.quota.QuotaService(jdbc, accounts));
         var rotations = new RotationService(jdbc, transactions, devices, protocols, clock);
         var rotationId = UUID.randomUUID();
         var begun = rotations.begin("advanced-user", new RotationRequests.Begin(

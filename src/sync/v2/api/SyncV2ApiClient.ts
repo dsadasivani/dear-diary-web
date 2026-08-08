@@ -18,6 +18,7 @@ import type {
   SyncV2DeviceRegistration,
   SyncV2Device,
   SyncV2MediaDownload,
+  SyncV2Quota,
 } from './SyncV2ApiTypes';
 
 export type SyncV2AccessTokenProvider = () => Promise<string>;
@@ -36,6 +37,9 @@ interface ApiErrorBody {
 }
 
 const API_CODE_MAP: Record<string, ConstructorParameters<typeof SyncError>[0]['code']> = {
+  STORAGE_QUOTA_EXCEEDED: 'STORAGE_QUOTA_EXCEEDED',
+  COMPANION_LIMIT_EXCEEDED: 'COMPANION_LIMIT_EXCEEDED',
+  ENTRY_MEDIA_LIMIT_EXCEEDED: 'ENTRY_MEDIA_LIMIT_EXCEEDED',
   DEVICE_REVOKED: 'DEVICE_REVOKED',
   RECORD_VERSION_CONFLICT: 'RECORD_VERSION_CONFLICT',
   PROTOCOL_INCOMPATIBLE: 'PROTOCOL_INCOMPATIBLE',
@@ -74,6 +78,10 @@ export class SyncV2ApiClient {
 
   getProtocol(): Promise<SyncV2Protocol> {
     return this.json('/api/v2/sync/protocol', { method: 'GET' });
+  }
+
+  getQuota(): Promise<SyncV2Quota> {
+    return this.json('/api/v2/sync/quota', { method: 'GET' });
   }
 
   registerDevice(request: {

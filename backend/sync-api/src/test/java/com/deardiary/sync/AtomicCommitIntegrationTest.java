@@ -78,7 +78,7 @@ class AtomicCommitIntegrationTest {
         jdbc.update("UPDATE sync_kill_switches SET engaged = FALSE, reason_code = NULL WHERE switch_name IN ('SYNC_WRITES', 'REMOTE_PULL', 'REALTIME')");
         jdbc.update("""
             UPDATE sync_protocol_config SET minimum_read_protocol_version = 2,
-                minimum_write_protocol_version = 2, current_protocol_version = 2,
+                minimum_write_protocol_version = 3, current_protocol_version = 3,
                 event_schema_version = 2, sync_writes_enabled = TRUE
             WHERE config_id = 1
             """);
@@ -92,7 +92,9 @@ class AtomicCommitIntegrationTest {
         keys = new ObjectKeyFactory();
         var protocols = new ProtocolService(jdbc);
         initiation = new OperationInitiationService(
-            jdbc, transactionManager, deviceAuthorization, protocols, keys, objectStore, Clock.systemUTC());
+            jdbc, transactionManager, deviceAuthorization, protocols, keys, objectStore, Clock.systemUTC(),
+            new com.deardiary.sync.quota.QuotaService(jdbc,
+                new com.deardiary.sync.account.AccountAuthorizationService(jdbc)));
         commits = new OperationCommitService(jdbc, transactionManager, protocols, objectStore, Clock.systemUTC());
         var accounts = new com.deardiary.sync.account.AccountAuthorizationService(jdbc);
         queries = new OperationQueryService(jdbc, accounts);
@@ -109,7 +111,7 @@ class AtomicCommitIntegrationTest {
         var media = keys.create(accountId);
         initiation.initiate("commit-user", new InitiateOperationRequest(
             firstOperationId, deviceId, "ENTRY", recordId, "UPSERT", 0,
-            2, 2, 1, "account", List.of(
+            3, 2, 1, "account", List.of(
                 new OperationObjectRequest(firstEvent.value(), "EVENT", "a".repeat(64), 512),
                 new OperationObjectRequest(media.value(), "MEDIA", "b".repeat(64), 1024)),
             List.of()));
@@ -130,7 +132,7 @@ class AtomicCommitIntegrationTest {
         var retainedEvent = keys.create(accountId);
         initiation.initiate("commit-user", new InitiateOperationRequest(
             retainedOperationId, deviceId, "ENTRY", recordId, "UPSERT", 1,
-            2, 2, 1, "account", List.of(
+            3, 2, 1, "account", List.of(
                 new OperationObjectRequest(retainedEvent.value(), "EVENT", "c".repeat(64), 512)),
             List.of(new RetainedMediaObjectRequest(media.value(), "MEDIA"))));
         objectStore.markUploaded(retainedEvent);
@@ -141,7 +143,7 @@ class AtomicCommitIntegrationTest {
         var removeEvent = keys.create(accountId);
         initiation.initiate("commit-user", new InitiateOperationRequest(
             removeOperationId, deviceId, "ENTRY", recordId, "UPSERT", 2,
-            2, 2, 1, "account", List.of(
+            3, 2, 1, "account", List.of(
                 new OperationObjectRequest(removeEvent.value(), "EVENT", "d".repeat(64), 512)),
             List.of()));
         objectStore.markUploaded(removeEvent);
@@ -244,7 +246,7 @@ class AtomicCommitIntegrationTest {
 
         var incompatible = initiate(deviceId, UUID.randomUUID(), 0);
         objectStore.markUploaded(incompatible.objectKey());
-        jdbc.update("UPDATE sync_accounts SET minimum_write_protocol = 3 WHERE account_id = ?", accountId);
+        jdbc.update("UPDATE sync_accounts SET minimum_write_protocol = 4 WHERE account_id = ?", accountId);
         assertApiCode(() -> commits.commit("commit-user", incompatible.operationId()), "PROTOCOL_INCOMPATIBLE");
 
         assertThat(count("sync_events")).isZero();
@@ -324,7 +326,7 @@ class AtomicCommitIntegrationTest {
         var objectKey = keys.create(accountId);
         initiation.initiate("commit-user", new InitiateOperationRequest(
             operationId, committingDeviceId, "ENTRY", recordId, "UPSERT", baseVersion,
-            2, 2, 1, "2026-07", List.of(new OperationObjectRequest(
+            3, 2, 1, "2026-07", List.of(new OperationObjectRequest(
                 objectKey.value(), "EVENT", "a".repeat(64), 512))));
         return new Initiated(operationId, objectKey);
     }

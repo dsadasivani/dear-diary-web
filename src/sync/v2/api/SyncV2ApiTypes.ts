@@ -72,6 +72,25 @@ export interface InitiateSyncV2OperationRequest {
   partitionKey: string;
   objects: SyncV2OperationObject[];
   retainedMediaObjects?: SyncV2RetainedMediaObject[];
+  entryMediaCounts?: {
+    photoCount: number;
+    recordingCount: number;
+  };
+}
+
+export interface SyncV2Quota {
+  planId: string;
+  planName: string;
+  limits: {
+    maximumCompanions: number;
+    maximumPhotosPerEntry: number;
+    maximumRecordingsPerEntry: number;
+    maximumStorageBytes: number;
+  };
+  usage: {
+    companionSlotsUsed: number;
+    storageBytesUsed: number;
+  };
 }
 
 export interface SyncV2UploadInstruction {

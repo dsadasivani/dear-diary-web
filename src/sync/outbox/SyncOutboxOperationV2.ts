@@ -28,6 +28,7 @@ export const OUTBOX_V2_STATES = [
   'BLOCKED_AUTH',
   'BLOCKED_DEVICE',
   'BLOCKED_UPGRADE',
+  'BLOCKED_QUOTA',
   'SAFETY_STOP',
   'SUPERSEDED',
 ] as const;

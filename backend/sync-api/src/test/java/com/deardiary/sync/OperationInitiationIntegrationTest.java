@@ -57,7 +57,9 @@ class OperationInitiationIntegrationTest {
         keys = new ObjectKeyFactory();
         operations = new OperationInitiationService(
             jdbc, transactionManager, devices, new ProtocolService(jdbc), keys,
-            new InMemoryEncryptedObjectStore(), Clock.systemUTC());
+            new InMemoryEncryptedObjectStore(), Clock.systemUTC(),
+            new com.deardiary.sync.quota.QuotaService(jdbc,
+                new com.deardiary.sync.account.AccountAuthorizationService(jdbc)));
     }
 
     @Test
@@ -111,7 +113,7 @@ class OperationInitiationIntegrationTest {
         jdbc.update("UPDATE sync_kill_switches SET engaged = TRUE, reason_code = 'TEST' WHERE switch_name = 'MEDIA_UPLOAD'");
         assertApiCode(() -> operations.initiate("operation-user", new InitiateOperationRequest(
             UUID.randomUUID(), deviceId, "ENTRY", UUID.randomUUID().toString(), "UPSERT", 0,
-            2, 2, 1, "account", List.of(
+            3, 2, 1, "account", List.of(
                 new OperationObjectRequest(eventKey, "EVENT", "a".repeat(64), 512),
                 new OperationObjectRequest(mediaKey, "MEDIA", "b".repeat(64), 1024)),
             List.of())), "MEDIA_UPLOAD_DISABLED");
@@ -119,7 +121,7 @@ class OperationInitiationIntegrationTest {
 
         assertApiCode(() -> operations.initiate("operation-user", new InitiateOperationRequest(
             UUID.randomUUID(), deviceId, "ENTRY", UUID.randomUUID().toString(), "UPSERT", 0,
-            2, 2, 1, "account", List.of(
+            3, 2, 1, "account", List.of(
                 new OperationObjectRequest(keys.create(accountId).value(), "EVENT", "c".repeat(64), 512)),
             List.of(new RetainedMediaObjectRequest(keys.create(accountId).value(), "MEDIA")))),
             "INVALID_MEDIA_REFERENCE");
@@ -143,6 +145,67 @@ class OperationInitiationIntegrationTest {
             .isEqualTo(1);
     }
 
+    @Test
+    void accountPlanEnforcesSeparateEntryMediaAndProjectedStorageLimits() {
+        jdbc.update("UPDATE sync_plans SET maximum_photos_per_entry = 1 WHERE plan_id = 'default'");
+        try {
+            var overMedia = new InitiateOperationRequest(
+                UUID.randomUUID(), deviceId, "ENTRY", UUID.randomUUID().toString(), "UPSERT", 0,
+                3, 2, 1, "account",
+                List.of(new OperationObjectRequest(
+                    keys.create(accountId).value(), "EVENT", "d".repeat(64), 128)),
+                List.of(), new InitiateOperationRequest.EntryMediaCounts(2, 0));
+            assertApiCode(() -> operations.initiate("operation-user", overMedia),
+                "ENTRY_MEDIA_LIMIT_EXCEEDED");
+
+            var grandfatheredRecordId = UUID.randomUUID().toString();
+            jdbc.update("""
+                INSERT INTO sync_record_versions (
+                    account_id, record_type, record_id, current_version, last_sequence, deleted,
+                    entry_photo_count, entry_recording_count, updated_at
+                ) VALUES (?, 'ENTRY', ?, 5, 5, FALSE, 5, 0, CURRENT_TIMESTAMP)
+                """, accountId, grandfatheredRecordId);
+            var unchangedExistingMedia = new InitiateOperationRequest(
+                UUID.randomUUID(), deviceId, "ENTRY", grandfatheredRecordId, "UPSERT", 5,
+                3, 2, 1, "account",
+                List.of(new OperationObjectRequest(
+                    keys.create(accountId).value(), "EVENT", "f".repeat(64), 128)),
+                List.of(), new InitiateOperationRequest.EntryMediaCounts(5, 0));
+            assertThat(operations.initiate("operation-user", unchangedExistingMedia).existing()).isFalse();
+
+            var growingExistingMedia = new InitiateOperationRequest(
+                UUID.randomUUID(), deviceId, "ENTRY", grandfatheredRecordId, "UPSERT", 5,
+                3, 2, 1, "account",
+                List.of(new OperationObjectRequest(
+                    keys.create(accountId).value(), "EVENT", "9".repeat(64), 128)),
+                List.of(), new InitiateOperationRequest.EntryMediaCounts(6, 0));
+            assertApiCode(() -> operations.initiate("operation-user", growingExistingMedia),
+                "ENTRY_MEDIA_LIMIT_EXCEEDED");
+        } finally {
+            jdbc.update("UPDATE sync_plans SET maximum_photos_per_entry = 3 WHERE plan_id = 'default'");
+        }
+
+        var used = jdbc.queryForObject("""
+            SELECT COALESCE(sum(size_bytes), 0) FROM sync_objects
+            WHERE account_id = ? AND storage_status <> 'DELETED'
+            """, Long.class, accountId);
+        jdbc.update("UPDATE sync_plans SET maximum_storage_bytes = ? WHERE plan_id = 'default'", used + 100);
+        try {
+            assertApiCode(() -> operations.initiate("operation-user", request(
+                UUID.randomUUID(), UUID.randomUUID(), keys.create(accountId).value(), 101)),
+                "STORAGE_QUOTA_EXCEEDED");
+
+            var deleteRequest = new InitiateOperationRequest(
+                UUID.randomUUID(), deviceId, "ENTRY", UUID.randomUUID().toString(), "DELETE", 0,
+                3, 2, 1, "account",
+                List.of(new OperationObjectRequest(
+                    keys.create(accountId).value(), "EVENT", "e".repeat(64), 101)));
+            assertThat(operations.initiate("operation-user", deleteRequest).existing()).isFalse();
+        } finally {
+            jdbc.update("UPDATE sync_plans SET maximum_storage_bytes = 524288000 WHERE plan_id = 'default'");
+        }
+    }
+
     private static InitiateOperationRequest request(UUID operationId, UUID recordId, String objectKey, long size) {
         return request(operationId, recordId.toString(), objectKey, size);
     }
@@ -150,7 +213,7 @@ class OperationInitiationIntegrationTest {
     private static InitiateOperationRequest request(UUID operationId, String recordId, String objectKey, long size) {
         return new InitiateOperationRequest(
             operationId, deviceId, "ENTRY", recordId, "UPSERT", 0,
-            2, 2, 1, "2026-07",
+            3, 2, 1, "2026-07",
             List.of(new OperationObjectRequest(objectKey, "EVENT", "a".repeat(64), size)));
     }
 

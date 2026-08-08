@@ -46,7 +46,7 @@ import { clearSyncV2LocalCache } from './clearSyncV2LocalCache';
 import { repositorySnapshotFromV2State } from './RepositorySnapshotAdapter';
 import { isSyncError } from '../errors';
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 
 interface PairingJournal {
   pairingId: string;
