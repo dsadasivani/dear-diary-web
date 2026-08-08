@@ -372,6 +372,10 @@ test('appearance offers named color personalities and persists the selection', a
     )
     .toBe('#35130C');
 
+  // Theme variables update immediately, but transition-colors can still expose the previous
+  // foreground to axe for a frame. Finish those transitions before evaluating contrast.
+  await page.evaluate(() => document.getAnimations().forEach((animation) => animation.finish()));
+
   const accessibilityResults = await new AxeBuilder({ page }).analyze();
   const blockingViolations = accessibilityResults.violations.filter(
     (violation) => violation.impact === 'serious' || violation.impact === 'critical',
