@@ -50,14 +50,9 @@ public class RecoveryService {
             lockAccount(account.accountId());
             var existing = loadOptional(account.accountId(), true);
             var now = OffsetDateTime.now(clock);
-            var existingIsActive = existing != null
-                && !isTerminal(existing.status())
-                && now.isBefore(existing.expiresAt());
-            if (existingIsActive) {
-                if (existing.attemptId().equals(request.recoveryAttemptId())
-                        && existing.deviceId().equals(request.recoveryDeviceId())) return response(existing, null);
-                throw invalid("RECOVERY_ALREADY_ACTIVE");
-            }
+            if (existing != null
+                    && existing.attemptId().equals(request.recoveryAttemptId())
+                    && existing.deviceId().equals(request.recoveryDeviceId())) return response(existing, null);
             if (existing != null
                     && !isTerminal(existing.status())
                     && !existing.deviceId().equals(request.recoveryDeviceId())) {

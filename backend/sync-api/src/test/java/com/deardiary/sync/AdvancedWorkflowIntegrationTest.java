@@ -228,7 +228,7 @@ class AdvancedWorkflowIntegrationTest {
     }
 
     @Test
-    void expiredRecoveryDoesNotBlockAReplacementDevice() throws Exception {
+    void aNewRecoveryImmediatelySupersedesAnUnfinishedAttempt() throws Exception {
         enable("primary_recovery_enabled", "PRIMARY_RECOVERY");
         var objectStore = new InMemoryEncryptedObjectStore();
         var protocols = new ProtocolService(jdbc);
@@ -242,15 +242,6 @@ class AdvancedWorkflowIntegrationTest {
         recovery.begin("advanced-user", new RecoveryRequests.Begin(staleAttempt, staleDevice,
             Base64.getEncoder().encodeToString(staleKey.getPublic().getEncoded()), "test"));
 
-        var competingKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
-        assertApiCode(() -> recovery.begin("advanced-user", new RecoveryRequests.Begin(
-            UUID.randomUUID(), UUID.randomUUID(),
-            Base64.getEncoder().encodeToString(competingKey.getPublic().getEncoded()), "test")),
-            "RECOVERY_ALREADY_ACTIVE");
-
-        jdbc.update("""
-            UPDATE sync_recovery_state SET requested_at = ?, expires_at = ? WHERE account_id = ?
-            """, OffsetDateTime.now(clock).minusDays(2), OffsetDateTime.now(clock).minusDays(1), accountId);
         var replacementKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
         var replacementDevice = UUID.randomUUID();
         var replacementAttempt = UUID.randomUUID();
@@ -265,6 +256,8 @@ class AdvancedWorkflowIntegrationTest {
             String.class, staleDevice)).isEqualTo("REVOKED");
         assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?",
             String.class, replacementDevice)).isEqualTo("RECOVERY_PENDING");
+        assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?",
+            String.class, primaryDeviceId)).isEqualTo("ACTIVE");
     }
 
     @Test
