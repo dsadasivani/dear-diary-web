@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { RefreshDouble as LoaderCircle } from 'iconoir-react';
 import { eventSyncEngine } from '../repositories';
 import { parseSyncMediaReference } from '../sync/syncMedia';
 
@@ -149,6 +150,7 @@ export default function SyncedImage({
   const isPlaceholder = displaySrc === TRANSPARENT_PLACEHOLDER_SRC;
   const hydrationFailed = Boolean(hydrationError);
   const isSkeleton = isPlaceholder || loadedSrc !== displaySrc;
+  const isSyncMedia = Boolean(parseSyncMediaReference(src));
 
   useEffect(() => {
     if (isPlaceholder) {
@@ -196,6 +198,16 @@ export default function SyncedImage({
           onError?.(event);
         }}
       />
+      {isSkeleton && !hydrationFailed && isSyncMedia && (
+        <span
+          role="status"
+          aria-label={`Syncing ${label}`}
+          className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 bg-brand-bg/72 px-2 text-center text-[10px] font-bold text-brand-sage backdrop-blur-[1px]"
+        >
+          <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+          <span>{resolvedSrc ? 'Opening photo…' : 'Syncing photo…'}</span>
+        </span>
+      )}
       {hydrationFailed && (
         <button
           type="button"
