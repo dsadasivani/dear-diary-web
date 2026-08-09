@@ -1339,7 +1339,7 @@ export default function DiaryDetailScreen({
 
           <nav
             aria-label="Entry navigation"
-            className="open-page-reader-nav mx-auto grid w-full max-w-sm grid-cols-[1fr_auto_1fr] items-center gap-2 p-2"
+            className="open-page-reader-nav sticky bottom-3 z-30 mx-auto grid w-full max-w-sm grid-cols-[1fr_auto_1fr] items-center gap-2 p-2"
           >
             <button
               type="button"
