@@ -79,9 +79,28 @@ public class PairingService {
                 }
                 return response(existing, null, null, null);
             }
+            var approvalInProgress = jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM sync_pairing_requests
+                    WHERE account_id = ? AND pairing_status = 'KEY_PACKAGE_PENDING'
+                )
+                """, Boolean.class, account.accountId());
+            if (Boolean.TRUE.equals(approvalInProgress)) {
+                throw invalid("PAIRING_ALREADY_ACTIVE",
+                    "Another companion pairing approval is already in progress.");
+            }
             quotas.requireCompanionSlot(account.accountId());
             var now = OffsetDateTime.now(clock);
             var expires = now.plus(Duration.ofMinutes(30));
+            // A browser may lose its local journal or start the flow in a new
+            // tab, producing a new device ID. Only the newest unapproved
+            // request should remain actionable on the primary phone.
+            jdbc.update("""
+                UPDATE sync_pairing_requests
+                SET pairing_status = CASE WHEN expires_at <= ? THEN 'EXPIRED' ELSE 'REJECTED' END
+                WHERE account_id = ?
+                  AND pairing_status IN ('REQUESTED', 'SNAPSHOT_PREPARING')
+                """, now, account.accountId());
             jdbc.update("""
                 INSERT INTO sync_pairing_requests (
                     account_id, pairing_id, requested_device_id, requested_device_public_key,

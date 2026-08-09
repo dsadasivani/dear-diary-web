@@ -23,6 +23,41 @@ import {
 } from '../sync/v2/v2DeviceManagement';
 import { BottomSheet } from './ui/BottomSheet';
 
+const pairingStatusPriority: Record<SyncV2Pairing['status'], number> = {
+  REQUESTED: 1,
+  SNAPSHOT_PREPARING: 2,
+  APPROVED: 3,
+  KEY_PACKAGE_PENDING: 4,
+  KEY_PACKAGE_AVAILABLE: 0,
+  BOOTSTRAP_READY: 0,
+  ACTIVATING: 0,
+  COMPLETED: 0,
+  EXPIRED: 0,
+  REJECTED: 0,
+};
+
+/**
+ * Older service versions could leave more than one browser request pending.
+ * Keep the request that has progressed furthest, or the newest request when
+ * both are at the same stage, so the phone never asks for two browser codes.
+ */
+export const selectCurrentCompanionPairing = (
+  pairings: SyncV2Pairing[],
+): SyncV2Pairing[] => {
+  if (pairings.length < 2) return pairings;
+  return [
+    pairings.reduce((current, candidate) => {
+      const priorityDifference =
+        pairingStatusPriority[candidate.status] - pairingStatusPriority[current.status];
+      if (priorityDifference > 0) return candidate;
+      if (priorityDifference < 0) return current;
+      return new Date(candidate.requestedAt).getTime() > new Date(current.requestedAt).getTime()
+        ? candidate
+        : current;
+    }),
+  ];
+};
+
 export default function CompanionApprovalPanel() {
   const [sessions, setSessions] = useState<SyncV2Pairing[]>([]);
   const [devices, setDevices] = useState<SyncV2Device[]>([]);
@@ -56,7 +91,7 @@ export default function CompanionApprovalPanel() {
         listPendingSyncV2Pairings(state.deviceId),
         listSyncV2Devices(state.deviceId),
       ]);
-      setSessions(pendingPairings);
+      setSessions(selectCurrentCompanionPairing(pendingPairings));
       setDevices(
         accountDevices.filter(
           (device) => device.deviceRole === 'COMPANION' && device.deviceStatus === 'ACTIVE',
