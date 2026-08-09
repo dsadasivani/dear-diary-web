@@ -1,6 +1,6 @@
 # Sync V2 and account identity
 
-Dear Diary uses Google only to establish a stable user identity and to authenticate with Supabase. It does not request Google Drive access or store encrypted journal objects in Drive.
+Loredays uses Google only to establish a stable user identity and to authenticate with Supabase. It does not request Google Drive access or store encrypted collection objects in Drive.
 
 Sync V2 stores only encrypted operation, media, snapshot, recovery, and device-key packages in the configured object store. The Spring sync API owns account authorization, device registration, cursors, conflict-safe operation commits, pairing, primary recovery, key rotation, and revocation.
 

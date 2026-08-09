@@ -267,7 +267,7 @@ export const encodeRecoveryKeyPackage = (keyPackage: RecoveryKeyPackage): Uint8A
 export const decodeRecoveryKeyPackage = (bytes: Uint8Array): RecoveryKeyPackage => {
   const keyPackage = JSON.parse(decoder.decode(bytes)) as RecoveryKeyPackage;
   if (keyPackage.version !== 1 || keyPackage.packageKind !== 'root_key') {
-    throw new Error('This is not a supported Dear Diary root-key package.');
+    throw new Error('This is not a supported Loredays root-key package.');
   }
   return keyPackage;
 };

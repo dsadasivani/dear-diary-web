@@ -1,6 +1,6 @@
 # Performance measurement
 
-Dear Diary exposes development measurements through `measureAsync` and `measureSync` in `src/utils/performance.ts`. Production builds disable local measurement collection by default.
+Loredays exposes development measurements through `measureAsync` and `measureSync` in `src/utils/performance.ts`. Production builds disable local measurement collection by default.
 
 ## Privacy
 

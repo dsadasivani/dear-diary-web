@@ -215,7 +215,7 @@ export default function SearchScreen({
               body: richTextHtmlToPlainText(entry.body),
               date: entry.date,
               tags: entry.tags,
-              diaryName: diaryNamesById[entry.diaryId] || 'Unknown Journal',
+              diaryName: diaryNamesById[entry.diaryId] || 'Unknown Collection',
               photoCount: entry.photoCount,
               rawObj: entry,
             }),
@@ -477,7 +477,7 @@ export default function SearchScreen({
         </h2>
         {layout !== 'mobile' && (
           <p className="mt-1 text-sm text-brand-text-muted">
-            Start with a journal entry, a quick note, or a familiar theme.
+            Start with an entry, a quick note, or a familiar theme.
           </p>
         )}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -491,9 +491,7 @@ export default function SearchScreen({
           >
             <BookOpen className="h-6 w-6 text-brand-sage" />
             <span>
-              <span className="block font-bold">
-                {layout === 'mobile' ? 'Entries' : 'Journal entries'}
-              </span>
+              <span className="block font-bold">Entries</span>
               {layout !== 'mobile' && (
                 <span className="text-xs text-brand-text-muted">Long-form pages and moments</span>
               )}

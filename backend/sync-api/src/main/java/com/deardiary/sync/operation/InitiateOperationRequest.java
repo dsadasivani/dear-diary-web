@@ -22,5 +22,53 @@ public record InitiateOperationRequest(
     @Min(1) @Max(1000) int eventSchemaVersion,
     @Min(1) int keyEpoch,
     @NotBlank @Size(max = 128) String partitionKey,
-    @NotEmpty @Size(max = 128) List<@Valid OperationObjectRequest> objects
-) {}
+    @NotEmpty @Size(max = 128) List<@Valid OperationObjectRequest> objects,
+    @Size(max = 128) List<@Valid RetainedMediaObjectRequest> retainedMediaObjects,
+    @Valid EntryMediaCounts entryMediaCounts
+) {
+    public record EntryMediaCounts(
+        @Min(0) int photoCount,
+        @Min(0) int recordingCount
+    ) {}
+
+    public InitiateOperationRequest(
+            UUID operationId,
+            UUID deviceId,
+            String recordType,
+            String recordId,
+            String operationType,
+            long baseRecordVersion,
+            int protocolVersion,
+            int eventSchemaVersion,
+            int keyEpoch,
+            String partitionKey,
+            List<OperationObjectRequest> objects) {
+        this(operationId, deviceId, recordType, recordId, operationType, baseRecordVersion,
+            protocolVersion, eventSchemaVersion, keyEpoch, partitionKey, objects, List.of(),
+            defaultEntryMediaCounts(recordType, operationType));
+    }
+
+    public InitiateOperationRequest(
+            UUID operationId,
+            UUID deviceId,
+            String recordType,
+            String recordId,
+            String operationType,
+            long baseRecordVersion,
+            int protocolVersion,
+            int eventSchemaVersion,
+            int keyEpoch,
+            String partitionKey,
+            List<OperationObjectRequest> objects,
+            List<RetainedMediaObjectRequest> retainedMediaObjects) {
+        this(operationId, deviceId, recordType, recordId, operationType, baseRecordVersion,
+            protocolVersion, eventSchemaVersion, keyEpoch, partitionKey, objects,
+            retainedMediaObjects, defaultEntryMediaCounts(recordType, operationType));
+    }
+
+    private static EntryMediaCounts defaultEntryMediaCounts(String recordType, String operationType) {
+        return "ENTRY".equals(recordType) && "UPSERT".equals(operationType)
+            ? new EntryMediaCounts(0, 0)
+            : null;
+    }
+}

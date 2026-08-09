@@ -56,7 +56,7 @@ const snapshotWithoutMediaPayloads = (snapshot: RepositorySnapshot): RepositoryS
   userProfile: snapshot.userProfile
     ? {
         ...snapshot.userProfile,
-        avatarUri: snapshot.userProfile.avatarUri ? '[local-media]' : undefined,
+        avatarUri: undefined,
       }
     : undefined,
 });
@@ -68,7 +68,6 @@ export const calculateLocalStorageUsage = async (
   const imageUris = uniqueLocalUris([
     ...snapshot.diaries.map((diary) => diary.coverImage),
     ...snapshot.entries.flatMap((entry) => entry.photoUris),
-    snapshot.userProfile?.avatarUri,
   ]);
   const audioUris = uniqueLocalUris([
     ...snapshot.entries.map((entry) => entry.audioUri),

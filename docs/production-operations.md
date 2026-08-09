@@ -1,11 +1,13 @@
 # Production sync operations
 
-The Sync V2 backend exposes health and Prometheus metrics through Actuator and exports sampled OTLP
-traces when configured. Logs are structured JSON and contain correlation, trace, and span identifiers;
+The Sync V2 backend sends metrics, structured logs, and sampled traces to Grafana Cloud over OTLP.
+Logs contain correlation, trace, and span identifiers;
 request bodies, signed object URLs, tokens, and diary content are never observability attributes.
 
-Import `ops/prometheus/alerts.yml` and the four dashboards under `ops/grafana/dashboards`. Critical
+Import `ops/prometheus/alerts.yml` and all six dashboards under `ops/grafana/dashboards` into Grafana
+Cloud. Critical
 integrity alerts page immediately. Operational alerts should page only after their configured window.
+Keep `SYNC_PROMETHEUS_PUBLIC_ENABLED=false`; the hosted service pushes metrics over authenticated OTLP.
 
 ## Emergency controls
 

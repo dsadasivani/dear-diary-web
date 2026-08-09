@@ -4,8 +4,8 @@ import AxeBuilder from '@axe-core/playwright';
 test('fresh web launch opens the companion onboarding screen', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: 'Dear Diary' })).toBeVisible();
-  await expect(page.getByText('Your diary starts on your phone.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Loredays.' })).toBeVisible();
+  await expect(page.getByText('Your story starts on your phone.')).toBeVisible();
   await expect(page.getByRole('link', { name: /get it on google play/i })).toHaveAttribute(
     'href',
     'https://play.google.com/store/apps/details?id=com.deardiary.app',

@@ -13,7 +13,7 @@ const createDist = async () => {
   const distPath = await mkdtemp(path.join(os.tmpdir(), 'dear-diary-dist-'));
   await writeFile(
     path.join(distPath, 'index.html'),
-    '<!doctype html><title>Dear Diary</title><div id="root"></div>',
+    '<!doctype html><title>Loredays</title><div id="root"></div>',
   );
   await writeFile(path.join(distPath, 'app.js'), 'window.__dearDiaryTest = true;');
   return distPath;
@@ -53,6 +53,7 @@ test('development policy permits Vite runtime features without weakening product
     'production',
     'http://localhost:8080/api/v2/sync',
     'http://localhost:9000/dear-diary-sync',
+    'https://faro-collector-prod-ap-south-1.grafana.net/collect/example',
   );
 
   assert.match(developmentPolicy, /connect-src[^;]+ws:/);
@@ -62,6 +63,10 @@ test('development policy permits Vite runtime features without weakening product
   assert.doesNotMatch(productionPolicy, /connect-src[^;]+ ws:/);
   assert.doesNotMatch(productionPolicy, /connect-src[^;]+localhost:8080/);
   assert.doesNotMatch(productionPolicy, /connect-src[^;]+localhost:9000/);
+  assert.match(
+    productionPolicy,
+    /connect-src[^;]+https:\/\/faro-collector-prod-ap-south-1\.grafana\.net/,
+  );
   assert.doesNotMatch(productionPolicy, /script-src[^;]*'unsafe-inline'/);
 });
 
@@ -87,14 +92,14 @@ test('production app serves static assets and falls back to the SPA shell', asyn
   assert.match(asset.text, /__dearDiaryTest/);
 
   const fallback = await request(app).get('/diaries/today').expect(200);
-  assert.match(fallback.text, /Dear Diary/);
+  assert.match(fallback.text, /Loredays/);
 });
 
 test('static serving does not expose files outside the dist directory', async () => {
   const app = await createApp({ mode: 'production', distPath: await createDist() });
   const response = await request(app).get('/..%2Fpackage.json').expect(200);
 
-  assert.match(response.text, /Dear Diary/);
+  assert.match(response.text, /Loredays/);
   assert.doesNotMatch(response.text, /"dependencies"/);
 });
 

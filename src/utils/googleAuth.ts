@@ -3,7 +3,7 @@ import type { SignInResult } from '@capawesome/capacitor-google-sign-in';
 import { isNativePlatform } from '../platform';
 import type { GoogleAccountSession } from '../types';
 
-export type GoogleAuthIntent = 'pin-reset' | 'sync';
+export type GoogleAuthIntent = 'pin-reset' | 'recovery-passphrase-reset' | 'sync';
 
 const GOOGLE_AUTH_INTENT_KEY = 'deardiary_google_auth_intent';
 const GOOGLE_SIGN_IN_TIMEOUT_MS = 90_000;
@@ -47,7 +47,7 @@ const mapNativeResult = (result: SignInResult): GoogleAccountSession => ({
 export const startGoogleAuth = async (intent: GoogleAuthIntent): Promise<GoogleAccountSession> => {
   if (isNativePlatform()) {
     await initializeNativeGoogleSignIn();
-    if (intent === 'pin-reset') await GoogleSignIn.signOut().catch(() => undefined);
+    if (intent !== 'sync') await GoogleSignIn.signOut().catch(() => undefined);
     const result = await withTimeout(
       GoogleSignIn.signIn(),
       'Google sign-in did not finish. Select the linked account and try again.',
@@ -63,7 +63,9 @@ export const startGoogleAuth = async (intent: GoogleAuthIntent): Promise<GoogleA
 
 export const getPendingGoogleAuthIntent = (): GoogleAuthIntent | null => {
   const value = localStorage.getItem(GOOGLE_AUTH_INTENT_KEY);
-  return value === 'pin-reset' || value === 'sync' ? value : null;
+  return value === 'pin-reset' || value === 'recovery-passphrase-reset' || value === 'sync'
+    ? value
+    : null;
 };
 
 export const clearGoogleAuthIntent = (): void => localStorage.removeItem(GOOGLE_AUTH_INTENT_KEY);

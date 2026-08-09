@@ -38,7 +38,7 @@ class SchemaMigrationIntegrationTest {
 
         var migration = flyway.migrate();
 
-        assertThat(migration.migrationsExecuted).isEqualTo(27);
+        assertThat(migration.migrationsExecuted).isEqualTo(29);
         try (Connection connection = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              Statement statement = connection.createStatement()) {
@@ -50,7 +50,10 @@ class SchemaMigrationIntegrationTest {
                 .isTrue();
             assertThat(queryLong(statement,
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'sync_%'"))
-                .isEqualTo(20);
+                .isEqualTo(22);
+            assertThat(queryLong(statement,
+                "SELECT maximum_storage_bytes FROM sync_plans WHERE plan_id = 'default'"))
+                .isEqualTo(524_288_000L);
             assertThat(queryBoolean(statement,
                 "SELECT has_table_privilege('anon', 'public.sync_accounts', 'SELECT')"))
                 .isFalse();

@@ -35,6 +35,16 @@ const snapshot: RepositorySnapshot = {
     },
   ],
   notes: [],
+  userProfile: {
+    name: 'Writer',
+    email: 'writer@example.com',
+    bio: '',
+    avatarEmoji: 'W',
+    avatarColor: '#fff',
+    avatarUri: 'data:image/png;base64,AQIDBAU=',
+    writingGoal: 100,
+    joinedDate: '07/2026',
+  },
 };
 
 test('calculates local writing and deduplicated media usage', async () => {
@@ -46,6 +56,16 @@ test('calculates local writing and deduplicated media usage', async () => {
   assert.equal(usage.audioBytes, 4);
   assert.ok(usage.writingBytes > 0);
   assert.equal(usage.totalBytes, usage.writingBytes + 7);
+});
+
+test('excludes the profile image from every storage statistic', async () => {
+  const withoutAvatar = await calculateLocalStorageUsage({
+    ...snapshot,
+    userProfile: { ...snapshot.userProfile!, avatarUri: undefined },
+  });
+  const withAvatar = await calculateLocalStorageUsage(snapshot);
+
+  assert.deepEqual(withAvatar, withoutAvatar);
 });
 
 test('does not download cloud-only sync media references', async () => {

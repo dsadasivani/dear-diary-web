@@ -51,10 +51,15 @@ import {
 } from '../outbox';
 import { SyncV2ApiClient } from './api/SyncV2ApiClient';
 import type { SyncV2Protocol } from './api/SyncV2ApiTypes';
+import type { SyncV2Quota } from './api/SyncV2ApiTypes';
+import { DEFAULT_ACCOUNT_QUOTA } from '../../domain/quota';
 import { PersistentSyncConflictStore } from './conflict/PersistentSyncConflictStore';
 import { SyncInvariantValidator } from './domain/SyncInvariantValidator';
 import { BoundedObjectTransfer, sha256Hex } from './operation/BoundedObjectTransfer';
 import { CanonicalSyncV2OperationPreparer } from './operation/CanonicalSyncV2OperationPreparer';
+import { createSyncV2ObjectKey } from './operation/CanonicalSyncV2OperationPreparer';
+import { SyncV2MediaPreparer } from './media/SyncV2MediaPreparer';
+import { SyncV2MediaHydrator } from './media/SyncV2MediaHydrator';
 import {
   PersistentOperationAcknowledgmentStore,
   type OperationAcknowledgmentStore,
@@ -90,8 +95,12 @@ import {
   repositorySnapshotFromV2State,
   repositorySnapshotToV2State,
 } from './RepositorySnapshotAdapter';
+import { toPortableSyncPayload } from '../portableMedia';
+import { toPortableDiary, toPortableEntry, toPortableUserProfile } from '../portableMedia';
+import { parseSyncMediaReference } from '../syncMedia';
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
+const SYNC_V2_QUOTA_CACHE_KEY = 'deardiary_sync_quota_v1';
 const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
 const MAX_WORK_PER_FLUSH = 100;
 const COMPANION_AUTHORIZATION_CHECK_INTERVAL_MS = 5_000;
@@ -151,6 +160,7 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     private readonly assertAuthorized: (() => Promise<void>) | null,
     private readonly onError: (context: string, error: unknown) => void | Promise<void>,
     private readonly recoverUnknownPullStop: () => Promise<boolean>,
+    private readonly mediaHydrator: SyncV2MediaHydrator | null,
   ) {}
   async start(): Promise<void> {
     // Coordinator startup completes its initial pull before it enables the
@@ -222,6 +232,9 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
       void this.flushPendingOutbox().catch(() => undefined);
     }, delayMs);
   }
+  hydrateMediaReference(reference: string): Promise<string> {
+    return this.mediaHydrator?.hydrate(reference) || Promise.resolve(reference);
+  }
 }
 
 class RepositoryReplayStore implements SyncV2ReplayStore {
@@ -236,13 +249,34 @@ class RepositoryReplayStore implements SyncV2ReplayStore {
     return this.persistent.hasAppliedEvent(eventId);
   }
   async applyBatch(events: ReplayBatchEvent[]): Promise<number> {
-    for (const { envelope, event } of events) {
+    const portableEvents = events.map(({ envelope, event }) => ({
+      envelope,
+      event: {
+        ...event,
+        payload: toPortableSyncPayload(recordTypeToLegacy[event.recordType], event.payload),
+      },
+    }));
+    for (const { envelope, event } of portableEvents) {
       await this.repository.applySyncEvent(
         toDomainEvent(envelope.deviceId, envelope.eventId, event),
         envelope.sequence,
       );
+      for (const pointer of event.mediaPointers || []) {
+        await this.repository.saveSyncMediaPointer({
+          mediaId: pointer.mediaId,
+          sequence: envelope.sequence,
+          driveFileId: pointer.objectKey,
+          sha256: '',
+          sizeBytes: 0,
+          createdByDeviceId: envelope.deviceId,
+          createdAt: new Date().toISOString(),
+          thumbnailSequence: pointer.thumbnailObjectKey ? envelope.sequence : undefined,
+          thumbnailDriveFileId: pointer.thumbnailObjectKey,
+          keyEpoch: envelope.keyEpoch,
+        });
+      }
     }
-    return this.persistent.applyBatch(events);
+    return this.persistent.applyBatch(portableEvents);
   }
 }
 
@@ -276,7 +310,10 @@ class RepositoryAcknowledgmentStore implements OperationAcknowledgmentStore {
     operation: SyncOutboxOperationV2,
     result: Parameters<OperationAcknowledgmentStore['acknowledge']>[1],
   ): Promise<void> {
-    const payload = await loadRecord(this.repository, operation);
+    const payload =
+      operation.preparedCanonicalPayload !== undefined
+        ? operation.preparedCanonicalPayload
+        : await loadRecord(this.repository, operation);
     const event = toDomainEvent(operation.deviceId, operation.operationId, {
       accountId: operation.accountId,
       operationId: operation.operationId,
@@ -288,6 +325,29 @@ class RepositoryAcknowledgmentStore implements OperationAcknowledgmentStore {
       payload,
     });
     await this.repository.acknowledgeLocalMutation({ event, sequence: result.sequence });
+    for (const pointer of operation.preparedMediaPointers || []) {
+      const media = operation.preparedObjects?.find(
+        (object) => object.objectKey === pointer.objectKey,
+      );
+      const thumbnail = operation.preparedObjects?.find(
+        (object) => object.objectKey === pointer.thumbnailObjectKey,
+      );
+      await this.repository.saveSyncMediaPointer({
+        mediaId: pointer.mediaId,
+        sequence: result.sequence,
+        driveFileId: pointer.objectKey,
+        sha256: media?.sha256 || '',
+        sizeBytes: media?.sizeBytes || 0,
+        createdByDeviceId: operation.deviceId,
+        createdAt: new Date().toISOString(),
+        localUri: pointer.localUri,
+        thumbnailSequence: pointer.thumbnailObjectKey ? result.sequence : undefined,
+        thumbnailDriveFileId: pointer.thumbnailObjectKey,
+        thumbnailSha256: thumbnail?.sha256,
+        thumbnailSizeBytes: thumbnail?.sizeBytes,
+        keyEpoch: operation.keyEpoch,
+      });
+    }
     await this.persistent.acknowledge(operation, result);
     const raw = await this.store.getItem(SYNC_V2_RECORDS_KEY);
     const records = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
@@ -363,6 +423,7 @@ export class SyncV2ApplicationLifecycle {
   private api: SyncV2ApiClient | null = null;
   private revocationHandling: Promise<void> | null = null;
   private readonly companionRecoveryAttempts = new Set<string>();
+  private readonly mediaEnabledAccounts = new Set<string>();
 
   constructor(
     private readonly store: LocalDataStore,
@@ -388,7 +449,7 @@ export class SyncV2ApplicationLifecycle {
     input: CreatePrimarySyncAccountInput,
   ): Promise<LocalSyncAccountState> {
     if (!input.googleSession.email)
-      throw new Error('Google must return an email address to restore your Dear Diary account.');
+      throw new Error('Google must return an email address to restore your Loredays account.');
     if (!input.supabaseSession.accessToken)
       throw new Error('Account authorization is unavailable. Sign in again.');
     if (await this.repository.getLocalSyncAccountState())
@@ -580,6 +641,7 @@ export class SyncV2ApplicationLifecycle {
         deviceId: pending.deviceId,
         eventSchemaVersion: protocol.eventSchemaVersion,
         replayBatchSize: 1,
+        onProgress: (progress) => this.legacyEngine.reportCatchUpProgress(progress),
       },
     );
     let currentSequence: number;
@@ -637,7 +699,7 @@ export class SyncV2ApplicationLifecycle {
 
   async createPrimaryAccount(input: CreatePrimarySyncAccountInput): Promise<LocalSyncAccountState> {
     if (!input.googleSession.email)
-      throw new Error('Google must return an email address to create a Dear Diary account.');
+      throw new Error('Google must return an email address to create a Loredays account.');
     if (!input.supabaseSession.accessToken)
       throw new Error('Account authorization is unavailable. Sign in again.');
     if (await this.repository.getLocalSyncAccountState())
@@ -768,6 +830,32 @@ export class SyncV2ApplicationLifecycle {
     );
     await api.registerKeyPackage(recoveryPackageId, deviceId);
 
+    // Media must be committed before the first restore point is captured. Keep the
+    // account setup journal until both the backfill and snapshot have succeeded so
+    // an interrupted setup can resume with the same encrypted outbox objects.
+    await saveSyncSecrets(
+      withPrimaryRecoveryCredential(
+        {
+          version: 2,
+          accountId: registration.accountId,
+          accountRootKey,
+          accountRootKeys: { 1: accountRootKey },
+          devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
+          supabaseSession: input.supabaseSession,
+          googleSession: input.googleSession,
+        },
+        input.recoveryPassphrase,
+      ),
+    );
+    this.api = api;
+    this.delegate = await this.composeRuntime(account);
+    this.legacyEngine.installRuntimeDelegate(this.delegate);
+    await this.delegate.start();
+    if (this.mediaEnabledAccounts.has(account.accountId)) {
+      const queued = await this.queueMediaBackfill(account);
+      if (queued) await this.delegate.flushPendingOutbox();
+    }
+
     input.onProgress?.('Creating your encrypted restore point...');
     const snapshots = new SyncV2SnapshotCoordinator(
       api,
@@ -790,23 +878,8 @@ export class SyncV2ApplicationLifecycle {
     );
     await snapshots.create();
     input.onProgress?.('Finishing secure setup...');
-    await saveSyncSecrets(
-      withPrimaryRecoveryCredential(
-        {
-          version: 2,
-          accountId: registration.accountId,
-          accountRootKey,
-          accountRootKeys: { 1: accountRootKey },
-          devicePrivateKeyJwk: pending.devicePrivateKeyJwk,
-          supabaseSession: input.supabaseSession,
-          googleSession: input.googleSession,
-        },
-        input.recoveryPassphrase,
-      ),
-    );
     await this.repository.saveLocalSyncAccountState(account);
     await clearPendingPrimaryAccountSetupSecret();
-    await this.startIfActive();
     return account;
   }
 
@@ -826,6 +899,48 @@ export class SyncV2ApplicationLifecycle {
       reason:
         'This legacy sync account is no longer supported. Reconnect to create a Sync V2 account.',
     };
+  }
+
+  async getQuota(options: { refresh?: boolean } = {}): Promise<SyncV2Quota> {
+    const account = await this.repository.getLocalSyncAccountState();
+    if (!account) return structuredClone(DEFAULT_ACCOUNT_QUOTA);
+
+    const loadCached = async (): Promise<SyncV2Quota | null> => {
+      const raw = await this.store.getItem(SYNC_V2_QUOTA_CACHE_KEY);
+      if (!raw) return null;
+      try {
+        const cached = JSON.parse(raw) as { accountId?: string; quota?: SyncV2Quota };
+        return cached.accountId === account.accountId && cached.quota ? cached.quota : null;
+      } catch {
+        return null;
+      }
+    };
+
+    if (!options.refresh) {
+      const cached = await loadCached();
+      if (cached) return cached;
+    }
+    try {
+      const quota = await this.client().getQuota();
+      await this.store.setItem(
+        SYNC_V2_QUOTA_CACHE_KEY,
+        JSON.stringify({ accountId: account.accountId, quota }),
+      );
+      for (const operation of await this.outbox.listByAccount(account.accountId)) {
+        if (operation.state !== 'BLOCKED_QUOTA') continue;
+        await this.outbox.transition(operation.operationId, 'BLOCKED_QUOTA', 'PREPARING', {
+          lastErrorCode: undefined,
+          lastErrorAt: undefined,
+          nextAttemptAt: 0,
+        });
+      }
+      this.legacyEngine.requestOutboxFlush();
+      return quota;
+    } catch (error) {
+      const cached = await loadCached();
+      if (cached) return cached;
+      throw error;
+    }
   }
 
   async unlinkThisCompanion(): Promise<void> {
@@ -879,6 +994,10 @@ export class SyncV2ApplicationLifecycle {
       if (!this.delegate) this.delegate = await this.composeRuntime(account);
       this.legacyEngine.installRuntimeDelegate(this.delegate);
       await this.delegate.start();
+      if (this.mediaEnabledAccounts.has(account.accountId)) {
+        const queued = await this.queueMediaBackfill(account);
+        if (queued) await this.delegate.flushPendingOutbox();
+      }
       return true;
     } catch (error) {
       if (isSyncError(error) && error.code === 'DEVICE_REVOKED') {
@@ -1044,8 +1163,10 @@ export class SyncV2ApplicationLifecycle {
     const runtime = await new SyncV2RuntimeStore(this.store).load();
     if (!runtime || runtime.accountId !== account.accountId)
       throw new Error('Sync V2 runtime state does not match the local account.');
+    if (protocol.featureFlags.mediaUploadEnabled) this.mediaEnabledAccounts.add(account.accountId);
+    else this.mediaEnabledAccounts.delete(account.accountId);
     const transfer = new BoundedObjectTransfer({
-      maximumObjectBytes: Math.max(protocol.maximumEventBytes, 1),
+      maximumObjectBytes: Math.max(protocol.maximumEventBytes, protocol.maximumMediaBytes, 1),
     });
     const validator = new SyncInvariantValidator();
     const safety = new PersistentSafetyStopStore(this.store);
@@ -1077,8 +1198,16 @@ export class SyncV2ApplicationLifecycle {
         deviceId: account.deviceId,
         eventSchemaVersion: protocol.eventSchemaVersion,
         replayBatchSize: 1,
+        onProgress: (progress) => this.legacyEngine.reportCatchUpProgress(progress),
       },
     );
+    const mediaPreparer = protocol.featureFlags.mediaUploadEnabled
+      ? new SyncV2MediaPreparer({
+          repository: this.repository,
+          keyForEpoch: (epoch) => this.keyForEpoch(epoch),
+          createObjectKey: createSyncV2ObjectKey,
+        })
+      : undefined;
     const preparer = new CanonicalSyncV2OperationPreparer({
       eventSchemaVersion: protocol.eventSchemaVersion,
       loadAuthoritativeRecord: (operation) => loadRecord(this.repository, operation),
@@ -1098,6 +1227,7 @@ export class SyncV2ApplicationLifecycle {
             { keyEpoch: epoch },
           )
         ).bytes,
+      mediaPreparer,
     });
     const acknowledgments = new RepositoryAcknowledgmentStore(
       new PersistentOperationAcknowledgmentStore(this.store),
@@ -1167,6 +1297,71 @@ export class SyncV2ApplicationLifecycle {
       assertAuthorized,
       (context, error) => this.handleRuntimeError(context, error),
       () => safety.clearRecoverableUnknownPull(account.accountId),
+      protocol.featureFlags.mediaUploadEnabled
+        ? new SyncV2MediaHydrator(
+            api,
+            this.repository,
+            (epoch) => this.keyForEpoch(epoch),
+            protocol.maximumMediaBytes,
+            account.accountId,
+          )
+        : null,
     );
+  }
+
+  private async queueMediaBackfill(account: LocalSyncAccountState): Promise<boolean> {
+    const marker = `deardiary_sync_v2_media_backfill_v1:${account.accountId}`;
+    if (await this.store.getItem(marker)) return false;
+    const hasLocal = (value: string | undefined): boolean =>
+      Boolean(value && !parseSyncMediaReference(value));
+    let queued = false;
+    const [diaries, entries, profile] = await Promise.all([
+      this.repository.listDiaries(),
+      this.repository.listEntries(),
+      this.repository.getUserProfile(),
+    ]);
+    for (const diary of diaries.filter((item) => hasLocal(item.coverImage))) {
+      await this.repository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'diary',
+        recordId: diary.id,
+        operation: 'upsert',
+        account,
+        localPayload: diary,
+        syncPayload: toPortableDiary(diary),
+      });
+      queued = true;
+    }
+    for (const entry of entries.filter(
+      (item) =>
+        item.photoUris.some(hasLocal) ||
+        hasLocal(item.audioUri) ||
+        item.blocks?.some((block) => hasLocal(block.audioUri)),
+    )) {
+      await this.repository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'entry',
+        recordId: entry.id,
+        operation: 'upsert',
+        account,
+        localPayload: entry,
+        syncPayload: toPortableEntry(entry),
+      });
+      queued = true;
+    }
+    if (hasLocal(profile.avatarUri)) {
+      await this.repository.applyLocalMutationWithOutbox({
+        operationId: crypto.randomUUID(),
+        recordType: 'profile',
+        recordId: 'profile',
+        operation: 'upsert',
+        account,
+        localPayload: profile,
+        syncPayload: toPortableUserProfile(profile),
+      });
+      queued = true;
+    }
+    await this.store.setItem(marker, new Date().toISOString());
+    return queued;
   }
 }

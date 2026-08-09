@@ -1,3 +1,5 @@
+import { BRAND } from '../config/brand';
+
 /**
  * WebAuthn Passkeys Utility
  * Enables standards-compliant, secure biometric authentication using Touch ID, Face ID, or Windows Hello.
@@ -70,13 +72,13 @@ export async function registerLocalPasskey(
   const creationOptions: PublicKeyCredentialCreationOptions = {
     challenge,
     rp: {
-      name: 'Dear Diary Private Sanctuary',
+      name: `${BRAND.name} Private Space`,
       id: rpId,
     },
     user: {
       id: userId,
       name: username,
-      displayName: 'Dear Diary User',
+      displayName: `${BRAND.name} User`,
     },
     pubKeyCredParams: [
       { type: 'public-key', alg: -7 }, // ES256

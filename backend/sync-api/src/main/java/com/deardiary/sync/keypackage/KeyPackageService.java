@@ -9,6 +9,7 @@ import com.deardiary.sync.objectstore.ObjectKeyFactory;
 import com.deardiary.sync.objectstore.ObjectStoreException;
 import com.deardiary.sync.objectstore.UploadObjectCommand;
 import com.deardiary.sync.protocol.ProtocolService;
+import com.deardiary.sync.quota.QuotaService;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.nio.charset.StandardCharsets;
@@ -35,11 +36,12 @@ public class KeyPackageService {
     private final EncryptedObjectStore objectStore;
     private final Clock clock;
     private final ProtocolService protocols;
+    private final QuotaService quotas;
 
     public KeyPackageService(JdbcTemplate jdbc, PlatformTransactionManager transactionManager,
             DeviceAuthorizationService devices, AccountAuthorizationService accounts,
             ObjectKeyFactory objectKeys, EncryptedObjectStore objectStore, Clock clock,
-            ProtocolService protocols) {
+            ProtocolService protocols, QuotaService quotas) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(transactionManager);
         this.devices = devices;
@@ -48,6 +50,7 @@ public class KeyPackageService {
         this.objectStore = objectStore;
         this.clock = clock;
         this.protocols = protocols;
+        this.quotas = quotas;
     }
 
     public KeyPackageResponse initiate(String ownerSubject, KeyPackageRequest request) {
@@ -185,6 +188,8 @@ public class KeyPackageService {
             }
             return existing;
         }
+        var securityWorkflow = "RECOVERY".equals(request.purpose()) || request.rotationId() != null;
+        quotas.requireStorageCapacity(accountId, request.sizeBytes(), securityWorkflow);
         var objectKey = objectKeys.create(accountId).value();
         var now = OffsetDateTime.now(clock);
         jdbc.update("""

@@ -1,4 +1,4 @@
-# Dear Diary Sync API
+# Loredays Sync API
 
 Spring Boot modular-monolith foundation for the Sync V2 control plane.
 
@@ -85,8 +85,10 @@ worker claims bounded batches with expiring leases, retries transient publishing
 dead-letters exhausted or non-retryable messages. Enable it only after configuring both
 `SYNC_NOTIFICATION_PUBLISHER_*` and `SYNC_NOTIFICATION_WORKER_*`; it is disabled by default.
 
-Production observability uses structured JSON logs, correlation/trace/span identifiers, Micrometer
-Prometheus metrics, and environment-configured OTLP trace export. Runtime flags, emergency mode,
+Production observability sends structured logs, Micrometer metrics, and sampled traces to Grafana Cloud
+over authenticated OTLP. Logs retain correlation/trace/span identifiers. Runtime flags, emergency mode,
 minimum versions, and deterministic canary percentage are returned by the protocol endpoint and are
 stored in PostgreSQL so an audited operator change takes effect without a client release. See
 `docs/production-operations.md` for dashboards, alerts, emergency controls, and rollout procedure.
+The Prometheus route remains denied because the hosted deployment pushes metrics over OTLP. See
+`docs/observability.md` for Grafana Cloud and AWS setup.

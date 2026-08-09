@@ -11,8 +11,7 @@ interface ImportMetaEnv {
   readonly VITE_APP_VERSION?: string;
   readonly VITE_MINIMUM_PROTOCOL_VERSION?: string;
   readonly VITE_TELEMETRY_RELEASE_VERSION?: string;
-  readonly VITE_TELEMETRY_ENDPOINT?: string;
-  readonly VITE_CRASH_REPORT_ENDPOINT?: string;
+  readonly VITE_GRAFANA_FARO_URL?: string;
   readonly VITE_ENABLE_MD_FLOW_HOOKS?: string;
 }
 

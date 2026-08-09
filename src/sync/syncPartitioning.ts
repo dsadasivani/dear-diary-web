@@ -7,6 +7,7 @@ import type {
   SyncPartitionManifestEntry,
   SyncRecordType,
 } from '../types';
+import { toPortableRepositorySnapshot } from './portableMedia';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -123,18 +124,8 @@ export const filterSnapshotForPartition = (
   };
 };
 
-const stripLocalMediaUris = (snapshot: RepositorySnapshot): RepositorySnapshot => ({
-  ...snapshot,
-  syncMediaPointers: Object.fromEntries(
-    Object.entries(snapshot.syncMediaPointers || {}).map(([sequence, pointer]) => [
-      sequence,
-      {
-        ...pointer,
-        localUri: undefined,
-      },
-    ]),
-  ),
-});
+const stripLocalMediaUris = (snapshot: RepositorySnapshot): RepositorySnapshot =>
+  toPortableRepositorySnapshot(snapshot);
 
 export const listPartitionKeysInSnapshot = (snapshot: RepositorySnapshot): SyncPartitionKey[] => {
   const keys = new Set<SyncPartitionKey>([CORE_PARTITION_KEY]);

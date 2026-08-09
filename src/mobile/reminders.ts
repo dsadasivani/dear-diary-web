@@ -1,6 +1,7 @@
 import { LocalNotifications } from '@capacitor/local-notifications';
 import type { AppSettings } from '../types';
 import { isNativePlatform } from '../platform';
+import { BRAND } from '../config/brand';
 
 const REMINDER_ID = 1001;
 
@@ -87,8 +88,8 @@ export const syncReminderNotification = async (
       notifications: [
         {
           id: REMINDER_ID,
-          title: 'Dear Diary',
-          body: 'Take a quiet moment to write today.',
+          title: BRAND.name,
+          body: 'Anything worth remembering from today?',
           schedule: {
             on: { hour, minute },
             repeats: true,

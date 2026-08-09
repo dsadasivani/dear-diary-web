@@ -773,7 +773,7 @@ export default function DiaryDetailScreen({
         <div className="open-page-reader-heading flex items-center gap-2">
           <button
             onClick={onBack}
-            aria-label="Back to journals"
+            aria-label="Back to collections"
             className="open-page-reader-back p-2 text-brand-plum rounded-full transition-all active:scale-95"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -851,7 +851,7 @@ export default function DiaryDetailScreen({
                   className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-brand-plum hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10 rounded-xl transition-all text-left w-full"
                 >
                   <Settings className="w-4 h-4 text-brand-pink" />
-                  <span>Journal Settings</span>
+                  <span>Collection Settings</span>
                 </button>
               </div>
             </>
@@ -1093,7 +1093,7 @@ export default function DiaryDetailScreen({
           <HelpCircle className="w-10 h-10 text-brand-sage animate-bounce" />
           <h3 className="font-serif-diary text-lg font-bold text-brand-plum">No pages found</h3>
           <p className="text-xs text-brand-text-muted max-w-xs">
-            We couldn't find any entries matching "{searchQuery}" in this journal. Re-verify
+            We couldn't find any entries matching "{searchQuery}" in this collection. Re-verify
             spelling or clear filters.
           </p>
           <button
@@ -1193,8 +1193,8 @@ export default function DiaryDetailScreen({
             </div>
 
             <p className="hidden text-xs font-bold text-brand-text-muted sm:block">
-              {activeEntry.isTimelineBifurcated ? 'Timeline entry' : 'Journal entry'} · Change
-              structure in Edit Entry
+              {activeEntry.isTimelineBifurcated ? 'Timeline entry' : 'Entry'} · Change structure in
+              Edit Entry
             </p>
           </div>
 

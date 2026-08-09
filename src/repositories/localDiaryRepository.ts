@@ -65,7 +65,11 @@ import {
   sanitizeNote,
   sanitizeRepositorySnapshot,
 } from '../domain/richTextSanitizer';
-import { calculateStreak, getTodayWordCount } from '../domain/journalCatalog';
+import {
+  calculateStreak,
+  getTodayWordCount,
+  recordPositiveDailyWordDelta,
+} from '../domain/journalCatalog';
 import {
   CORE_PARTITION_KEY,
   filterSnapshotForPartition,
@@ -258,6 +262,10 @@ export class LocalDiaryRepository implements DiaryRepository {
   private writeTail: Promise<void> = Promise.resolve();
   private changeListeners = new Set<RepositoryChangeListener>();
   private typedChangeListeners = new Set<TypedRepositoryChangeListener>();
+  private syncCatchUpStatus: Pick<
+    SyncStatusSummary,
+    'catchUpPhase' | 'appliedSequence' | 'targetSequence' | 'catchUpError' | 'catchUpRecoverable'
+  > = {};
 
   constructor(private readonly store: LocalDataStore) {}
 
@@ -530,6 +538,11 @@ export class LocalDiaryRepository implements DiaryRepository {
           ...clone(input),
           id: createId('entry'),
           wordCount: countWords(input.body || ''),
+          wordsWrittenByDate: recordPositiveDailyWordDelta(
+            null,
+            countWords(input.body || ''),
+            timestamp,
+          ),
           photoCount: input.photoUris?.length || 0,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -553,11 +566,15 @@ export class LocalDiaryRepository implements DiaryRepository {
         const index = entries.findIndex((entry) => entry.id === updatedEntry.id);
         if (index < 0) return null;
 
+        const previous = entries[index];
+        const nextWordCount = countWords(updatedEntry.body || '');
+        const updatedAt = Date.now();
         const entry: Entry = sanitizeEntry({
           ...clone(updatedEntry),
-          wordCount: countWords(updatedEntry.body || ''),
+          wordCount: nextWordCount,
+          wordsWrittenByDate: recordPositiveDailyWordDelta(previous, nextWordCount, updatedAt),
           photoCount: updatedEntry.photoUris?.length || 0,
-          updatedAt: Date.now(),
+          updatedAt,
         });
         entry.wordCount = countWords(entry.body || '');
         entries[index] = entry;
@@ -1272,13 +1289,26 @@ export class LocalDiaryRepository implements DiaryRepository {
     return Object.values(pointers).find((pointer) => pointer.driveFileId === driveFileId) || null;
   }
 
+  async getSyncMediaPointerByLocalUri(localUri: string): Promise<SyncMediaPointer | null> {
+    await this.waitForWrites();
+    const pointers = await this.readJson<Record<string, SyncMediaPointer>>(
+      STORAGE_KEYS.syncMediaPointers,
+      {},
+    );
+    return Object.values(pointers).find((pointer) => pointer.localUri === localUri) || null;
+  }
+
   saveSyncMediaPointer(pointer: SyncMediaPointer): Promise<void> {
     return this.enqueueWrite(async () => {
       const pointers = await this.readJson<Record<string, SyncMediaPointer>>(
         STORAGE_KEYS.syncMediaPointers,
         {},
       );
-      const key = pointer.sequence > 0 ? String(pointer.sequence) : `media:${pointer.mediaId}`;
+      const key = pointer.driveFileId.startsWith('accounts/')
+        ? `media:${pointer.mediaId}`
+        : pointer.sequence > 0
+          ? String(pointer.sequence)
+          : `media:${pointer.mediaId}`;
       Object.entries(pointers).forEach(([existingKey, existing]) => {
         if (
           existingKey !== key &&
@@ -1298,7 +1328,14 @@ export class LocalDiaryRepository implements DiaryRepository {
     return this.enqueueWrite(() =>
       this.writeJson(
         STORAGE_KEYS.syncMediaPointers,
-        Object.fromEntries(pointers.map((pointer) => [String(pointer.sequence), clone(pointer)])),
+        Object.fromEntries(
+          pointers.map((pointer) => [
+            pointer.driveFileId.startsWith('accounts/')
+              ? `media:${pointer.mediaId}`
+              : String(pointer.sequence),
+            clone(pointer),
+          ]),
+        ),
       ),
     );
   }
@@ -1531,6 +1568,29 @@ export class LocalDiaryRepository implements DiaryRepository {
   async getSyncStatusSummary(): Promise<SyncStatusSummary> {
     const outbox = await this.listSyncOutboxOperations();
     return this.createSyncStatusSummary(outbox);
+  }
+
+  updateSyncCatchUpStatus(
+    status: Pick<
+      SyncStatusSummary,
+      'catchUpPhase' | 'appliedSequence' | 'targetSequence' | 'catchUpError' | 'catchUpRecoverable'
+    >,
+  ): Promise<void> {
+    this.syncCatchUpStatus = { ...status };
+    return this.enqueueWrite(async () => {
+      const [outbox, backup] = await Promise.all([
+        this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {}),
+        this.readJson<LocalRepositoryMetadata>(
+          STORAGE_KEYS.driveBackup,
+          createDefaultLocalRepositoryMetadata(),
+        ),
+      ]);
+      this.emitChange(backup.contentRevision || 0, {
+        type: 'sync-status-updated',
+        status: this.createSyncStatusSummary(Object.values(outbox)),
+        contentRevision: backup.contentRevision || 0,
+      });
+    });
   }
 
   async rebuildDerivedProjections(): Promise<void> {
@@ -2375,6 +2435,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       failedOperationCount: outbox.filter(isRetryableFailedOutboxOperation).length,
       isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
       conflictCount: outbox.filter((operation) => operation.state === 'conflict_preserved').length,
+      ...this.syncCatchUpStatus,
     };
   }
 

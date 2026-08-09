@@ -1,6 +1,5 @@
 import { localDataStore } from '../../platform/storage';
 import { diaryRepository } from '../../repositories';
-import type { RepositorySnapshot } from '../../repositories/DiaryRepository';
 import type { LocalSyncAccountState, SecurityConfig } from '../../types';
 import {
   decodeCompanionKeyPackage,
@@ -40,15 +39,14 @@ import type { SyncV2Pairing } from './api/SyncV2ApiTypes';
 import { BoundedObjectTransfer } from './operation/BoundedObjectTransfer';
 import { SyncV2RuntimeStore } from './protocol/ProtocolBootstrap';
 import { PersistentSafetyStopStore } from './safety/PersistentSafetyStopStore';
-import {
-  PersistentSyncV2SnapshotStore,
-  type SyncV2CanonicalSnapshotState,
-} from './snapshot/PersistentSyncV2SnapshotStore';
+import { PersistentSyncV2SnapshotStore } from './snapshot/PersistentSyncV2SnapshotStore';
 import { AccountKeySyncV2SnapshotCodec } from './snapshot/SyncV2SnapshotCodec';
 import { SyncV2SnapshotCoordinator } from './snapshot/SyncV2SnapshotCoordinator';
 import { clearSyncV2LocalCache } from './clearSyncV2LocalCache';
+import { repositorySnapshotFromV2State } from './RepositorySnapshotAdapter';
+import { isSyncError } from '../errors';
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 
 interface PairingJournal {
   pairingId: string;
@@ -189,26 +187,6 @@ const transferAdapter = (maximumBytes: number) => {
   };
 };
 
-const repositorySnapshotFromV2 = (state: SyncV2CanonicalSnapshotState): RepositorySnapshot => {
-  const values = (prefix: string) =>
-    Object.entries(state.records)
-      .filter(([key]) => key.startsWith(`${prefix}:`))
-      .map(([, value]) => value);
-  return {
-    diaries: values('DIARY') as RepositorySnapshot['diaries'],
-    entries: values('ENTRY') as RepositorySnapshot['entries'],
-    notes: values('NOTE') as RepositorySnapshot['notes'],
-    settings: state.records['SETTINGS:settings'] as RepositorySnapshot['settings'],
-    userProfile: state.records['PROFILE:profile'] as RepositorySnapshot['userProfile'],
-    syncRecordVersions: Object.fromEntries(
-      Object.entries(state.recordVersions).map(([key, version]) => {
-        const [type, ...id] = key.split(':');
-        return [`${type.toLowerCase()}:${id.join(':')}`, version];
-      }),
-    ),
-  };
-};
-
 const pairingCrypto = (options: {
   primarySecrets?: SyncSecrets;
   primaryState?: LocalSyncAccountState;
@@ -291,9 +269,12 @@ export const requestSyncV2CompanionPairing = async (auth: WebGoogleSyncSession) 
   );
   const existing = await requestJournal().load();
   if (existing) {
-    const remote = await api
-      .getPairing(existing.pairingId, existing.requestedDeviceId)
-      .catch(() => null);
+    let remote: SyncV2Pairing | null = null;
+    try {
+      remote = await api.getPairing(existing.pairingId, existing.requestedDeviceId);
+    } catch (error) {
+      if (!isSyncError(error) || error.code !== 'PAIRING_NOT_FOUND') throw error;
+    }
     if (!remote || remote.status === 'EXPIRED' || remote.status === 'REJECTED')
       await requestJournal().clear();
   }
@@ -306,7 +287,14 @@ export const getPendingSyncV2CompanionPairing = async (auth: WebGoogleSyncSessio
   webAccessTokenProvider = async () => auth.supabaseSession.accessToken;
   const pending = await requestJournal().load();
   if (!pending) return null;
-  const pairing = await optionsApi().getPairing(pending.pairingId, pending.requestedDeviceId);
+  let pairing: SyncV2Pairing;
+  try {
+    pairing = await optionsApi().getPairing(pending.pairingId, pending.requestedDeviceId);
+  } catch (error) {
+    if (!isSyncError(error) || error.code !== 'PAIRING_NOT_FOUND') throw error;
+    await requestJournal().clear();
+    return null;
+  }
   return {
     pairing,
     pairingCode: pending.pairingCode,
@@ -448,7 +436,7 @@ export const completeSyncV2CompanionPairing = async (
     const throughSequence = await snapshots.restoreLatest();
     const restored = await stateStore.exportAccountState(completed.accountId);
     await diaryRepository.importSnapshot(
-      repositorySnapshotFromV2(restored.state),
+      repositorySnapshotFromV2State(restored.state),
       'replace-portable',
     );
     await diaryRepository.saveSecurityConfig({

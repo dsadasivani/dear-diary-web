@@ -1,28 +1,130 @@
 {
-  "title": "Dear Diary Release Health",
+  "title": "Loredays Release Health",
   "uid": "deardiary-release",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      { "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" },
+      { "name": "logs", "label": "Logs", "type": "datasource", "query": "loki" },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "custom",
+        "query": "staging,production",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "staging", "value": "staging" }
+      }
+    ]
+  },
   "panels": [
     {
       "id": 1,
-      "type": "timeseries",
-      "title": "Client push outcomes",
-      "targets": [{ "expr": "sum by (error_code) (rate(deardiary_sync_push_failure_total[5m]))" }]
+      "type": "stat",
+      "title": "Backend telemetry age",
+      "description": "The API process uptime proves the selected backend release is still publishing metrics.",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "max(process_uptime_seconds{application=\"dear-diary-sync-api\", environment=~\"${environment:regex}\"})",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 2,
-      "type": "timeseries",
-      "title": "Client pull outcomes",
-      "targets": [{ "expr": "sum by (error_code) (rate(deardiary_sync_pull_failure_total[5m]))" }]
+      "type": "stat",
+      "title": "Frontend telemetry records",
+      "description": "Privacy-safe Faro measurements received during the selected time range.",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({kind=~\"measurement|measurements\"} | json | app_name=\"dear-diary-client\" | app_environment=~\"${environment:regex}\" [$__range])) or on() vector(0)",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 3,
       "type": "stat",
-      "title": "Crash-free sessions",
+      "title": "Frontend exceptions",
+      "description": "Faro exceptions received during the selected time range. Any increase should be checked by release.",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
-          "expr": "1 - (sum(rate(deardiary_session_crash_total[1h])) / clamp_min(sum(rate(deardiary_session_start_total[1h])), 0.001))"
+          "expr": "sum(count_over_time({kind=~\"exception|exceptions\"} | json | app_name=\"dear-diary-client\" | app_environment=~\"${environment:regex}\" [$__range])) or on() vector(0)",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Client push outcomes",
+      "description": "Successful and failed synchronization pushes from Faro measurements.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (type) (sum_over_time({kind=~\"measurement|measurements\"} | json | app_name=\"dear-diary-client\" | app_environment=~\"${environment:regex}\" | type=~\"deardiary\\\\.sync\\\\.push\\\\.(success|failure)\" | unwrap value_value | __error__=\"\" [$__auto]))",
+          "legendFormat": "{{type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Client pull outcomes",
+      "description": "Successful and failed synchronization pulls from Faro measurements.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (type) (sum_over_time({kind=~\"measurement|measurements\"} | json | app_name=\"dear-diary-client\" | app_environment=~\"${environment:regex}\" | type=~\"deardiary\\\\.sync\\\\.pull\\\\.(success|failure)\" | unwrap value_value | __error__=\"\" [$__auto]))",
+          "legendFormat": "{{type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Frontend signals by release",
+      "description": "Measurement rate grouped by the Faro application version embedded at build time.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": { "defaults": { "unit": "eps" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (app_version) (rate({kind=~\"measurement|measurements\"} | json | app_name=\"dear-diary-client\" | app_environment=~\"${environment:regex}\" [$__auto]))",
+          "legendFormat": "{{app_version}}",
+          "refId": "A"
         }
       ]
     }

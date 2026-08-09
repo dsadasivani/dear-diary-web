@@ -9,4 +9,4 @@ foreach ($port in 3000, 8080) {
 }
 Start-Sleep -Seconds 2
 docker compose -f (Join-Path $root 'dev/local-sync-v2.compose.yml') down
-Write-Host 'Dear Diary local Sync V2 stack stopped. Docker volumes were retained.'
+Write-Host 'Loredays local Sync V2 stack stopped. Docker volumes were retained.'

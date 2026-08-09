@@ -11,7 +11,7 @@ if (isReleaseBuild && (webViewDebug || bridgeLogging)) {
 
 const config: CapacitorConfig = {
   appId: 'com.deardiary.app',
-  appName: 'Dear Diary',
+  appName: 'Loredays',
   webDir: 'dist',
   android: {
     loggingBehavior: bridgeLogging ? 'debug' : 'none',

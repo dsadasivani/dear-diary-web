@@ -47,6 +47,21 @@ $env:SYNC_OBJECT_STORE_ENDPOINT = 'http://localhost:9000'
 $env:SYNC_OBJECT_STORE_PATH_STYLE = 'true'
 $env:AWS_ACCESS_KEY_ID = 'dear_diary_local'
 $env:AWS_SECRET_ACCESS_KEY = 'dear_diary_local_secret'
+$grafanaOtlpEndpoint = ([string]$values['SYNC_OTLP_BASE_ENDPOINT']).TrimEnd('/')
+if ($grafanaOtlpEndpoint) {
+  $env:SYNC_OTLP_BASE_ENDPOINT = $grafanaOtlpEndpoint
+  $env:SYNC_OTLP_AUTHORIZATION_HEADER = [string]$values['SYNC_OTLP_AUTHORIZATION_HEADER']
+  $env:SYNC_OTLP_METRICS_ENABLED = 'true'
+  $env:SYNC_OTLP_LOGS_ENABLED = 'true'
+  $env:SYNC_TRACING_ENABLED = 'true'
+  $env:SYNC_TRACING_SAMPLE_PROBABILITY = '1.0'
+} else {
+  $env:SYNC_OTLP_METRICS_ENABLED = 'false'
+  $env:SYNC_OTLP_LOGS_ENABLED = 'false'
+  $env:SYNC_TRACING_ENABLED = 'false'
+}
+$env:SYNC_DEPLOYMENT_ENVIRONMENT = 'development'
+$env:SYNC_RELEASE_VERSION = [string]$values['VITE_TELEMETRY_RELEASE_VERSION']
 
 $backendListener = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $backendListener) {
@@ -117,8 +132,9 @@ if ($adb) {
   }
 }
 
-Write-Host 'Dear Diary local Sync V2 stack is ready:'
+Write-Host 'Loredays local Sync V2 stack is ready:'
 Write-Host '  App:           http://localhost:3000'
 Write-Host '  Backend:       http://localhost:8080/actuator/health'
 Write-Host '  MinIO console: http://localhost:9001'
+if ($grafanaOtlpEndpoint) { Write-Host '  Observability: Grafana Cloud export enabled' }
 Write-Host '  Local logs:    .local/'

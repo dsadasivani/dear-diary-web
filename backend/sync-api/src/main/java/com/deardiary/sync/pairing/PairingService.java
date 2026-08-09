@@ -9,6 +9,7 @@ import com.deardiary.sync.objectstore.ObjectKeyFactory;
 import com.deardiary.sync.objectstore.ObjectStoreException;
 import com.deardiary.sync.objectstore.UploadObjectCommand;
 import com.deardiary.sync.protocol.ProtocolService;
+import com.deardiary.sync.quota.QuotaService;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
@@ -37,11 +38,12 @@ public class PairingService {
     private final ObjectKeyFactory objectKeys;
     private final EncryptedObjectStore objectStore;
     private final Clock clock;
+    private final QuotaService quotas;
 
     public PairingService(JdbcTemplate jdbc, PlatformTransactionManager transactionManager,
             AccountAuthorizationService accounts, DeviceAuthorizationService devices,
             ProtocolService protocols, ObjectKeyFactory objectKeys,
-            EncryptedObjectStore objectStore, Clock clock) {
+            EncryptedObjectStore objectStore, Clock clock, QuotaService quotas) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(transactionManager);
         this.accounts = accounts;
@@ -50,6 +52,7 @@ public class PairingService {
         this.objectKeys = objectKeys;
         this.objectStore = objectStore;
         this.clock = clock;
+        this.quotas = quotas;
     }
 
     public PairingResponse create(String ownerSubject, PairingRequests.Create request) {
@@ -76,6 +79,7 @@ public class PairingService {
                 }
                 return response(existing, null, null, null);
             }
+            quotas.requireCompanionSlot(account.accountId());
             var now = OffsetDateTime.now(clock);
             var expires = now.plus(Duration.ofMinutes(10));
             jdbc.update("""
@@ -207,6 +211,8 @@ public class PairingService {
         }
         if (!"REQUESTED".equals(pair.status())) throw invalid("PAIRING_ALREADY_USED", "The pairing request was already used.");
         verifyApproval(pair, request);
+        quotas.requireCompanionSlot(accountId);
+        quotas.requireStorageCapacity(accountId, request.sizeBytes(), false);
         var objectKey = objectKeys.create(accountId).value();
         var epoch = jdbc.queryForObject("SELECT current_key_epoch FROM sync_accounts WHERE account_id = ?",
             Integer.class, accountId);

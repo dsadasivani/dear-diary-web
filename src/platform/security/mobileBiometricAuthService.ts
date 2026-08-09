@@ -1,5 +1,6 @@
 import type { SecureAuthService } from './SecureAuthService';
 import { NativeBiometric } from '@capgo/capacitor-native-biometric';
+import { BRAND } from '../../config/brand';
 
 export class MobileBiometricAuthService implements SecureAuthService {
   async isAvailable(): Promise<boolean> {
@@ -15,10 +16,10 @@ export class MobileBiometricAuthService implements SecureAuthService {
   async authenticate(): Promise<boolean> {
     try {
       await NativeBiometric.verifyIdentity({
-        reason: 'Unlock your private diary',
-        title: 'Dear Diary',
+        reason: `Unlock ${BRAND.name}`,
+        title: BRAND.name,
         subtitle: 'Confirm fingerprint to unlock',
-        description: 'Use your enrolled biometric credential to open your journal.',
+        description: 'Use your enrolled biometric credential to open your private space.',
         negativeButtonText: 'Use PIN',
         maxAttempts: 3,
       });

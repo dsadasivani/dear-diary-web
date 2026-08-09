@@ -36,6 +36,7 @@ export const contentSecurityPolicy = (
   mode: 'development' | 'production',
   developmentApiUrl = process.env.VITE_SYNC_V2_API_URL,
   developmentObjectStoreUrl = process.env.SYNC_OBJECT_STORE_ENDPOINT || 'http://localhost:9000',
+  faroCollectorUrl = process.env.VITE_GRAFANA_FARO_URL,
 ): string => {
   const connectSources = [
     "'self'",
@@ -43,6 +44,16 @@ export const contentSecurityPolicy = (
     'wss://*.supabase.co',
     'https://www.googleapis.com',
   ];
+  if (faroCollectorUrl) {
+    try {
+      const collector = new URL(faroCollectorUrl);
+      if (collector.protocol === 'https:' && !connectSources.includes(collector.origin)) {
+        connectSources.push(collector.origin);
+      }
+    } catch {
+      // Invalid telemetry URLs are handled by the environment configuration checks.
+    }
+  }
   if (mode === 'development') {
     connectSources.push('ws:', 'wss:');
     for (const developmentUrl of [developmentApiUrl, developmentObjectStoreUrl]) {

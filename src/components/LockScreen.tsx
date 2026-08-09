@@ -27,10 +27,12 @@ import {
   SyncDeviceRole,
 } from '../types';
 import {
+  attemptPinUnlock,
+  clearPinLockout,
   createInitialPin,
+  getPinLockoutStatus,
   isValidPin,
   resetPinAfterVerifiedRecovery,
-  unlockWithPin,
 } from '../domain/security';
 import type { PinLength } from '../domain/security';
 import {
@@ -56,6 +58,7 @@ import {
 import { triggerImpact } from '../mobile/haptics';
 import { isNativePlatform } from '../platform';
 import { secureAuthService } from '../platform/security';
+import { BRAND } from '../config/brand';
 
 interface LockScreenProps {
   initialSecurity: SecurityConfig;
@@ -168,6 +171,8 @@ export default function LockScreen({
   const [resetConfirmPin, setResetConfirmPin] = useState('');
   const [recoveryVerifiedBy, setRecoveryVerifiedBy] = useState<'google' | null>(null);
   const [isBiometricUnlocking, setIsBiometricUnlocking] = useState(false);
+  const [isSubmittingPin, setIsSubmittingPin] = useState(false);
+  const [pinLockoutNow, setPinLockoutNow] = useState(Date.now());
   const [screenMode, setScreenMode] = useState<'ambient' | 'keypad'>(() =>
     initialSecurity.isPinCreated ? 'ambient' : 'keypad',
   );
@@ -198,6 +203,7 @@ export default function LockScreen({
   useEffect(() => {
     const updateTime = () => {
       const now = new Date();
+      setPinLockoutNow(now.getTime());
       setTime(`${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`);
       setDate(
         now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }),
@@ -207,6 +213,15 @@ export default function LockScreen({
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!security.pinLockedUntil || security.pinLockedUntil > pinLockoutNow) return;
+    const updated = { ...security, pinLockedUntil: undefined };
+    setSecurity(updated);
+    onSecurityChange(updated);
+    setError('');
+    void diaryRepository.saveSecurityConfig(updated);
+  }, [onSecurityChange, pinLockoutNow, security]);
 
   useEffect(() => {
     const quoteInterval = setInterval(() => {
@@ -259,7 +274,7 @@ export default function LockScreen({
         setScreenMode('keypad');
         setPin('');
         setError('');
-        setSuccessMsg('Enter your PIN to connect this diary to its encrypted account.');
+        setSuccessMsg('Enter your PIN to connect this space to its encrypted account.');
         return;
       }
       setPendingSetupPin(verifiedPin || pendingSetupPin);
@@ -267,7 +282,7 @@ export default function LockScreen({
       setScreenMode('keypad');
       setPin('');
       setError('');
-      setSuccessMsg('Local diary verified. Connect it to your encrypted account.');
+      setSuccessMsg('Local space verified. Connect it to your encrypted account.');
       return;
     }
 
@@ -277,7 +292,8 @@ export default function LockScreen({
   };
 
   const handleKeyPress = (num: string) => {
-    triggerHaptic(10);
+    if (getPinLockoutStatus(security).isLockedOut) return;
+    void triggerImpact('light');
     const maxLength = security.isPinCreated ? security.pinLength || 8 : selectedPinLength;
     if (pin.length < maxLength) {
       setError('');
@@ -297,6 +313,7 @@ export default function LockScreen({
   };
 
   const handleSubmit = async () => {
+    if (getPinLockoutStatus(security).isLockedOut || isSubmittingPin) return;
     const requiredLength = security.isPinCreated ? security.pinLength : selectedPinLength;
     if (!isValidPin(pin, requiredLength)) {
       fail(`PIN must be exactly ${requiredLength || '4 or 8'} digits.`);
@@ -338,19 +355,27 @@ export default function LockScreen({
         return;
       }
     } else {
-      const unlockedSecurity = unlockWithPin(security, pin);
-      if (unlockedSecurity) {
-        await diaryRepository.saveSecurityConfig(unlockedSecurity);
-        setSecurity(unlockedSecurity);
-        onSecurityChange(unlockedSecurity);
-        await completeUnlock(unlockedSecurity, pin);
-      } else {
-        setPin('');
-        fail(
-          deviceRole === 'web_companion'
-            ? 'Incorrect PIN for this browser. If your mobile PIN changed after pairing, use recovery or pair this browser again.'
-            : 'Incorrect security PIN.',
-        );
+      setIsSubmittingPin(true);
+      try {
+        const attempt = attemptPinUnlock(security, pin);
+        await diaryRepository.saveSecurityConfig(attempt.config);
+        setSecurity(attempt.config);
+        onSecurityChange(attempt.config);
+        if (attempt.status === 'unlocked') {
+          await completeUnlock(attempt.config, pin);
+        } else if (attempt.status === 'incorrect') {
+          setPin('');
+          fail(
+            deviceRole === 'web_companion'
+              ? `Incorrect PIN for this browser. ${attempt.attemptsRemaining} attempt${attempt.attemptsRemaining === 1 ? '' : 's'} remaining before a timed lock.`
+              : `Incorrect security PIN. ${attempt.attemptsRemaining} attempt${attempt.attemptsRemaining === 1 ? '' : 's'} remaining before a timed lock.`,
+          );
+        } else if (attempt.status === 'lockout-started') {
+          setPin('');
+          fail('Too many incorrect PIN attempts. PIN entry is temporarily locked.');
+        }
+      } finally {
+        setIsSubmittingPin(false);
       }
     }
   };
@@ -391,7 +416,7 @@ export default function LockScreen({
       setSuccessMsg(
         hasExistingAccount
           ? 'Encrypted account found. Enter your existing recovery passphrase.'
-          : 'Google connected. Create an 8-digit recovery passphrase for your encrypted diary.',
+          : 'Google connected. Create an 8-digit recovery passphrase for your encrypted memories.',
       );
     } catch (err: any) {
       const message = err?.message || '';
@@ -535,7 +560,7 @@ export default function LockScreen({
         fail('Biometric identity was not confirmed. Use your app PIN.');
         return;
       }
-      const unlockedSecurity = { ...security, isLocked: false };
+      const unlockedSecurity = { ...clearPinLockout(security), isLocked: false };
       await diaryRepository.saveSecurityConfig(unlockedSecurity);
       setSecurity(unlockedSecurity);
       onSecurityChange(unlockedSecurity);
@@ -567,7 +592,7 @@ export default function LockScreen({
 
   const setupTitle =
     setupStep === 'complete'
-      ? 'Your Diary Is Ready'
+      ? `${BRAND.name} Is Ready`
       : showBackupChoice
         ? !syncSetupSelection
           ? 'Connect Google Account'
@@ -577,7 +602,7 @@ export default function LockScreen({
         : setupStep === 'confirm'
           ? 'Confirm Security PIN'
           : setupStep === 'welcome'
-            ? 'Welcome to Dear Diary'
+            ? `Welcome to ${BRAND.name}`
             : security.isPinCreated
               ? 'Enter Security PIN'
               : 'Setup Security PIN';
@@ -598,7 +623,7 @@ export default function LockScreen({
             : security.isPinCreated
               ? deviceRole === 'web_companion'
                 ? `Enter this browser's ${security.pinLength || '4 or 8'}-digit PIN. If your mobile PIN changed after pairing, verify Google or pair this browser again.`
-                : `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock your diary.`
+                : `Enter your ${security.pinLength || '4 or 8'}-digit PIN to unlock ${BRAND.name}.`
               : 'Choose a 4-digit or 8-digit PIN.';
   const setupProgressLabel =
     security.isPinCreated && setupStep !== 'complete'
@@ -621,9 +646,17 @@ export default function LockScreen({
   const activeBgClass = 'lock-atmosphere bg-brand-bg';
 
   const hasGoogleRecovery = Boolean(security.linkedGoogleUserId);
+  const pinLockoutStatus = getPinLockoutStatus(security, pinLockoutNow);
+  const isPinLockedOut = security.isPinCreated && pinLockoutStatus.isLockedOut;
+  const remainingLockoutSeconds = Math.ceil(pinLockoutStatus.remainingMs / 1000);
+  const pinLockoutCountdown = `${String(Math.floor(remainingLockoutSeconds / 60)).padStart(2, '0')}:${String(remainingLockoutSeconds % 60).padStart(2, '0')}`;
   const visiblePinLength = security.isPinCreated
     ? security.pinLength || (pin.length > 4 ? 8 : 4)
     : selectedPinLength;
+  const canSubmitPin =
+    !isPinLockedOut &&
+    !isSubmittingPin &&
+    isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength);
   const accountSetupProgressMessage = successMsg || 'Opening Google account...';
   const accountSetupProgressKey = syncSetupProgressKeyForMessage(accountSetupProgressMessage);
   const accountSetupProgressIndex = Math.max(
@@ -703,7 +736,7 @@ export default function LockScreen({
         <div className="flex items-center gap-2 bg-white/55 dark:bg-white/[0.06] backdrop-blur-xl px-3.5 py-1.5 rounded-full border border-brand-border/50 dark:border-white/10 shadow-sm">
           <BookOpen className="w-3.5 h-3.5 text-brand-pink" />
           <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#3E2429] dark:text-[#EADCD1]">
-            Dear Diary
+            {BRAND.wordmark}
           </span>
         </div>
         <motion.button
@@ -931,7 +964,7 @@ export default function LockScreen({
                       onClick={() => void onUnlock()}
                       className="w-full rounded-2xl bg-brand-plum py-3.5 text-xs font-bold uppercase tracking-widest text-white shadow-md hover:bg-brand-pink dark:bg-[#EADCD1] dark:text-[#21191C]"
                     >
-                      Enter Dear Diary
+                      Enter {BRAND.name}
                     </button>
                   </div>
                 ) : setupStep === 'welcome' ? (
@@ -967,8 +1000,8 @@ export default function LockScreen({
                   <div className="flex flex-col gap-3">
                     {!syncSetupSelection ? (
                       <div className="rounded-2xl border border-brand-sage/20 bg-brand-sage/8 p-3 text-left text-xs leading-relaxed text-brand-text-muted">
-                        Dear Diary uses Google only to identify your account. Your diary remains
-                        encrypted before it is synchronized.
+                        {BRAND.name} uses Google only to identify your account. Your memories remain
+                        encrypted before they are synchronized.
                       </div>
                     ) : (
                       <>
@@ -1067,7 +1100,7 @@ export default function LockScreen({
                         <div className="rounded-2xl border border-brand-pink/15 bg-brand-pink/5 p-3 text-left text-xs leading-relaxed text-brand-text-muted">
                           {isRecoveringSyncAccount
                             ? 'Use the recovery passphrase from the original setup. After the encrypted restore is verified, this device becomes the only active primary and the previous primary and companions are revoked.'
-                            : 'This 8-digit recovery passphrase protects your encrypted diary. Keep it somewhere safe.'}
+                            : 'This 8-digit recovery passphrase protects your encrypted memories. Keep it somewhere safe.'}
                         </div>
                       </>
                     )}
@@ -1212,6 +1245,19 @@ export default function LockScreen({
                       </div>
                       <div className="min-h-[16px] text-center flex flex-col items-center mt-1">
                         <AnimatePresence mode="wait">
+                          {isPinLockedOut && (
+                            <motion.p
+                              initial={{ opacity: 0, y: -4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                              role="status"
+                              aria-live="polite"
+                              className="text-xs font-bold text-brand-rose flex items-center gap-1"
+                            >
+                              <Lock className="w-3 h-3 flex-shrink-0" />
+                              <span>PIN locked. Try again in {pinLockoutCountdown}.</span>
+                            </motion.p>
+                          )}
                           {error && (
                             <motion.p
                               initial={{ opacity: 0, y: -4 }}
@@ -1238,14 +1284,15 @@ export default function LockScreen({
                       </div>
                     </div>
 
-                    <div className="open-page-pin-grid grid grid-cols-3 gap-y-2 gap-x-4 mt-0.5 justify-items-center lg:mx-auto lg:mt-9 lg:w-[300px] lg:gap-x-8 lg:gap-y-8">
+                    <div className="open-page-pin-grid mx-auto grid w-full max-w-[248px] grid-cols-3 justify-items-center gap-x-5 gap-y-2.5 lg:mt-9 lg:w-[300px] lg:max-w-none lg:gap-x-8 lg:gap-y-8">
                       {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
                         <motion.button
                           key={num}
                           type="button"
                           whileTap={{ scale: 0.9 }}
                           onClick={() => handleKeyPress(num)}
-                          className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
+                          disabled={isPinLockedOut}
+                          className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-35 lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
                         >
                           <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">
                             {num}
@@ -1272,7 +1319,8 @@ export default function LockScreen({
                         onClick={() => {
                           pin.length > 0 ? handleClear() : setShowPin(!showPin);
                         }}
-                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5"
+                        disabled={isPinLockedOut}
+                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-text-muted hover:text-brand-plum bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-35 lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5"
                       >
                         {pin.length > 0 ? (
                           <X className="h-5 w-5 text-brand-pink" />
@@ -1286,7 +1334,8 @@ export default function LockScreen({
                         type="button"
                         whileTap={{ scale: 0.9 }}
                         onClick={() => handleKeyPress('0')}
-                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
+                        disabled={isPinLockedOut}
+                        className="w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full bg-white dark:bg-[#1A1517]/40 border border-brand-border dark:border-white/5 flex flex-col items-center justify-center hover:bg-brand-pink/5 hover:border-brand-pink/20 transition-all shadow-sm select-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-35 lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:bg-transparent dark:lg:hover:bg-white/5"
                       >
                         <span className="leading-none text-lg sm:text-xl lg:text-xl lg:font-medium font-bold text-[#2C1D21] dark:text-[#ECE6E1]">
                           0
@@ -1298,7 +1347,7 @@ export default function LockScreen({
                         title="Erase last PIN digit"
                         whileTap={{ scale: 0.9 }}
                         onClick={handleBackspace}
-                        disabled={pin.length === 0}
+                        disabled={pin.length === 0 || isPinLockedOut}
                         className={`w-12.5 h-12.5 sm:w-14 sm:h-14 lg:h-12 lg:w-12 rounded-full flex items-center justify-center text-brand-pink hover:text-brand-pink-dark bg-white hover:bg-brand-blush-light dark:bg-transparent dark:hover:bg-black/20 border border-brand-border dark:border-white/10 shadow-sm transition-all select-none cursor-pointer lg:bg-transparent lg:border-transparent lg:shadow-none lg:hover:bg-brand-blush-light/45 dark:lg:hover:bg-white/5 ${pin.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
                       >
                         <Delete className="h-5 w-5" />
@@ -1307,16 +1356,11 @@ export default function LockScreen({
 
                     <button
                       onClick={handleSubmit}
-                      disabled={
-                        !isValidPin(
-                          pin,
-                          security.isPinCreated ? security.pinLength : selectedPinLength,
-                        )
-                      }
-                      className={`open-page-pin-submit w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${isValidPin(pin, security.isPinCreated ? security.pinLength : selectedPinLength) ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}
+                      disabled={!canSubmitPin}
+                      className={`open-page-pin-submit w-full py-3.5 lg:py-3 rounded-2xl font-bold text-xs sm:text-xs uppercase tracking-widest transition-all mt-1.5 shadow-md cursor-pointer lg:mt-8 ${canSubmitPin ? 'bg-brand-plum text-white hover:bg-brand-pink shadow-brand-plum/10 dark:bg-[#EADCD1] dark:text-[#21191C]' : 'bg-brand-border/60 text-brand-text-muted opacity-40 cursor-not-allowed lg:hidden'}`}
                     >
                       {security.isPinCreated
-                        ? 'Unlock Diary'
+                        ? `Unlock ${BRAND.name}`
                         : setupStep === 'confirm'
                           ? 'Confirm PIN'
                           : 'Continue'}
@@ -1324,28 +1368,32 @@ export default function LockScreen({
                   </>
                 )}
 
-                {security.isPinCreated && !isResetting && (
-                  <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
-                    <button
-                      onClick={() => {
-                        triggerHaptic(15);
-                        setRecoveryVerifiedBy(null);
-                        if (!hasGoogleRecovery) {
-                          fail(
-                            'PIN recovery is unavailable because this legacy local diary is not linked to a Google account.',
-                          );
-                          return;
-                        }
-                        setRecoveryMode('google');
-                        setError('');
-                        setSuccessMsg('');
-                      }}
-                      className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors"
-                    >
-                      Forgot security passcode PIN?
-                    </button>
-                  </div>
-                )}
+                {security.isPinCreated &&
+                  setupStep === 'pin' &&
+                  !showBackupChoice &&
+                  !recoveryMode &&
+                  !isResetting && (
+                    <div className="text-center pt-0.5 mt-1.5 lg:mt-7">
+                      <button
+                        onClick={() => {
+                          triggerHaptic(15);
+                          setRecoveryVerifiedBy(null);
+                          if (!hasGoogleRecovery) {
+                            fail(
+                              'PIN recovery is unavailable because this legacy local space is not linked to a Google account.',
+                            );
+                            return;
+                          }
+                          setRecoveryMode('google');
+                          setError('');
+                          setSuccessMsg('');
+                        }}
+                        className="text-xs sm:text-xs font-bold text-brand-text-muted hover:text-brand-pink underline tracking-wide cursor-pointer transition-colors"
+                      >
+                        Forgot security passcode PIN?
+                      </button>
+                    </div>
+                  )}
 
                 <AnimatePresence>
                   {recoveryMode && (
@@ -1493,7 +1541,7 @@ export default function LockScreen({
           <span>Protected Access</span>
         </div>
         <p className="text-xs sm:text-xs text-brand-text-muted max-w-[260px] leading-normal font-medium lg:hidden">
-          Your recovery passphrase protects your diary before encrypted backup begins.
+          Your recovery passphrase protects your memories before encrypted backup begins.
         </p>
       </footer>
     </div>

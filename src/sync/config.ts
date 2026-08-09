@@ -1,6 +1,5 @@
 import { SyncV2ApiClient, type SyncV2AccessTokenProvider } from './v2';
 import {
-  HttpTelemetryExporter,
   NOOP_TELEMETRY,
   PrivacySafeTelemetry,
   type Telemetry,
@@ -11,6 +10,12 @@ import {
   type CrashReporter,
 } from '../infrastructure/telemetry/CrashReporter';
 import { APP_ENVIRONMENT } from '../config/environment';
+import {
+  createGrafanaFaro,
+  GrafanaFaroTelemetryExporter,
+  reportCrashToGrafana,
+} from '../infrastructure/telemetry/GrafanaFaro';
+import type { Faro } from '@grafana/faro-web-sdk';
 
 const readViteEnv = (key: string): string => {
   const value = (import.meta.env[key] as string | undefined)?.trim();
@@ -37,20 +42,27 @@ export const createConfiguredSyncV2ApiClient = (
     accessToken,
   });
 
+let configuredFaro: Faro | undefined;
+
+const getConfiguredFaro = (): Faro | undefined => {
+  const url = (import.meta.env.VITE_GRAFANA_FARO_URL as string | undefined)?.trim();
+  if (!url) return undefined;
+  configuredFaro ??= createGrafanaFaro(
+    url,
+    APP_ENVIRONMENT,
+    (import.meta.env.VITE_TELEMETRY_RELEASE_VERSION as string | undefined)?.trim() || 'unknown',
+  );
+  return configuredFaro;
+};
+
 export const createConfiguredTelemetry = (): Telemetry => {
-  const endpoint = (import.meta.env.VITE_TELEMETRY_ENDPOINT as string | undefined)?.trim();
-  return endpoint ? new PrivacySafeTelemetry(new HttpTelemetryExporter(endpoint)) : NOOP_TELEMETRY;
+  const faro = getConfiguredFaro();
+  return faro ? new PrivacySafeTelemetry(new GrafanaFaroTelemetryExporter(faro)) : NOOP_TELEMETRY;
 };
 
 export const createConfiguredCrashReporter = (): CrashReporter => {
-  const endpoint = (import.meta.env.VITE_CRASH_REPORT_ENDPOINT as string | undefined)?.trim();
-  if (!endpoint) return NOOP_CRASH_REPORTER;
-  return new AdapterCrashReporter((report) => {
-    void fetch(endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(report),
-      keepalive: true,
-    }).catch(() => undefined);
-  });
+  const faro = getConfiguredFaro();
+  return faro
+    ? new AdapterCrashReporter((report) => reportCrashToGrafana(faro, report))
+    : NOOP_CRASH_REPORTER;
 };

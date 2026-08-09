@@ -13,6 +13,10 @@ public class ObjectKeyFactory {
         return new ObjectKey(namespace(accountId) + "/objects/" + UUID.randomUUID());
     }
 
+    public ObjectKey forObjectId(UUID accountId, UUID objectId) {
+        return new ObjectKey(namespace(accountId) + "/objects/" + objectId);
+    }
+
     public boolean belongsTo(UUID accountId, ObjectKey objectKey) {
         return objectKey.value().startsWith(namespace(accountId) + "/objects/");
     }

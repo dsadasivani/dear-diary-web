@@ -3,6 +3,8 @@ import type { DiaryRepository, NewDiary, NewEntry, NewNote } from './DiaryReposi
 import type { EventSyncEngine } from '../sync/eventSyncEngine';
 import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
 import { reportUnexpectedError } from '../infrastructure/telemetry/reportUnexpectedError';
+import { toPortableDiary, toPortableEntry, toPortableUserProfile } from '../sync/portableMedia';
+import { recordPositiveDailyWordDelta } from '../domain/journalCatalog';
 
 const createId = (prefix: string): string => {
   const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -121,6 +123,7 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: profile,
+          syncPayload: toPortableUserProfile(profile),
         });
         requestBackgroundFlush(syncEngine);
       };
@@ -142,6 +145,7 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: diary,
+          syncPayload: toPortableDiary(diary),
         });
         requestBackgroundFlush(syncEngine);
         return saved as Diary;
@@ -158,6 +162,7 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: diary,
+          syncPayload: toPortableDiary(diary),
         });
         requestBackgroundFlush(syncEngine);
         return saved ? syncEngine.hydrateDiary(saved as Diary) : null;
@@ -188,6 +193,11 @@ export const createSyncingDiaryRepository = (
           ...input,
           id: createId('entry'),
           wordCount: countWords(input.body || ''),
+          wordsWrittenByDate: recordPositiveDailyWordDelta(
+            null,
+            countWords(input.body || ''),
+            timestamp,
+          ),
           photoCount: input.photoUris?.length || 0,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -200,20 +210,25 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: entry,
+          syncPayload: toPortableEntry(entry),
         });
         requestBackgroundFlush(syncEngine);
         return saved as Entry;
       };
     if (property === 'updateEntry')
       return async (entry: Entry): Promise<Entry | null> => {
-        if (!(await localRepository.getEntry(entry.id))) return null;
+        const previous = await localRepository.getEntry(entry.id);
+        if (!previous) return null;
         const account = await localRepository.getLocalSyncAccountState();
         if (!account) return localRepository.updateEntry(entry);
+        const nextWordCount = countWords(entry.body || '');
+        const updatedAt = Date.now();
         const updated = sanitizeEntry({
           ...entry,
-          wordCount: countWords(entry.body || ''),
+          wordCount: nextWordCount,
+          wordsWrittenByDate: recordPositiveDailyWordDelta(previous, nextWordCount, updatedAt),
           photoCount: entry.photoUris?.length || 0,
-          updatedAt: Date.now(),
+          updatedAt,
         });
         updated.wordCount = countWords(updated.body || '');
         const saved = await localRepository.applyLocalMutationWithOutbox({
@@ -223,6 +238,7 @@ export const createSyncingDiaryRepository = (
           operation: 'upsert',
           account,
           localPayload: updated,
+          syncPayload: toPortableEntry(updated),
         });
         requestBackgroundFlush(syncEngine);
         return saved ? (await syncEngine.hydrateEntries([saved as Entry]))[0] : null;

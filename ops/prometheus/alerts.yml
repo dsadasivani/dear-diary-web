@@ -2,36 +2,39 @@ groups:
   - name: dear-diary-integrity-critical
     rules:
       - alert: SyncHashMismatch
-        expr: increase(deardiary_sync_integrity_hash_mismatch_total[5m]) + increase(sync_object_validation_failure_total{error_code=~".*HASH.*"}[5m]) > 0
+        expr: sum by (environment) (increase(sync_api_error_total{error_code="HASH_MISMATCH"}[5m])) > 0
         for: 0m
         labels: { severity: critical }
         annotations: { summary: 'Encrypted sync object hash mismatch detected' }
-      - alert: SyncInvariantViolation
-        expr: increase(deardiary_sync_integrity_invariant_failure_total[5m]) > 0
-        labels: { severity: critical }
-        annotations: { summary: 'A sync invariant stopped unsafe processing' }
       - alert: SyncSequenceRegression
-        expr: increase(deardiary_sync_pull_failure_total{error_code="SEQUENCE_REGRESSION"}[5m]) > 0
+        expr: sum by (environment) (increase(sync_api_error_total{error_code=~"SEQUENCE_GAP|CURSOR_REGRESSION|SNAPSHOT_SEQUENCE_STALE"}[5m])) > 0
         labels: { severity: critical }
-        annotations: { summary: 'Remote sequence regression detected' }
-      - alert: SyncUnexpectedDecryptionFailure
-        expr: increase(deardiary_sync_integrity_decryption_failure_total[5m]) > 0
-        labels: { severity: critical }
-        annotations: { summary: 'Unexpected event decryption failure detected' }
+        annotations: { summary: 'A sequence or cursor integrity violation was detected' }
       - alert: SyncCommittedObjectMissing
-        expr: increase(sync_object_validation_failure_total{error_code="OBJECT_MISSING"}[5m]) > 0
+        expr: sum by (environment) (increase(sync_api_error_total{error_code="OBJECT_MISSING"}[5m])) > 0
         labels: { severity: critical }
         annotations: { summary: 'Committed encrypted object is missing' }
       - alert: SyncDatabaseCorruption
-        expr: increase(sync_database_corruption_total[5m]) > 0
+        expr: sum by (environment) (increase(sync_database_corruption_total[5m])) > 0
         labels: { severity: critical }
         annotations: { summary: 'Database corruption was detected' }
   - name: dear-diary-operational
     rules:
+      - alert: SyncApiUnavailable
+        expr: absent_over_time(process_uptime_seconds{application="dear-diary-sync-api",environment="staging"}[5m])
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: 'The Sync API stopped sending metrics to Grafana Cloud' }
       - alert: SyncCommitSuccessRateLow
-        expr: sum(rate(sync_operation_commit_total{outcome="success"}[15m])) / clamp_min(sum(rate(sync_operation_commit_total[15m])), 0.001) < 0.99
+        expr: (sum by (environment) (rate(sync_operation_commit_total{outcome="success"}[15m])) / clamp_min(sum by (environment) (rate(sync_operation_commit_total[15m])), 0.001) < 0.99) and (sum by (environment) (rate(sync_operation_commit_total[15m])) > 0.01)
         for: 10m
         labels: { severity: warning }
+        annotations: { summary: 'Sync commit success rate is below 99%' }
+      - alert: SyncHttpServerErrorRateHigh
+        expr: (sum by (environment) (rate(http_server_requests_seconds_count{status=~"5.."}[10m])) / clamp_min(sum by (environment) (rate(http_server_requests_seconds_count[10m])), 0.001) > 0.01) and (sum by (environment) (rate(http_server_requests_seconds_count[10m])) > 0.01)
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: 'Sync API HTTP 5xx rate is above 1%' }
       - alert: SyncNotificationBacklog
         expr: sync_notification_outbox_depth > 1000
         for: 15m
@@ -46,18 +49,6 @@ groups:
         labels: { severity: warning }
       - alert: SyncAuthenticationFailureSpike
         expr: rate(sync_authentication_failure_total[5m]) > 1
-        for: 10m
-        labels: { severity: warning }
-      - alert: SyncOutboxAgeHigh
-        expr: histogram_quantile(0.95, sum by (le) (rate(deardiary_outbox_oldest_age_ms_bucket[15m]))) > 900000
-        for: 15m
-        labels: { severity: warning }
-      - alert: SyncCrashFreeSessionsLow
-        expr: 1 - (sum(rate(deardiary_session_crash_total[1h])) / clamp_min(sum(rate(deardiary_session_start_total[1h])), 0.001)) < 0.998
-        for: 30m
-        labels: { severity: warning }
-      - alert: SyncDatabaseOpenFailureSpike
-        expr: rate(deardiary_database_open_failure_total[10m]) > 0.01
         for: 10m
         labels: { severity: warning }
       - alert: SyncObjectStorageRateLimited

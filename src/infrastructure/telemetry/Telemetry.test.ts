@@ -5,6 +5,7 @@ import {
   type TelemetryAttributes,
   type TelemetryEnvelope,
 } from './Telemetry';
+import { createGrafanaFaroConfig } from './GrafanaFaro';
 
 test('telemetry exports only allowlisted low-cardinality attributes', async () => {
   const exported: TelemetryEnvelope[] = [];
@@ -38,4 +39,21 @@ test('telemetry exports only allowlisted low-cardinality attributes', async () =
 test('telemetry rejects unregistered metric namespaces', () => {
   const telemetry = new PrivacySafeTelemetry({ export: async () => undefined });
   assert.throws(() => telemetry.counter('arbitrary.user.metric', 1));
+});
+
+test('Faro enables only the session instrumentation required by the collector', () => {
+  const config = createGrafanaFaroConfig(
+    'https://faro-collector.example.grafana.net/collect/example',
+    'staging',
+    'release-1',
+  );
+
+  assert.deepEqual(
+    config.instrumentations?.map((instrumentation) => instrumentation.name),
+    ['@grafana/faro-web-sdk:instrumentation-session'],
+  );
+  assert.deepEqual(config.metas, []);
+  assert.equal(config.sessionTracking?.enabled, true);
+  assert.equal(config.sessionTracking?.persistent, false);
+  assert.equal(config.trackGeolocation, false);
 });

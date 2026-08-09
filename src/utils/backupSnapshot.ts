@@ -351,7 +351,7 @@ const validateBackup = async (
     throw new Error(`Unsupported backup schema version ${manifest.schemaVersion}.`);
   }
   if (payload.version !== '2.0.0' && payload.version !== '3.0.0') {
-    throw new Error('Unsupported Dear Diary backup payload.');
+    throw new Error('Unsupported Loredays backup payload.');
   }
   if (
     !Array.isArray(payload.diaries) ||

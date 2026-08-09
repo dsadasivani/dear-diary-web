@@ -68,6 +68,7 @@ public class OperationCommitService {
         validateAccountAndProtocol(account, operation);
         requireActiveOperationDevice(account.accountId(), operation.deviceId());
         var objects = loadObjects(account.accountId(), operationId);
+        var retainedMedia = loadRetainedMedia(account.accountId(), operationId);
         verifyObjects(objects);
 
         var nextSequence = account.currentSequence() + 1;
@@ -88,15 +89,20 @@ public class OperationCommitService {
             eventObject.sizeBytes(), operation.eventSchemaVersion(), now);
         jdbc.update("""
             INSERT INTO sync_record_versions (
-                account_id, record_type, record_id, current_version, last_sequence, deleted, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                account_id, record_type, record_id, current_version, last_sequence, deleted,
+                entry_photo_count, entry_recording_count, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (account_id, record_type, record_id) DO UPDATE SET
                 current_version = EXCLUDED.current_version,
                 last_sequence = EXCLUDED.last_sequence,
                 deleted = EXCLUDED.deleted,
+                entry_photo_count = EXCLUDED.entry_photo_count,
+                entry_recording_count = EXCLUDED.entry_recording_count,
                 updated_at = EXCLUDED.updated_at
             """, account.accountId(), operation.recordType(), operation.recordId(), nextRecordVersion,
-            nextSequence, "DELETE".equals(operation.operationType()), now);
+            nextSequence, "DELETE".equals(operation.operationType()),
+            isEntryUpsert(operation) ? operation.entryPhotoCount() : null,
+            isEntryUpsert(operation) ? operation.entryRecordingCount() : null, now);
         jdbc.update("""
             UPDATE sync_object_references SET deleted_sequence = ?
             WHERE account_id = ? AND owner_record_type = ? AND owner_record_id = ?
@@ -116,6 +122,17 @@ public class OperationCommitService {
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, account.accountId(), object.objectKey(), operation.recordType(), operation.recordId(),
                 referenceKind(object.kind()), nextSequence, now);
+        }
+        if (!"DELETE".equals(operation.operationType())) {
+            for (var retained : retainedMedia) {
+                jdbc.update("""
+                    INSERT INTO sync_object_references (
+                        account_id, object_key, owner_record_type, owner_record_id,
+                        reference_kind, created_sequence, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, account.accountId(), retained.objectKey(), operation.recordType(),
+                    operation.recordId(), retained.kind(), nextSequence, now);
+            }
         }
         jdbc.update("""
             UPDATE sync_operations SET operation_status = 'COMMITTED', committed_sequence = ?,
@@ -151,16 +168,22 @@ public class OperationCommitService {
         var rows = jdbc.query("""
             SELECT device_id, record_type, record_id, operation_type, base_record_version,
                    operation_status, protocol_version, event_schema_version, key_epoch,
-                   partition_key, committed_sequence, committed_record_version
+                   partition_key, committed_sequence, committed_record_version,
+                   entry_photo_count, entry_recording_count
             FROM sync_operations WHERE account_id = ? AND operation_id = ? FOR UPDATE
             """, (rs, row) -> new OperationRow(
                 rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3),
                 rs.getString(4), rs.getLong(5), rs.getString(6), rs.getInt(7), rs.getInt(8),
-                rs.getInt(9), rs.getString(10), nullableLong(rs, 11), nullableLong(rs, 12)),
+                rs.getInt(9), rs.getString(10), nullableLong(rs, 11), nullableLong(rs, 12),
+                nullableInteger(rs, 13), nullableInteger(rs, 14)),
             accountId, operationId);
         if (rows.isEmpty()) throw new ApiException("OPERATION_NOT_FOUND", HttpStatus.NOT_FOUND,
             "The synchronization operation was not found.");
         return rows.getFirst();
+    }
+
+    private boolean isEntryUpsert(OperationRow operation) {
+        return "ENTRY".equals(operation.recordType()) && "UPSERT".equals(operation.operationType());
     }
 
     private long lockCurrentVersion(UUID accountId, String recordType, String recordId) {
@@ -212,6 +235,19 @@ public class OperationCommitService {
             accountId, operationId);
     }
 
+    private List<ObjectRow> loadRetainedMedia(UUID accountId, UUID operationId) {
+        return jdbc.query("""
+            SELECT retained.object_key, retained.object_kind, object.sha256, object.size_bytes
+            FROM sync_operation_retained_media retained
+            JOIN sync_objects object ON object.account_id = retained.account_id
+                AND object.object_key = retained.object_key
+            WHERE retained.account_id = ? AND retained.operation_id = ?
+            ORDER BY retained.object_key
+            """, (rs, row) -> new ObjectRow(
+                rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4)),
+            accountId, operationId);
+    }
+
     private void verifyObjects(List<ObjectRow> objects) {
         if (objects.isEmpty()) throw new ApiException("INVALID_OPERATION_OBJECTS", HttpStatus.CONFLICT,
             "The operation has no encrypted objects.");
@@ -254,11 +290,17 @@ public class OperationCommitService {
         return rs.wasNull() ? null : value;
     }
 
+    private Integer nullableInteger(java.sql.ResultSet rs, int index) throws java.sql.SQLException {
+        var value = rs.getInt(index);
+        return rs.wasNull() ? null : value;
+    }
+
     private record AccountRow(UUID accountId, long currentSequence, int currentKeyEpoch, String status, int minimumWriteProtocol) {}
     private record OperationRow(
         UUID deviceId, String recordType, String recordId, String operationType,
         long baseRecordVersion, String status, int protocolVersion, int eventSchemaVersion,
-        int keyEpoch, String partitionKey, Long committedSequence, Long committedRecordVersion
+        int keyEpoch, String partitionKey, Long committedSequence, Long committedRecordVersion,
+        Integer entryPhotoCount, Integer entryRecordingCount
     ) {}
     private record ObjectRow(String objectKey, String kind, String sha256, long sizeBytes) {}
     private record CommitOutcome(CommitOperationResponse response, ApiException error) {

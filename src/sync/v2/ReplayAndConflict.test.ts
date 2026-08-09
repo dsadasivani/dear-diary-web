@@ -98,6 +98,63 @@ test('remote pull survives a lost cursor acknowledgment without replaying the ev
   assert.equal(await replay.hasAppliedEvent('event-1'), true);
 });
 
+test('remote pull reports measurable progress across event pages', async () => {
+  const store = new MemoryDataStore();
+  await seedRuntime(store);
+  const bytes = new Uint8Array([4, 5, 6]);
+  const first = await envelope(bytes);
+  const second = await envelope(bytes, {
+    sequence: 2,
+    eventId: 'event-2',
+    operationId: 'operation-remote-2',
+    recordVersion: 2,
+  });
+  const progress: Array<{
+    phase: string;
+    appliedSequence: number;
+    targetSequence?: number;
+  }> = [];
+  let decryptions = 0;
+  const replay = new PersistentReplayStore(store, new SyncInvariantValidator(), 100, () => 10);
+  const puller = new RemoteEventPuller(
+    {
+      pullEvents: async (after: number) => ({
+        events: after === 0 ? [first] : after === 1 ? [second] : [],
+        currentSequence: 2,
+        hasMore: after === 0,
+      }),
+      acknowledgeCursor: async () => undefined,
+    },
+    new BoundedObjectTransfer({ maximumObjectBytes: 1024, fetch: async () => new Response(bytes) }),
+    {
+      hasKeyEpoch: async () => true,
+      decrypt: async () => decoded(decryptions++ === 0 ? first : second),
+    },
+    replay,
+    new SyncInvariantValidator(),
+    new PersistentSafetyStopStore(store),
+    { updateSyncHealth: async () => undefined },
+    {
+      accountId: 'account-1',
+      deviceId: 'device-1',
+      eventSchemaVersion: 2,
+      pageSize: 1,
+      replayBatchSize: 1,
+      onProgress: (value) => progress.push(value),
+    },
+  );
+
+  assert.equal(await puller.pull(), 2);
+  assert.deepEqual(progress, [
+    { phase: 'starting', appliedSequence: 0 },
+    { phase: 'pulling', appliedSequence: 0, targetSequence: 2 },
+    { phase: 'pulling', appliedSequence: 1, targetSequence: 2 },
+    { phase: 'pulling', appliedSequence: 1, targetSequence: 2 },
+    { phase: 'pulling', appliedSequence: 2, targetSequence: 2 },
+    { phase: 'complete', appliedSequence: 2, targetSequence: 2 },
+  ]);
+});
+
 test('replay rejects an invalid batch without advancing the atomic cursor', async () => {
   const store = new MemoryDataStore();
   await seedRuntime(store);

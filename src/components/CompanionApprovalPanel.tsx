@@ -87,7 +87,7 @@ export default function CompanionApprovalPanel() {
     setError('');
     try {
       await approveSyncV2CompanionPairing(session, pairingCode);
-      setMessage('Web browser approved. It is restoring the encrypted diary.');
+      setMessage('Web browser approved. It is restoring your encrypted memories.');
       setCodes((current) => ({ ...current, [session.pairingId]: '' }));
       await refresh();
     } catch (approvalError: any) {

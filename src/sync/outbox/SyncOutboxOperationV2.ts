@@ -1,5 +1,20 @@
 import type { SyncErrorCode } from '../errors';
 
+export interface PreparedSyncObjectV2 {
+  objectKey: string;
+  objectKind: 'EVENT' | 'MEDIA' | 'THUMBNAIL';
+  sha256: string;
+  sizeBytes: number;
+  encryptedBase64: string;
+}
+
+export interface PreparedMediaPointerV2 {
+  mediaId: string;
+  objectKey: string;
+  localUri?: string;
+  thumbnailObjectKey?: string;
+}
+
 export const OUTBOX_V2_STATES = [
   'PENDING',
   'PREPARING',
@@ -13,6 +28,7 @@ export const OUTBOX_V2_STATES = [
   'BLOCKED_AUTH',
   'BLOCKED_DEVICE',
   'BLOCKED_UPGRADE',
+  'BLOCKED_QUOTA',
   'SAFETY_STOP',
   'SUPERSEDED',
 ] as const;
@@ -38,6 +54,13 @@ export interface SyncOutboxOperationV2 {
   encryptedEventSchemaVersion?: number;
   keyEpoch?: number;
   partitionKey?: string;
+  preparedCanonicalPayload?: unknown | null;
+  preparedObjects?: PreparedSyncObjectV2[];
+  preparedMediaPointers?: PreparedMediaPointerV2[];
+  retainedMediaObjects?: Array<{
+    objectKey: string;
+    objectKind: 'MEDIA' | 'THUMBNAIL';
+  }>;
   remoteSequence?: number;
   remoteRecordVersion?: number;
   dependencyOperationId?: string;

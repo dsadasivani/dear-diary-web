@@ -23,6 +23,7 @@ import {
 
 import OverlayPortal from './components/OverlayPortal';
 import ProfileAvatar from './components/ProfileAvatar';
+import SyncCatchUpOverlay, { type InitialSyncGate } from './components/SyncCatchUpOverlay';
 import {
   AppHeader,
   CreateActionSheet,
@@ -36,6 +37,7 @@ import {
   AppSettings,
   Diary,
   Entry,
+  LocalSyncAccountState,
   PartitionHydrationState,
   ResponsiveLayout,
   SecurityConfig,
@@ -75,6 +77,9 @@ import {
 import type { AccentThemeId } from './design/accentThemes';
 import { measureAsync } from './utils/performance';
 import { pageMotion } from './components/ui/motion';
+import { BRAND } from './config/brand';
+import { DEFAULT_ACCOUNT_QUOTA } from './domain/quota';
+import type { SyncV2Quota } from './sync/v2/api/SyncV2ApiTypes';
 import {
   legacyNavigationTarget,
   resolveNavigationTarget,
@@ -247,6 +252,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     type: 'success' | 'error' | 'info' | 'warning';
   } | null>(null);
   const [globalLoading, setGlobalLoading] = useState<GlobalLoadingState | null>(null);
+  const [initialSyncGate, setInitialSyncGate] = useState<InitialSyncGate | null>(null);
   const loadingDepthRef = React.useRef(0);
   const pendingDeepLinkRef = React.useRef<DearDiaryDeepLinkTarget | null>(null);
 
@@ -291,6 +297,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
   const [archiveMonths, setArchiveMonths] = useState<PartitionHydrationState[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
+  const [accountQuota, setAccountQuota] = useState<SyncV2Quota>(DEFAULT_ACCOUNT_QUOTA);
   const [homeStreak, setHomeStreak] = useState(0);
   const [homeSummary, setHomeSummary] = useState<HomeSummary | null>(null);
 
@@ -474,34 +481,65 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     setDiaries(storedDiaries);
   };
 
-  const resumePendingSyncWorkAfterUnlock = async () => {
-    await syncV2Application.resumeAfterUnlock();
-    return diaryRepository.getLocalSyncAccountState();
+  const completeInitialCatchUp = async (syncAccount: LocalSyncAccountState) => {
+    setInitialSyncGate({
+      phase: 'starting',
+      appliedSequence: syncAccount.currentSyncSequence,
+      allowOffline: syncAccount.currentSyncSequence > 0,
+    });
+    try {
+      await syncV2Application.resumeAfterUnlock();
+      await reloadShellData();
+      setUnlockedDiaryIds(new Set());
+      setIsAuthenticated(true);
+      setInitialSyncGate(null);
+      eventSyncEngine.requestOutboxFlush();
+      eventSyncEngine.startPolling();
+    } catch (err: any) {
+      setIsAuthenticated(true);
+      setInitialSyncGate((current) => ({
+        phase: 'failed',
+        appliedSequence: current?.appliedSequence || syncAccount.currentSyncSequence,
+        targetSequence: current?.targetSequence,
+        allowOffline: syncAccount.currentSyncSequence > 0,
+        error: err?.message || 'Encrypted sync could not load the latest data.',
+      }));
+    }
   };
 
   const handleUnlock = async () => {
+    let syncAccount: LocalSyncAccountState | null = null;
     await runWithGlobalLoader(
-      'Unlocking your diary',
+      'Unlocking your private space',
       async () => {
         await measureAsync('app.pinUnlock', () => reloadShellData());
-        setUnlockedDiaryIds(new Set());
-        setIsAuthenticated(true);
+        syncAccount = await diaryRepository.getLocalSyncAccountState();
       },
       'Loading your latest local data.',
     );
-    if (isE2eAppMode()) return;
-    void resumePendingSyncWorkAfterUnlock()
-      .then((syncAccount) => {
-        if (syncAccount) {
-          eventSyncEngine.requestOutboxFlush();
-          eventSyncEngine.startPolling();
-        }
-      })
-      .catch((err) => {
-        showToast(err?.message || 'Encrypted sync could not resume after unlock.', 'warning');
-        console.warn('Unable to start sync polling after unlock:', err);
-      });
+    if (isE2eAppMode() || !syncAccount) {
+      setUnlockedDiaryIds(new Set());
+      setIsAuthenticated(true);
+      return;
+    }
+    await completeInitialCatchUp(syncAccount);
   };
+
+  const retryInitialCatchUp = () => {
+    void diaryRepository.getLocalSyncAccountState().then((account) => {
+      if (account) void completeInitialCatchUp(account);
+    });
+  };
+
+  useEffect(
+    () =>
+      eventSyncEngine.subscribeCatchUpProgress((progress) => {
+        setInitialSyncGate((current) =>
+          current ? { ...progress, allowOffline: current.allowOffline } : current,
+        );
+      }),
+    [],
+  );
 
   // On mount: load initial state
   useEffect(() => {
@@ -525,6 +563,21 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       cancelled = true;
     };
   }, [isAuthenticated]);
+
+  const refreshAccountQuota = useCallback(async (): Promise<void> => {
+    const quota = await syncV2Application.getQuota({ refresh: true });
+    setAccountQuota(quota);
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void refreshAccountQuota().catch(() =>
+      syncV2Application
+        .getQuota()
+        .then(setAccountQuota)
+        .catch(() => setAccountQuota(DEFAULT_ACCOUNT_QUOTA)),
+    );
+  }, [isAuthenticated, refreshAccountQuota]);
 
   useEffect(() => {
     const handleAuthorizationRequired = (event: Event) => {
@@ -739,7 +792,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     const targetDiary = diaries[0];
     if (!targetDiary) {
       handleNavigate('diaries');
-      showToast('Create a journal before adding your first entry.', 'info');
+      showToast('Create a collection before adding your first entry.', 'info');
       return;
     }
     handleNavigate(
@@ -760,7 +813,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       notes: 'Notes',
       search: 'Search',
       stats: currentScreen === 'appSettings' ? 'Settings' : 'Insights',
-    })[activeTab] || 'Dear Diary';
+    })[activeTab] || BRAND.name;
 
   const navigateToDeepLink = useCallback(async (target: DearDiaryDeepLinkTarget) => {
     switch (target.kind) {
@@ -780,7 +833,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           diaryId = entry?.diaryId || '';
         }
         if (!diaryId) {
-          showToast('That diary link is no longer available.', 'warning');
+          showToast('That collection link is no longer available.', 'warning');
           return;
         }
         handleNavigate('diaries', 'diaryDetail', diaryId, target.entryId);
@@ -809,12 +862,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     (url: string) => {
       const target = parseDearDiaryDeepLink(url);
       if (!target) {
-        showToast('That Dear Diary link could not be opened.', 'warning');
+        showToast(`That ${BRAND.name} link could not be opened.`, 'warning');
         return;
       }
       if (!isAuthenticated) {
         pendingDeepLinkRef.current = target;
-        showToast('Unlock Dear Diary to continue.', 'info');
+        showToast(`Unlock ${BRAND.name} to continue.`, 'info');
         return;
       }
       void navigateToDeepLink(target);
@@ -944,7 +997,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         return;
       }
       if (isAuthenticated && shouldLockAfterBackground({ backgroundedAt, resumedAt: Date.now() })) {
-        showToast('Dear Diary locked after being in the background.', 'info');
+        showToast(`${BRAND.name} locked after being in the background.`, 'info');
         handleLockApp();
       } else if (isAuthenticated) {
         eventSyncEngine.requestOutboxFlush();
@@ -1105,12 +1158,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 type="button"
                 onClick={() => handleNavigate('diaries', 'list')}
                 className="flex h-9 w-9 items-center justify-center rounded-full text-brand-sage transition-all hover:bg-brand-blush-light hover:text-brand-plum active:scale-95"
-                title="Back to diaries"
+                title="Back to collections"
               >
                 <ArrowLeft className="w-5 h-5" />
               </button>
               <span className="rounded-full bg-brand-pink/10 px-4 py-1.5 text-[9px] font-black uppercase tracking-[0.22em] text-brand-pink">
-                Locked Diary
+                Private Collection
               </span>
             </div>
 
@@ -1204,7 +1257,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
                 disabled={!canSubmitPin}
                 className="w-full rounded-xl bg-brand-sage py-3.5 text-xs font-extrabold uppercase tracking-wider text-white shadow-sm transition-all hover:bg-brand-sage-dark disabled:cursor-not-allowed disabled:bg-brand-sage/45 disabled:text-white/90"
               >
-                Unlock Diary
+                Unlock Collection
               </button>
             </form>
 
@@ -1313,6 +1366,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               onRefreshEntries={refreshEntries}
               onFocusModeChange={setIsEditorFocusMode}
               initialFocusMode={isEditorFocusMode}
+              quota={accountQuota}
               onShowToast={showToast}
               onRunWithLoader={runWithGlobalLoader}
             />
@@ -1386,6 +1440,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               onThemeChange={handleLocalThemeChange}
               accentTheme={accentTheme}
               onAccentThemeChange={handleLocalAccentThemeChange}
+              quota={accountQuota}
+              onRefreshQuota={refreshAccountQuota}
             />
           );
         }
@@ -1523,7 +1579,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     if (activeTab === 'diaries' && currentScreen === 'entryEditor')
       return selectedEntryId ? 'Edit Entry' : 'New Entry';
     if (activeTab === 'diaries' && currentScreen === 'diaryDetail') {
-      return diaries.find((diary) => diary.id === selectedDiaryId)?.name || 'My Journal';
+      return diaries.find((diary) => diary.id === selectedDiaryId)?.name || 'My Collection';
     }
     return (
       {
@@ -1531,7 +1587,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         diaries: 'Memories',
         notes: 'Notes',
         search: 'Search',
-      }[activeTab] || 'Dear Diary'
+      }[activeTab] || BRAND.name
     );
   };
 
@@ -1579,6 +1635,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       <div className="app-canvas min-h-screen bg-brand-bg text-brand-text font-sans select-none relative safe-area-root overflow-hidden">
         {renderSyncAuthorizationBanner()}
         <GlobalLoaderOverlay loading={globalLoading} />
+        <SyncCatchUpOverlay
+          gate={initialSyncGate}
+          onRetry={retryInitialCatchUp}
+          onContinueOffline={() => setInitialSyncGate(null)}
+        />
         {renderDesktopBackground()}
         {!isOnline && (
           <div
@@ -1598,7 +1659,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               </div>
               <div className="min-w-0">
                 <h1 className="font-serif-diary text-2xl font-bold tracking-tight text-brand-plum dark:text-brand-text xl:text-3xl">
-                  Dear Diary
+                  {BRAND.wordmark}
                 </h1>
                 <p className="mt-0.5 text-xs font-semibold text-brand-text-muted">
                   {visibleStreak} Day Streak
@@ -1714,7 +1775,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
             </header>
 
             <main className="min-h-0 flex-1 overflow-y-auto px-5 py-5 xl:px-10 xl:py-7">
-              <AnimatePresence mode="wait">
+              <AnimatePresence mode={prefersReducedMotion ? 'sync' : 'wait'}>
                 <motion.div
                   key={`${activeTab}-${currentScreen}`}
                   {...pageMotion(prefersReducedMotion)}
@@ -1753,6 +1814,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       {renderSyncAuthorizationBanner()}
       {renderSyncStatusBadge()}
       <GlobalLoaderOverlay loading={globalLoading} />
+      <SyncCatchUpOverlay
+        gate={initialSyncGate}
+        onRetry={retryInitialCatchUp}
+        onContinueOffline={() => setInitialSyncGate(null)}
+      />
       {renderDesktopBackground()}
       {!isOnline && (
         <div
@@ -1784,6 +1850,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
           />
         </Suspense>
         <GlobalLoaderOverlay loading={globalLoading} />
+        <SyncCatchUpOverlay
+          gate={initialSyncGate}
+          onRetry={retryInitialCatchUp}
+          onContinueOffline={() => setInitialSyncGate(null)}
+        />
       </>
     );
   }
@@ -1795,6 +1866,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
         {renderSyncAuthorizationBanner()}
         {renderSyncStatusBadge()}
         <GlobalLoaderOverlay loading={globalLoading} />
+        <SyncCatchUpOverlay
+          gate={initialSyncGate}
+          onRetry={retryInitialCatchUp}
+          onContinueOffline={() => setInitialSyncGate(null)}
+        />
         {!isOnline && (
           <div
             className="pointer-events-none fixed inset-x-3 top-3 z-[90] mx-auto flex max-w-sm items-center justify-center gap-2 rounded-lg bg-brand-plum px-3 py-2 text-xs font-bold text-white shadow-lg"
@@ -1825,6 +1901,11 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       {renderSyncAuthorizationBanner()}
       {renderSyncStatusBadge()}
       <GlobalLoaderOverlay loading={globalLoading} />
+      <SyncCatchUpOverlay
+        gate={initialSyncGate}
+        onRetry={retryInitialCatchUp}
+        onContinueOffline={() => setInitialSyncGate(null)}
+      />
       {layout === 'tablet' && (
         <NavigationRail
           active={activeTab}

@@ -30,10 +30,10 @@ describe('WebCompanionLink', () => {
   it('explains the Android-first model before offering companion sign-in', async () => {
     render(<WebCompanionLink onLinked={vi.fn()} />);
 
-    expect(screen.getByRole('heading', { name: 'Dear Diary' })).toBeInTheDocument();
-    expect(screen.getByText('Your diary starts on your phone.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Loredays.' })).toBeInTheDocument();
+    expect(screen.getByText('Your story starts on your phone.')).toBeInTheDocument();
     expect(screen.getByText('Install on Android')).toBeInTheDocument();
-    expect(screen.getByText('Set up your diary')).toBeInTheDocument();
+    expect(screen.getByText('Set up Loredays')).toBeInTheDocument();
     expect(screen.getByText('Link this browser')).toBeInTheDocument();
 
     const download = screen.getByRole('link', { name: /get it on google play/i });

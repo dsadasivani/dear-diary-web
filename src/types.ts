@@ -33,6 +33,8 @@ export interface Entry {
   photoUris: string[]; // Attached photo references (Base64 data URIs or object URLs on web)
   photoCount: number;
   wordCount: number;
+  /** Positive words added on each authoring-device local calendar day. */
+  wordsWrittenByDate?: Record<string, number>;
   audioUri?: string; // Base64 raw audio data
   createdAt: number;
   updatedAt: number;
@@ -62,6 +64,9 @@ export interface SecurityConfig {
   linkedGoogleUserId?: string; // Immutable Google subject used for PIN reset and sync identity
   linkedGoogleEmail?: string | null; // Email for the locally bound Google account
   linkedGoogleBoundAt?: number; // Timestamp when the Google account was locally bound
+  pinLockoutStage?: 0 | 1 | 2 | 3 | 4; // Current device-local PIN escalation stage
+  failedPinAttempts?: number; // Failed attempts accumulated within the current stage
+  pinLockedUntil?: number; // Absolute device timestamp until PIN entry is disabled
 }
 
 export interface Mood {

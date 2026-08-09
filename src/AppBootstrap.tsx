@@ -11,6 +11,7 @@ import WebCompanionLink from './components/WebCompanionLink';
 import { measureAsync } from './utils/performance';
 import { seedE2eRepositoryIfRequested } from './testing/e2eRepositorySeed';
 import { AppButton, LoadingSkeleton, StatusNotice } from './components/UiPrimitives';
+import { BRAND } from './config/brand';
 
 interface BootstrapData {
   settings: AppSettings;
@@ -73,7 +74,7 @@ export default function AppBootstrap() {
       })
       .catch(() => {
         bootstrapPromise = null;
-        if (active) setError('Dear Diary could not open local storage safely.');
+        if (active) setError(`${BRAND.name} could not open local storage safely.`);
       });
     return () => {
       active = false;
@@ -99,12 +100,12 @@ export default function AppBootstrap() {
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-[1.35rem] bg-accent text-[var(--color-on-primary)] shadow-[var(--shadow-floating)]">
           <BookOpen aria-hidden="true" className="h-7 w-7" />
         </div>
-        <p className="app-eyebrow mt-6">Living memories</p>
+        <p className="app-eyebrow mt-6">{BRAND.tagline}</p>
         <h1 id="bootstrap-title" className="type-page-title mt-1 font-semibold">
-          Dear Diary
+          {BRAND.wordmark}
         </h1>
         <p className="type-supporting mx-auto mt-2 max-w-xs">
-          Preparing your private sanctuary on this device.
+          Preparing your private space on this device.
         </p>
         <div className="mt-7">
           {error ? (
@@ -122,7 +123,11 @@ export default function AppBootstrap() {
               </AppButton>
             </div>
           ) : (
-            <LoadingSkeleton lines={3} label="Opening Dear Diary" className="mx-auto max-w-xs" />
+            <LoadingSkeleton
+              lines={3}
+              label={`Opening ${BRAND.name}`}
+              className="mx-auto max-w-xs"
+            />
           )}
         </div>
       </section>

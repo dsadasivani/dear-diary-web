@@ -55,6 +55,8 @@ import {
   toggleUnorderedList,
 } from '../utils/richTextSelection';
 import EntrySaveStatus, { type EntrySaveState } from './editor/EntrySaveStatus';
+import type { SyncV2Quota } from '../sync/v2/api/SyncV2ApiTypes';
+import { DEFAULT_ACCOUNT_QUOTA, entryMediaCounts } from '../domain/quota';
 
 interface EntryEditorScreenProps {
   diaries: Diary[];
@@ -75,6 +77,7 @@ interface EntryEditorScreenProps {
     detail?: string,
   ) => Promise<void>;
   showDiarySelector?: boolean;
+  quota?: SyncV2Quota;
 }
 
 interface ComposedEntryDraft {
@@ -99,6 +102,7 @@ export default function EntryEditorScreen({
   initialPrompt,
   onShowToast,
   showDiarySelector = false,
+  quota = DEFAULT_ACCOUNT_QUOTA,
 }: EntryEditorScreenProps) {
   // Find current entry if editing
   const isEditing = !!entryId;
@@ -131,6 +135,10 @@ export default function EntryEditorScreen({
   const [isPhotoDragActive, setIsPhotoDragActive] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
   const [audioUri, setAudioUri] = useState<string | undefined>(undefined);
+  const recordingCount = useMemo(
+    () => (audioUri ? 1 : 0) + blocks.filter((block) => Boolean(block.audioUri)).length,
+    [audioUri, blocks],
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [autosaveError, setAutosaveError] = useState('');
@@ -142,6 +150,7 @@ export default function EntryEditorScreen({
   const [showAddTools, setShowAddTools] = useState(false);
   const [showFormattingTools, setShowFormattingTools] = useState(false);
   const baselineFingerprintRef = useRef<string | null>(null);
+  const persistedMediaCountsRef = useRef({ photoCount: 0, recordingCount: 0 });
   const workingEntryIdRef = useRef<string | undefined>(entryId);
   const originalEntryRef = useRef<Entry | null>(null);
   const isLeavingRef = useRef(false);
@@ -150,6 +159,14 @@ export default function EntryEditorScreen({
   const [showTagPicker, setShowTagPicker] = useState<boolean>(false);
   const [fontFamily, setFontFamily] = useState<'serif' | 'sans' | 'mono'>('serif');
   const [isFocusMode, setIsFocusMode] = useState<boolean>(initialFocusMode);
+
+  const maximumAllowedPhotos = () =>
+    Math.max(quota.limits.maximumPhotosPerEntry, persistedMediaCountsRef.current.photoCount);
+  const maximumAllowedRecordings = () =>
+    Math.max(
+      quota.limits.maximumRecordingsPerEntry,
+      persistedMediaCountsRef.current.recordingCount,
+    );
 
   // Convert "HH:MM" to "HH:MM AM/PM"
   const formatTime12 = (time24?: string) => {
@@ -1432,6 +1449,13 @@ export default function EntryEditorScreen({
     if (showRecordingOverlay) {
       stopRecording();
     } else {
+      if (mode === 'voice-dictation' && recordingCount >= maximumAllowedRecordings()) {
+        onShowToast?.(
+          `This plan allows ${quota.limits.maximumRecordingsPerEntry} recordings per entry.`,
+          'warning',
+        );
+        return;
+      }
       startRecording(false, mode);
     }
   };
@@ -1470,6 +1494,7 @@ export default function EntryEditorScreen({
         if (cancelled) return;
         if (entryObj) {
           originalEntryRef.current = entryObj;
+          persistedMediaCountsRef.current = entryMediaCounts(entryObj);
           setDiaryId(entryObj.diaryId);
           setDate(entryObj.date);
 
@@ -1518,6 +1543,7 @@ export default function EntryEditorScreen({
           }
         }
       } else {
+        persistedMediaCountsRef.current = { photoCount: 0, recordingCount: 0 };
         const now = new Date();
         setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
 
@@ -1631,6 +1657,15 @@ export default function EntryEditorScreen({
   };
 
   const persistEntryDraft = async (draft: ComposedEntryDraft): Promise<void> => {
+    const draftRecordingCount = draft.finalBlocks.filter((block) => Boolean(block.audioUri)).length;
+    const allowedPhotos = maximumAllowedPhotos();
+    const allowedRecordings = maximumAllowedRecordings();
+    if (photoUris.length > allowedPhotos) {
+      throw new Error(`Remove photos until this entry has at most ${allowedPhotos}.`);
+    }
+    if (draftRecordingCount > allowedRecordings) {
+      throw new Error(`Remove recordings until this entry has at most ${allowedRecordings}.`);
+    }
     const existingId = workingEntryIdRef.current;
     if (existingId) {
       const existing = await diaryRepository.getEntry(existingId);
@@ -1652,6 +1687,10 @@ export default function EntryEditorScreen({
         updatedAt: Date.now(),
         blocks: draft.finalBlocks,
       });
+      persistedMediaCountsRef.current = {
+        photoCount: photoUris.length,
+        recordingCount: draftRecordingCount,
+      };
       return;
     }
     const created = await diaryRepository.createEntry({
@@ -1668,6 +1707,10 @@ export default function EntryEditorScreen({
       blocks: draft.finalBlocks,
     });
     workingEntryIdRef.current = created.id;
+    persistedMediaCountsRef.current = {
+      photoCount: photoUris.length,
+      recordingCount: draftRecordingCount,
+    };
   };
 
   useEffect(() => {
@@ -1695,13 +1738,28 @@ export default function EntryEditorScreen({
   }, [draftFingerprint, isDirty, isEditorReady, isSaving, isAutosaving]);
 
   const attachPhotoFiles = async (files: File[]) => {
-    const selectedFiles = files.filter((file) => file.type.startsWith('image/'));
-    if (selectedFiles.length === 0) {
+    const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+    if (imageFiles.length === 0) {
       onShowToast?.('Drop an image file to attach it to this entry.', 'warning');
       return;
     }
-    if (selectedFiles.length !== files.length) {
+    if (imageFiles.length !== files.length) {
       onShowToast?.('Only image files were attached.', 'info');
+    }
+    const remaining = Math.max(0, maximumAllowedPhotos() - photoUris.length);
+    if (remaining === 0) {
+      onShowToast?.(
+        `This plan allows ${quota.limits.maximumPhotosPerEntry} photos per entry.`,
+        'warning',
+      );
+      return;
+    }
+    const selectedFiles = imageFiles.slice(0, remaining);
+    if (selectedFiles.length < imageFiles.length) {
+      onShowToast?.(
+        `Only ${remaining} more photo${remaining === 1 ? '' : 's'} can be attached.`,
+        'info',
+      );
     }
 
     await (async () => {
@@ -1842,6 +1900,13 @@ export default function EntryEditorScreen({
   };
 
   const triggerPhotoInput = () => {
+    if (photoUris.length >= maximumAllowedPhotos()) {
+      onShowToast?.(
+        `This plan allows ${quota.limits.maximumPhotosPerEntry} photos per entry.`,
+        'warning',
+      );
+      return;
+    }
     fileInputRef.current?.click();
   };
 
@@ -1920,7 +1985,7 @@ export default function EntryEditorScreen({
               </h2>
               {recordingOverlayMode === 'voice-dictation' && (
                 <p className="text-xs sm:text-xs text-brand-text-muted font-medium px-2">
-                  Record an audio memory and save it with this diary moment.
+                  Record an audio memory and keep it with this moment.
                 </p>
               )}
 
@@ -2629,7 +2694,7 @@ export default function EntryEditorScreen({
               className="inline-flex items-center gap-2 text-sm font-bold text-brand-sage transition-colors hover:text-brand-pink"
             >
               <ArrowLeft className="h-4 w-4" />
-              My Journal
+              New Entry
             </button>
             <h1 className="mt-2 font-serif-diary text-4xl font-semibold tracking-tight text-brand-plum dark:text-brand-text xl:text-5xl">
               {isEditing ? 'Edit Reflection' : 'New Entry'}
@@ -2784,7 +2849,7 @@ export default function EntryEditorScreen({
                   {showDiarySelector && diaries.length > 0 && (
                     <label className="mb-7 flex flex-col gap-2">
                       <span className="text-xs font-bold uppercase tracking-[0.18em] text-brand-sage">
-                        Destination journal
+                        Collection
                       </span>
                       <select
                         value={diaryId}
@@ -3008,6 +3073,9 @@ export default function EntryEditorScreen({
                 <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">
                   Scrapbook
                 </h2>
+                <span className="text-xs text-brand-text-muted">
+                  {photoUris.length}/{quota.limits.maximumPhotosPerEntry}
+                </span>
                 <button
                   type="button"
                   onClick={triggerPhotoInput}
@@ -3070,6 +3138,9 @@ export default function EntryEditorScreen({
               <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-brand-plum dark:text-brand-text">
                 Voice Memo
               </h2>
+              <p className="mt-1 text-xs text-brand-text-muted">
+                {recordingCount}/{quota.limits.maximumRecordingsPerEntry} saved recordings
+              </p>
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <button
                   type="button"
@@ -3158,7 +3229,7 @@ export default function EntryEditorScreen({
         {isEditing && (
           <section className="max-w-4xl rounded-[24px] border border-red-100 bg-red-50/45 px-5 py-4">
             <p className="text-sm font-semibold text-red-700">
-              Deleting this journal entry is irreversible.
+              This entry will be permanently removed.
             </p>
             {!showConfirmDelete ? (
               <button
@@ -3250,11 +3321,11 @@ export default function EntryEditorScreen({
             {showDiarySelector && diaries.length > 0 && (
               <div className="flex flex-col gap-1.5 pb-3 border-b border-brand-border/20">
                 <label className="text-xs font-extrabold text-brand-pink uppercase tracking-widest pl-0.5 select-none">
-                  Choose Destination Journal
+                  Choose Collection
                 </label>
                 <div className="relative">
                   <select
-                    aria-label="Destination journal"
+                    aria-label="Destination collection"
                     value={diaryId}
                     onChange={(e) => setDiaryId(e.target.value)}
                     className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
@@ -3275,7 +3346,7 @@ export default function EntryEditorScreen({
                         }}
                       />
                       <span className="font-serif-diary italic text-sm truncate pr-1">
-                        {diaries.find((d) => d.id === diaryId)?.name || 'Select a Journal'}
+                        {diaries.find((d) => d.id === diaryId)?.name || 'Select a Collection'}
                       </span>
                     </div>
                     <ChevronDown className="w-3.5 h-3.5 text-brand-sage flex-shrink-0" />
@@ -3581,7 +3652,7 @@ export default function EntryEditorScreen({
         {photoUris.length > 0 && (
           <div className="flex flex-col gap-1.5 border-t border-brand-border/40 pt-3 mt-2">
             <p className="text-xs font-bold text-brand-sage uppercase tracking-widest">
-              Attached Photos
+              Attached Photos ({photoUris.length}/{quota.limits.maximumPhotosPerEntry})
             </p>
             <div className="flex overflow-x-auto gap-3 py-1">
               {photoUris.map((photo, idx) => (
@@ -3636,7 +3707,7 @@ export default function EntryEditorScreen({
             className="flex min-h-20 flex-col items-start justify-center gap-2 rounded-2xl border border-brand-border bg-brand-card-bg p-4 text-left text-sm font-bold"
           >
             <Mic className="h-5 w-5 text-brand-pink" />
-            Audio note
+            Audio note ({recordingCount}/{quota.limits.maximumRecordingsPerEntry})
           </button>
           <button
             type="button"
@@ -3864,7 +3935,7 @@ export default function EntryEditorScreen({
             <div className="max-w-md mx-auto flex flex-col gap-3">
               <div className="flex justify-between items-center">
                 <span className="text-xs font-bold text-brand-sage uppercase tracking-widest">
-                  Select Diary Tags
+                  Select Entry Tags
                 </span>
                 <button onClick={() => setShowTagPicker(false)} className="text-brand-sage">
                   <X className="w-4 h-4" />
@@ -3898,7 +3969,7 @@ export default function EntryEditorScreen({
       {isEditing && (
         <div className="bg-red-50/50 p-5 rounded-3xl border border-red-100 flex flex-col gap-3 mt-4">
           <p className="text-xs text-red-600/90 leading-relaxed">
-            Need to clear this reflection? Deleting this journal entry is irreversible.
+            Delete this entry? It will be permanently removed.
           </p>
 
           {!showConfirmDelete ? (

@@ -313,7 +313,8 @@ export default function NotesScreen({
           placeholder="Write a quick thought…"
           testId={editingId ? 'note-edit-editor' : 'quick-note-editor'}
           autoFocus={!editingId}
-          className="mt-7 min-h-[300px] flex-1 font-serif-diary text-lg leading-[1.75] text-brand-plum dark:text-brand-text"
+          enableChecklist
+          className="quick-note-writing-area rich-text-editor min-h-[300px] flex-1 font-serif-diary text-lg leading-[1.75] text-brand-plum dark:text-brand-text"
         />
 
         <details className="mt-8 border-y border-brand-border/60 py-3">
@@ -669,7 +670,7 @@ export default function NotesScreen({
               className="flex min-h-12 w-full items-center gap-3 text-left text-sm font-bold"
             >
               <BookOpen className="h-4 w-4" />
-              Convert to journal entry
+              Convert to entry
             </button>
             <button
               type="button"
@@ -698,7 +699,7 @@ export default function NotesScreen({
 
       <AppDialog
         open={Boolean(conversionNote)}
-        title="Convert to journal entry"
+        title="Convert to entry"
         description="Review where this note will go and what happens to the original."
         onClose={() => setConversionNote(null)}
         footer={
@@ -717,11 +718,11 @@ export default function NotesScreen({
         <div className="space-y-4">
           {diaries.length === 0 ? (
             <StatusNotice tone="warning">
-              Create a journal before converting this note.
+              Create a collection before converting this note.
             </StatusNotice>
           ) : (
             <label className="block text-sm font-bold">
-              Journal
+              Collection
               <select
                 value={conversionJournalId}
                 onChange={(event) => setConversionJournalId(event.target.value)}

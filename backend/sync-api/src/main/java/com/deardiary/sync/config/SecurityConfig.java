@@ -28,7 +28,9 @@ public class SecurityConfig {
             ObjectProvider<JwtDecoder> jwtDecoderProvider,
             SecurityErrorWriter errorWriter,
             CorrelationIdFilter correlationIdFilter,
-            CorsConfigurationSource corsConfigurationSource) throws Exception {
+            CorsConfigurationSource corsConfigurationSource,
+            @Value("${sync.observability.prometheus-public-enabled:false}")
+            boolean prometheusPublicEnabled) throws Exception {
         var jwtDecoder = jwtDecoderProvider.getIfAvailable();
         http
             .csrf(csrf -> csrf.disable())
@@ -42,6 +44,9 @@ public class SecurityConfig {
                 authorize
                     .dispatcherTypeMatchers(ERROR).permitAll()
                     .requestMatchers("/actuator/health", "/actuator/health/**").permitAll();
+                if (prometheusPublicEnabled) {
+                    authorize.requestMatchers("/actuator/prometheus").permitAll();
+                }
                 if (jwtDecoder == null) {
                     authorize.anyRequest().denyAll();
                 } else {

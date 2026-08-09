@@ -20,6 +20,7 @@ describe('redesigned application shell', () => {
           bio: '',
           avatarEmoji: '🌸',
           avatarColor: '#97415f',
+          avatarUri: 'data:image/png;base64,aGVsbG8=',
           writingGoal: 250,
           joinedDate: '07/2026',
         }}
@@ -29,9 +30,13 @@ describe('redesigned application shell', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Today' })).toBeInTheDocument();
-    expect(screen.getByText('Dear Diary')).toBeVisible();
+    expect(screen.getByText('Loredays.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Search' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open profile and settings' })).toBeVisible();
+    expect(screen.getByRole('img', { name: 'Writer profile' })).toHaveAttribute(
+      'src',
+      'data:image/png;base64,aGVsbG8=',
+    );
   });
 
   it('only classifies primary list screens as root destinations', () => {
@@ -76,8 +81,8 @@ describe('redesigned application shell', () => {
     );
 
     expect(screen.getByRole('dialog', { name: 'Write' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /New Journal Entry/ })).toBeDisabled();
-    expect(screen.getAllByText('Create a journal first').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /New Entry/ })).toBeDisabled();
+    expect(screen.getAllByText('Create a collection first').length).toBeGreaterThan(0);
     await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledOnce();
   });

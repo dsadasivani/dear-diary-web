@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   getLocalThemePreference: vi.fn(),
   setLocalThemePreference: vi.fn(),
   createInitialPin: vi.fn(),
+  triggerImpact: vi.fn(),
 }));
 
 vi.mock('../repositories', () => ({
@@ -69,6 +70,10 @@ vi.mock('../domain/security', async () => {
     createInitialPin: mocks.createInitialPin,
   };
 });
+
+vi.mock('../mobile/haptics', () => ({
+  triggerImpact: mocks.triggerImpact,
+}));
 
 const initialSettings: AppSettings = {
   remindersEnabled: false,
@@ -174,14 +179,23 @@ describe('LockScreen first-run sync setup', () => {
     const user = userEvent.setup();
     renderLockScreen();
     expect(screen.getByLabelText(/setup progress: step 1 of 6/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /forgot security passcode pin/i }),
+    ).not.toBeInTheDocument();
     await finishLocalSetup(user);
 
     expect(mocks.saveSecurityConfig).toHaveBeenCalledWith(pinOnlySecurity);
+    expect(
+      screen.queryByRole('button', { name: /forgot security passcode pin/i }),
+    ).not.toBeInTheDocument();
 
     expect(screen.queryByLabelText(/new 8-digit recovery passphrase/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /connect google account/i }));
 
     await screen.findByText(/Google connected/i);
+    expect(
+      screen.queryByRole('button', { name: /forgot security passcode pin/i }),
+    ).not.toBeInTheDocument();
     const createButton = screen.getByRole('button', { name: /create encrypted account/i });
     expect(createButton).toBeDisabled();
 
@@ -243,6 +257,23 @@ describe('LockScreen first-run sync setup', () => {
     expect(screen.queryByText(/^erase$/i)).not.toBeInTheDocument();
   });
 
+  it('provides light haptic feedback when a lock-screen number is tapped', async () => {
+    const user = userEvent.setup();
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={savedSecurity}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    await user.click(await screen.findByRole('button', { name: /^1$/ }));
+
+    expect(mocks.triggerImpact).toHaveBeenCalledWith('light');
+  });
+
   it('unlocks the app from the ambient lock screen with enabled native biometrics', async () => {
     const nativePlatform = vi.spyOn(platform, 'isNativePlatform').mockReturnValue(true);
     const authenticate = vi.spyOn(secureAuthService, 'authenticate').mockResolvedValue(true);
@@ -256,6 +287,9 @@ describe('LockScreen first-run sync setup', () => {
           ...savedSecurity,
           isBiometricsEnabled: true,
           passkeyCredentialId: 'native-biometric',
+          pinLockoutStage: 3,
+          failedPinAttempts: 1,
+          pinLockedUntil: Date.now() + 60_000,
         }}
         onSecurityChange={vi.fn()}
         onUnlock={onUnlock}
@@ -266,9 +300,105 @@ describe('LockScreen first-run sync setup', () => {
     await user.click(screen.getByRole('button', { name: /unlock with biometrics/i }));
 
     expect(authenticate).toHaveBeenCalledWith('native-biometric');
+    expect(mocks.saveSecurityConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pinLockoutStage: 0,
+        failedPinAttempts: 0,
+        pinLockedUntil: undefined,
+      }),
+    );
     await waitFor(() => expect(onUnlock).toHaveBeenCalledOnce());
     nativePlatform.mockRestore();
     authenticate.mockRestore();
+  });
+
+  it('persists failed lock-screen PIN attempts', async () => {
+    const user = userEvent.setup();
+    const lockedSecurity: SecurityConfig = {
+      isPinCreated: true,
+      pinHash: CryptoJS.SHA256('1234device-salt').toString(),
+      pinSalt: 'device-salt',
+      pinLength: 4,
+      isBiometricsEnabled: false,
+      isLocked: true,
+      pinLockoutStage: 0,
+      failedPinAttempts: 0,
+    };
+    mocks.getLocalSyncAccountState.mockResolvedValue({ deviceRole: 'primary_mobile' });
+
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={lockedSecurity}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    await screen.findByRole('button', { name: /^9$/ });
+    await clickPin(user, '9999');
+    await user.click(screen.getByRole('button', { name: /unlock loredays/i }));
+
+    await waitFor(() =>
+      expect(mocks.saveSecurityConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ pinLockoutStage: 0, failedPinAttempts: 1 }),
+      ),
+    );
+    expect(screen.getByText(/9 attempts remaining before a timed lock/i)).toBeInTheDocument();
+  });
+
+  it('restores an active lockout with disabled PIN controls and available Google recovery', async () => {
+    const user = userEvent.setup();
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={{
+          ...pinOnlySecurity,
+          isLocked: true,
+          linkedGoogleUserId: googleSession.userId,
+          linkedGoogleEmail: googleSession.email,
+          pinLockoutStage: 1,
+          failedPinAttempts: 0,
+          pinLockedUntil: Date.now() + 15 * 60 * 1000,
+        }}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    expect(await screen.findByText(/PIN locked\. Try again in \d{2}:\d{2}/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^1$/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /unlock loredays/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /forgot security passcode pin/i })).toBeEnabled();
+  });
+
+  it('re-enables PIN entry when the persisted lockout deadline expires', async () => {
+    const user = userEvent.setup();
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={{
+          ...pinOnlySecurity,
+          isLocked: true,
+          pinLockoutStage: 1,
+          failedPinAttempts: 0,
+          pinLockedUntil: Date.now() + 1_100,
+        }}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    expect(await screen.findByText(/PIN locked\. Try again in/i)).toBeInTheDocument();
+    const oneButton = screen.getByRole('button', { name: /^1$/ });
+    expect(oneButton).toBeDisabled();
+
+    await waitFor(() => expect(oneButton).toBeEnabled(), { timeout: 3_000 });
+    expect(mocks.saveSecurityConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ pinLockoutStage: 1, pinLockedUntil: undefined }),
+    );
   });
 
   it('does not offer security-question recovery when only Google recovery is configured', async () => {
@@ -322,7 +452,7 @@ describe('LockScreen first-run sync setup', () => {
     await screen.findByRole('button', { name: /^1$/ });
     expect(await screen.findAllByText(/enter this browser's 4-digit pin/i)).not.toHaveLength(0);
     await clickPin(user, '1234');
-    await user.click(screen.getByRole('button', { name: /unlock diary/i }));
+    await user.click(screen.getByRole('button', { name: /unlock loredays/i }));
 
     await waitFor(() => expect(onUnlock).toHaveBeenCalledOnce());
     expect(screen.queryByText(/add recovery question/i)).not.toBeInTheDocument();

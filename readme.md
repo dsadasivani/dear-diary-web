@@ -1,16 +1,18 @@
-# Dear Diary
+# Loredays
 
-Dear Diary is a private, local-first journaling application for Android and linked web companions. Android is the primary standalone target. A browser without a local sync account opens the companion-link flow and must be approved from a primary Android device.
+**The days that became you.**
 
-Journal plaintext stays on trusted devices. The current Sync V2 path encrypts payloads on the client, uses Supabase Auth for identity, stores synchronization metadata in the Spring Boot sync service and PostgreSQL, and stores encrypted objects in an S3-compatible object store.
+Loredays is a private personal journaling and memory application designed to help people capture the thoughts, moments and experiences that shape their lives. Android is the primary standalone target. A browser without a local sync account opens the companion-link flow and must be approved from a primary Android device.
+
+Plaintext stays on trusted devices. The current Sync V2 path encrypts payloads on the client, uses Supabase Auth for identity, stores synchronization metadata in the Spring Boot sync service and PostgreSQL, and stores encrypted objects in an S3-compatible object store.
 
 ## Features
 
-- Multiple journals with custom covers, colors, icons, and optional session-level locks.
+- Multiple collections with custom covers, colors, icons, and optional session-level locks.
 - Rich-text entries, timeline blocks, moods, tags, photos, audio notes, and dictation.
-- Quick notes with pinning, tags, rich text, and conversion to journal entries.
+- Quick notes with pinning, tags, rich text, and conversion to entries.
 - Search, calendar and table-of-contents views, writing streaks, mood trends, tag usage, and a writing heatmap.
-- A local PIN, Google-verified PIN recovery, Android biometric unlock, automatic privacy locking, and diary-level access controls.
+- A local PIN, Google-verified PIN recovery, Android biometric unlock, automatic privacy locking, and collection-level access controls.
 - Encrypted, local-first multi-device sync with durable outbox operations, companion pairing, recovery, key rotation, conflict preservation, and encrypted snapshots.
 - Encrypted IndexedDB storage on the web and SQLCipher-backed SQLite plus app-private media files on Android.
 
@@ -33,9 +35,9 @@ flowchart TD
     UI --> PLATFORM[Filesystem, audio, biometrics, reminders]
 ```
 
-`src/App.tsx` owns navigation and application-level state; the project does not use a client router. The primary destinations are Today, Diaries, Notes, Insights, Search, and Settings.
+`src/App.tsx` owns navigation and application-level state; the project does not use a client router. The primary destinations are Today, Memories, Notes, Insights, Search, and Settings.
 
-All journal mutations go through the asynchronous `DiaryRepository`. A synced write updates encrypted local storage and its durable outbox record before returning to the UI. Network upload, remote pull, acknowledgement, snapshots, and archive hydration run afterward. Repository change events and targeted queries keep screens current without reloading the entire data set after normal navigation.
+All collection and entry mutations go through the asynchronous `DiaryRepository`. The internal `Diary` terminology is retained for data compatibility. A synced write updates encrypted local storage and its durable outbox record before returning to the UI. Network upload, remote pull, acknowledgement, snapshots, and archive hydration run afterward. Repository change events and targeted queries keep screens current without reloading the entire data set after normal navigation.
 
 The Express host is intentionally small. In development it mounts Vite middleware; in production it serves `dist` with an SPA fallback. `GET /api/health` is the only application API on that host. The separate Spring Boot service under `backend/sync-api` owns Sync V2 endpoints.
 
@@ -46,6 +48,7 @@ For details, see:
 - [Android and Capacitor](docs/mobile-capacitor.md)
 - [Performance measurement](docs/performance.md)
 - [Production sync operations](docs/production-operations.md)
+- [Observability](docs/observability.md)
 - [Testing](docs/testing.md)
 
 ## Local development
@@ -140,9 +143,9 @@ The main client settings are:
 - `VITE_GOOGLE_WEB_CLIENT_ID` for Google identity and legacy Drive compatibility flows.
 - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth and Sync V2.
 - `VITE_SYNC_V2_API_URL` for the Spring Boot Sync V2 service.
-- `VITE_TELEMETRY_ENDPOINT` and `VITE_CRASH_REPORT_ENDPOINT` for optional privacy-safe reporting.
+- `VITE_GRAFANA_FARO_URL` for privacy-restricted Grafana Cloud Frontend Observability.
 
-Backend database, JWT, object-store, notification, garbage-collection, tracing, and CORS settings are documented
+Backend database, JWT, object-store, notification, garbage-collection, Grafana Cloud OTLP, and CORS settings are documented
 inline in [.env.example](.env.example). Select `development`, `staging`, or `production` with
 `SPRING_PROFILES_ACTIVE`. Environment variables and SSM-injected secrets take precedence over the corresponding
 Spring profile. Production release builds validate required frontend configuration and fail closed when it is

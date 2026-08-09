@@ -1,31 +1,143 @@
 {
-  "title": "Dear Diary Sync Health",
+  "title": "Loredays Sync Health",
   "uid": "deardiary-sync-health",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      { "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "custom",
+        "query": "staging,production",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "staging", "value": "staging" }
+      }
+    ]
+  },
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Commit success rate",
+      "description": "Successful commits divided by all commit attempts. No data is expected before the first commit.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.99 },
+              { "color": "green", "value": 0.999 }
+            ]
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
-          "expr": "sum(rate(sync_operation_commit_total{outcome=\"success\"}[5m])) / clamp_min(sum(rate(sync_operation_commit_total[5m])), 0.001)"
+          "expr": "sum(rate(sync_operation_commit_total{environment=~\"${environment:regex}\", outcome=\"success\"}[$__rate_interval])) / clamp_min(sum(rate(sync_operation_commit_total{environment=~\"${environment:regex}\"}[$__rate_interval])), 0.001)",
+          "refId": "A"
         }
       ]
     },
     {
       "id": 2,
-      "type": "timeseries",
-      "title": "Sequence lag",
-      "targets": [{ "expr": "sync_sequence_lag" }]
+      "type": "stat",
+      "title": "Commit attempts / second",
+      "description": "Total synchronization commit traffic.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum(rate(sync_operation_commit_total{environment=~\"${environment:regex}\"}[$__rate_interval]))",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 3,
+      "type": "stat",
+      "title": "Commit latency p95",
+      "description": "95th-percentile commit duration across successful and failed operations.",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sync_operation_commit_duration_seconds_bucket{environment=~\"${environment:regex}\"}[$__rate_interval])))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Commit failures",
+      "description": "Failed commits in the selected dashboard time range.",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sync_operation_commit_total{environment=~\"${environment:regex}\", outcome=\"failure\"}[$__range])) or on() vector(0)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Sequence lag",
+      "description": "Largest gap between an account sequence and its device cursors.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "max(sync_sequence_lag{environment=~\"${environment:regex}\"})",
+          "legendFormat": "maximum lag",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
       "type": "timeseries",
       "title": "Notification outbox depth",
-      "targets": [{ "expr": "sync_notification_outbox_depth" }]
+      "description": "Notifications waiting to be published or retried.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "max(sync_notification_outbox_depth{environment=~\"${environment:regex}\"})",
+          "legendFormat": "pending notifications",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

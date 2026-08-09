@@ -27,13 +27,16 @@ import {
 } from 'iconoir-react';
 import {
   AppSettings,
+  GoogleAccountSession,
   LocalSyncAccountState,
   SecurityConfig,
+  SupabaseAuthSession,
   Mood,
   ResponsiveLayout,
   UserProfile,
 } from '../types';
 import { PREDEFINED_TAGS, PREDEFINED_MOODS, PREDEFINED_COLORS } from '../domain/journalCatalog';
+import { BRAND } from '../config/brand';
 import { isValidPin, updatePinWithCurrentPin } from '../domain/security';
 import type { PinLength } from '../domain/security';
 import { isNativePlatform } from '../platform';
@@ -50,12 +53,16 @@ import {
   type ReminderCapability,
 } from '../mobile/reminders';
 import ProfileAvatar from './ProfileAvatar';
+import AvatarCropper from './AvatarCropper';
 import CompanionApprovalPanel from './CompanionApprovalPanel';
 import {
   isValidNewRecoveryPassphrase,
   RECOVERY_PASSPHRASE_DIGIT_LENGTH,
 } from '../sync/e2eeKeyPackage';
 import { rotateRecoveryPassphrase } from '../sync/recoveryPassphraseRotation';
+import { getConfiguredSupabaseAnonKey, getConfiguredSupabaseUrl } from '../sync/config';
+import { exchangeGoogleIdTokenForSupabaseSession } from '../sync/supabaseAuth';
+import { signOutGoogleAuth, startGoogleAuth } from '../utils/googleAuth';
 import type { PreservedSyncConflict, SyncStatusSummary } from '../repositories';
 import { useScreenPerformance } from '../hooks/useScreenPerformance';
 import { pageMotion } from './ui/motion';
@@ -68,6 +75,8 @@ import {
 import { DEFAULT_ACCENT_THEME_ID, type AccentThemeId } from '../design/accentThemes';
 import AccentThemeSelector from './AccentThemeSelector';
 import { calculateLocalStorageUsage, type LocalStorageUsage } from '../utils/localStorageUsage';
+import type { SyncV2Quota } from '../sync/v2/api/SyncV2ApiTypes';
+import { DEFAULT_ACCOUNT_QUOTA } from '../domain/quota';
 
 interface AppSettingsScreenProps {
   initialSettings: AppSettings;
@@ -82,6 +91,8 @@ interface AppSettingsScreenProps {
   onThemeChange?: (theme: 'light' | 'dark') => void;
   accentTheme?: AccentThemeId;
   onAccentThemeChange?: (accentTheme: AccentThemeId) => void;
+  quota?: SyncV2Quota;
+  onRefreshQuota?: () => Promise<void>;
 }
 
 export type SettingsSection =
@@ -185,6 +196,8 @@ export default function AppSettingsScreen({
   onThemeChange,
   accentTheme = DEFAULT_ACCENT_THEME_ID,
   onAccentThemeChange,
+  quota = DEFAULT_ACCOUNT_QUOTA,
+  onRefreshQuota,
 }: AppSettingsScreenProps) {
   useScreenPerformance('settings');
   const prefersReducedMotion = useReducedMotion();
@@ -218,6 +231,7 @@ export default function AppSettingsScreen({
   const [showAvatarEditor, setShowAvatarEditor] = useState(false);
   const [isSavingAvatar, setIsSavingAvatar] = useState(false);
   const [avatarError, setAvatarError] = useState('');
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // Custom Tags and Moods
@@ -242,9 +256,15 @@ export default function AppSettingsScreen({
   const [confirmNewRecoveryPassphrase, setConfirmNewRecoveryPassphrase] = useState('');
   const [syncRecoveryError, setSyncRecoveryError] = useState('');
   const [isRotatingRecoveryPassphrase, setIsRotatingRecoveryPassphrase] = useState(false);
+  const [isVerifyingRecoveryAccount, setIsVerifyingRecoveryAccount] = useState(false);
+  const [verifiedRecoveryAuth, setVerifiedRecoveryAuth] = useState<{
+    googleSession: GoogleAccountSession;
+    supabaseSession: SupabaseAuthSession;
+  } | null>(null);
   const [localStorageUsage, setLocalStorageUsage] = useState<LocalStorageUsage | null>(null);
   const [isLocalStorageUsageLoading, setIsLocalStorageUsageLoading] = useState(false);
   const [localStorageUsageError, setLocalStorageUsageError] = useState('');
+  const [isQuotaRefreshing, setIsQuotaRefreshing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
   const [syncHealth, setSyncHealth] = useState<SyncHealth | null>(null);
   const [syncStatusError, setSyncStatusError] = useState('');
@@ -354,7 +374,7 @@ export default function AppSettingsScreen({
     );
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'dear-diary-sync-diagnostics.json';
+    link.download = 'loredays-sync-diagnostics.json';
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -432,6 +452,10 @@ export default function AppSettingsScreen({
   const handleRotateRecoveryPassphrase = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();
     setSyncRecoveryError('');
+    if (!verifiedRecoveryAuth) {
+      setSyncRecoveryError('Verify the linked Google account before resetting the passphrase.');
+      return;
+    }
     if (newRecoveryPassphrase !== confirmNewRecoveryPassphrase) {
       setSyncRecoveryError('Recovery passphrases do not match.');
       return;
@@ -440,18 +464,69 @@ export default function AppSettingsScreen({
     try {
       await rotateRecoveryPassphrase({
         newPassphrase: newRecoveryPassphrase,
+        googleSession: verifiedRecoveryAuth.googleSession,
+        supabaseSession: verifiedRecoveryAuth.supabaseSession,
         repository: diaryRepository,
         syncEngine: eventSyncEngine,
       });
       setNewRecoveryPassphrase('');
       setConfirmNewRecoveryPassphrase('');
       setShowSyncRecoveryForm(false);
+      setVerifiedRecoveryAuth(null);
       setSyncAccountState(await diaryRepository.getLocalSyncAccountState());
       onShowToast?.('Account recovery passphrase changed.', 'success');
     } catch (error: any) {
       setSyncRecoveryError(error?.message || 'Recovery passphrase could not be changed.');
     } finally {
       setIsRotatingRecoveryPassphrase(false);
+    }
+  };
+
+  const closeSyncRecoveryForm = (): void => {
+    setShowSyncRecoveryForm(false);
+    setVerifiedRecoveryAuth(null);
+    setNewRecoveryPassphrase('');
+    setConfirmNewRecoveryPassphrase('');
+    setSyncRecoveryError('');
+  };
+
+  const handleVerifyRecoveryAccount = async (): Promise<void> => {
+    if (!syncAccountState || syncAccountState.deviceRole !== 'primary_mobile') return;
+    if (!isNativePlatform()) {
+      setSyncRecoveryError('Recovery passphrases can only be reset on the active primary mobile.');
+      return;
+    }
+    setIsVerifyingRecoveryAccount(true);
+    setSyncRecoveryError('');
+    try {
+      const googleSession = await startGoogleAuth('recovery-passphrase-reset');
+      if (
+        googleSession.userId !== syncAccountState.googleUserId ||
+        googleSession.userId !== security.linkedGoogleUserId
+      ) {
+        await signOutGoogleAuth();
+        throw new Error(
+          `Use ${syncAccountState.googleEmail || security.linkedGoogleEmail || 'the linked Google account'} to reset this passphrase.`,
+        );
+      }
+      if (!googleSession.idToken) {
+        throw new Error(
+          'Google did not return an ID token. Select the linked account and try again.',
+        );
+      }
+      const supabaseSession = await exchangeGoogleIdTokenForSupabaseSession({
+        supabaseUrl: getConfiguredSupabaseUrl(),
+        anonKey: getConfiguredSupabaseAnonKey(),
+        googleIdToken: googleSession.idToken,
+      });
+      setVerifiedRecoveryAuth({ googleSession, supabaseSession });
+    } catch (error: any) {
+      setVerifiedRecoveryAuth(null);
+      setSyncRecoveryError(
+        syncAuthorizationMessage(error, 'The linked Google account could not be verified.'),
+      );
+    } finally {
+      setIsVerifyingRecoveryAccount(false);
     }
   };
 
@@ -645,20 +720,28 @@ export default function AppSettingsScreen({
     }
   };
 
-  const handleAvatarFile = async (file?: File): Promise<void> => {
+  const handleAvatarFile = (file?: File): void => {
     if (!file) return;
+    setAvatarError('');
+    if (!isSupportedImageMimeType(file.type)) {
+      setAvatarError('Choose a JPEG, PNG, WebP, or BMP image.');
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+      return;
+    }
+    setPendingAvatarFile(file);
+    if (avatarInputRef.current) avatarInputRef.current.value = '';
+  };
+
+  const handleAvatarSelection = async (image: Blob): Promise<void> => {
     setIsSavingAvatar(true);
     setAvatarError('');
     try {
-      if (!isSupportedImageMimeType(file.type)) {
-        throw new Error('Choose a JPEG, PNG, WebP, or BMP image.');
-      }
-      setProfileAvatarUri(await persistOptimizedImageFile(file, 'avatar'));
+      setProfileAvatarUri(await persistOptimizedImageFile(image, 'avatar'));
+      setPendingAvatarFile(null);
     } catch (error: any) {
       setAvatarError(error?.message || 'Profile photo could not be saved.');
     } finally {
       setIsSavingAvatar(false);
-      if (avatarInputRef.current) avatarInputRef.current.value = '';
     }
   };
 
@@ -721,16 +804,16 @@ export default function AppSettingsScreen({
       setShowConfirmReset(false);
       onShowToast?.(
         syncPending
-          ? 'Journal data was deleted here. Other devices will update when sync reconnects.'
+          ? 'Your saved content was deleted here. Other devices will update when sync reconnects.'
           : syncConfigured
-            ? 'Journal data was deleted from this account and synced devices.'
-            : 'Journal data was deleted from this device.',
+            ? 'Your saved content was deleted from this account and synced devices.'
+            : 'Your saved content was deleted from this device.',
         syncPending ? 'warning' : 'success',
       );
     } catch (error) {
       const message = syncAuthorizationMessage(
         error,
-        'Could not delete journal data. Connect to the internet and try again.',
+        'Could not delete your saved content. Connect to the internet and try again.',
       );
       setResetContentError(message);
       onShowToast?.(message, 'error');
@@ -814,7 +897,7 @@ export default function AppSettingsScreen({
               type="button"
               onClick={() => openSection(section.id)}
               aria-current={hasSidebar && isActive ? 'page' : undefined}
-              className={`${hasSidebar ? 'mb-1 rounded-2xl px-3 py-3' : 'min-h-14 border-b border-brand-border/60 px-4 py-2 last:border-b-0'} group flex w-full items-center gap-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-sage ${hasSidebar && isActive ? 'bg-brand-sage text-white' : 'text-brand-plum hover:bg-brand-blush-light/60 dark:text-brand-text dark:hover:bg-white/5'}`}
+              className={`${hasSidebar ? 'mb-1 rounded-2xl px-3 py-3' : 'min-h-14 border-b border-brand-border/60 px-4 py-2 last:border-b-0'} group flex w-full items-center gap-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-sage ${hasSidebar && isActive ? 'bg-brand-sage text-[var(--color-on-primary)]' : 'text-brand-plum hover:bg-brand-blush-light/60 dark:text-brand-text dark:hover:bg-white/5'}`}
             >
               <span
                 className={`${hasSidebar && isActive ? 'bg-white/15 text-[var(--color-on-primary)]' : 'bg-brand-sage/10 text-brand-sage'} flex h-10 w-10 shrink-0 items-center justify-center rounded-xl`}
@@ -998,7 +1081,7 @@ export default function AppSettingsScreen({
 
                   {/* Member badge info */}
                   <div className="flex justify-between items-center text-xs text-brand-sage font-semibold border-t border-brand-border/40 pt-3">
-                    <span>Journaling Journey Started</span>
+                    <span>Your Story Began</span>
                     <span className="text-brand-plum dark:text-brand-text font-bold uppercase tracking-wider">
                       {profile.joinedDate || 'June 2026'}
                     </span>
@@ -1020,11 +1103,9 @@ export default function AppSettingsScreen({
                     </span>
                     <div>
                       <h3 className="text-xl font-semibold text-brand-plum dark:text-brand-text">
-                        Dear Diary
+                        {BRAND.name}
                       </h3>
-                      <p className="text-sm text-brand-text-muted">
-                        Your private, local-first journaling space.
-                      </p>
+                      <p className="text-sm text-brand-text-muted">{BRAND.tagline}</p>
                     </div>
                   </div>
                   <div className="mt-5 space-y-3 text-sm leading-6 text-brand-text-muted">
@@ -1033,7 +1114,7 @@ export default function AppSettingsScreen({
                       account and recovery controls separate from your public profile.
                     </p>
                     <p>
-                      Dear Diary does not use your entries for advertising. On-device suggestions
+                      {BRAND.name} does not use your entries for advertising. On-device suggestions
                       are identified wherever they appear.
                     </p>
                   </div>
@@ -1225,79 +1306,107 @@ export default function AppSettingsScreen({
                       <button
                         type="button"
                         onClick={() => {
-                          setShowSyncRecoveryForm((value) => !value);
-                          setSyncRecoveryError('');
+                          if (showSyncRecoveryForm) closeSyncRecoveryForm();
+                          else {
+                            setShowSyncRecoveryForm(true);
+                            setSyncRecoveryError('');
+                          }
                         }}
                         className="shrink-0 px-4 py-2 bg-brand-bg hover:bg-brand-rose-light text-xs font-bold text-brand-sage-dark rounded-full border border-brand-border transition-colors"
                       >
-                        {showSyncRecoveryForm ? 'Close' : 'Change'}
+                        {showSyncRecoveryForm ? 'Close' : 'Reset with Google'}
                       </button>
                     </div>
 
                     {showSyncRecoveryForm && (
-                      <form
-                        onSubmit={handleRotateRecoveryPassphrase}
-                        className="mt-2 pt-3 border-t border-brand-border flex flex-col gap-3"
-                      >
-                        <label className="flex flex-col gap-1">
-                          <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                            New 8-Digit Passphrase
-                          </span>
-                          <input
-                            type="password"
-                            inputMode="numeric"
-                            autoComplete="new-password"
-                            maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
-                            value={newRecoveryPassphrase}
-                            onChange={(event) =>
-                              setNewRecoveryPassphrase(
-                                event.target.value
-                                  .replace(/\D/g, '')
-                                  .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH),
-                              )
-                            }
-                            className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
-                          />
-                        </label>
-                        <label className="flex flex-col gap-1">
-                          <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
-                            Confirm 8-Digit Passphrase
-                          </span>
-                          <input
-                            type="password"
-                            inputMode="numeric"
-                            autoComplete="new-password"
-                            maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
-                            value={confirmNewRecoveryPassphrase}
-                            onChange={(event) =>
-                              setConfirmNewRecoveryPassphrase(
-                                event.target.value
-                                  .replace(/\D/g, '')
-                                  .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH),
-                              )
-                            }
-                            className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
-                          />
-                        </label>
+                      <div className="mt-2 pt-3 border-t border-brand-border flex flex-col gap-3">
+                        {!verifiedRecoveryAuth ? (
+                          <>
+                            <p className="text-xs leading-relaxed text-brand-text-muted">
+                              Verify the linked Google account before choosing a new recovery
+                              passphrase. The forgotten passphrase is not required on this primary
+                              device.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => void handleVerifyRecoveryAccount()}
+                              disabled={isVerifyingRecoveryAccount}
+                              className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
+                            >
+                              {isVerifyingRecoveryAccount
+                                ? 'Verifying Google Account...'
+                                : `Verify ${syncAccountState.googleEmail} with Google`}
+                            </button>
+                          </>
+                        ) : (
+                          <form
+                            onSubmit={handleRotateRecoveryPassphrase}
+                            className="flex flex-col gap-3"
+                          >
+                            <p className="flex items-center gap-1 text-xs font-bold text-brand-sage">
+                              <Check className="h-4 w-4" /> Google account verified
+                            </p>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
+                                New 8-Digit Passphrase
+                              </span>
+                              <input
+                                type="password"
+                                inputMode="numeric"
+                                autoComplete="new-password"
+                                maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
+                                value={newRecoveryPassphrase}
+                                onChange={(event) =>
+                                  setNewRecoveryPassphrase(
+                                    event.target.value
+                                      .replace(/\D/g, '')
+                                      .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH),
+                                  )
+                                }
+                                className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
+                              />
+                            </label>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-xs font-bold text-brand-sage uppercase tracking-wider">
+                                Confirm 8-Digit Passphrase
+                              </span>
+                              <input
+                                type="password"
+                                inputMode="numeric"
+                                autoComplete="new-password"
+                                maxLength={RECOVERY_PASSPHRASE_DIGIT_LENGTH}
+                                value={confirmNewRecoveryPassphrase}
+                                onChange={(event) =>
+                                  setConfirmNewRecoveryPassphrase(
+                                    event.target.value
+                                      .replace(/\D/g, '')
+                                      .slice(0, RECOVERY_PASSPHRASE_DIGIT_LENGTH),
+                                  )
+                                }
+                                className="bg-brand-bg text-sm text-brand-plum border border-brand-border p-2.5 rounded-xl focus:outline-none focus:border-brand-pink"
+                              />
+                            </label>
+                            <button
+                              type="submit"
+                              disabled={
+                                isRotatingRecoveryPassphrase ||
+                                !isValidNewRecoveryPassphrase(newRecoveryPassphrase) ||
+                                newRecoveryPassphrase !== confirmNewRecoveryPassphrase
+                              }
+                              className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
+                            >
+                              {isRotatingRecoveryPassphrase
+                                ? 'Resetting...'
+                                : 'Reset Recovery Passphrase'}
+                            </button>
+                          </form>
+                        )}
                         {syncRecoveryError && (
                           <p className="text-xs font-bold text-brand-pink-dark">
                             {syncRecoveryError}
                           </p>
                         )}
-                        <button
-                          type="submit"
-                          disabled={
-                            isRotatingRecoveryPassphrase ||
-                            !isValidNewRecoveryPassphrase(newRecoveryPassphrase) ||
-                            newRecoveryPassphrase !== confirmNewRecoveryPassphrase
-                          }
-                          className="w-full py-2 bg-brand-sage hover:bg-brand-sage-dark disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm transition-colors"
-                        >
-                          {isRotatingRecoveryPassphrase
-                            ? 'Changing...'
-                            : 'Change Recovery Passphrase'}
-                        </button>
-                      </form>
+                      </div>
                     )}
                   </div>
                 )}
@@ -1400,6 +1509,75 @@ export default function AppSettingsScreen({
                 {...pageMotion(prefersReducedMotion)}
                 className="flex flex-col gap-5"
               >
+                {syncAccountState && (
+                  <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
+                          Encrypted cloud · {quota.planName}
+                        </h3>
+                        <p className="mt-1 text-sm text-brand-text-muted">
+                          {formatBytes(quota.usage.storageBytesUsed)} of{' '}
+                          {formatBytes(quota.limits.maximumStorageBytes)} used
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!onRefreshQuota) return;
+                          setIsQuotaRefreshing(true);
+                          void onRefreshQuota().finally(() => setIsQuotaRefreshing(false));
+                        }}
+                        disabled={!onRefreshQuota || isQuotaRefreshing}
+                        className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-brand-border text-brand-sage disabled:opacity-40"
+                        aria-label="Refresh cloud quota usage"
+                      >
+                        <RefreshCw
+                          className={`h-4 w-4 ${isQuotaRefreshing ? 'animate-spin' : ''}`}
+                        />
+                      </button>
+                    </div>
+                    <div
+                      className="mt-4 h-2 overflow-hidden rounded-full bg-brand-bg"
+                      role="progressbar"
+                      aria-label="Encrypted cloud storage used"
+                      aria-valuemin={0}
+                      aria-valuemax={quota.limits.maximumStorageBytes}
+                      aria-valuenow={Math.min(
+                        quota.usage.storageBytesUsed,
+                        quota.limits.maximumStorageBytes,
+                      )}
+                    >
+                      <div
+                        className="h-full rounded-full bg-brand-sage transition-[width]"
+                        style={{
+                          width: `${Math.min(100, (quota.usage.storageBytesUsed / quota.limits.maximumStorageBytes) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                      {[
+                        [
+                          'Companions',
+                          `${quota.usage.companionSlotsUsed}/${quota.limits.maximumCompanions}`,
+                        ],
+                        ['Photos per entry', String(quota.limits.maximumPhotosPerEntry)],
+                        ['Recordings per entry', String(quota.limits.maximumRecordingsPerEntry)],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-xl bg-brand-bg/50 p-3">
+                          <span className="block text-xs text-brand-text-muted">{label}</span>
+                          <span className="mt-1 block text-sm font-bold text-brand-plum dark:text-brand-text">
+                            {value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-3 text-xs leading-relaxed text-brand-text-muted">
+                      Usage includes retained encrypted objects and uploads reserved but not yet
+                      completed. On-device-only files do not use this allowance.
+                    </p>
+                  </div>
+                )}
                 <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex min-w-0 items-center gap-3">
@@ -1583,7 +1761,7 @@ export default function AppSettingsScreen({
                     </h3>
                     <p className="mt-2 text-sm leading-relaxed text-red-600 dark:text-red-400">
                       Stops sync, revokes this browser, and permanently clears its local encrypted
-                      journal data and keys. Your other devices are unaffected.
+                      saved content and keys. Your other devices are unaffected.
                     </p>
                     {!showConfirmUnlink ? (
                       <button
@@ -1624,6 +1802,22 @@ export default function AppSettingsScreen({
                 {...pageMotion(prefersReducedMotion)}
                 className="flex flex-col gap-5"
               >
+                {syncAccountState && (
+                  <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
+                    <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
+                      {quota.planName} cloud plan
+                    </h3>
+                    <p className="mt-2 text-2xl font-semibold text-brand-plum dark:text-brand-text">
+                      {formatBytes(quota.usage.storageBytesUsed)} /{' '}
+                      {formatBytes(quota.limits.maximumStorageBytes)}
+                    </p>
+                    <p className="mt-2 text-sm text-brand-text-muted">
+                      {quota.usage.companionSlotsUsed}/{quota.limits.maximumCompanions} companion
+                      slots · {quota.limits.maximumPhotosPerEntry} photos and{' '}
+                      {quota.limits.maximumRecordingsPerEntry} recordings per entry
+                    </p>
+                  </div>
+                )}
                 <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -1657,7 +1851,7 @@ export default function AppSettingsScreen({
                         'Writing & settings',
                         localStorageUsage?.writingBytes,
                         localStorageUsage
-                          ? `${localStorageUsage.journalCount} journals · ${localStorageUsage.entryCount} entries · ${localStorageUsage.noteCount} notes`
+                          ? `${localStorageUsage.journalCount} collections · ${localStorageUsage.entryCount} entries · ${localStorageUsage.noteCount} notes`
                           : '',
                       ],
                       [
@@ -1699,10 +1893,10 @@ export default function AppSettingsScreen({
                 </div>
                 <div className="rounded-3xl border border-red-200 bg-red-50/70 p-5 dark:border-red-900/40 dark:bg-red-950/10">
                   <h3 className="text-sm font-bold text-red-700 dark:text-red-300">
-                    Delete all journal data
+                    Delete all saved content
                   </h3>
                   <p className="mt-2 text-sm leading-relaxed text-red-600 dark:text-red-400">
-                    Permanently deletes journals, entries, notes, and attached media from this
+                    Permanently deletes collections, entries, notes, and attached media from this
                     account. The deletion syncs to every linked device. Your profile, security
                     settings, and device links remain.
                   </p>
@@ -2007,121 +2201,148 @@ export default function AppSettingsScreen({
       )}
       <BottomSheet
         open={showAvatarEditor}
-        title="Edit profile image"
-        description="Choose a photo or keep a personal emblem as your fallback."
+        title={pendingAvatarFile ? 'Position your photo' : 'Edit profile image'}
+        description={
+          pendingAvatarFile
+            ? 'Choose a crop or keep the whole image visible.'
+            : 'Choose a photo or keep a personal emblem as your fallback.'
+        }
         onClose={() => {
-          if (!isSavingAvatar) setShowAvatarEditor(false);
+          if (!isSavingAvatar) {
+            setPendingAvatarFile(null);
+            setShowAvatarEditor(false);
+          }
         }}
         footer={
-          <button
-            type="button"
-            onClick={() => setShowAvatarEditor(false)}
-            disabled={isSavingAvatar}
-            className="min-h-11 rounded-xl bg-brand-sage px-5 text-sm font-bold text-white"
-          >
-            Done
-          </button>
+          !pendingAvatarFile ? (
+            <button
+              type="button"
+              onClick={() => setShowAvatarEditor(false)}
+              disabled={isSavingAvatar}
+              className="min-h-11 rounded-xl bg-brand-sage px-5 text-sm font-bold text-white"
+            >
+              Done
+            </button>
+          ) : undefined
         }
       >
-        <div className="flex justify-center">
-          <span
-            className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border-2 border-brand-border text-5xl shadow-sm"
-            style={{ backgroundColor: profileColor }}
-          >
-            <ProfileAvatar
-              profile={{
-                ...profile,
-                name: profileName,
-                avatarEmoji: profileEmoji,
-                avatarColor: profileColor,
-                avatarUri: profileAvatarUri,
-              }}
-            />
-          </span>
-        </div>
         <input
           ref={avatarInputRef}
           type="file"
           accept="image/jpeg,image/png,image/webp,image/bmp"
           className="sr-only"
-          onChange={(event) => void handleAvatarFile(event.target.files?.[0])}
+          onChange={(event) => handleAvatarFile(event.target.files?.[0])}
         />
-        <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => avatarInputRef.current?.click()}
-            disabled={isSavingAvatar}
-            className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white disabled:opacity-50"
-          >
-            <ImagePlus className="h-4 w-4" />
-            {isSavingAvatar
-              ? 'Preparing photo…'
-              : profileAvatarUri
-                ? 'Change photo'
-                : 'Choose photo'}
-          </button>
-          {profileAvatarUri && (
-            <button
-              type="button"
-              onClick={() => {
-                setProfileAvatarUri(undefined);
-                setAvatarError('');
-              }}
-              disabled={isSavingAvatar}
-              className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-200 px-4 text-sm font-bold text-red-600 disabled:opacity-50 dark:border-red-900/50 dark:text-red-300"
-            >
-              <Trash2 className="h-4 w-4" />
-              Remove photo
-            </button>
-          )}
-        </div>
-        {avatarError && (
-          <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
-            {avatarError}
-          </p>
-        )}
-        <fieldset className="mt-6">
-          <legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">
-            Emblem
-          </legend>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {['🌸', '☕', '🦊', '🥑', '🌿', '🎒', '🛹', '🎨', '✨', '🧘', '🦄', '🐳', '🐾'].map(
-              (emo) => (
-                <button
-                  key={emo}
-                  type="button"
-                  aria-label={`Use ${emo} profile emblem`}
-                  aria-pressed={profileEmoji === emo}
-                  onClick={() => {
-                    setProfileEmoji(emo);
-                    setProfileAvatarUri(undefined);
-                  }}
-                  className={`h-11 w-11 rounded-full text-xl ${profileEmoji === emo ? 'border-2 border-brand-pink bg-brand-pink/10' : 'border border-brand-border'}`}
-                >
-                  {emo}
-                </button>
-              ),
+        {pendingAvatarFile ? (
+          <>
+            <AvatarCropper
+              file={pendingAvatarFile}
+              busy={isSavingAvatar}
+              onCancel={() => avatarInputRef.current?.click()}
+              onChoose={handleAvatarSelection}
+            />
+            {avatarError && (
+              <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+                {avatarError}
+              </p>
             )}
-          </div>
-        </fieldset>
-        <fieldset className="mt-6">
-          <legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">
-            Background
-          </legend>
-          <div className="mt-3 flex flex-wrap gap-3">
-            {PREDEFINED_COLORS.map((col) => (
+          </>
+        ) : (
+          <>
+            <div className="flex justify-center">
+              <span
+                className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border-2 border-brand-border text-5xl shadow-sm"
+                style={{ backgroundColor: profileColor }}
+              >
+                <ProfileAvatar
+                  profile={{
+                    ...profile,
+                    name: profileName,
+                    avatarEmoji: profileEmoji,
+                    avatarColor: profileColor,
+                    avatarUri: profileAvatarUri,
+                  }}
+                />
+              </span>
+            </div>
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
               <button
-                key={col.hex}
                 type="button"
-                aria-label={`Use ${col.name} avatar color`}
-                aria-pressed={profileColor === col.hex}
-                onClick={() => setProfileColor(col.hex)}
-                className={`h-10 w-10 rounded-full border border-black/10 ${profileColor === col.hex ? 'ring-2 ring-brand-pink ring-offset-2' : ''}`}
-                style={{ backgroundColor: col.hex }}
-              />
-            ))}
-          </div>
-        </fieldset>
+                onClick={() => avatarInputRef.current?.click()}
+                disabled={isSavingAvatar}
+                className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-brand-sage px-4 text-sm font-bold text-white disabled:opacity-50"
+              >
+                <ImagePlus className="h-4 w-4" />
+                {isSavingAvatar
+                  ? 'Preparing photo…'
+                  : profileAvatarUri
+                    ? 'Change photo'
+                    : 'Choose photo'}
+              </button>
+              {profileAvatarUri && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileAvatarUri(undefined);
+                    setAvatarError('');
+                  }}
+                  disabled={isSavingAvatar}
+                  className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-red-200 px-4 text-sm font-bold text-red-600 disabled:opacity-50 dark:border-red-900/50 dark:text-red-300"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Remove photo
+                </button>
+              )}
+            </div>
+            {avatarError && (
+              <p className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+                {avatarError}
+              </p>
+            )}
+            <fieldset className="mt-6">
+              <legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">
+                Emblem
+              </legend>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {['🌸', '☕', '🦊', '🥑', '🌿', '🎒', '🛹', '🎨', '✨', '🧘', '🦄', '🐳', '🐾'].map(
+                  (emo) => (
+                    <button
+                      key={emo}
+                      type="button"
+                      aria-label={`Use ${emo} profile emblem`}
+                      aria-pressed={profileEmoji === emo}
+                      onClick={() => {
+                        setProfileEmoji(emo);
+                        setProfileAvatarUri(undefined);
+                      }}
+                      className={`h-11 w-11 rounded-full text-xl ${profileEmoji === emo ? 'border-2 border-brand-pink bg-brand-pink/10' : 'border border-brand-border'}`}
+                    >
+                      {emo}
+                    </button>
+                  ),
+                )}
+              </div>
+            </fieldset>
+            <fieldset className="mt-6">
+              <legend className="text-xs font-bold uppercase tracking-wider text-brand-sage">
+                Background
+              </legend>
+              <div className="mt-3 flex flex-wrap gap-3">
+                {PREDEFINED_COLORS.map((col) => (
+                  <button
+                    key={col.hex}
+                    type="button"
+                    aria-label={`Use ${col.name} avatar color`}
+                    aria-pressed={profileColor === col.hex}
+                    onClick={() => setProfileColor(col.hex)}
+                    className={`h-10 w-10 rounded-full border border-black/10 ${profileColor === col.hex ? 'ring-2 ring-brand-pink ring-offset-2' : ''}`}
+                    style={{ backgroundColor: col.hex }}
+                  />
+                ))}
+              </div>
+            </fieldset>
+          </>
+        )}
       </BottomSheet>
     </div>
   );

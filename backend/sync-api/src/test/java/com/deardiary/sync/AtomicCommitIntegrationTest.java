@@ -12,10 +12,12 @@ import com.deardiary.sync.event.EventPullService;
 import com.deardiary.sync.objectstore.InMemoryEncryptedObjectStore;
 import com.deardiary.sync.objectstore.ObjectKey;
 import com.deardiary.sync.objectstore.ObjectKeyFactory;
+import com.deardiary.sync.media.MediaDownloadService;
 import com.deardiary.sync.operation.InitiateOperationRequest;
 import com.deardiary.sync.operation.OperationCommitService;
 import com.deardiary.sync.operation.OperationInitiationService;
 import com.deardiary.sync.operation.OperationObjectRequest;
+import com.deardiary.sync.operation.RetainedMediaObjectRequest;
 import com.deardiary.sync.operation.OperationQueryService;
 import com.deardiary.sync.protocol.ProtocolService;
 import com.deardiary.sync.notification.NotificationOutboxWorker;
@@ -54,6 +56,7 @@ class AtomicCommitIntegrationTest {
     private ObjectKeyFactory keys;
     private EventPullService pulls;
     private CursorService cursors;
+    private MediaDownloadService mediaDownloads;
     private UUID accountId;
     private UUID deviceId;
 
@@ -75,7 +78,7 @@ class AtomicCommitIntegrationTest {
         jdbc.update("UPDATE sync_kill_switches SET engaged = FALSE, reason_code = NULL WHERE switch_name IN ('SYNC_WRITES', 'REMOTE_PULL', 'REALTIME')");
         jdbc.update("""
             UPDATE sync_protocol_config SET minimum_read_protocol_version = 2,
-                minimum_write_protocol_version = 2, current_protocol_version = 2,
+                minimum_write_protocol_version = 3, current_protocol_version = 3,
                 event_schema_version = 2, sync_writes_enabled = TRUE
             WHERE config_id = 1
             """);
@@ -89,12 +92,63 @@ class AtomicCommitIntegrationTest {
         keys = new ObjectKeyFactory();
         var protocols = new ProtocolService(jdbc);
         initiation = new OperationInitiationService(
-            jdbc, transactionManager, deviceAuthorization, protocols, keys, objectStore, Clock.systemUTC());
+            jdbc, transactionManager, deviceAuthorization, protocols, keys, objectStore, Clock.systemUTC(),
+            new com.deardiary.sync.quota.QuotaService(jdbc,
+                new com.deardiary.sync.account.AccountAuthorizationService(jdbc)));
         commits = new OperationCommitService(jdbc, transactionManager, protocols, objectStore, Clock.systemUTC());
         var accounts = new com.deardiary.sync.account.AccountAuthorizationService(jdbc);
         queries = new OperationQueryService(jdbc, accounts);
         pulls = new EventPullService(jdbc, accounts, objectStore);
         cursors = new CursorService(jdbc, transactionManager, deviceAuthorization, Clock.systemUTC());
+        mediaDownloads = new MediaDownloadService(jdbc, accounts, keys, objectStore);
+    }
+
+    @Test
+    void retainedMediaRemainsDownloadableUntilARecordRemovesIt() {
+        var recordId = UUID.randomUUID().toString();
+        var firstOperationId = UUID.randomUUID();
+        var firstEvent = keys.create(accountId);
+        var media = keys.create(accountId);
+        initiation.initiate("commit-user", new InitiateOperationRequest(
+            firstOperationId, deviceId, "ENTRY", recordId, "UPSERT", 0,
+            3, 2, 1, "account", List.of(
+                new OperationObjectRequest(firstEvent.value(), "EVENT", "a".repeat(64), 512),
+                new OperationObjectRequest(media.value(), "MEDIA", "b".repeat(64), 1024)),
+            List.of()));
+        objectStore.markUploaded(firstEvent);
+        objectStore.markUploaded(media);
+        commits.commit("commit-user", firstOperationId);
+
+        var objectId = UUID.fromString(media.value().substring(media.value().lastIndexOf('/') + 1));
+        var download = mediaDownloads.get("commit-user", objectId);
+        assertThat(download.sha256()).isEqualTo("b".repeat(64));
+        assertThat(download.sizeBytes()).isEqualTo(1024);
+        assertThat(download.keyEpoch()).isEqualTo(1);
+        assertThat(download.downloadUrl().toString()).contains("/download/");
+        assertThat(download.downloadExpiresAt()).isAfter(java.time.Instant.now());
+        assertApiCode(() -> mediaDownloads.get("another-user", objectId), "ACCOUNT_NOT_FOUND");
+
+        var retainedOperationId = UUID.randomUUID();
+        var retainedEvent = keys.create(accountId);
+        initiation.initiate("commit-user", new InitiateOperationRequest(
+            retainedOperationId, deviceId, "ENTRY", recordId, "UPSERT", 1,
+            3, 2, 1, "account", List.of(
+                new OperationObjectRequest(retainedEvent.value(), "EVENT", "c".repeat(64), 512)),
+            List.of(new RetainedMediaObjectRequest(media.value(), "MEDIA"))));
+        objectStore.markUploaded(retainedEvent);
+        commits.commit("commit-user", retainedOperationId);
+        assertThat(mediaDownloads.get("commit-user", objectId).objectKind()).isEqualTo("MEDIA");
+
+        var removeOperationId = UUID.randomUUID();
+        var removeEvent = keys.create(accountId);
+        initiation.initiate("commit-user", new InitiateOperationRequest(
+            removeOperationId, deviceId, "ENTRY", recordId, "UPSERT", 2,
+            3, 2, 1, "account", List.of(
+                new OperationObjectRequest(removeEvent.value(), "EVENT", "d".repeat(64), 512)),
+            List.of()));
+        objectStore.markUploaded(removeEvent);
+        commits.commit("commit-user", removeOperationId);
+        assertApiCode(() -> mediaDownloads.get("commit-user", objectId), "OBJECT_MISSING");
     }
 
     @Test
@@ -192,7 +246,7 @@ class AtomicCommitIntegrationTest {
 
         var incompatible = initiate(deviceId, UUID.randomUUID(), 0);
         objectStore.markUploaded(incompatible.objectKey());
-        jdbc.update("UPDATE sync_accounts SET minimum_write_protocol = 3 WHERE account_id = ?", accountId);
+        jdbc.update("UPDATE sync_accounts SET minimum_write_protocol = 4 WHERE account_id = ?", accountId);
         assertApiCode(() -> commits.commit("commit-user", incompatible.operationId()), "PROTOCOL_INCOMPATIBLE");
 
         assertThat(count("sync_events")).isZero();
@@ -272,7 +326,7 @@ class AtomicCommitIntegrationTest {
         var objectKey = keys.create(accountId);
         initiation.initiate("commit-user", new InitiateOperationRequest(
             operationId, committingDeviceId, "ENTRY", recordId, "UPSERT", baseVersion,
-            2, 2, 1, "2026-07", List.of(new OperationObjectRequest(
+            3, 2, 1, "2026-07", List.of(new OperationObjectRequest(
                 objectKey.value(), "EVENT", "a".repeat(64), 512))));
         return new Initiated(operationId, objectKey);
     }

@@ -68,6 +68,11 @@ if (
   failures.push('Development backend URLs are forbidden.');
 }
 
+const faroUrl = environment.VITE_GRAFANA_FARO_URL?.trim();
+if (faroUrl && !/^https:\/\/[^/]+\.grafana\.net\/collect\//i.test(faroUrl)) {
+  failures.push('VITE_GRAFANA_FARO_URL must be an HTTPS Grafana Cloud collector URL.');
+}
+
 if (releaseBuild) {
   for (const variable of [
     'VITE_SUPABASE_URL',
@@ -75,6 +80,7 @@ if (releaseBuild) {
     'VITE_SYNC_V2_API_URL',
     'VITE_MINIMUM_PROTOCOL_VERSION',
     'VITE_TELEMETRY_RELEASE_VERSION',
+    'VITE_GRAFANA_FARO_URL',
   ]) {
     if (!environment[variable]?.trim())
       failures.push(`${variable} is required for release builds.`);

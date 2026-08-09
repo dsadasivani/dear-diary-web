@@ -9,6 +9,7 @@ import com.deardiary.sync.objectstore.ObjectKeyFactory;
 import com.deardiary.sync.objectstore.ObjectStoreException;
 import com.deardiary.sync.objectstore.UploadObjectCommand;
 import com.deardiary.sync.protocol.ProtocolService;
+import com.deardiary.sync.quota.QuotaService;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.Map;
@@ -31,6 +32,7 @@ public class SnapshotService {
     private final ObjectKeyFactory objectKeys;
     private final EncryptedObjectStore objectStore;
     private final Clock clock;
+    private final QuotaService quotas;
 
     public SnapshotService(
             JdbcTemplate jdbc,
@@ -40,7 +42,8 @@ public class SnapshotService {
             ProtocolService protocols,
             ObjectKeyFactory objectKeys,
             EncryptedObjectStore objectStore,
-            Clock clock) {
+            Clock clock,
+            QuotaService quotas) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(transactionManager);
         this.devices = devices;
@@ -49,6 +52,7 @@ public class SnapshotService {
         this.objectKeys = objectKeys;
         this.objectStore = objectStore;
         this.clock = clock;
+        this.quotas = quotas;
     }
 
     public InitiateSnapshotResponse initiate(String ownerSubject, InitiateSnapshotRequest request) {
@@ -152,6 +156,7 @@ public class SnapshotService {
             }
             return new PersistedSnapshot(existing.objectKey(), existing.status(), true);
         }
+        quotas.requireStorageCapacity(accountId, request.sizeBytes(), false);
         var objectKey = objectKeys.create(accountId).value();
         var now = OffsetDateTime.now(clock);
         jdbc.update("""
