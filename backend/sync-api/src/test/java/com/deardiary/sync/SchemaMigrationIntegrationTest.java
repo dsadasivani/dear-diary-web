@@ -77,7 +77,11 @@ class SchemaMigrationIntegrationTest {
                     2, 2, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
                 """))
-                .hasMessageContaining("ck_sync_accounts_sequence");
+                // Both the current-sequence constraint and the protocol-4 retention
+                // boundary constraint reject this row. PostgreSQL is free to report
+                // either check first, so assert the account constraint family instead
+                // of depending on constraint evaluation order.
+                .hasMessageContaining("ck_sync_accounts_");
         }
     }
 
