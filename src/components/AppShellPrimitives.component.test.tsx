@@ -30,7 +30,7 @@ describe('redesigned application shell', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Today' })).toBeInTheDocument();
-    expect(screen.getByText('loredays.')).toBeVisible();
+    expect(screen.getByText('Loredays.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Search' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open profile and settings' })).toBeVisible();
     expect(screen.getByRole('img', { name: 'Writer profile' })).toHaveAttribute(

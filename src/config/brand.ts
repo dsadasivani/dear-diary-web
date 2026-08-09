@@ -1,6 +1,6 @@
 export const BRAND = {
   name: 'Loredays',
-  wordmark: 'loredays.',
+  wordmark: 'Loredays.',
   tagline: 'The days that became you.',
   philosophy: 'Every day adds to your lore.',
   promise: 'A private place for the moments that become your story.',

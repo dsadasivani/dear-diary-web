@@ -293,7 +293,7 @@ export default function LockScreen({
 
   const handleKeyPress = (num: string) => {
     if (getPinLockoutStatus(security).isLockedOut) return;
-    triggerHaptic(10);
+    void triggerImpact('light');
     const maxLength = security.isPinCreated ? security.pinLength || 8 : selectedPinLength;
     if (pin.length < maxLength) {
       setError('');

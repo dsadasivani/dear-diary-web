@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   getLocalThemePreference: vi.fn(),
   setLocalThemePreference: vi.fn(),
   createInitialPin: vi.fn(),
+  triggerImpact: vi.fn(),
 }));
 
 vi.mock('../repositories', () => ({
@@ -69,6 +70,10 @@ vi.mock('../domain/security', async () => {
     createInitialPin: mocks.createInitialPin,
   };
 });
+
+vi.mock('../mobile/haptics', () => ({
+  triggerImpact: mocks.triggerImpact,
+}));
 
 const initialSettings: AppSettings = {
   remindersEnabled: false,
@@ -250,6 +255,23 @@ describe('LockScreen first-run sync setup', () => {
     expect(screen.getByRole('button', { name: /erase last pin digit/i })).toBeDisabled();
     expect(screen.queryByText(/^reveal$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^erase$/i)).not.toBeInTheDocument();
+  });
+
+  it('provides light haptic feedback when a lock-screen number is tapped', async () => {
+    const user = userEvent.setup();
+    render(
+      <LockScreen
+        initialSettings={initialSettings}
+        initialSecurity={savedSecurity}
+        onSecurityChange={vi.fn()}
+        onUnlock={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /tap to unlock/i }));
+    await user.click(await screen.findByRole('button', { name: /^1$/ }));
+
+    expect(mocks.triggerImpact).toHaveBeenCalledWith('light');
   });
 
   it('unlocks the app from the ambient lock screen with enabled native biometrics', async () => {
