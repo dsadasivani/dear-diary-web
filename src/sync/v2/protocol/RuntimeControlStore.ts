@@ -17,6 +17,7 @@ export interface CachedRuntimeControls {
   syncV2RolloutPercentage: number;
   rolloutSaltVersion: number;
   emergencyMode: boolean;
+  bootstrapControls?: SyncV2Protocol['bootstrapControls'];
   fetchedAt: number;
 }
 
@@ -48,6 +49,17 @@ export const EMERGENCY_RUNTIME_CONTROLS: CachedRuntimeControls = {
   syncV2RolloutPercentage: 0,
   rolloutSaltVersion: 1,
   emergencyMode: true,
+  bootstrapControls: {
+    atomicReplayEnabled: false,
+    rollingSnapshotsEnabled: false,
+    bootstrapManifestEnabled: false,
+    retentionDeletionEnabled: false,
+    softTailEvents: 100,
+    hardTailEvents: 500,
+    maximumSnapshotAgeDays: 7,
+    replayBatchSize: 25,
+    bootstrapExpiryMinutes: 60,
+  },
   fetchedAt: 0,
 };
 
@@ -73,6 +85,7 @@ export class RuntimeControlStore {
       syncV2RolloutPercentage: protocol.syncV2RolloutPercentage,
       rolloutSaltVersion: protocol.rolloutSaltVersion,
       emergencyMode: protocol.emergencyMode,
+      bootstrapControls: protocol.bootstrapControls,
       fetchedAt: this.now(),
     };
     await this.store.setItem(STORAGE_KEY, JSON.stringify(controls));
@@ -105,6 +118,7 @@ export class RuntimeControlStore {
       rolloutSaltVersion: controls.rolloutSaltVersion,
       emergencyMode: controls.emergencyMode,
       featureFlags: controls.featureFlags,
+      bootstrapControls: controls.bootstrapControls,
     };
   }
 }

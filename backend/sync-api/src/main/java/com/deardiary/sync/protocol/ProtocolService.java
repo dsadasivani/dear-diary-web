@@ -27,7 +27,12 @@ public class ProtocolService {
                    media_upload_enabled, archive_hydration_enabled, device_revocation_enabled,
                    primary_recovery_enabled, companion_pairing_enabled,
                    minimum_supported_app_version, sync_v2_rollout_percentage,
-                   rollout_salt_version, emergency_mode
+                   rollout_salt_version, emergency_mode,
+                   atomic_replay_enabled, rolling_snapshots_enabled,
+                   bootstrap_manifest_enabled, retention_deletion_enabled,
+                   bootstrap_soft_tail, bootstrap_hard_tail,
+                   maximum_snapshot_age_days, replay_batch_size,
+                   bootstrap_expiry_minutes
             FROM sync_protocol_config WHERE config_id = 1
             """, (rs, row) -> new ProtocolResponse(
                 rs.getInt(1), rs.getInt(2), rs.getInt(3), rs.getInt(4), rs.getInt(5),
@@ -44,6 +49,10 @@ public class ProtocolService {
                     rs.getBoolean(17) && !rs.getBoolean(23) && !switches.getOrDefault("DEVICE_REVOCATION", true),
                     rs.getBoolean(18) && !rs.getBoolean(23) && !switches.getOrDefault("PRIMARY_RECOVERY", true),
                     rs.getBoolean(19) && !rs.getBoolean(23) && !switches.getOrDefault("COMPANION_PAIRING", true)
+                ),
+                new ProtocolResponse.BootstrapControls(
+                    rs.getBoolean(24), rs.getBoolean(25), rs.getBoolean(26), rs.getBoolean(27),
+                    rs.getInt(28), rs.getInt(29), rs.getInt(30), rs.getInt(31), rs.getInt(32)
                 )));
     }
 }

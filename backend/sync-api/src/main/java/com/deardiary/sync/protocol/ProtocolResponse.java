@@ -13,7 +13,8 @@ public record ProtocolResponse(
     int syncV2RolloutPercentage,
     int rolloutSaltVersion,
     boolean emergencyMode,
-    FeatureFlags featureFlags
+    FeatureFlags featureFlags,
+    BootstrapControls bootstrapControls
 ) {
     public record FeatureFlags(
         boolean syncWritesEnabled,
@@ -27,5 +28,17 @@ public record ProtocolResponse(
         boolean deviceRevocationEnabled,
         boolean primaryRecoveryEnabled,
         boolean companionPairingEnabled
+    ) {}
+
+    public record BootstrapControls(
+        boolean atomicReplayEnabled,
+        boolean rollingSnapshotsEnabled,
+        boolean bootstrapManifestEnabled,
+        boolean retentionDeletionEnabled,
+        int softTailEvents,
+        int hardTailEvents,
+        int maximumSnapshotAgeDays,
+        int replayBatchSize,
+        int bootstrapExpiryMinutes
     ) {}
 }

@@ -1825,6 +1825,9 @@ export default function EntryEditorScreen({
       setIsSaving(true);
       const saveOperation = async () => {
         await persistEntryDraft(draft);
+        if (workingEntryIdRef.current) {
+          await diaryRepository.publishPendingEntryDraft(workingEntryIdRef.current);
+        }
 
         if (draft.hasDraftText || audioUri) {
           setAudioUri(undefined);
@@ -1865,12 +1868,24 @@ export default function EntryEditorScreen({
     isLeavingRef.current = true;
     void (async () => {
       try {
+        if (workingEntryIdRef.current) {
+          await diaryRepository.publishPendingEntryDraft(workingEntryIdRef.current);
+        }
         await onRefreshEntries();
       } finally {
         onBack();
       }
     })();
   };
+
+  useEffect(() => {
+    const publishOnBackground = () => {
+      if (document.visibilityState !== 'hidden' || !workingEntryIdRef.current) return;
+      void diaryRepository.publishPendingEntryDraft(workingEntryIdRef.current);
+    };
+    document.addEventListener('visibilitychange', publishOnBackground);
+    return () => document.removeEventListener('visibilitychange', publishOnBackground);
+  }, []);
 
   const handleDiscardAndLeave = async () => {
     isLeavingRef.current = true;

@@ -47,12 +47,20 @@ export interface SyncV2SnapshotStateStore {
   clearCreationJournal(snapshotId: string): Promise<void>;
 }
 
+export interface AtomicSnapshotReplacement {
+  accountId: string;
+  throughSequence: number;
+  state: SyncV2CanonicalSnapshotState;
+  runtime: SyncV2LocalRuntime;
+}
+
 export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
   private tail: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly store: LocalDataStore,
     private readonly now: () => number = Date.now,
+    private readonly replaceCanonicalAndV2?: (input: AtomicSnapshotReplacement) => Promise<void>,
   ) {}
 
   exportAccountState(
@@ -104,13 +112,22 @@ export class PersistentSyncV2SnapshotStore implements SyncV2SnapshotStateStore {
         lastAppliedSequence: input.throughSequence,
         updatedAt: this.now(),
       };
-      await this.store.setItems({
-        [SYNC_V2_RECORDS_KEY]: JSON.stringify(input.state.records),
-        [SYNC_V2_VERSIONS_KEY]: JSON.stringify(input.state.recordVersions),
-        [SYNC_V2_MEDIA_KEY]: JSON.stringify(input.state.mediaPointers),
-        [SYNC_V2_APPLIED_KEY]: '[]',
-        [SYNC_V2_RUNTIME_KEY]: JSON.stringify(nextRuntime),
-      });
+      if (this.replaceCanonicalAndV2) {
+        await this.replaceCanonicalAndV2({
+          accountId: input.accountId,
+          throughSequence: input.throughSequence,
+          state: input.state,
+          runtime: nextRuntime,
+        });
+      } else {
+        await this.store.setItems({
+          [SYNC_V2_RECORDS_KEY]: JSON.stringify(input.state.records),
+          [SYNC_V2_VERSIONS_KEY]: JSON.stringify(input.state.recordVersions),
+          [SYNC_V2_MEDIA_KEY]: JSON.stringify(input.state.mediaPointers),
+          [SYNC_V2_APPLIED_KEY]: '[]',
+          [SYNC_V2_RUNTIME_KEY]: JSON.stringify(nextRuntime),
+        });
+      }
       const persisted = await this.runtime();
       if (persisted.lastAppliedSequence !== input.throughSequence) {
         throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });

@@ -14,9 +14,17 @@ export default function SyncCatchUpOverlay({
   onContinueOffline: () => void;
 }) {
   if (!gate) return null;
-  const target = gate.targetSequence || 0;
-  const percent = target > 0 ? Math.min(100, Math.round((gate.appliedSequence / target) * 100)) : 0;
+  const target = gate.targetSequence || gate.startingSequence;
+  const total = gate.totalEvents ?? Math.max(0, target - gate.startingSequence);
+  const completed = gate.appliedEvents ?? Math.max(0, gate.appliedSequence - gate.startingSequence);
+  const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
   const failed = gate.phase === 'failed';
+  const progressMessage = (() => {
+    if (gate.phase === 'restoring-snapshot') return 'Downloading your encrypted backup…';
+    if (gate.phase === 'opening' || gate.phase === 'complete') return 'Opening your diary…';
+    if (total > 0) return `Applying recent changes — ${completed} of ${total}`;
+    return 'Checking for recent encrypted changes…';
+  })();
   return (
     <OverlayPortal>
       <div
@@ -39,11 +47,9 @@ export default function SyncCatchUpOverlay({
           <p className="mt-2 text-sm text-brand-text-muted">
             {failed
               ? gate.error || 'Your latest encrypted data could not be loaded.'
-              : target > 0
-                ? `Applied ${gate.appliedSequence} of ${target} encrypted updates.`
-                : 'Checking for your latest encrypted updates…'}
+              : progressMessage}
           </p>
-          {!failed && target > 0 && (
+          {!failed && total > 0 && (
             <div
               className="mt-5 h-2 overflow-hidden rounded-full bg-brand-border/60"
               aria-label="Initial sync progress"

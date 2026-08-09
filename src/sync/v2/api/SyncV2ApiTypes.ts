@@ -26,6 +26,17 @@ export interface SyncV2Protocol {
   rolloutSaltVersion: number;
   emergencyMode: boolean;
   featureFlags: SyncV2FeatureFlags;
+  bootstrapControls?: {
+    atomicReplayEnabled: boolean;
+    rollingSnapshotsEnabled: boolean;
+    bootstrapManifestEnabled: boolean;
+    retentionDeletionEnabled: boolean;
+    softTailEvents: number;
+    hardTailEvents: number;
+    maximumSnapshotAgeDays: number;
+    replayBatchSize: number;
+    bootstrapExpiryMinutes: number;
+  };
 }
 
 export interface SyncV2DeviceRegistration {
@@ -167,6 +178,7 @@ export interface InitiateSyncV2SnapshotRequest {
   keyEpoch: number;
   snapshotSchemaVersion: number;
   protocolVersion: number;
+  metadataSignature?: string;
 }
 
 export interface InitiateSyncV2SnapshotResponse {
@@ -190,6 +202,33 @@ export interface SyncV2Snapshot {
   downloadExpiresAt: string | null;
 }
 
+export interface SyncV2BootstrapReadiness {
+  status: 'SNAPSHOT_PREPARING' | 'BOOTSTRAP_READY';
+  headSequence: number;
+  minimumAvailableSequence: number;
+  snapshotId: string | null;
+  snapshotSequence: number | null;
+  snapshotCreatedAt: string | null;
+  snapshotLag: number;
+  snapshotRequired: boolean;
+  softTailEvents: number;
+  hardTailEvents: number;
+}
+
+export interface SyncV2BootstrapManifest {
+  bootstrapId: string;
+  deviceId: string;
+  pairingId: string | null;
+  status: 'READY' | 'ACTIVATING' | 'COMPLETED' | 'EXPIRED' | 'FAILED';
+  snapshot: SyncV2Snapshot & { metadataSignature: string | null };
+  headSequence: number;
+  minimumAvailableSequence: number;
+  requiredKeyEpochs: number[];
+  tailCount: number;
+  expiresAt: string;
+  completedAt: string | null;
+}
+
 export interface SyncV2Pairing {
   accountId: string;
   pairingId: string;
@@ -202,6 +241,9 @@ export interface SyncV2Pairing {
     | 'APPROVED'
     | 'KEY_PACKAGE_PENDING'
     | 'KEY_PACKAGE_AVAILABLE'
+    | 'SNAPSHOT_PREPARING'
+    | 'BOOTSTRAP_READY'
+    | 'ACTIVATING'
     | 'COMPLETED'
     | 'EXPIRED'
     | 'REJECTED';

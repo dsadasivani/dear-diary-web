@@ -484,6 +484,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const completeInitialCatchUp = async (syncAccount: LocalSyncAccountState) => {
     setInitialSyncGate({
       phase: 'starting',
+      startingSequence: syncAccount.currentSyncSequence,
       appliedSequence: syncAccount.currentSyncSequence,
       allowOffline: syncAccount.currentSyncSequence > 0,
     });
@@ -499,6 +500,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       setIsAuthenticated(true);
       setInitialSyncGate((current) => ({
         phase: 'failed',
+        startingSequence: current?.startingSequence ?? syncAccount.currentSyncSequence,
         appliedSequence: current?.appliedSequence || syncAccount.currentSyncSequence,
         targetSequence: current?.targetSequence,
         allowOffline: syncAccount.currentSyncSequence > 0,

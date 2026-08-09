@@ -3,13 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import SyncCatchUpOverlay from './SyncCatchUpOverlay';
 
 describe('SyncCatchUpOverlay', () => {
-  it('shows applied and target sequence progress while stale content is blocked', () => {
+  it('shows session-relative progress while stale content is blocked', () => {
     render(
       <SyncCatchUpOverlay
         gate={{
-          phase: 'pulling',
-          appliedSequence: 25,
+          phase: 'applying-events',
+          startingSequence: 75,
+          appliedSequence: 100,
           targetSequence: 100,
+          appliedEvents: 25,
+          totalEvents: 25,
           allowOffline: false,
         }}
         onRetry={vi.fn()}
@@ -18,9 +21,9 @@ describe('SyncCatchUpOverlay', () => {
     );
 
     expect(screen.getByRole('status')).toHaveAttribute('aria-busy', 'true');
-    expect(screen.getByText(/applied 25 of 100 encrypted updates/i)).toBeInTheDocument();
+    expect(screen.getByText(/applying recent changes — 25 of 25/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/initial sync progress/i).firstElementChild).toHaveStyle({
-      width: '25%',
+      width: '100%',
     });
   });
 
@@ -30,6 +33,7 @@ describe('SyncCatchUpOverlay', () => {
       <SyncCatchUpOverlay
         gate={{
           phase: 'failed',
+          startingSequence: 0,
           appliedSequence: 0,
           targetSequence: 10,
           allowOffline: false,
@@ -47,7 +51,7 @@ describe('SyncCatchUpOverlay', () => {
 
     view.rerender(
       <SyncCatchUpOverlay
-        gate={{ phase: 'failed', appliedSequence: 6, allowOffline: true }}
+        gate={{ phase: 'failed', startingSequence: 0, appliedSequence: 6, allowOffline: true }}
         onRetry={onRetry}
         onContinueOffline={vi.fn()}
       />,

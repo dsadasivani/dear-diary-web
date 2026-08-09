@@ -108,7 +108,7 @@ class SnapshotIntegrationTest {
         var id = UUID.randomUUID();
         snapshots.initiate("snapshot-user", request(id, 0));
         var changed = new InitiateSnapshotRequest(id, deviceId, 0, "account", "b".repeat(64),
-            512, 1, 2, 3);
+            512, 1, 2, 3, null);
         assertApiCode(() -> snapshots.initiate("snapshot-user", changed), "IDEMPOTENCY_MISMATCH");
 
         jdbc.update("UPDATE sync_kill_switches SET engaged = TRUE, reason_code = 'TEST' WHERE switch_name = 'SNAPSHOT_CREATION'");
@@ -117,7 +117,7 @@ class SnapshotIntegrationTest {
 
     private InitiateSnapshotRequest request(UUID snapshotId, long sequence) {
         return new InitiateSnapshotRequest(snapshotId, deviceId, sequence, "account", "a".repeat(64),
-            512, 1, 2, 3);
+            512, 1, 2, 3, null);
     }
 
     private String status(UUID snapshotId) {

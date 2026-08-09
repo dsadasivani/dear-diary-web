@@ -22,6 +22,7 @@ export interface RemoteEventPullerOptions {
   eventSchemaVersion: number;
   pageSize?: number;
   replayBatchSize?: number;
+  throughSequence?: number;
   now?: () => number;
   onProgress?: (progress: SyncCatchUpProgress) => void;
 }
@@ -54,24 +55,53 @@ export class RemoteEventPuller {
     }
     await this.health.updateSyncHealth({ lastPullAttemptAt: this.now() });
     const span = this.telemetry.startSpan('events.pull');
+    let startingSequence = 0;
     try {
       let after = await this.replay.getLastAppliedSequence();
-      this.options.onProgress?.({ phase: 'starting', appliedSequence: after });
+      startingSequence = after;
+      let downloadedEvents = 0;
+      let pageCount = 0;
+      let batchCount = 0;
+      let lastProgressAt = 0;
+      const report = (progress: SyncCatchUpProgress, force = false) => {
+        const now = this.now();
+        if (!force && now - lastProgressAt < 100) return;
+        lastProgressAt = now;
+        this.options.onProgress?.(progress);
+      };
+      report({ phase: 'starting', startingSequence, appliedSequence: after }, true);
       while (true) {
-        const page = await this.api.pullEvents(after, this.pageSize);
-        this.options.onProgress?.({
-          phase: 'pulling',
-          appliedSequence: after,
-          targetSequence: page.currentSequence,
-        });
+        const page = await this.api.pullEvents(after, this.pageSize, this.options.throughSequence);
+        pageCount += 1;
+        const totalEvents = Math.max(0, page.currentSequence - startingSequence);
+        report(
+          {
+            phase: 'downloading-events',
+            startingSequence,
+            appliedSequence: after,
+            targetSequence: page.currentSequence,
+            downloadedEvents,
+            appliedEvents: Math.max(0, after - startingSequence),
+            totalEvents,
+          },
+          pageCount === 1,
+        );
         this.validator.validateSequences(after, page.currentSequence);
         this.validator.validateReplayPage(page.events, after);
         for (let index = 0; index < page.events.length; index += this.replayBatchSize) {
           const envelopes = page.events.slice(index, index + this.replayBatchSize);
+          batchCount += 1;
           await this.faults.hit('BEFORE_REMOTE_DOWNLOAD');
+          const downloadStartedAt = this.now();
           const bytes = await this.transfer.download(envelopes);
+          this.telemetry.histogram(
+            'deardiary.sync.pull.download_duration_ms',
+            this.now() - downloadStartedAt,
+          );
+          downloadedEvents += envelopes.length;
           await this.faults.hit('AFTER_REMOTE_DOWNLOAD');
           await this.faults.hit('AFTER_HASH_VERIFICATION');
+          const decryptStartedAt = this.now();
           const decoded = await Promise.all(
             envelopes.map(async (event, eventIndex) => {
               this.validateEnvelope(event);
@@ -83,15 +113,42 @@ export class RemoteEventPuller {
               return { envelope: event, event: decrypted };
             }),
           );
+          this.telemetry.histogram(
+            'deardiary.sync.pull.decrypt_duration_ms',
+            this.now() - decryptStartedAt,
+          );
           await this.faults.hit('DURING_EVENT_APPLY');
-          after = await this.replay.applyBatch(decoded);
-          this.options.onProgress?.({
-            phase: 'pulling',
+          report({
+            phase: 'applying-events',
+            startingSequence,
             appliedSequence: after,
             targetSequence: page.currentSequence,
+            downloadedEvents,
+            appliedEvents: Math.max(0, after - startingSequence),
+            totalEvents,
+          });
+          const applyStartedAt = this.now();
+          after = await this.replay.applyBatch(decoded);
+          this.telemetry.histogram(
+            'deardiary.sync.pull.apply_duration_ms',
+            this.now() - applyStartedAt,
+          );
+          report({
+            phase: 'applying-events',
+            startingSequence,
+            appliedSequence: after,
+            targetSequence: page.currentSequence,
+            downloadedEvents,
+            appliedEvents: Math.max(0, after - startingSequence),
+            totalEvents,
           });
           await this.faults.hit('AFTER_LOCAL_COMMIT_BEFORE_SERVER_ACK');
+          const acknowledgmentStartedAt = this.now();
           await this.api.acknowledgeCursor(this.options.deviceId, after);
+          this.telemetry.histogram(
+            'deardiary.sync.pull.ack_duration_ms',
+            this.now() - acknowledgmentStartedAt,
+          );
         }
         if (page.events.length === 0)
           await this.api.acknowledgeCursor(this.options.deviceId, after);
@@ -104,12 +161,22 @@ export class RemoteEventPuller {
         lastSuccessfulPullAt: this.now(),
         integrityState: 'HEALTHY',
       });
-      this.options.onProgress?.({
-        phase: 'complete',
-        appliedSequence: after,
-        targetSequence: after,
-      });
+      report(
+        {
+          phase: 'complete',
+          startingSequence,
+          appliedSequence: after,
+          targetSequence: after,
+          downloadedEvents,
+          appliedEvents: Math.max(0, after - startingSequence),
+          totalEvents: Math.max(0, after - startingSequence),
+        },
+        true,
+      );
       this.telemetry.counter('deardiary.sync.pull.success', 1);
+      this.telemetry.histogram('deardiary.sync.pull.page_count', pageCount);
+      this.telemetry.histogram('deardiary.sync.pull.batch_count', batchCount);
+      this.telemetry.histogram('deardiary.sync.pull.event_count', downloadedEvents);
       this.telemetry.gauge('deardiary.sync.sequence_lag', 0, { sequence_lag_bucket: '0' });
       span.end();
       return after;
@@ -135,9 +202,14 @@ export class RemoteEventPuller {
         lastErrorCode: typed.code,
         lastErrorAt: this.now(),
       });
+      const appliedSequence = await this.replay
+        .getLastAppliedSequence()
+        .catch(() => startingSequence);
       this.options.onProgress?.({
         phase: 'failed',
-        appliedSequence: await this.replay.getLastAppliedSequence().catch(() => 0),
+        startingSequence,
+        appliedSequence,
+        errorCode: typed.code,
         error: typed.message,
         recoverable: typed.retryable || typed.userActionRequired,
       });

@@ -19,7 +19,8 @@ public class EventController {
     PullEventsResponse pull(
             Authentication authentication,
             @RequestParam(defaultValue = "0") long after,
+            @RequestParam(required = false) Long through,
             @RequestParam(defaultValue = "100") int limit) {
-        return pullService.pull(authentication.getName(), after, limit);
+        return pullService.pull(authentication.getName(), after, through, limit);
     }
 }

@@ -111,8 +111,12 @@ test('remote pull reports measurable progress across event pages', async () => {
   });
   const progress: Array<{
     phase: string;
+    startingSequence: number;
     appliedSequence: number;
     targetSequence?: number;
+    downloadedEvents?: number;
+    appliedEvents?: number;
+    totalEvents?: number;
   }> = [];
   let decryptions = 0;
   const replay = new PersistentReplayStore(store, new SyncInvariantValidator(), 100, () => 10);
@@ -145,14 +149,22 @@ test('remote pull reports measurable progress across event pages', async () => {
   );
 
   assert.equal(await puller.pull(), 2);
-  assert.deepEqual(progress, [
-    { phase: 'starting', appliedSequence: 0 },
-    { phase: 'pulling', appliedSequence: 0, targetSequence: 2 },
-    { phase: 'pulling', appliedSequence: 1, targetSequence: 2 },
-    { phase: 'pulling', appliedSequence: 1, targetSequence: 2 },
-    { phase: 'pulling', appliedSequence: 2, targetSequence: 2 },
-    { phase: 'complete', appliedSequence: 2, targetSequence: 2 },
-  ]);
+  assert.deepEqual(progress[0], {
+    phase: 'starting',
+    startingSequence: 0,
+    appliedSequence: 0,
+  });
+  assert.ok(progress.some((item) => item.phase === 'downloading-events'));
+  assert.deepEqual(progress.at(-1), {
+    phase: 'complete',
+    startingSequence: 0,
+    appliedSequence: 2,
+    targetSequence: 2,
+    downloadedEvents: 2,
+    appliedEvents: 2,
+    totalEvents: 2,
+  });
+  assert.ok(progress.every((item) => item.startingSequence === 0));
 });
 
 test('replay rejects an invalid batch without advancing the atomic cursor', async () => {

@@ -43,10 +43,15 @@ import { PersistentSyncV2SnapshotStore } from './snapshot/PersistentSyncV2Snapsh
 import { AccountKeySyncV2SnapshotCodec } from './snapshot/SyncV2SnapshotCodec';
 import { SyncV2SnapshotCoordinator } from './snapshot/SyncV2SnapshotCoordinator';
 import { clearSyncV2LocalCache } from './clearSyncV2LocalCache';
-import { repositorySnapshotFromV2State } from './RepositorySnapshotAdapter';
+import { createAtomicRepositorySnapshotReplacement } from './RepositorySnapshotAdapter';
 import { isSyncError } from '../errors';
+import { decryptSyncPayload } from '../encryptedSyncObject';
+import { SyncInvariantValidator } from './domain/SyncInvariantValidator';
+import { PersistentReplayStore, type DecryptedSyncV2Event } from './replay/PersistentReplayStore';
+import { RepositoryReplayStore } from './replay/RepositoryReplayStore';
+import { RemoteEventPuller } from './replay/RemoteEventPuller';
 
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 
 interface PairingJournal {
   pairingId: string;
@@ -54,6 +59,7 @@ interface PairingJournal {
   privateKeyHandle: string;
   pairingCode: string;
   challenge: string;
+  bootstrapId?: string;
 }
 
 interface PairingApprovalJournal {
@@ -333,6 +339,46 @@ export const approveSyncV2CompanionPairing = async (
     throw new Error('Pairing request belongs to another Sync V2 account.');
   const api = createConfiguredSyncV2ApiClient(primaryAccessToken);
   const protocol = await api.getProtocol();
+  if (protocol.bootstrapControls?.bootstrapManifestEnabled) {
+    const readiness = await api.getBootstrapReadiness(state.deviceId);
+    if (readiness.snapshotRequired) {
+      const pendingOperations = await diaryRepository.listSyncOutboxOperations();
+      if (
+        pendingOperations.some(
+          (operation) => operation.state !== 'applied' && operation.state !== 'conflict_preserved',
+        )
+      ) {
+        throw new Error('Finish syncing pending diary changes before preparing this companion.');
+      }
+      const runtime = await new SyncV2RuntimeStore(localDataStore).load();
+      if (!runtime || runtime.accountId !== state.accountId) {
+        throw new Error('The local sync cursor is unavailable for snapshot preparation.');
+      }
+      await api.acknowledgeCursor(state.deviceId, runtime.lastAppliedSequence);
+      const snapshots = new SyncV2SnapshotCoordinator(
+        api,
+        new BoundedObjectTransfer({
+          maximumObjectBytes: protocol.maximumSnapshotBytes,
+          maximumConcurrency: 6,
+        }),
+        new PersistentSyncV2SnapshotStore(localDataStore),
+        new AccountKeySyncV2SnapshotCodec((epoch) =>
+          Promise.resolve(getAccountRootKeyForEpoch(secrets, epoch)),
+        ),
+        new PersistentSafetyStopStore(localDataStore),
+        {
+          accountId: state.accountId,
+          deviceId: state.deviceId,
+          protocolVersion: PROTOCOL_VERSION,
+          snapshotSchemaVersion: protocol.snapshotSchemaVersion,
+          maximumSnapshotBytes: protocol.maximumSnapshotBytes,
+          currentKeyEpoch: async () => state.keyEpoch || 1,
+          signMetadata: (message) => signWithDeviceBundle(secrets.devicePrivateKeyJwk, message),
+        },
+      );
+      await snapshots.create();
+    }
+  }
   const staleApproval = await approvalJournal().load();
   if (staleApproval && staleApproval.pairingId !== pairing.pairingId) {
     // The encrypted bytes are bound to the old device public key and pairing
@@ -365,10 +411,15 @@ export const completeSyncV2CompanionPairing = async (
   const pending = await requestJournal().load();
   if (!pending) throw new Error('No secure Sync V2 pairing request is available.');
   const remote = await api.getPairing(pending.pairingId, pending.requestedDeviceId);
-  if (remote.status === 'REQUESTED') return null;
+  if (remote.status === 'REQUESTED' || remote.status === 'SNAPSHOT_PREPARING') return null;
   if (remote.status === 'EXPIRED' || remote.status === 'REJECTED')
     throw new Error('Pairing request expired.');
   const protocol = await api.getProtocol();
+  const bootstrapEnabled = protocol.bootstrapControls?.bootstrapManifestEnabled === true;
+  if (bootstrapEnabled && !pending.bootstrapId) {
+    pending.bootstrapId = crypto.randomUUID();
+    await requestJournal().save(pending);
+  }
   let unwrapped: Awaited<ReturnType<typeof unwrapRootKeysForCompanion>> | null = null;
   let privateKey = '';
   const coordinator = new SyncV2PairingCoordinator(
@@ -408,22 +459,31 @@ export const completeSyncV2CompanionPairing = async (
     await new SyncV2RuntimeStore(localDataStore).save({
       accountId: completed.accountId,
       deviceId: completed.requestedDeviceId,
-      deviceStatus: 'ACTIVE',
+      deviceStatus: bootstrapEnabled ? 'RECOVERY_PENDING' : 'ACTIVE',
       protocolVersion: PROTOCOL_VERSION,
       eventSchemaVersion: protocol.eventSchemaVersion,
       keyEpoch: keys.keyEpoch,
       lastAppliedSequence: 0,
       updatedAt: Date.now(),
     });
-    const stateStore = new PersistentSyncV2SnapshotStore(localDataStore);
+    const stateStore = new PersistentSyncV2SnapshotStore(
+      localDataStore,
+      Date.now,
+      createAtomicRepositorySnapshotReplacement(diaryRepository),
+    );
+    const transfer = new BoundedObjectTransfer({
+      maximumObjectBytes: Math.max(protocol.maximumSnapshotBytes, protocol.maximumEventBytes),
+      maximumConcurrency: 6,
+    });
+    const safety = new PersistentSafetyStopStore(localDataStore);
     const snapshots = new SyncV2SnapshotCoordinator(
       api,
-      new BoundedObjectTransfer({ maximumObjectBytes: protocol.maximumSnapshotBytes }),
+      transfer,
       stateStore,
       new AccountKeySyncV2SnapshotCodec(
         async (epoch) => keys.accountRootKeys[epoch] || keys.accountRootKey,
       ),
-      new PersistentSafetyStopStore(localDataStore),
+      safety,
       {
         accountId: completed.accountId,
         deviceId: completed.requestedDeviceId,
@@ -433,12 +493,26 @@ export const completeSyncV2CompanionPairing = async (
         currentKeyEpoch: async () => keys.keyEpoch,
       },
     );
-    const throughSequence = await snapshots.restoreLatest();
-    const restored = await stateStore.exportAccountState(completed.accountId);
-    await diaryRepository.importSnapshot(
-      repositorySnapshotFromV2State(restored.state),
-      'replace-portable',
-    );
+    const manifest = bootstrapEnabled
+      ? await api.createBootstrap({
+          bootstrapId: pending.bootstrapId!,
+          deviceId: completed.requestedDeviceId,
+          pairingId: pending.pairingId,
+        })
+      : null;
+    if (manifest) {
+      await diaryRepository.updateSyncCatchUpStatus({
+        catchUpPhase: 'restoring-snapshot',
+        startingSequence: manifest.snapshot.throughSequence,
+        snapshotSequence: manifest.snapshot.throughSequence,
+        appliedSequence: 0,
+        targetSequence: manifest.headSequence,
+        totalEvents: manifest.tailCount,
+      });
+    }
+    const throughSequence = manifest
+      ? (await snapshots.restoreSnapshot(manifest.snapshot)).throughSequence
+      : await snapshots.restoreLatest();
     await diaryRepository.saveSecurityConfig({
       isPinCreated: true,
       pinHash: keys.pinVerifier.pinHash,
@@ -463,6 +537,91 @@ export const completeSyncV2CompanionPairing = async (
       linkedAt: Date.now(),
     };
     await diaryRepository.saveLocalSyncAccountState(localState);
+    if (manifest) {
+      const validator = new SyncInvariantValidator();
+      const puller = new RemoteEventPuller(
+        api,
+        transfer,
+        {
+          hasKeyEpoch: async (epoch) => Boolean(keys.accountRootKeys[epoch] || keys.accountRootKey),
+          decrypt: async (bytes, epoch): Promise<DecryptedSyncV2Event> => {
+            const decrypted = await decryptSyncPayload(
+              keys.accountRootKeys[epoch] || keys.accountRootKey,
+              bytes,
+            );
+            if (decrypted.objectKind !== 'event') {
+              throw new Error('Downloaded Sync V2 object is not an event.');
+            }
+            return JSON.parse(new TextDecoder().decode(decrypted.payload)) as DecryptedSyncV2Event;
+          },
+        },
+        new RepositoryReplayStore(
+          new PersistentReplayStore(localDataStore, validator),
+          diaryRepository,
+        ),
+        validator,
+        safety,
+        diaryRepository,
+        {
+          accountId: completed.accountId,
+          deviceId: completed.requestedDeviceId,
+          eventSchemaVersion: protocol.eventSchemaVersion,
+          pageSize: 100,
+          replayBatchSize: protocol.bootstrapControls?.replayBatchSize || 25,
+          throughSequence: manifest.headSequence,
+          onProgress: (progress) =>
+            diaryRepository.updateSyncCatchUpStatus({
+              catchUpPhase: progress.phase,
+              startingSequence: progress.startingSequence,
+              snapshotSequence: progress.snapshotSequence,
+              appliedSequence: progress.appliedSequence,
+              targetSequence: progress.targetSequence,
+              downloadedEvents: progress.downloadedEvents,
+              appliedEvents: progress.appliedEvents,
+              totalEvents: progress.totalEvents,
+              catchUpErrorCode: progress.errorCode,
+              catchUpError: progress.error,
+              catchUpRecoverable: progress.recoverable,
+            }),
+        },
+      );
+      await puller.pull();
+      await diaryRepository.updateSyncCatchUpStatus({
+        catchUpPhase: 'opening',
+        startingSequence: manifest.snapshot.throughSequence,
+        snapshotSequence: manifest.snapshot.throughSequence,
+        appliedSequence: manifest.headSequence,
+        targetSequence: manifest.headSequence,
+        appliedEvents: manifest.tailCount,
+        totalEvents: manifest.tailCount,
+      });
+      const possessionSignature = await signWithDeviceBundle(
+        privateKey,
+        `bootstrap-complete:${manifest.bootstrapId}:${manifest.headSequence}`,
+      );
+      await api.completeBootstrap(manifest.bootstrapId, {
+        deviceId: completed.requestedDeviceId,
+        appliedThroughSequence: manifest.headSequence,
+        possessionSignature,
+      });
+      const runtimeStore = new SyncV2RuntimeStore(localDataStore);
+      const runtime = await runtimeStore.load();
+      if (!runtime) throw new Error('Companion bootstrap runtime is unavailable.');
+      await runtimeStore.save({ ...runtime, deviceStatus: 'ACTIVE', updatedAt: Date.now() });
+      await diaryRepository.saveLocalSyncAccountState({
+        ...localState,
+        currentSyncSequence: manifest.headSequence,
+      });
+      await diaryRepository.updateSyncCatchUpStatus({
+        catchUpPhase: 'complete',
+        startingSequence: manifest.snapshot.throughSequence,
+        snapshotSequence: manifest.snapshot.throughSequence,
+        appliedSequence: manifest.headSequence,
+        targetSequence: manifest.headSequence,
+        appliedEvents: manifest.tailCount,
+        totalEvents: manifest.tailCount,
+      });
+    }
   });
   return diaryRepository.getLocalSyncAccountState();
 };

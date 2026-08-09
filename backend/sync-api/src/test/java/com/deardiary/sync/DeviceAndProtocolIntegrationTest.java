@@ -107,7 +107,7 @@ class DeviceAndProtocolIntegrationTest {
     void protocolConfigurationCombinesPersistentFlagsWithKillSwitches() {
         var protocol = protocols.current();
 
-        assertThat(protocol.currentProtocolVersion()).isEqualTo(3);
+        assertThat(protocol.currentProtocolVersion()).isEqualTo(4);
           assertThat(protocol.maximumEventBytes()).isEqualTo(10_485_760);
           assertThat(protocol.maximumSnapshotBytes()).isEqualTo(104_857_600);
         assertThat(protocol.featureFlags().syncWritesEnabled()).isTrue();
@@ -118,6 +118,12 @@ class DeviceAndProtocolIntegrationTest {
         assertThat(protocol.featureFlags().mediaUploadEnabled()).isTrue();
         assertThat(protocol.featureFlags().archiveHydrationEnabled()).isTrue();
         assertThat(protocol.syncV2RolloutPercentage()).isZero();
+        assertThat(protocol.bootstrapControls().atomicReplayEnabled()).isFalse();
+        assertThat(protocol.bootstrapControls().rollingSnapshotsEnabled()).isFalse();
+        assertThat(protocol.bootstrapControls().bootstrapManifestEnabled()).isFalse();
+        assertThat(protocol.bootstrapControls().retentionDeletionEnabled()).isFalse();
+        assertThat(protocol.bootstrapControls().hardTailEvents()).isEqualTo(500);
+        assertThat(protocol.bootstrapControls().replayBatchSize()).isEqualTo(25);
 
         jdbc.update("UPDATE sync_kill_switches SET engaged = TRUE, reason_code = 'TEST' WHERE switch_name = 'SYNC_WRITES'");
         assertThat(protocols.current().featureFlags().syncWritesEnabled()).isFalse();

@@ -55,13 +55,23 @@ public class CursorService {
                              'REQUESTED', 'APPROVED', 'KEY_PACKAGE_PENDING',
                              'KEY_PACKAGE_AVAILABLE', 'LOCAL_KEY_PERSISTED', 'FINALIZING'
                          )
-                   ) AS active_recovery
+                   ) AS active_recovery,
+                   EXISTS (
+                       SELECT 1 FROM sync_bootstraps b
+                       WHERE b.account_id = d.account_id
+                         AND b.device_id = d.device_id
+                         AND b.bootstrap_status IN ('READY', 'ACTIVATING')
+                         AND b.expires_at > CURRENT_TIMESTAMP
+                   ) AS active_bootstrap
             FROM sync_devices d
             WHERE d.account_id = ? AND d.device_id = ? FOR UPDATE
-            """, (rs, row) -> new Object[] { rs.getString("device_status"), rs.getBoolean("active_recovery") },
+            """, (rs, row) -> new Object[] {
+                rs.getString("device_status"), rs.getBoolean("active_recovery"), rs.getBoolean("active_bootstrap")
+            },
             accountId, deviceId);
         var cursorAuthorized = "ACTIVE".equals(deviceAuthorization[0])
-            || ("RECOVERY_PENDING".equals(deviceAuthorization[0]) && Boolean.TRUE.equals(deviceAuthorization[1]));
+            || ("RECOVERY_PENDING".equals(deviceAuthorization[0])
+                && (Boolean.TRUE.equals(deviceAuthorization[1]) || Boolean.TRUE.equals(deviceAuthorization[2])));
         if (!cursorAuthorized) {
             throw new ApiException("DEVICE_REVOKED", HttpStatus.FORBIDDEN,
                 "The device is no longer authorized.", false, true, Map.of());

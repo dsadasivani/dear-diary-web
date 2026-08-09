@@ -8,11 +8,13 @@ export interface SyncV2BackgroundWorker {
 export class SyncV2RuntimeCoordinator {
   private pullStarted = false;
   private outboxStarted = false;
+  private maintenanceStarted = false;
 
   constructor(
     private readonly bootstrap: ProtocolBootstrap,
     private readonly pullWorker: SyncV2BackgroundWorker,
     private readonly outboxWorker: SyncV2BackgroundWorker,
+    private readonly maintenanceWorker?: SyncV2BackgroundWorker,
   ) {}
 
   async start(): Promise<ProtocolBootstrapResult> {
@@ -24,6 +26,10 @@ export class SyncV2RuntimeCoordinator {
     if (result.writesAllowed) {
       await this.outboxWorker.start();
       this.outboxStarted = true;
+      if (this.maintenanceWorker) {
+        await this.maintenanceWorker.start();
+        this.maintenanceStarted = true;
+      }
     }
     return result;
   }
@@ -31,7 +37,9 @@ export class SyncV2RuntimeCoordinator {
   async stop(): Promise<void> {
     if (this.pullStarted) await this.pullWorker.stop();
     if (this.outboxStarted) await this.outboxWorker.stop();
+    if (this.maintenanceStarted) await this.maintenanceWorker?.stop();
     this.pullStarted = false;
     this.outboxStarted = false;
+    this.maintenanceStarted = false;
   }
 }

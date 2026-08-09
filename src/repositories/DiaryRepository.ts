@@ -150,9 +150,22 @@ export interface SyncStatusSummary {
   isOffline: boolean;
   reauthorizationRequired?: boolean;
   conflictCount?: number;
-  catchUpPhase?: 'starting' | 'pulling' | 'complete' | 'failed';
+  catchUpPhase?:
+    | 'starting'
+    | 'restoring-snapshot'
+    | 'downloading-events'
+    | 'applying-events'
+    | 'opening'
+    | 'complete'
+    | 'failed';
+  startingSequence?: number;
+  snapshotSequence?: number;
   appliedSequence?: number;
   targetSequence?: number;
+  downloadedEvents?: number;
+  appliedEvents?: number;
+  totalEvents?: number;
+  catchUpErrorCode?: string;
   catchUpError?: string;
   catchUpRecoverable?: boolean;
 }
@@ -198,11 +211,19 @@ export interface ApplyLocalMutationWithOutboxInput {
   localPayload: Diary | Entry | Note | AppSettings | UserProfile | null;
   syncPayload?: Diary | Entry | Note | AppSettings | UserProfile | null;
   createdAt?: number;
+  publishNotBefore?: number;
 }
 
 export interface AcknowledgeLocalMutationInput {
   event: SyncDomainEvent;
   sequence: number;
+}
+
+export interface RemoteSyncEventBatchItem {
+  event: SyncDomainEvent;
+  sequence: number;
+  operationId?: string;
+  mediaPointers?: SyncMediaPointer[];
 }
 
 export interface RepositorySnapshot {
@@ -250,6 +271,7 @@ export interface DiaryRepository {
   createEntry(input: NewEntry): Promise<Entry>;
   updateEntry(entry: Entry): Promise<Entry | null>;
   deleteEntry(id: string): Promise<boolean>;
+  publishPendingEntryDraft(entryId: string): Promise<void>;
 
   listNotes(): Promise<Note[]>;
   listNotes(options: NoteListOptions): Promise<PageResult<Note | NoteSummary>>;
@@ -287,6 +309,10 @@ export interface DiaryRepository {
     sequence: number,
     options?: { allowHistorical?: boolean },
   ): Promise<void>;
+  applyRemoteEventBatch(
+    events: RemoteSyncEventBatchItem[],
+    expectedCursor: number,
+  ): Promise<number>;
   getSyncMediaPointer(sequence: number): Promise<SyncMediaPointer | null>;
   getSyncMediaPointerByMediaId(mediaId: string): Promise<SyncMediaPointer | null>;
   getSyncMediaPointerByDriveFileId(driveFileId: string): Promise<SyncMediaPointer | null>;
@@ -316,7 +342,17 @@ export interface DiaryRepository {
   updateSyncCatchUpStatus(
     status: Pick<
       SyncStatusSummary,
-      'catchUpPhase' | 'appliedSequence' | 'targetSequence' | 'catchUpError' | 'catchUpRecoverable'
+      | 'catchUpPhase'
+      | 'startingSequence'
+      | 'snapshotSequence'
+      | 'appliedSequence'
+      | 'targetSequence'
+      | 'downloadedEvents'
+      | 'appliedEvents'
+      | 'totalEvents'
+      | 'catchUpErrorCode'
+      | 'catchUpError'
+      | 'catchUpRecoverable'
     >,
   ): Promise<void>;
   getSyncHealth(): Promise<SyncHealth>;
@@ -338,6 +374,11 @@ export interface DiaryRepository {
 
   exportSnapshot(): Promise<RepositorySnapshot>;
   importSnapshot(snapshot: RepositorySnapshot, mode: RepositoryImportMode): Promise<void>;
+  importSnapshotAtomically(
+    snapshot: RepositorySnapshot,
+    mode: RepositoryImportMode,
+    additionalItems: Record<string, unknown>,
+  ): Promise<void>;
   previewPortableMerge(
     snapshot: RepositorySnapshot,
     mediaCount?: number,

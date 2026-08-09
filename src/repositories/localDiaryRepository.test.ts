@@ -1053,6 +1053,98 @@ test('applies canonical sync events idempotently and tracks record versions', as
   assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 3);
 });
 
+test('atomically applies a remote event batch and rejects an invalid version chain', async () => {
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
+  const account = {
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    currentSyncSequence: 0,
+    linkedAt: 1,
+  };
+  await repository.saveLocalSyncAccountState(account);
+  await store.setItem(
+    'deardiary_sync_v2_runtime',
+    JSON.stringify({
+      accountId: account.accountId,
+      deviceId: account.deviceId,
+      deviceStatus: 'ACTIVE',
+      protocolVersion: 4,
+      eventSchemaVersion: 2,
+      keyEpoch: 1,
+      lastAppliedSequence: 0,
+      updatedAt: 1,
+    }),
+  );
+  const note = (id: string, title: string) => ({
+    id,
+    title,
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 10,
+    updatedAt: 10,
+  });
+  const first = createSyncDomainEvent({
+    accountId: account.accountId,
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: 'note-batch-1',
+    baseRecordVersion: 0,
+    payload: note('note-batch-1', 'First'),
+  });
+  const second = createSyncDomainEvent({
+    accountId: account.accountId,
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: 'note-batch-2',
+    baseRecordVersion: 0,
+    payload: note('note-batch-2', 'Second'),
+  });
+
+  assert.equal(
+    await repository.applyRemoteEventBatch(
+      [
+        { event: first, sequence: 1, operationId: 'operation-1' },
+        { event: second, sequence: 2, operationId: 'operation-2' },
+      ],
+      0,
+    ),
+    2,
+  );
+  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 2);
+  assert.equal(
+    JSON.parse((await store.getItem('deardiary_sync_v2_runtime'))!).lastAppliedSequence,
+    2,
+  );
+  assert.equal((await repository.getNote('note-batch-1'))?.title, 'First');
+  assert.equal((await repository.getNote('note-batch-2'))?.title, 'Second');
+
+  const invalid = createSyncDomainEvent({
+    accountId: account.accountId,
+    deviceId: 'device-2',
+    recordType: 'note',
+    operation: 'upsert',
+    recordId: 'note-invalid',
+    baseRecordVersion: 1,
+    payload: note('note-invalid', 'Invalid'),
+  });
+  await assert.rejects(
+    repository.applyRemoteEventBatch(
+      [{ event: invalid, sequence: 3, operationId: 'operation-3' }],
+      2,
+    ),
+  );
+  assert.equal(await repository.getNote('note-invalid'), null);
+  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 2);
+});
+
 test('sanitizes malicious rich text during sync event replay', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
@@ -1367,6 +1459,71 @@ test('atomically applies a local note mutation with its durable outbox operation
   assert.equal(outboxV2['operation-local-first'].baseRecordVersion, 0);
   assert.equal(JSON.stringify(outboxV2).includes('Saved locally.'), false);
   assert.deepEqual(changes, ['note-created', 'sync-status-updated']);
+});
+
+test('coalesces untouched same-record operations and cancels an unpublished create-delete', async () => {
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    currentSyncSequence: 0,
+    linkedAt: 1,
+  });
+  const account = (await repository.getLocalSyncAccountState())!;
+  const note: Note = {
+    id: 'note-coalesced',
+    title: 'First',
+    body: '',
+    isPinned: false,
+    tags: [],
+    createdAt: 10,
+    updatedAt: 10,
+  };
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-coalesced-1',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account,
+    localPayload: note,
+  });
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-coalesced-2',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account,
+    localPayload: { ...note, title: 'Latest', updatedAt: 20 },
+  });
+
+  const [coalesced] = await repository.listSyncOutboxOperations(['prepared']);
+  assert.equal(coalesced.operationId, 'operation-coalesced-1');
+  assert.equal((coalesced.payload as Note).title, 'Latest');
+  assert.equal((await repository.getNote(note.id))?.title, 'Latest');
+  assert.equal(
+    Object.keys(JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}')).length,
+    1,
+  );
+
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-coalesced-delete',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'delete',
+    account,
+    localPayload: null,
+  });
+  assert.equal(await repository.getNote(note.id), null);
+  assert.equal((await repository.listSyncOutboxOperations()).length, 0);
+  assert.equal(
+    Object.keys(JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}')).length,
+    0,
+  );
 });
 
 test('chains same-record local mutations once an earlier outbox operation is in flight', async () => {
