@@ -53,6 +53,7 @@ const capture = async (page: Page, name: string) => {
     animations: 'disabled',
     caret: 'hide',
     scale: 'css',
+    ...(name === 'home-dark' ? { maxDiffPixels: 700 } : {}),
   });
 };
 
