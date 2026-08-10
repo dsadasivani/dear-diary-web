@@ -72,7 +72,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
-      - run: npm run test:v2-client
+      - run: npm run test:sync-client
       - run: npm run test:storage
       - run: npm run test:component
       - run: npm run test:server
