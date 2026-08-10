@@ -1,6 +1,6 @@
 import { fullJitterDelay, type RetryPolicy } from '../../infrastructure/http/retryPolicy';
 import { SyncError } from '../errors';
-import type { SyncOutboxOperationV2, SyncOutboxStateV2 } from './SyncOutboxOperationV2';
+import type { SyncOperation, SyncOperationState } from './SyncOperation';
 
 const RETRY_POLICY: RetryPolicy = {
   maxAttempts: Number.MAX_SAFE_INTEGER,
@@ -9,7 +9,7 @@ const RETRY_POLICY: RetryPolicy = {
   retryableStatuses: new Set(),
 };
 
-export const stateForSyncError = (error: SyncError): SyncOutboxStateV2 => {
+export const stateForSyncError = (error: SyncError): SyncOperationState => {
   if (error.code === 'RECORD_VERSION_CONFLICT') return 'CONFLICT';
   if (error.code === 'AUTH_EXPIRED' || error.code === 'AUTH_INVALID') return 'BLOCKED_AUTH';
   if (error.code === 'DEVICE_REVOKED') return 'BLOCKED_DEVICE';
@@ -26,11 +26,11 @@ export const stateForSyncError = (error: SyncError): SyncOutboxStateV2 => {
 };
 
 export const scheduleOutboxFailure = (
-  operation: SyncOutboxOperationV2,
+  operation: SyncOperation,
   error: SyncError,
   now: number,
   random: () => number = Math.random,
-): Partial<SyncOutboxOperationV2> & { state: SyncOutboxStateV2 } => {
+): Partial<SyncOperation> & { state: SyncOperationState } => {
   const state = stateForSyncError(error);
   const retryCount = operation.retryCount + 1;
   return {

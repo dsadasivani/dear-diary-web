@@ -56,7 +56,7 @@ import {
   toggleUnorderedList,
 } from '../utils/richTextSelection';
 import EntrySaveStatus, { type EntrySaveState } from './editor/EntrySaveStatus';
-import type { SyncV2Quota } from '../sync/v2/api/SyncV2ApiTypes';
+import type { SyncQuota } from '../sync/core/api/SyncApiTypes';
 import { DEFAULT_ACCOUNT_QUOTA, entryMediaCounts } from '../domain/quota';
 import type { SyncStatusSummary } from '../repositories/DiaryRepository';
 
@@ -79,7 +79,7 @@ interface EntryEditorScreenProps {
     detail?: string,
   ) => Promise<void>;
   showDiarySelector?: boolean;
-  quota?: SyncV2Quota;
+  quota?: SyncQuota;
   syncStatus?: SyncStatusSummary | null;
   isOnline?: boolean;
 }
@@ -1762,7 +1762,13 @@ export default function EntryEditorScreen({
       onShowToast?.('Please wait for the current photos to finish preparing.', 'info');
       return;
     }
-    const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+    // Android document providers frequently omit File.type. The selected bytes are
+    // validated by the image optimizer, so accept known image extensions here too.
+    const imageFiles = files.filter(
+      (file) =>
+        file.type.startsWith('image/') ||
+        /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i.test(file.name),
+    );
     if (imageFiles.length === 0) {
       onShowToast?.('Drop an image file to attach it to this entry.', 'warning');
       return;
@@ -1920,15 +1926,6 @@ export default function EntryEditorScreen({
       }
     })();
   };
-
-  useEffect(() => {
-    const publishOnBackground = () => {
-      if (document.visibilityState !== 'hidden' || !workingEntryIdRef.current) return;
-      void diaryRepository.publishPendingEntryDraft(workingEntryIdRef.current);
-    };
-    document.addEventListener('visibilitychange', publishOnBackground);
-    return () => document.removeEventListener('visibilitychange', publishOnBackground);
-  }, []);
 
   const handleDiscardAndLeave = async () => {
     isLeavingRef.current = true;

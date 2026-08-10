@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/sync/devices/{deviceId}/cursor")
+@RequestMapping("/api/sync/devices/{deviceId}/cursor")
 public class CursorController {
     private final CursorService cursorService;
 

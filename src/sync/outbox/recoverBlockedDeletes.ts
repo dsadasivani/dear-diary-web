@@ -14,11 +14,11 @@ export const recoverDeletesBlockedByConflictedWrites = async ({
   outbox,
   pullLatest,
 }: RecoverBlockedDeletesInput): Promise<number> => {
-  const v2Operations = await outbox.listByAccount(accountId);
+  const operations = await outbox.listByAccount(accountId);
   const operationsById = new Map(
-    v2Operations.map((operation) => [operation.operationId, operation]),
+    operations.map((operation) => [operation.operationId, operation]),
   );
-  const blockedDeletes = v2Operations.filter((operation) => {
+  const blockedDeletes = operations.filter((operation) => {
     if (operation.state !== 'PENDING' || operation.operationType !== 'DELETE') return false;
     const dependency = operation.dependencyOperationId
       ? operationsById.get(operation.dependencyOperationId)
@@ -36,32 +36,16 @@ export const recoverDeletesBlockedByConflictedWrites = async ({
   let recovered = 0;
   for (const blockedDelete of blockedDeletes) {
     const dependencyOperationId = blockedDelete.dependencyOperationId!;
-    const legacyOperations = await repository.listSyncOutboxOperations();
-    const legacyDelete = legacyOperations.find(
-      (operation) => operation.operationId === blockedDelete.operationId,
-    );
-    if (!legacyDelete || legacyDelete.operation !== 'delete' || !legacyDelete.localApplied) {
-      continue;
-    }
+    if (!blockedDelete.localApplied) continue;
     const baseRecordVersion = await repository.getSyncRecordVersion(
-      legacyDelete.recordType,
-      legacyDelete.recordId,
+      blockedDelete.recordType.toLowerCase() as 'diary' | 'entry' | 'note' | 'settings' | 'profile',
+      blockedDelete.recordId,
     );
-    await repository.saveSyncOutboxOperation({
-      ...legacyDelete,
-      baseRecordVersion,
-      dependsOnOperationId: undefined,
-      error: undefined,
-      retryCount: undefined,
-      lastErrorAt: undefined,
-      nextRetryAt: undefined,
-    });
     await outbox.supersedeConflictAndRebaseDependentDelete(
       blockedDelete.operationId,
       dependencyOperationId,
       baseRecordVersion,
     );
-    await repository.removeSyncOutboxOperation(dependencyOperationId);
     recovered += 1;
   }
   return recovered;

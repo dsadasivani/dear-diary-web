@@ -8,18 +8,14 @@ import {
 } from '../platform/storage/webEncryptedKeyValueStore';
 
 const SECURE_STORAGE_PREFIX = 'deardiary_';
-const SYNC_SECRETS_KEY = 'multi_device_sync_secrets_v1';
-const PENDING_PAIRING_KEY = 'pending_companion_pairing_v1';
-const PENDING_V2_PAIRING_KEY = 'pending_companion_pairing_v2';
-const PENDING_V2_PAIRING_APPROVAL_KEY = 'pending_companion_pairing_approval_v2';
-const PENDING_V2_DEVICE_KEY_ROTATION_KEY = 'pending_device_key_rotation_v2';
-const PENDING_DEVICE_KEY_ROTATION_KEY = 'pending_device_key_rotation_v1';
-const PENDING_PRIMARY_RECOVERY_KEY = 'pending_primary_recovery_v1';
-const PENDING_PRIMARY_ACCOUNT_SETUP_KEY = 'pending_primary_account_setup_v2';
-const PENDING_PRIMARY_ACCOUNT_RECOVERY_KEY = 'pending_primary_account_recovery_v2';
+const SYNC_SECRETS_KEY = 'multi_device_sync_secrets';
+const PENDING_SYNC_PAIRING_KEY = 'pending_companion_pairing';
+const PENDING_SYNC_PAIRING_APPROVAL_KEY = 'pending_companion_pairing_approval';
+const PENDING_SYNC_DEVICE_KEY_ROTATION_KEY = 'pending_device_key_rotation';
+const PENDING_PRIMARY_ACCOUNT_SETUP_KEY = 'pending_primary_account_setup';
+const PENDING_PRIMARY_ACCOUNT_RECOVERY_KEY = 'pending_primary_account_recovery';
 
 export interface SyncSecrets {
-  version: 1 | 2;
   accountId: string;
   accountRootKey: Uint8Array;
   accountRootKeys?: Record<number, Uint8Array>;
@@ -28,7 +24,6 @@ export interface SyncSecrets {
   googleSession?: GoogleAccountSession;
   /** Primary-only. Never included in snapshots, portable exports, or companion packages. */
   primaryRecoveryCredential?: {
-    version: 1;
     passphrase: string;
     capturedAt: number;
   };
@@ -123,7 +118,6 @@ export const loadSyncSecrets = async (
     const stored = JSON.parse(value) as StoredSyncSecrets;
     const accountRootKey = base64ToBytes(stored.accountRootKey);
     if (
-      (stored.version !== 1 && stored.version !== 2) ||
       !stored.accountId ||
       accountRootKey.byteLength !== ACCOUNT_ROOT_KEY_BYTES
     ) {
@@ -152,9 +146,7 @@ export const withPrimaryRecoveryCredential = (
   if (!passphrase) throw new Error('Enter your recovery passphrase.');
   return {
     ...secrets,
-    version: 2,
     primaryRecoveryCredential: {
-      version: 1,
       passphrase,
       capturedAt: Date.now(),
     },
@@ -195,12 +187,12 @@ export const clearSyncSecrets = async (
   storage: SyncSecretStorage = defaultSecretStorage(),
 ): Promise<void> => storage.removeItem(SYNC_SECRETS_KEY);
 
-export const savePendingPairingSecret = async <T>(value: T): Promise<void> => {
-  await defaultSecretStorage().setItem(PENDING_PAIRING_KEY, JSON.stringify(value));
+export const savePendingSyncPairingSecret = async <T>(value: T): Promise<void> => {
+  await defaultSecretStorage().setItem(PENDING_SYNC_PAIRING_KEY, JSON.stringify(value));
 };
 
-export const loadPendingPairingSecret = async <T>(): Promise<T | null> => {
-  const value = await defaultSecretStorage().getItem(PENDING_PAIRING_KEY);
+export const loadPendingSyncPairingSecret = async <T>(): Promise<T | null> => {
+  const value = await defaultSecretStorage().getItem(PENDING_SYNC_PAIRING_KEY);
   if (!value) return null;
   try {
     return JSON.parse(value) as T;
@@ -209,16 +201,16 @@ export const loadPendingPairingSecret = async <T>(): Promise<T | null> => {
   }
 };
 
-export const clearPendingPairingSecret = async (): Promise<void> => {
-  await defaultSecretStorage().removeItem(PENDING_PAIRING_KEY);
+export const clearPendingSyncPairingSecret = async (): Promise<void> => {
+  await defaultSecretStorage().removeItem(PENDING_SYNC_PAIRING_KEY);
 };
 
-export const savePendingV2PairingSecret = async <T>(value: T): Promise<void> => {
-  await defaultSecretStorage().setItem(PENDING_V2_PAIRING_KEY, JSON.stringify(value));
+export const savePendingSyncPairingApprovalSecret = async <T>(value: T): Promise<void> => {
+  await defaultSecretStorage().setItem(PENDING_SYNC_PAIRING_APPROVAL_KEY, JSON.stringify(value));
 };
 
-export const loadPendingV2PairingSecret = async <T>(): Promise<T | null> => {
-  const value = await defaultSecretStorage().getItem(PENDING_V2_PAIRING_KEY);
+export const loadPendingSyncPairingApprovalSecret = async <T>(): Promise<T | null> => {
+  const value = await defaultSecretStorage().getItem(PENDING_SYNC_PAIRING_APPROVAL_KEY);
   if (!value) return null;
   try {
     return JSON.parse(value) as T;
@@ -227,16 +219,16 @@ export const loadPendingV2PairingSecret = async <T>(): Promise<T | null> => {
   }
 };
 
-export const clearPendingV2PairingSecret = async (): Promise<void> => {
-  await defaultSecretStorage().removeItem(PENDING_V2_PAIRING_KEY);
+export const clearPendingSyncPairingApprovalSecret = async (): Promise<void> => {
+  await defaultSecretStorage().removeItem(PENDING_SYNC_PAIRING_APPROVAL_KEY);
 };
 
-export const savePendingV2PairingApprovalSecret = async <T>(value: T): Promise<void> => {
-  await defaultSecretStorage().setItem(PENDING_V2_PAIRING_APPROVAL_KEY, JSON.stringify(value));
+export const savePendingSyncDeviceKeyRotationSecret = async <T>(value: T): Promise<void> => {
+  await defaultSecretStorage().setItem(PENDING_SYNC_DEVICE_KEY_ROTATION_KEY, JSON.stringify(value));
 };
 
-export const loadPendingV2PairingApprovalSecret = async <T>(): Promise<T | null> => {
-  const value = await defaultSecretStorage().getItem(PENDING_V2_PAIRING_APPROVAL_KEY);
+export const loadPendingSyncDeviceKeyRotationSecret = async <T>(): Promise<T | null> => {
+  const value = await defaultSecretStorage().getItem(PENDING_SYNC_DEVICE_KEY_ROTATION_KEY);
   if (!value) return null;
   try {
     return JSON.parse(value) as T;
@@ -245,76 +237,8 @@ export const loadPendingV2PairingApprovalSecret = async <T>(): Promise<T | null>
   }
 };
 
-export const clearPendingV2PairingApprovalSecret = async (): Promise<void> => {
-  await defaultSecretStorage().removeItem(PENDING_V2_PAIRING_APPROVAL_KEY);
-};
-
-export const savePendingV2DeviceKeyRotationSecret = async <T>(value: T): Promise<void> => {
-  await defaultSecretStorage().setItem(PENDING_V2_DEVICE_KEY_ROTATION_KEY, JSON.stringify(value));
-};
-
-export const loadPendingV2DeviceKeyRotationSecret = async <T>(): Promise<T | null> => {
-  const value = await defaultSecretStorage().getItem(PENDING_V2_DEVICE_KEY_ROTATION_KEY);
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
-};
-
-export const clearPendingV2DeviceKeyRotationSecret = async (): Promise<void> => {
-  await defaultSecretStorage().removeItem(PENDING_V2_DEVICE_KEY_ROTATION_KEY);
-};
-
-export const savePendingDeviceKeyRotationSecret = async <T>(
-  value: T,
-  storage: SyncSecretStorage = defaultSecretStorage(),
-): Promise<void> => {
-  await storage.setItem(PENDING_DEVICE_KEY_ROTATION_KEY, JSON.stringify(value));
-};
-
-export const loadPendingDeviceKeyRotationSecret = async <T>(
-  storage: SyncSecretStorage = defaultSecretStorage(),
-): Promise<T | null> => {
-  const value = await storage.getItem(PENDING_DEVICE_KEY_ROTATION_KEY);
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
-};
-
-export const clearPendingDeviceKeyRotationSecret = async (
-  storage: SyncSecretStorage = defaultSecretStorage(),
-): Promise<void> => {
-  await storage.removeItem(PENDING_DEVICE_KEY_ROTATION_KEY);
-};
-
-export const savePendingPrimaryRecoverySecret = async <T>(
-  value: T,
-  storage: SyncSecretStorage = defaultSecretStorage(),
-): Promise<void> => {
-  await storage.setItem(PENDING_PRIMARY_RECOVERY_KEY, JSON.stringify(value));
-};
-
-export const loadPendingPrimaryRecoverySecret = async <T>(
-  storage: SyncSecretStorage = defaultSecretStorage(),
-): Promise<T | null> => {
-  const value = await storage.getItem(PENDING_PRIMARY_RECOVERY_KEY);
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
-};
-
-export const clearPendingPrimaryRecoverySecret = async (
-  storage: SyncSecretStorage = defaultSecretStorage(),
-): Promise<void> => {
-  await storage.removeItem(PENDING_PRIMARY_RECOVERY_KEY);
+export const clearPendingSyncDeviceKeyRotationSecret = async (): Promise<void> => {
+  await defaultSecretStorage().removeItem(PENDING_SYNC_DEVICE_KEY_ROTATION_KEY);
 };
 
 export const savePendingPrimaryAccountSetupSecret = async <T>(value: T): Promise<void> => {

@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { LocalDataStore } from '../../platform/storage';
 import { SyncError } from '../errors';
 import { PersistentOutboxRepository } from './PersistentOutboxRepository';
-import type { SyncOutboxOperationV2 } from './SyncOutboxOperationV2';
+import type { SyncOperation } from './SyncOperation';
 
 class MemoryStore implements LocalDataStore {
   readonly values = new Map<string, string>();
@@ -24,7 +24,7 @@ class MemoryStore implements LocalDataStore {
   }
 }
 
-const operation = (operationId: string, createdAt = 1): SyncOutboxOperationV2 => ({
+const operation = (operationId: string, createdAt = 1): SyncOperation => ({
   operationId,
   accountId: 'account-1',
   deviceId: 'device-1',
@@ -80,23 +80,38 @@ test('persists operations and recovers an expired lease after restart', async ()
 
 test('bootstrap can release every expired account lease without touching active leases', async () => {
   const repository = new PersistentOutboxRepository(new MemoryStore());
-  await repository.enqueue(operation('expired'));
-  await repository.enqueue(operation('active', 2));
-  await repository.claimNextRunnable({
-    accountId: 'account-1',
-    workerId: 'worker-a',
-    now: 10,
-    leaseDurationMs: 10,
-  });
-  await repository.claimNextRunnable({
-    accountId: 'account-1',
-    workerId: 'worker-b',
-    now: 10,
-    leaseDurationMs: 20,
+  await repository.enqueue({ ...operation('expired'), leaseOwner: 'worker-a', leaseExpiresAt: 20 });
+  await repository.enqueue({
+    ...operation('active', 2),
+    leaseOwner: 'worker-b',
+    leaseExpiresAt: 30,
   });
   assert.equal(await repository.releaseExpiredLeases('account-1', 20), 1);
   assert.equal((await repository.getById('expired'))?.leaseOwner, undefined);
   assert.equal((await repository.getById('active'))?.leaseOwner, 'worker-b');
+});
+
+test('a later operation cannot bypass the leased head of the account ledger', async () => {
+  const repository = new PersistentOutboxRepository(new MemoryStore());
+  await repository.enqueue(operation('first', 1));
+  await repository.enqueue(operation('second', 2));
+  await repository.claimNextRunnable({
+    accountId: 'account-1',
+    workerId: 'worker-a',
+    now: 10,
+    leaseDurationMs: 50,
+  });
+
+  assert.equal(
+    await repository.claimNextRunnable({
+      accountId: 'account-1',
+      workerId: 'worker-b',
+      now: 11,
+      leaseDurationMs: 50,
+    }),
+    null,
+  );
+  assert.equal((await repository.getById('second'))?.leaseOwner, undefined);
 });
 
 test('concurrent workers cannot claim the same operation', async () => {

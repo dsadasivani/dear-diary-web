@@ -1,8 +1,8 @@
-# Sync V2 and account identity
+# Loredays Sync and account identity
 
 Loredays uses Google only to establish a stable user identity and to authenticate with Supabase. It does not request Google Drive access or store encrypted collection objects in Drive.
 
-Sync V2 stores only encrypted operation, media, snapshot, recovery, and device-key packages in the configured object store. The Spring sync API owns account authorization, device registration, cursors, conflict-safe operation commits, pairing, primary recovery, key rotation, and revocation.
+Loredays Sync stores only encrypted operation, media, snapshot, recovery, and device-key packages in the configured object store. The Spring sync API owns account authorization, device registration, cursors, conflict-safe operation commits, pairing, primary recovery, key rotation, and revocation.
 
 The Android phone is the primary device. Browser companions are approved with an encrypted key package. Removing a companion from the primary rotates the account key. A browser may unlink itself with a device-private-key signature; the server revokes only that matching companion and the browser destroys its local cache and keys.
 

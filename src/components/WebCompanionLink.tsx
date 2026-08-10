@@ -16,11 +16,11 @@ import mobileAppPreview from '../../tests/e2e/visual.spec.ts-snapshots/home-ligh
 import { diaryRepository } from '../repositories';
 import type { LocalSyncAccountState } from '../types';
 import {
-  completeSyncV2CompanionPairing,
-  getPendingSyncV2CompanionPairing,
-  requestSyncV2CompanionPairing,
-} from '../sync/v2/v2CompanionPairing';
-import type { SyncV2Pairing } from '../sync/v2/api/SyncV2ApiTypes';
+  completeSyncCompanionPairing,
+  getPendingSyncCompanionPairing,
+  requestSyncCompanionPairing,
+} from '../sync/core/companionPairing';
+import type { SyncPairing } from '../sync/core/api/SyncApiTypes';
 import {
   restoreWebGoogleSyncSession,
   startWebGoogleSyncSignIn,
@@ -29,7 +29,7 @@ import {
 import { BRAND } from '../config/brand';
 
 interface PendingWebCompanion {
-  pairing: Awaited<ReturnType<typeof requestSyncV2CompanionPairing>>;
+  pairing: Awaited<ReturnType<typeof requestSyncCompanionPairing>>;
   auth: WebGoogleSyncSession;
 }
 
@@ -38,14 +38,14 @@ interface WebCompanionLinkProps {
 }
 
 let pairingInitializationPromise: Promise<PendingWebCompanion | null> | null = null;
-let pairingCompletionPromise: ReturnType<typeof completeSyncV2CompanionPairing> | null = null;
+let pairingCompletionPromise: ReturnType<typeof completeSyncCompanionPairing> | null = null;
 const APPROVAL_POLL_INTERVAL_MS = 1_000;
 
 export const ANDROID_APP_URL =
   import.meta.env.VITE_ANDROID_APP_URL?.trim() ||
   'https://play.google.com/store/apps/details?id=com.deardiary.app';
 
-export const canCompleteWebCompanionPairing = (status: SyncV2Pairing['status']): boolean =>
+export const canCompleteWebCompanionPairing = (status: SyncPairing['status']): boolean =>
   status === 'KEY_PACKAGE_AVAILABLE' || status === 'COMPLETED';
 
 const initializePairing = (): Promise<PendingWebCompanion | null> => {
@@ -53,7 +53,7 @@ const initializePairing = (): Promise<PendingWebCompanion | null> => {
     pairingInitializationPromise = (async () => {
       const auth = await restoreWebGoogleSyncSession();
       if (!auth) return null;
-      const stored = await getPendingSyncV2CompanionPairing(auth).catch(() => null);
+      const stored = await getPendingSyncCompanionPairing(auth).catch(() => null);
       if (stored && new Date(stored.pairing.expiresAt).getTime() > Date.now()) {
         return {
           pairing: {
@@ -65,7 +65,7 @@ const initializePairing = (): Promise<PendingWebCompanion | null> => {
           auth,
         };
       }
-      return { pairing: await requestSyncV2CompanionPairing(auth), auth };
+      return { pairing: await requestSyncCompanionPairing(auth), auth };
     })().catch((error) => {
       pairingInitializationPromise = null;
       throw error;
@@ -135,14 +135,14 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
       completingRef.current = true;
       try {
         const existingLinkedState = await diaryRepository.getLocalSyncAccountState();
-        if (existingLinkedState?.syncProtocolVersion === 2) {
+        if (existingLinkedState) {
           pairingInitializationPromise = null;
           setIsRestoring(true);
           setStatus('Companion approved. Opening your encrypted memories...');
           await onLinked(existingLinkedState);
           return;
         }
-        const details = await getPendingSyncV2CompanionPairing(context.auth);
+        const details = await getPendingSyncCompanionPairing(context.auth);
         if (
           !details ||
           details.pairing.status === 'EXPIRED' ||
@@ -159,7 +159,7 @@ export default function WebCompanionLink({ onLinked }: WebCompanionLinkProps) {
           setStatus('Companion approved. Restoring your encrypted memories...');
         }
         if (!pairingCompletionPromise) {
-          pairingCompletionPromise = completeSyncV2CompanionPairing(context.auth).finally(() => {
+          pairingCompletionPromise = completeSyncCompanionPairing(context.auth).finally(() => {
             pairingCompletionPromise = null;
           });
         }

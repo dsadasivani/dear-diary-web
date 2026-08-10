@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/sync")
+@RequestMapping("/api/sync")
 public class BootstrapController {
     private final BootstrapService bootstraps;
 

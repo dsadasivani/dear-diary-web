@@ -44,7 +44,8 @@ export const mapHttpError = (
     return new SyncError({ code: 'SERVER_UNAVAILABLE', retryable: true, cause: error });
   return new SyncError({
     code: fallbackCode,
-    safetyRelevant: fallbackCode === 'UNKNOWN',
+    retryable: fallbackCode === 'UNKNOWN',
+    safetyRelevant: false,
     cause: error,
   });
 };

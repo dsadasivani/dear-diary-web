@@ -1,4 +1,4 @@
-import { SyncV2ApiClient, type SyncV2AccessTokenProvider } from './v2';
+import { SyncApiClient, type SyncAccessTokenProvider } from './core';
 import {
   NOOP_TELEMETRY,
   PrivacySafeTelemetry,
@@ -32,13 +32,13 @@ export const getConfiguredSupabaseUrl = (): string => readViteEnv('VITE_SUPABASE
 
 export const getConfiguredSupabaseAnonKey = (): string => readViteEnv('VITE_SUPABASE_ANON_KEY');
 
-export const getConfiguredSyncV2ApiUrl = (): string => readViteEnv('VITE_SYNC_V2_API_URL');
+export const getConfiguredSyncApiUrl = (): string => readViteEnv('VITE_SYNC_API_URL');
 
-export const createConfiguredSyncV2ApiClient = (
-  accessToken: SyncV2AccessTokenProvider,
-): SyncV2ApiClient =>
-  new SyncV2ApiClient({
-    baseUrl: getConfiguredSyncV2ApiUrl(),
+export const createConfiguredSyncApiClient = (
+  accessToken: SyncAccessTokenProvider,
+): SyncApiClient =>
+  new SyncApiClient({
+    baseUrl: getConfiguredSyncApiUrl(),
     accessToken,
   });
 

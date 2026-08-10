@@ -60,7 +60,7 @@ for (const variable of ['CAPACITOR_WEBVIEW_DEBUG', 'CAPACITOR_DEBUG', 'CAPACITOR
 if (environment.VITE_DISABLE_ENCRYPTION === 'true') failures.push('Encryption cannot be disabled.');
 if (environment.VITE_USE_MOCK_AUTH === 'true')
   failures.push('Mock authentication cannot be enabled.');
-const backendUrl = environment.VITE_SYNC_V2_API_URL || environment.VITE_BACKEND_URL;
+const backendUrl = environment.VITE_SYNC_API_URL || environment.VITE_BACKEND_URL;
 if (
   appEnvironment !== 'development' &&
   /localhost|127\.0\.0\.1|\.local(?:\/|$)/i.test(backendUrl || '')
@@ -77,7 +77,7 @@ if (releaseBuild) {
   for (const variable of [
     'VITE_SUPABASE_URL',
     'VITE_SUPABASE_ANON_KEY',
-    'VITE_SYNC_V2_API_URL',
+    'VITE_SYNC_API_URL',
     'VITE_MINIMUM_PROTOCOL_VERSION',
     'VITE_TELEMETRY_RELEASE_VERSION',
     'VITE_GRAFANA_FARO_URL',

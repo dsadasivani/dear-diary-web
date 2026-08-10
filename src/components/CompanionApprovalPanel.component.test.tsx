@@ -5,12 +5,12 @@ import CompanionApprovalPanel from './CompanionApprovalPanel';
 const mocks = vi.hoisted(() => ({
   getLocalSyncAccountState: vi.fn(),
   pullPending: vi.fn(),
-  listPendingSyncV2Pairings: vi.fn(),
-  approveSyncV2CompanionPairing: vi.fn(),
-  listSyncV2Devices: vi.fn(),
-  resumePendingSyncV2DeviceRevocation: vi.fn(),
+  listPendingSyncPairings: vi.fn(),
+  approveSyncCompanionPairing: vi.fn(),
+  listSyncDevices: vi.fn(),
+  resumePendingSyncDeviceRevocation: vi.fn(),
   hasPrimaryRecoveryCredential: vi.fn(),
-  revokeSyncV2Device: vi.fn(),
+  revokeSyncDevice: vi.fn(),
 }));
 
 vi.mock('../repositories', () => ({
@@ -22,14 +22,14 @@ vi.mock('../repositories', () => ({
   },
 }));
 
-vi.mock('../sync/v2/v2CompanionPairing', () => ({
-  listPendingSyncV2Pairings: mocks.listPendingSyncV2Pairings,
-  approveSyncV2CompanionPairing: mocks.approveSyncV2CompanionPairing,
+vi.mock('../sync/core/companionPairing', () => ({
+  listPendingSyncPairings: mocks.listPendingSyncPairings,
+  approveSyncCompanionPairing: mocks.approveSyncCompanionPairing,
 }));
-vi.mock('../sync/v2/v2DeviceManagement', () => ({
-  listSyncV2Devices: mocks.listSyncV2Devices,
-  resumePendingSyncV2DeviceRevocation: mocks.resumePendingSyncV2DeviceRevocation,
-  revokeSyncV2Device: mocks.revokeSyncV2Device,
+vi.mock('../sync/core/deviceManagement', () => ({
+  listSyncDevices: mocks.listSyncDevices,
+  resumePendingSyncDeviceRevocation: mocks.resumePendingSyncDeviceRevocation,
+  revokeSyncDevice: mocks.revokeSyncDevice,
   hasPrimaryRecoveryCredential: mocks.hasPrimaryRecoveryCredential,
   enrollPrimaryRecoveryCredential: vi.fn(),
 }));
@@ -43,12 +43,12 @@ describe('CompanionApprovalPanel', () => {
       deviceRole: 'primary_mobile',
       syncProtocolVersion: 2,
     });
-    mocks.listPendingSyncV2Pairings.mockResolvedValue([]);
-    mocks.listSyncV2Devices.mockResolvedValue([]);
-    mocks.resumePendingSyncV2DeviceRevocation.mockResolvedValue('none');
+    mocks.listPendingSyncPairings.mockResolvedValue([]);
+    mocks.listSyncDevices.mockResolvedValue([]);
+    mocks.resumePendingSyncDeviceRevocation.mockResolvedValue('none');
     mocks.hasPrimaryRecoveryCredential.mockResolvedValue(true);
     mocks.pullPending.mockResolvedValue(undefined);
-    mocks.revokeSyncV2Device.mockResolvedValue(undefined);
+    mocks.revokeSyncDevice.mockResolvedValue(undefined);
   });
 
   it('shows active companions returned by device management', async () => {
@@ -58,7 +58,7 @@ describe('CompanionApprovalPanel', () => {
       deviceRole: 'primary_mobile',
       syncProtocolVersion: 2,
     });
-    mocks.listSyncV2Devices.mockResolvedValue([
+    mocks.listSyncDevices.mockResolvedValue([
       {
         deviceId: 'web-v2',
         deviceRole: 'COMPANION',
@@ -75,7 +75,7 @@ describe('CompanionApprovalPanel', () => {
 
     expect(await screen.findByText('Linked companions')).toBeInTheDocument();
     expect(screen.getByTitle('Remove device')).toBeInTheDocument();
-    expect(mocks.listSyncV2Devices).toHaveBeenCalledWith('primary-v2');
+    expect(mocks.listSyncDevices).toHaveBeenCalledWith('primary-v2');
     view.unmount();
   });
 
@@ -86,7 +86,7 @@ describe('CompanionApprovalPanel', () => {
       deviceRole: 'primary_mobile',
       syncProtocolVersion: 2,
     });
-    mocks.listPendingSyncV2Pairings.mockResolvedValue([
+    mocks.listPendingSyncPairings.mockResolvedValue([
       {
         accountId: 'v2-account',
         pairingId: 'pairing-v2',
@@ -112,7 +112,7 @@ describe('CompanionApprovalPanel', () => {
 
     expect(await screen.findByText('Web browser')).toBeInTheDocument();
     expect(screen.getByText('web')).toBeInTheDocument();
-    expect(mocks.listPendingSyncV2Pairings).toHaveBeenCalledWith('primary-v2');
+    expect(mocks.listPendingSyncPairings).toHaveBeenCalledWith('primary-v2');
     view.unmount();
   });
 
@@ -136,7 +136,7 @@ describe('CompanionApprovalPanel', () => {
       requestedAt,
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
-    mocks.listPendingSyncV2Pairings.mockResolvedValue([
+    mocks.listPendingSyncPairings.mockResolvedValue([
       pairing('older', '2026-08-09T10:00:00Z'),
       pairing('newer', '2026-08-09T10:01:00Z'),
     ]);
@@ -148,7 +148,7 @@ describe('CompanionApprovalPanel', () => {
     fireEvent.change(codeInput, { target: { value: '12345678' } });
     fireEvent.click(screen.getByTitle('Approve companion'));
     await waitFor(() =>
-      expect(mocks.approveSyncV2CompanionPairing).toHaveBeenCalledWith(
+      expect(mocks.approveSyncCompanionPairing).toHaveBeenCalledWith(
         expect.objectContaining({ pairingId: 'newer' }),
         '12345678',
       ),
@@ -163,10 +163,10 @@ describe('CompanionApprovalPanel', () => {
 
   it('dismisses confirmation immediately and completes device removal in the background', async () => {
     let finishRevocation!: () => void;
-    mocks.revokeSyncV2Device.mockImplementation(
+    mocks.revokeSyncDevice.mockImplementation(
       () => new Promise<void>((resolve) => (finishRevocation = resolve)),
     );
-    mocks.listSyncV2Devices.mockResolvedValue([
+    mocks.listSyncDevices.mockResolvedValue([
       {
         deviceId: 'web-v2',
         deviceRole: 'COMPANION',
@@ -188,15 +188,15 @@ describe('CompanionApprovalPanel', () => {
     expect(
       screen.getByText('Removing this device securely. You can continue using the app.'),
     ).toBeInTheDocument();
-    await waitFor(() => expect(mocks.revokeSyncV2Device).toHaveBeenCalledWith('web-v2'));
+    await waitFor(() => expect(mocks.revokeSyncDevice).toHaveBeenCalledWith('web-v2'));
 
     finishRevocation();
     await screen.findByText('Device removed and the encrypted account key was rotated.');
   });
 
   it('makes a failed background removal retryable', async () => {
-    mocks.revokeSyncV2Device.mockRejectedValue(new Error('Network unavailable.'));
-    mocks.listSyncV2Devices.mockResolvedValue([
+    mocks.revokeSyncDevice.mockRejectedValue(new Error('Network unavailable.'));
+    mocks.listSyncDevices.mockResolvedValue([
       {
         deviceId: 'web-v2',
         deviceRole: 'COMPANION',

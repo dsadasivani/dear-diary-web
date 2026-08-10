@@ -38,7 +38,7 @@ class SchemaMigrationIntegrationTest {
 
         var migration = flyway.migrate();
 
-        assertThat(migration.migrationsExecuted).isEqualTo(31);
+        assertThat(migration.migrationsExecuted).isEqualTo(30);
         try (Connection connection = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              Statement statement = connection.createStatement()) {
@@ -50,7 +50,37 @@ class SchemaMigrationIntegrationTest {
                 .isTrue();
             assertThat(queryLong(statement,
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'sync_%'"))
-                .isEqualTo(24);
+                .isEqualTo(23);
+            assertThat(queryLong(statement, """
+                SELECT count(*) FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'sync_migrations'
+                """))
+                .isZero();
+            assertThat(queryLong(statement, """
+                SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'sync_accounts'
+                  AND column_name = 'v1_mode'
+                """))
+                .isZero();
+            assertThat(queryLong(statement, """
+                SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'sync_protocol_config'
+                  AND column_name IN (
+                      'sync_v2_rollout_percentage',
+                      'rollout_salt_version',
+                      'atomic_replay_enabled'
+                  )
+                """))
+                .isZero();
+            assertThat(queryLong(statement, """
+                SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'sync_recovery_state'
+                  AND column_name = 'expires_at'
+                """))
+                .isZero();
             assertThat(queryLong(statement,
                 "SELECT maximum_storage_bytes FROM sync_plans WHERE plan_id = 'default'"))
                 .isEqualTo(524_288_000L);

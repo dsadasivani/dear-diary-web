@@ -6,7 +6,7 @@ import { LocalDiaryRepository } from './localDiaryRepository';
 import { createSyncingDiaryRepository } from './syncingDiaryRepository';
 import { setSyncTelemetrySink, type SyncTelemetryEvent } from '../sync/syncTelemetry';
 import { createSyncDomainEvent } from '../sync/domainEvents';
-import type { Diary, UserProfile } from '../types';
+import type { Diary, SyncRecordType, UserProfile } from '../types';
 
 class MemoryDataStore implements LocalDataStore {
   private values = new Map<string, string>();
@@ -42,7 +42,7 @@ test('syncing repository saves locally and requests background flush without awa
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 2,
+    appliedSequence: 2,
     linkedAt: 1,
   });
   let requestedFlush = 0;
@@ -64,7 +64,7 @@ test('syncing repository saves locally and requests background flush without awa
   });
 
   assert.equal((await localRepository.getNote(note.id))?.title, 'Offline note');
-  assert.equal((await localRepository.listSyncOutboxOperations(['prepared'])).length, 1);
+  assert.equal((await localRepository.listSyncOutboxOperations(['PENDING'])).length, 1);
   assert.equal(requestedFlush, 1);
 });
 
@@ -79,7 +79,7 @@ test('entry autosave waits for remote idle publication and Done releases it imme
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 0,
+    appliedSequence: 0,
     linkedAt: 1,
   });
   let requestedFlushes = 0;
@@ -100,7 +100,7 @@ test('entry autosave waits for remote idle publication and Done releases it imme
     tags: [],
     photoUris: [],
   });
-  const pending = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+  const pending = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
     string,
     { nextAttemptAt: number }
   >;
@@ -108,7 +108,7 @@ test('entry autosave waits for remote idle publication and Done releases it imme
   assert.ok(Object.values(pending)[0].nextAttemptAt >= before + 14_000);
 
   await repository.publishPendingEntryDraft(entry.id);
-  const released = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+  const released = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
     string,
     { nextAttemptAt: number }
   >;
@@ -126,7 +126,7 @@ test('syncing repository keeps native profile media locally but excludes it from
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 0,
+    appliedSequence: 0,
     linkedAt: 1,
   });
   const repository = createSyncingDiaryRepository(localRepository, {
@@ -142,8 +142,8 @@ test('syncing repository keeps native profile media locally but excludes it from
   await repository.saveUserProfile(profile);
 
   assert.equal((await localRepository.getUserProfile()).avatarUri, nativeAvatar);
-  const [operation] = await localRepository.listSyncOutboxOperations(['prepared']);
-  assert.equal((operation.payload as UserProfile).avatarUri, undefined);
+  const [operation] = await localRepository.listSyncOutboxOperations(['PENDING']);
+  assert.equal((operation.sourceCanonicalPayload as UserProfile).avatarUri, undefined);
 });
 
 test('account-wide reset tombstones local and archived work before creating one blank journal', async () => {
@@ -174,7 +174,7 @@ test('account-wide reset tombstones local and archived work before creating one 
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 8,
+    appliedSequence: 8,
     linkedAt: 1,
   });
   await store.setItem(
@@ -197,7 +197,7 @@ test('account-wide reset tombstones local and archived work before creating one 
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 8,
+    appliedSequence: 8,
     linkedAt: 1,
   });
   let pulls = 0;
@@ -224,8 +224,8 @@ test('account-wide reset tombstones local and archived work before creating one 
 
   const operations = await localRepository.listSyncOutboxOperations();
   const deleted = operations
-    .filter((operation) => operation.operation === 'delete')
-    .map((operation) => `${operation.recordType}:${operation.recordId}`)
+    .filter((operation) => operation.operationType === 'DELETE')
+    .map((operation) => `${operation.recordType.toLowerCase()}:${operation.recordId}`)
     .sort();
   assert.deepEqual(
     deleted,
@@ -242,16 +242,16 @@ test('account-wide reset tombstones local and archived work before creating one 
   );
   assert.equal(
     operations.some(
-      (operation) => operation.recordType === 'profile' && operation.operation === 'delete',
+      (operation) => operation.recordType === 'PROFILE' && operation.operationType === 'DELETE',
     ),
     false,
   );
   assert.equal(
     operations.some(
       (operation) =>
-        operation.recordType === 'diary' &&
+        operation.recordType === 'DIARY' &&
         operation.recordId === remainingDiaries[0].id &&
-        operation.operation === 'upsert',
+        operation.operationType === 'UPSERT',
     ),
     true,
   );
@@ -264,11 +264,14 @@ test('account-wide reset tombstones local and archived work before creating one 
         accountId: operation.accountId,
         deviceId: operation.deviceId,
         eventId: operation.operationId,
-        recordType: operation.recordType,
+        recordType: operation.recordType.toLowerCase() as SyncRecordType,
         recordId: operation.recordId,
-        operation: operation.operation || 'upsert',
+        operation: operation.operationType === 'DELETE' ? 'delete' : 'upsert',
         baseRecordVersion: operation.baseRecordVersion || 0,
-        payload: operation.operation === 'delete' ? null : (operation.payload as Diary),
+        payload:
+          operation.operationType === 'DELETE'
+            ? null
+            : (operation.sourceCanonicalPayload as Diary),
       }),
       sequence,
     );
@@ -291,7 +294,7 @@ test('expected background flush failures are handled at the repository call site
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 0,
+    appliedSequence: 0,
     linkedAt: 1,
   });
   const events: SyncTelemetryEvent[] = [];

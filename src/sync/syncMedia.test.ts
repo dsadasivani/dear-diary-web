@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  createStableSyncMediaReference,
   createSyncMediaReference,
   decodeSyncMediaPayload,
   decodeSyncThumbnailPayload,
@@ -28,10 +27,8 @@ test('round-trips binary media payloads without base64 expansion', () => {
 });
 
 test('round-trips portable media references', () => {
-  const reference = createSyncMediaReference(17, 'media-1');
-  assert.deepEqual(parseSyncMediaReference(reference), { sequence: 17, mediaId: 'media-1' });
-  const stableReference = createStableSyncMediaReference('media-2', 'drive_file-2');
-  assert.deepEqual(parseSyncMediaReference(stableReference), {
+  const reference = createSyncMediaReference('media-2', 'drive_file-2');
+  assert.deepEqual(parseSyncMediaReference(reference), {
     mediaId: 'media-2',
     driveFileId: 'drive_file-2',
   });
@@ -60,7 +57,7 @@ test('removes device-local media while retaining portable references', () => {
   const nativeAvatar =
     'http://localhost/_capacitor_file_/data/user/0/com.deardiary.app/files/media/avatar.png';
   assert.equal(isDeviceLocalMediaUri(nativeAvatar), true);
-  assert.equal(isDeviceLocalMediaUri('ddmedia:v2:media-1:object-1'), false);
+  assert.equal(isDeviceLocalMediaUri('ddmedia:media-1:object-1'), false);
 
   assert.equal(
     toPortableUserProfile({
@@ -98,7 +95,7 @@ test('removes device-local media while retaining portable references', () => {
     moodName: 'Calm',
     moodEmoji: '',
     tags: [],
-    photoUris: [nativeAvatar, 'ddmedia:v2:media-1:object-1'],
+    photoUris: [nativeAvatar, 'ddmedia:media-1:object-1'],
     photoCount: 2,
     wordCount: 0,
     audioUri: 'content://recording/1',
@@ -106,7 +103,7 @@ test('removes device-local media while retaining portable references', () => {
     updatedAt: 1,
     blocks: [{ id: 'block-1', time: '10:00', body: '', audioUri: 'blob:local-audio' }],
   });
-  assert.deepEqual(entry.photoUris, ['ddmedia:v2:media-1:object-1']);
+  assert.deepEqual(entry.photoUris, ['ddmedia:media-1:object-1']);
   assert.equal(entry.photoCount, 1);
   assert.equal(entry.audioUri, undefined);
   assert.equal(entry.blocks?.[0].audioUri, undefined);

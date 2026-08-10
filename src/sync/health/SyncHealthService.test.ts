@@ -42,7 +42,7 @@ test('preserves typed failures and records non-destructive warning health', asyn
   ]);
 });
 
-test('converts unexpected failures into a persistent safety stop', async () => {
+test('converts unexpected failures into retryable warning health', async () => {
   const { patches, store } = recorder();
   const service = new SyncHealthService(store, () => 30);
 
@@ -51,10 +51,13 @@ test('converts unexpected failures into a persistent safety stop', async () => {
       throw new Error('unexpected external detail');
     }),
     (error: unknown) =>
-      error instanceof SyncError && error.code === 'UNKNOWN' && error.safetyRelevant,
+      error instanceof SyncError &&
+      error.code === 'UNKNOWN' &&
+      error.retryable &&
+      !error.safetyRelevant,
   );
   assert.deepEqual(patches, [
     { lastPushAttemptAt: 30 },
-    { lastErrorCode: 'UNKNOWN', lastErrorAt: 30, integrityState: 'SAFETY_STOP' },
+    { lastErrorCode: 'UNKNOWN', lastErrorAt: 30, integrityState: 'WARNING' },
   ]);
 });

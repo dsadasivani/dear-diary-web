@@ -41,7 +41,7 @@ import {
   signOutGoogleAuth,
   startGoogleAuth,
 } from '../utils/googleAuth';
-import { diaryRepository, syncV2Application } from '../repositories';
+import { diaryRepository, syncApplication } from '../repositories';
 import {
   applyThemePreference,
   getLocalThemePreference,
@@ -404,7 +404,7 @@ export default function LockScreen({
         googleIdToken: session.idToken,
       });
       setSuccessMsg('Checking for your encrypted account...');
-      const hasExistingAccount = await syncV2Application.hasExistingPrimaryAccount(supabaseSession);
+      const hasExistingAccount = await syncApplication.hasExistingPrimaryAccount(supabaseSession);
       setSyncSetupSelection({
         googleSession: session,
         supabaseSession,
@@ -458,8 +458,8 @@ export default function LockScreen({
         isRecovery ? 'Preparing account recovery...' : 'Preparing encrypted account...',
       );
       const completeAccountSetup = isRecovery
-        ? syncV2Application.recoverPrimaryAccount.bind(syncV2Application)
-        : syncV2Application.createPrimaryAccount.bind(syncV2Application);
+        ? syncApplication.recoverPrimaryAccount.bind(syncApplication)
+        : syncApplication.createPrimaryAccount.bind(syncApplication);
       await completeAccountSetup({
         googleSession: syncSetupSelection.googleSession,
         supabaseSession: syncSetupSelection.supabaseSession,

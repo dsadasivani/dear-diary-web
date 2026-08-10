@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/sync/operations")
+@RequestMapping("/api/sync/operations")
 public class OperationController {
     private final OperationInitiationService initiationService;
     private final OperationCommitService commitService;

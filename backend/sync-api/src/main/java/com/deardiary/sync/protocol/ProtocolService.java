@@ -26,9 +26,8 @@ public class ProtocolService {
                    garbage_collection_enabled, key_rotation_enabled,
                    media_upload_enabled, archive_hydration_enabled, device_revocation_enabled,
                    primary_recovery_enabled, companion_pairing_enabled,
-                   minimum_supported_app_version, sync_v2_rollout_percentage,
-                   rollout_salt_version, emergency_mode,
-                   atomic_replay_enabled, rolling_snapshots_enabled,
+                   minimum_supported_app_version, emergency_mode,
+                   rolling_snapshots_enabled,
                    bootstrap_manifest_enabled, retention_deletion_enabled,
                    bootstrap_soft_tail, bootstrap_hard_tail,
                    maximum_snapshot_age_days, replay_batch_size,
@@ -36,23 +35,23 @@ public class ProtocolService {
             FROM sync_protocol_config WHERE config_id = 1
             """, (rs, row) -> new ProtocolResponse(
                 rs.getInt(1), rs.getInt(2), rs.getInt(3), rs.getInt(4), rs.getInt(5),
-                rs.getLong(6), rs.getLong(7), rs.getLong(8), rs.getString(20), rs.getInt(21), rs.getInt(22), rs.getBoolean(23),
+                rs.getLong(6), rs.getLong(7), rs.getLong(8), rs.getString(20), rs.getBoolean(21),
                 new ProtocolResponse.FeatureFlags(
-                    rs.getBoolean(9) && !rs.getBoolean(23) && !switches.getOrDefault("SYNC_WRITES", true),
+                    rs.getBoolean(9) && !rs.getBoolean(21) && !switches.getOrDefault("SYNC_WRITES", true),
                     rs.getBoolean(10) && !switches.getOrDefault("REMOTE_PULL", true),
-                    rs.getBoolean(11) && !rs.getBoolean(23) && !switches.getOrDefault("REALTIME", true),
-                    rs.getBoolean(12) && !rs.getBoolean(23) && !switches.getOrDefault("SNAPSHOT_CREATION", true),
-                    rs.getBoolean(13) && !rs.getBoolean(23) && !switches.getOrDefault("GARBAGE_COLLECTION", true),
-                    rs.getBoolean(15) && !rs.getBoolean(23) && !switches.getOrDefault("MEDIA_UPLOAD", true),
-                    rs.getBoolean(16) && !rs.getBoolean(23) && !switches.getOrDefault("ARCHIVE_HYDRATION", true),
-                    rs.getBoolean(14) && !rs.getBoolean(23) && !switches.getOrDefault("KEY_ROTATION", true),
-                    rs.getBoolean(17) && !rs.getBoolean(23) && !switches.getOrDefault("DEVICE_REVOCATION", true),
-                    rs.getBoolean(18) && !rs.getBoolean(23) && !switches.getOrDefault("PRIMARY_RECOVERY", true),
-                    rs.getBoolean(19) && !rs.getBoolean(23) && !switches.getOrDefault("COMPANION_PAIRING", true)
+                    rs.getBoolean(11) && !rs.getBoolean(21) && !switches.getOrDefault("REALTIME", true),
+                    rs.getBoolean(12) && !rs.getBoolean(21) && !switches.getOrDefault("SNAPSHOT_CREATION", true),
+                    rs.getBoolean(13) && !rs.getBoolean(21) && !switches.getOrDefault("GARBAGE_COLLECTION", true),
+                    rs.getBoolean(15) && !rs.getBoolean(21) && !switches.getOrDefault("MEDIA_UPLOAD", true),
+                    rs.getBoolean(16) && !rs.getBoolean(21) && !switches.getOrDefault("ARCHIVE_HYDRATION", true),
+                    rs.getBoolean(14) && !rs.getBoolean(21) && !switches.getOrDefault("KEY_ROTATION", true),
+                    rs.getBoolean(17) && !rs.getBoolean(21) && !switches.getOrDefault("DEVICE_REVOCATION", true),
+                    rs.getBoolean(18) && !rs.getBoolean(21) && !switches.getOrDefault("PRIMARY_RECOVERY", true),
+                    rs.getBoolean(19) && !rs.getBoolean(21) && !switches.getOrDefault("COMPANION_PAIRING", true)
                 ),
                 new ProtocolResponse.BootstrapControls(
-                    rs.getBoolean(24), rs.getBoolean(25), rs.getBoolean(26), rs.getBoolean(27),
-                    rs.getInt(28), rs.getInt(29), rs.getInt(30), rs.getInt(31), rs.getInt(32)
+                    rs.getBoolean(22), rs.getBoolean(23), rs.getBoolean(24),
+                    rs.getInt(25), rs.getInt(26), rs.getInt(27), rs.getInt(28), rs.getInt(29)
                 )));
     }
 }

@@ -5,7 +5,7 @@ import { isNativePlatform } from '../platform';
 import { isDeviceLocalMediaUri } from './portableMedia';
 
 /**
- * The application now has one sync runtime: Sync V2.  This facade remains so
+ * The application now has one sync runtime: Loredays Sync.  This facade remains so
  * repositories and screens do not need to know when that runtime is mounted.
  */
 export interface SyncRuntimeDelegate {
@@ -157,11 +157,7 @@ export class EventSyncEngine {
     if (!isNativePlatform() && isDeviceLocalMediaUri(reference)) return '';
     const parsed = parseSyncMediaReference(reference);
     if (!parsed) return reference;
-    const pointer = parsed.sequence
-      ? await this.repository.getSyncMediaPointer(parsed.sequence)
-      : parsed.driveFileId
-        ? await this.repository.getSyncMediaPointerByDriveFileId(parsed.driveFileId)
-        : await this.repository.getSyncMediaPointerByMediaId(parsed.mediaId);
+    const pointer = await this.repository.getSyncMediaPointerByMediaId(parsed.mediaId);
     if (pointer?.localUri) return pointer.localUri;
     return this.runtimeDelegate?.hydrateMediaReference?.(reference) || reference;
   }

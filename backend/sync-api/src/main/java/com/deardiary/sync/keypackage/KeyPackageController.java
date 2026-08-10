@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/sync/key-packages")
+@RequestMapping("/api/sync/key-packages")
 public class KeyPackageController {
     private final KeyPackageService packages;
     public KeyPackageController(KeyPackageService packages) { this.packages = packages; }

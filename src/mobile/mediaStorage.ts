@@ -34,7 +34,7 @@ export const persistMediaDataUri = async (
   const path = `media/${kind}-${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
 
   try {
-    const stored = await fileStorageService.writeBase64(path, base64FromDataUri(dataUri));
+    const stored = await fileStorageService.writeBase64Atomic(path, base64FromDataUri(dataUri));
     return Capacitor.convertFileSrc(stored.uri);
   } catch (error) {
     console.warn(`Failed to persist ${kind} media to native filesystem:`, error);
@@ -43,12 +43,12 @@ export const persistMediaDataUri = async (
         new CustomEvent('deardiary-media-storage-warning', {
           detail: {
             kind,
-            message: `${kind} storage failed; keeping an inline copy until storage is available.`,
+            message: `${kind} storage failed. Nothing was attached; please try again.`,
           },
         }),
       );
     }
-    return dataUri;
+    throw new Error(`Unable to save ${kind} securely on this device.`, { cause: error });
   }
 };
 

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SyncError } from '../errors';
 import { scheduleOutboxFailure, stateForSyncError } from './retryScheduling';
-import type { SyncOutboxOperationV2 } from './SyncOutboxOperationV2';
+import type { SyncOperation } from './SyncOperation';
 
-const operation: SyncOutboxOperationV2 = {
+const operation: SyncOperation = {
   operationId: 'op',
   accountId: 'account',
   deviceId: 'device',

@@ -27,24 +27,24 @@ interface ReferencedMedia {
   names: Set<string>;
   pointerByName: Map<string, SyncMediaPointer>;
   pointers: SyncMediaPointer[];
-  referencedSequences: Set<number>;
   referencedMediaIds: Set<string>;
-  referencedDriveFileIds: Set<string>;
+  referencedObjectIds: Set<string>;
 }
+
+const objectIdFromKey = (objectKey: string): string =>
+  objectKey.slice(objectKey.lastIndexOf('/') + 1);
 
 const collectReferencedNames = async (): Promise<ReferencedMedia> => {
   const snapshot = await diaryRepository.exportSnapshot();
   const names = new Set<string>();
-  const referencedSequences = new Set<number>();
   const referencedMediaIds = new Set<string>();
-  const referencedDriveFileIds = new Set<string>();
+  const referencedObjectIds = new Set<string>();
   const pointerByName = new Map<string, SyncMediaPointer>();
   const add = (uri: string | undefined) => {
     const reference = parseSyncMediaReference(uri);
     if (reference) {
-      if (reference.sequence) referencedSequences.add(reference.sequence);
       referencedMediaIds.add(reference.mediaId);
-      if (reference.driveFileId) referencedDriveFileIds.add(reference.driveFileId);
+      referencedObjectIds.add(reference.driveFileId);
       return;
     }
     const name = basenameFromUri(uri);
@@ -62,9 +62,8 @@ const collectReferencedNames = async (): Promise<ReferencedMedia> => {
     if (name) {
       pointerByName.set(name, pointer);
       if (
-        referencedSequences.has(pointer.sequence) ||
         referencedMediaIds.has(pointer.mediaId) ||
-        referencedDriveFileIds.has(pointer.driveFileId)
+        referencedObjectIds.has(objectIdFromKey(pointer.driveFileId))
       ) {
         names.add(name);
       }
@@ -74,9 +73,8 @@ const collectReferencedNames = async (): Promise<ReferencedMedia> => {
     names,
     pointerByName,
     pointers: Object.values(snapshot.syncMediaPointers || {}),
-    referencedSequences,
     referencedMediaIds,
-    referencedDriveFileIds,
+    referencedObjectIds,
   };
 };
 
@@ -112,9 +110,8 @@ export const pruneOrphanedMedia = async (
   for (const pointer of referenced.pointers) {
     if (
       pointer.localUri &&
-      !referenced.referencedSequences.has(pointer.sequence) &&
       !referenced.referencedMediaIds.has(pointer.mediaId) &&
-      !referenced.referencedDriveFileIds.has(pointer.driveFileId)
+      !referenced.referencedObjectIds.has(objectIdFromKey(pointer.driveFileId))
     ) {
       await diaryRepository.saveSyncMediaPointer({ ...pointer, localUri: undefined });
     }

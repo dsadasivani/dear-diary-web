@@ -34,7 +34,7 @@ vi.mock('../repositories', () => ({
     getSecurityConfig: mocks.getSecurityConfig,
     saveSecurityConfig: mocks.saveSecurityConfig,
   },
-  syncV2Application: {
+  syncApplication: {
     hasExistingPrimaryAccount: mocks.hasExistingPrimaryAccount,
     createPrimaryAccount: mocks.createPrimaryAccount,
     recoverPrimaryAccount: mocks.recoverPrimaryAccount,

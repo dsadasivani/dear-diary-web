@@ -1,41 +1,3 @@
-ALTER TABLE sync_accounts
-    ADD COLUMN v1_mode TEXT NOT NULL DEFAULT 'READ_WRITE',
-    ADD CONSTRAINT ck_sync_accounts_v1_mode CHECK (v1_mode IN ('READ_WRITE', 'READ_ONLY'));
-
-CREATE TABLE sync_migrations (
-    account_id UUID NOT NULL REFERENCES sync_accounts(account_id),
-    migration_id UUID NOT NULL,
-    device_id UUID NOT NULL,
-    migration_status TEXT NOT NULL,
-    baseline_digest TEXT NOT NULL,
-    validation_digest TEXT,
-    baseline_sequence BIGINT NOT NULL,
-    activated_sequence BIGINT,
-    snapshot_id UUID,
-    last_error_code TEXT,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (account_id, migration_id),
-    CONSTRAINT fk_sync_migrations_device FOREIGN KEY (account_id, device_id)
-        REFERENCES sync_devices(account_id, device_id),
-    CONSTRAINT ck_sync_migrations_status CHECK (migration_status IN (
-        'PRECHECK', 'DRAINING_V1', 'VALIDATING_LOCAL_STATE', 'CREATING_V2_SNAPSHOT',
-        'UPLOADING_V2_SNAPSHOT', 'REGISTERING_V2_ACCOUNT', 'VERIFYING_V2_RESTORE',
-        'V2_ACTIVE', 'V1_READ_ONLY', 'FAILED', 'ROLLED_BACK'
-    )),
-    CONSTRAINT ck_sync_migrations_digest CHECK (
-        baseline_digest ~ '^[0-9a-f]{64}$' AND
-        (validation_digest IS NULL OR validation_digest ~ '^[0-9a-f]{64}$')
-    ),
-    CONSTRAINT ck_sync_migrations_sequences CHECK (
-        baseline_sequence >= 0 AND
-        (activated_sequence IS NULL OR activated_sequence >= baseline_sequence)
-    )
-);
-
-CREATE UNIQUE INDEX uq_sync_migrations_active ON sync_migrations(account_id)
-    WHERE migration_status NOT IN ('V1_READ_ONLY', 'FAILED', 'ROLLED_BACK');
-
 CREATE TABLE sync_pairing_requests (
     account_id UUID NOT NULL REFERENCES sync_accounts(account_id),
     pairing_id UUID NOT NULL,
@@ -111,7 +73,7 @@ ALTER TABLE sync_recovery_state ADD CONSTRAINT ck_sync_recovery_status CHECK (re
 ALTER TABLE sync_recovery_state DROP CONSTRAINT ck_sync_recovery_attempt;
 ALTER TABLE sync_recovery_state ADD CONSTRAINT ck_sync_recovery_attempt CHECK (
     recovery_status = 'NONE' OR
-    (recovery_attempt_id IS NOT NULL AND requested_at IS NOT NULL AND expires_at IS NOT NULL)
+    (recovery_attempt_id IS NOT NULL AND requested_at IS NOT NULL)
 );
 ALTER TABLE sync_recovery_state
     ADD COLUMN recovery_device_id UUID,

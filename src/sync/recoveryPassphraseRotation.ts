@@ -1,6 +1,6 @@
 import type { DiaryRepository } from '../repositories/DiaryRepository';
 import type { GoogleAccountSession, SupabaseAuthSession } from '../types';
-import { createConfiguredSyncV2ApiClient } from './config';
+import { createConfiguredSyncApiClient } from './config';
 import {
   encodeRecoveryKeyPackage,
   validateRecoveryPassphrase,
@@ -13,7 +13,7 @@ import {
   saveSyncSecrets,
   withPrimaryRecoveryCredential,
 } from './syncSecrets';
-import { BoundedObjectTransfer } from './v2/operation/BoundedObjectTransfer';
+import { BoundedObjectTransfer } from './core/operation/BoundedObjectTransfer';
 
 const sha256 = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -35,7 +35,6 @@ export const rotateRecoveryPassphrase = async (input: {
   ]);
   if (
     !state ||
-    state.syncProtocolVersion !== 2 ||
     state.deviceRole !== 'primary_mobile' ||
     !secrets ||
     secrets.accountId !== state.accountId
@@ -68,7 +67,6 @@ export const rotateRecoveryPassphrase = async (input: {
   const latestSecrets = await loadSyncSecrets();
   if (
     !latestState ||
-    latestState.syncProtocolVersion !== 2 ||
     latestState.deviceRole !== 'primary_mobile' ||
     latestState.googleUserId !== input.googleSession.userId ||
     !latestSecrets ||
@@ -77,7 +75,7 @@ export const rotateRecoveryPassphrase = async (input: {
     throw new Error('This device is no longer the active primary mobile.');
   }
 
-  const api = createConfiguredSyncV2ApiClient(
+  const api = createConfiguredSyncApiClient(
     async () => latestSecrets.supabaseSession.accessToken,
   );
   const protocol = await api.getProtocol();

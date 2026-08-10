@@ -34,7 +34,7 @@ export const resolveViteMode = (value = process.env.VITE_MODE): string =>
 
 export const contentSecurityPolicy = (
   mode: 'development' | 'production',
-  developmentApiUrl = process.env.VITE_SYNC_V2_API_URL,
+  developmentApiUrl = process.env.VITE_SYNC_API_URL,
   developmentObjectStoreUrl = process.env.SYNC_OBJECT_STORE_ENDPOINT || 'http://localhost:9000',
   faroCollectorUrl = process.env.VITE_GRAFANA_FARO_URL,
 ): string => {

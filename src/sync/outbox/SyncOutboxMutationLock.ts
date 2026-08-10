@@ -3,10 +3,10 @@ import type { LocalDataStore } from '../../platform/storage';
 const mutationTails = new WeakMap<LocalDataStore, Promise<void>>();
 
 /**
- * Serializes every in-process read-modify-write of the shared V2 outbox value.
+ * Serializes every in-process read-modify-write of the shared operation ledger.
  *
- * The diary repository and the V2 worker intentionally use separate repository
- * classes, but both persist `deardiary_sync_outbox_v2`. Without a shared lock,
+ * The diary repository and worker use separate repository classes, but both
+ * persist `deardiary_sync_operations`. Without a shared lock,
  * either writer can read an old snapshot and overwrite an operation written by
  * the other one.
  */

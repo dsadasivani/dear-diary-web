@@ -50,7 +50,7 @@ public class SecurityConfig {
                 if (jwtDecoder == null) {
                     authorize.anyRequest().denyAll();
                 } else {
-                    authorize.requestMatchers("/api/v2/**").authenticated().anyRequest().denyAll();
+                    authorize.requestMatchers("/api/sync/**").authenticated().anyRequest().denyAll();
                 }
             });
         if (jwtDecoder != null) {
@@ -77,7 +77,7 @@ public class SecurityConfig {
         configuration.setAllowCredentials(false);
         configuration.setMaxAge(3600L);
         var source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/api/v2/**", configuration);
+        source.registerCorsConfiguration("/api/sync/**", configuration);
         return source;
     }
 }

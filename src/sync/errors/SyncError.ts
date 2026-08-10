@@ -32,8 +32,7 @@ const SAFE_MESSAGES: Record<SyncErrorCode, string> = {
   SEQUENCE_REGRESSION: 'The remote event sequence moved backwards.',
   RECORD_VERSION_CONFLICT: 'A newer version exists on another device.',
   RECOVERY_CONFLICT:
-    'Another account recovery is already in progress. Continue on that device or try again after it expires.',
-  RECOVERY_EXPIRED: 'This account recovery attempt expired. Start the recovery again.',
+    'Another account recovery is already in progress. Continue on that device or restart recovery here.',
   PROTOCOL_INCOMPATIBLE: 'This app version cannot use the current synchronization protocol.',
   SCHEMA_INCOMPATIBLE: 'This app cannot safely read the synchronized data schema.',
   KEY_EPOCH_UNAVAILABLE: 'A required encryption key is not available on this device.',
@@ -59,7 +58,7 @@ export class SyncError extends Error {
     this.code = options.code;
     this.retryable = options.retryable ?? false;
     this.userActionRequired = options.userActionRequired ?? false;
-    this.safetyRelevant = options.safetyRelevant ?? options.code === 'UNKNOWN';
+    this.safetyRelevant = options.safetyRelevant ?? false;
     this.retryAfterMs = options.retryAfterMs;
     this.cause = options.cause;
   }

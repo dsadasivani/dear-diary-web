@@ -1,7 +1,7 @@
 import type { Entry } from '../types';
-import type { SyncV2Quota } from '../sync/v2/api/SyncV2ApiTypes';
+import type { SyncQuota } from '../sync/core/api/SyncApiTypes';
 
-export const DEFAULT_ACCOUNT_QUOTA: SyncV2Quota = {
+export const DEFAULT_ACCOUNT_QUOTA: SyncQuota = {
   planId: 'default',
   planName: 'Default',
   limits: {

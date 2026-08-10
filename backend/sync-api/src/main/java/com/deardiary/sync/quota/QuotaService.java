@@ -55,26 +55,23 @@ public class QuotaService {
     }
 
     public void requireEntryMediaCounts(
-            UUID accountId, String recordId, long baseRecordVersion, int photos, int recordings) {
+            UUID accountId, String recordId, int photos, int recordings) {
         var plan = requirePlan(accountId);
         var previous = jdbc.query("""
-            SELECT current_version, deleted, entry_photo_count, entry_recording_count
+            SELECT deleted, entry_photo_count, entry_recording_count
             FROM sync_record_versions
             WHERE account_id = ? AND record_type = 'ENTRY' AND record_id = ?
             """, (rs, row) -> new EntryMediaUsage(
-                rs.getLong(1), rs.getBoolean(2), nullableInteger(rs, 3), nullableInteger(rs, 4)),
+                rs.getBoolean(1), nullableInteger(rs, 2), nullableInteger(rs, 3)),
                 accountId, recordId);
         var existing = previous.isEmpty() ? null : previous.getFirst();
-        var legacyExisting = existing != null && !existing.deleted()
-            && existing.currentVersion() == baseRecordVersion
-            && existing.photoCount() == null && existing.recordingCount() == null;
         var allowedPhotos = existing == null || existing.deleted() || existing.photoCount() == null
             ? plan.maximumPhotosPerEntry()
             : Math.max(plan.maximumPhotosPerEntry(), existing.photoCount());
         var allowedRecordings = existing == null || existing.deleted() || existing.recordingCount() == null
             ? plan.maximumRecordingsPerEntry()
             : Math.max(plan.maximumRecordingsPerEntry(), existing.recordingCount());
-        if (!legacyExisting && (photos > allowedPhotos || recordings > allowedRecordings)) {
+        if (photos > allowedPhotos || recordings > allowedRecordings) {
             throw new ApiException(
                 "ENTRY_MEDIA_LIMIT_EXCEEDED", HttpStatus.CONFLICT,
                 "This entry exceeds the media limits for the account plan.", false, true,
@@ -95,7 +92,7 @@ public class QuotaService {
     }
 
     private record EntryMediaUsage(
-        long currentVersion, boolean deleted, Integer photoCount, Integer recordingCount
+        boolean deleted, Integer photoCount, Integer recordingCount
     ) {}
 
     public void requireStorageCapacity(UUID accountId, long additionalBytes, boolean allowOverage) {
