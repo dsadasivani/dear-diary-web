@@ -10,7 +10,6 @@ import java.security.KeyFactory;
 import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.Map;
@@ -61,7 +60,6 @@ public class RecoveryService {
                     WHERE account_id = ? AND device_id = ? AND device_status = 'RECOVERY_PENDING'
                     """, now, account.accountId(), existing.deviceId());
             }
-            var expires = now.plus(Duration.ofHours(24));
             jdbc.update("""
                 INSERT INTO sync_devices (
                     device_id, account_id, device_public_key, device_role, device_status,
@@ -79,17 +77,17 @@ public class RecoveryService {
             jdbc.update("""
                 INSERT INTO sync_recovery_state (
                     account_id, recovery_attempt_id, requested_by_device_id, recovery_device_id,
-                    recovery_status, requested_at, expires_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'REQUESTED', ?, ?, ?)
+                    recovery_status, requested_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'REQUESTED', ?, ?)
                 ON CONFLICT (account_id) DO UPDATE SET
                     recovery_attempt_id = EXCLUDED.recovery_attempt_id,
                     requested_by_device_id = EXCLUDED.requested_by_device_id,
                     recovery_device_id = EXCLUDED.recovery_device_id,
                     recovery_status = 'REQUESTED', requested_at = EXCLUDED.requested_at,
-                    expires_at = EXCLUDED.expires_at, completed_at = NULL,
-                    validation_snapshot_id = NULL, last_error_code = NULL, updated_at = EXCLUDED.updated_at
+                    completed_at = NULL, validation_snapshot_id = NULL,
+                    last_error_code = NULL, updated_at = EXCLUDED.updated_at
                 """, account.accountId(), request.recoveryAttemptId(), request.recoveryDeviceId(),
-                request.recoveryDeviceId(), now, expires, now);
+                request.recoveryDeviceId(), now, now);
             return response(load(account.accountId(), false), null);
         });
     }
@@ -101,7 +99,6 @@ public class RecoveryService {
         return transactions.execute(status -> {
             lockAccount(account.accountId());
             var state = requireAttempt(account.accountId(), attemptId, recoveryDeviceId, true);
-            requireNotExpired(state);
             if ("APPROVED".equals(state.status()) || later(state.status())) return response(state, null);
             if (!"REQUESTED".equals(state.status())) throw invalid("INVALID_RECOVERY_TRANSITION");
             updateStatus(account.accountId(), "APPROVED", null, null);
@@ -113,7 +110,6 @@ public class RecoveryService {
         requireEnabled();
         var account = accounts.requireActiveAccount(ownerSubject);
         var state = requireAttempt(account.accountId(), attemptId, recoveryDeviceId, false);
-        requireNotExpired(state);
         if (!"APPROVED".equals(state.status()) && !"KEY_PACKAGE_PENDING".equals(state.status())
                 && !"KEY_PACKAGE_AVAILABLE".equals(state.status())) {
             throw invalid("INVALID_RECOVERY_TRANSITION");
@@ -143,7 +139,6 @@ public class RecoveryService {
         return transactions.execute(status -> {
             lockAccount(account.accountId());
             var state = requireAttempt(account.accountId(), attemptId, request.recoveryDeviceId(), true);
-            requireNotExpired(state);
             if ("LOCAL_KEY_PERSISTED".equals(state.status()) || "COMPLETED".equals(state.status())) return response(state, null);
             if (!"KEY_PACKAGE_AVAILABLE".equals(state.status())) throw invalid("INVALID_RECOVERY_TRANSITION");
             requireSnapshot(account.accountId(), request.validationSnapshotId());
@@ -162,7 +157,6 @@ public class RecoveryService {
         return transactions.execute(status -> {
             var currentSequence = lockAccount(account.accountId());
             var state = requireAttempt(account.accountId(), attemptId, recoveryDeviceId, true);
-            requireNotExpired(state);
             if ("COMPLETED".equals(state.status())) return response(state, null);
             if (!"LOCAL_KEY_PERSISTED".equals(state.status())) throw invalid("INVALID_RECOVERY_TRANSITION");
             var cursor = jdbc.queryForObject("""
@@ -192,7 +186,7 @@ public class RecoveryService {
     public RecoveryResponse get(String ownerSubject) {
         var account = accounts.requireActiveAccount(ownerSubject);
         var state = loadOptional(account.accountId(), false);
-        return state == null ? new RecoveryResponse(null, null, "NONE", null, null, null) : response(state, null);
+        return state == null ? new RecoveryResponse(null, null, "NONE", null, null) : response(state, null);
     }
 
     private void requireEnabled() {
@@ -214,9 +208,6 @@ public class RecoveryService {
         if (!attempt.equals(state.attemptId()) || !device.equals(state.deviceId())) throw invalid("RECOVERY_NOT_FOUND");
         return state;
     }
-    private void requireNotExpired(RecoveryRow row) {
-        if (OffsetDateTime.now(clock).isAfter(row.expiresAt())) throw invalid("RECOVERY_EXPIRED");
-    }
     private void updateStatus(UUID accountId, String status, UUID snapshotId, String error) {
         jdbc.update("""
             UPDATE sync_recovery_state SET recovery_status = ?,
@@ -232,16 +223,15 @@ public class RecoveryService {
     private RecoveryRow loadOptional(UUID accountId, boolean lock) {
         var rows = jdbc.query("""
             SELECT recovery_attempt_id, recovery_device_id, recovery_status,
-                   validation_snapshot_id, expires_at
+                   validation_snapshot_id
             FROM sync_recovery_state WHERE account_id = ?
             """ + (lock ? " FOR UPDATE" : ""), (rs, row) -> new RecoveryRow(
                 rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getString(3),
-                rs.getObject(4, UUID.class), rs.getObject(5, OffsetDateTime.class)), accountId);
+                rs.getObject(4, UUID.class)), accountId);
         return rows.isEmpty() ? null : rows.getFirst();
     }
     private RecoveryResponse response(RecoveryRow row, KeyPackageResponse keyPackage) {
-        return new RecoveryResponse(row.attemptId(), row.deviceId(), row.status(), row.snapshotId(),
-            row.expiresAt() == null ? null : row.expiresAt().toInstant(), keyPackage);
+        return new RecoveryResponse(row.attemptId(), row.deviceId(), row.status(), row.snapshotId(), keyPackage);
     }
     private boolean isTerminal(String status) { return "COMPLETED".equals(status) || "FAILED".equals(status) || "NONE".equals(status); }
     private boolean later(String status) { return java.util.Set.of("KEY_PACKAGE_PENDING", "KEY_PACKAGE_AVAILABLE", "LOCAL_KEY_PERSISTED", "FINALIZING", "COMPLETED").contains(status); }
@@ -256,5 +246,5 @@ public class RecoveryService {
     }
     private ApiException invalid(String code) { return new ApiException(code, HttpStatus.CONFLICT,
         "The recovery state is invalid.", false, true, Map.of()); }
-    private record RecoveryRow(UUID attemptId, UUID deviceId, String status, UUID snapshotId, OffsetDateTime expiresAt) {}
+    private record RecoveryRow(UUID attemptId, UUID deviceId, String status, UUID snapshotId) {}
 }

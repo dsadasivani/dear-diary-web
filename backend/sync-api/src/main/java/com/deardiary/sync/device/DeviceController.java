@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/sync/devices")
+@RequestMapping("/api/sync/devices")
 public class DeviceController {
     private final DeviceRegistrationService registrationService;
     private final DeviceManagementService managementService;

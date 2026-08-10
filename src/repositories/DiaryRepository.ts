@@ -10,12 +10,12 @@ import type {
   SecurityConfig,
   SyncDomainEvent,
   SyncMediaPointer,
-  SyncOutboxOperation,
   SyncPartitionKey,
   SyncRecordType,
   UserProfile,
 } from '../types';
 import type { SyncHealth, SyncHealthPatch } from '../sync/health/SyncHealth';
+import type { SyncOperation } from '../sync/outbox';
 
 export type NewDiary = Omit<Diary, 'id' | 'entryCount' | 'lastUpdated'>;
 export type NewEntry = Omit<Entry, 'id' | 'createdAt' | 'updatedAt' | 'wordCount' | 'photoCount'>;
@@ -171,7 +171,7 @@ export interface SyncStatusSummary {
 }
 
 export interface PreservedSyncConflict {
-  operation: SyncOutboxOperation;
+  operation: SyncOperation;
   currentRecord?: Entry | Note | null;
   recoveredRecord?: Entry | Note | null;
 }
@@ -212,11 +212,6 @@ export interface ApplyLocalMutationWithOutboxInput {
   syncPayload?: Diary | Entry | Note | AppSettings | UserProfile | null;
   createdAt?: number;
   publishNotBefore?: number;
-}
-
-export interface AcknowledgeLocalMutationInput {
-  event: SyncDomainEvent;
-  sequence: number;
 }
 
 export interface RemoteSyncEventBatchItem {
@@ -335,8 +330,10 @@ export interface DiaryRepository {
     partitionKey: SyncPartitionKey | string,
     error: string,
   ): Promise<void>;
-  saveSyncOutboxOperation(operation: SyncOutboxOperation): Promise<void>;
-  listSyncOutboxOperations(states?: SyncOutboxOperation['state'][]): Promise<SyncOutboxOperation[]>;
+  saveSyncOutboxOperation(operation: SyncOperation): Promise<void>;
+  listSyncOutboxOperations(
+    states?: SyncOperation['state'][],
+  ): Promise<SyncOperation[]>;
   removeSyncOutboxOperation(operationId: string): Promise<void>;
   getSyncStatusSummary(): Promise<SyncStatusSummary>;
   updateSyncCatchUpStatus(
@@ -368,8 +365,6 @@ export interface DiaryRepository {
   applyLocalMutationWithOutbox(
     input: ApplyLocalMutationWithOutboxInput,
   ): Promise<Diary | Entry | Note | AppSettings | UserProfile | null>;
-  acknowledgeLocalMutation(input: AcknowledgeLocalMutationInput): Promise<void>;
-
   resetContent(): Promise<void>;
 
   exportSnapshot(): Promise<RepositorySnapshot>;

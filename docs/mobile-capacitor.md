@@ -40,9 +40,9 @@ Native WebView inspection is off by default. Set `CAPACITOR_WEBVIEW_DEBUG=true` 
 
 Android OS backup and device transfer are disabled because restoring encrypted SQLite without its secure-storage key would make the database unusable. Clearing app storage or uninstalling the app removes local data and security material.
 
-## Local Sync V2 networking
+## Local Loredays Sync networking
 
-The local stack uses the web host on port 3000, the Spring API on port 8080, and MinIO on ports 9000 and 9001. The helper script configures `adb reverse` for the API and object store when an emulator is attached. See [local-sync-v2.md](local-sync-v2.md).
+The local stack uses the web host on port 3000, the Spring API on port 8080, and MinIO on ports 9000 and 9001. The helper script configures `adb reverse` for the API and object store when an emulator is attached. See [local-sync.md](local-sync.md).
 
 The cleartext localhost exception exists only in `android/app/src/debug/AndroidManifest.xml`; release builds do not opt into cleartext traffic.
 

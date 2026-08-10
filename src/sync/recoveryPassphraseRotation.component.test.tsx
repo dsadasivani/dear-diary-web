@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./config', () => ({
-  createConfiguredSyncV2ApiClient: (tokenProvider: () => Promise<string>) => {
+  createConfiguredSyncApiClient: (tokenProvider: () => Promise<string>) => {
     mocks.tokenProvider = tokenProvider;
     return {
       getProtocol: mocks.getProtocol,
@@ -43,7 +43,7 @@ vi.mock('./syncSecrets', () => ({
   withPrimaryRecoveryCredential: mocks.withPrimaryRecoveryCredential,
 }));
 
-vi.mock('./v2/operation/BoundedObjectTransfer', () => ({
+vi.mock('./core/operation/BoundedObjectTransfer', () => ({
   BoundedObjectTransfer: class {
     upload = mocks.upload;
   },
@@ -59,7 +59,7 @@ const state = {
   googleUserId: 'google-1',
   googleEmail: 'writer@example.com',
   devicePublicKey: 'public-key',
-  currentSyncSequence: 3,
+  appliedSequence: 3,
   keyEpoch: 2,
   linkedAt: 1,
 };

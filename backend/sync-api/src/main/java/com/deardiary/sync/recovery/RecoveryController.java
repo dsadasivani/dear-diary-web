@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/sync/recovery")
+@RequestMapping("/api/sync/recovery")
 public class RecoveryController {
     private final RecoveryService recovery;
     public RecoveryController(RecoveryService recovery) { this.recovery = recovery; }

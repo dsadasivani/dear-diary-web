@@ -146,7 +146,7 @@ public class OperationInitiationService {
             return new PersistedOperation(existing.status(), true, loadObjects(accountId, request.operationId()));
         }
         if (request.entryMediaCounts() != null) {
-            quotas.requireEntryMediaCounts(accountId, request.recordId(), request.baseRecordVersion(),
+            quotas.requireEntryMediaCounts(accountId, request.recordId(),
                 request.entryMediaCounts().photoCount(), request.entryMediaCounts().recordingCount());
         }
         quotas.requireStorageCapacity(accountId,

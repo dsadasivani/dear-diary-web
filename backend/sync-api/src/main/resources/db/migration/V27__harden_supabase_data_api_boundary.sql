@@ -1,4 +1,4 @@
--- Sync V2 is accessed only through the authenticated Spring API. Supabase's
+-- Loredays Sync is accessed only through the authenticated Spring API. Supabase's
 -- browser-facing Data API roles must never read or mutate backend metadata.
 DO $migration$
 DECLARE

@@ -63,7 +63,7 @@ class JwtAuthenticationIntegrationTest {
 
     @Test
     void missingTokenReturnsStablePrivacySafeError() throws Exception {
-        mockMvc.perform(get("/api/v2/sync/protocol").header("X-Correlation-Id", "request_12345678"))
+        mockMvc.perform(get("/api/sync/protocol").header("X-Correlation-Id", "request_12345678"))
             .andExpect(status().isUnauthorized())
             .andExpect(header().string("X-Correlation-Id", "request_12345678"))
             .andExpect(jsonPath("$.code").value("AUTH_INVALID"))
@@ -114,10 +114,10 @@ class JwtAuthenticationIntegrationTest {
     void validAuthenticatedUserTokenPassesTheSecurityBoundary() throws Exception {
         when(protocolService.current()).thenReturn(new ProtocolResponse(
             2, 2, 2, 2, 2, 10_485_760, 104_857_600, 104_857_600,
-            "0.0.0", 0, 1, false,
+            "0.0.0", false,
             new ProtocolResponse.FeatureFlags(true, true, true, false, false, true, true, false, false, false, false),
-            new ProtocolResponse.BootstrapControls(false, false, false, false, 100, 500, 7, 25, 60)));
-        mockMvc.perform(get("/api/v2/sync/protocol")
+            new ProtocolResponse.BootstrapControls(false, false, false, 100, 500, 7, 25, 60)));
+        mockMvc.perform(get("/api/sync/protocol")
                 .header(HttpHeaders.AUTHORIZATION, bearer(token(
                     TRUSTED_KEY, "user-1", "authenticated", "authenticated", Instant.now().plusSeconds(300)))))
             .andExpect(status().isOk())
@@ -125,7 +125,7 @@ class JwtAuthenticationIntegrationTest {
     }
 
     private void expectUnauthorized(String token) throws Exception {
-        mockMvc.perform(get("/api/v2/sync/protocol").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+        mockMvc.perform(get("/api/sync/protocol").header(HttpHeaders.AUTHORIZATION, bearer(token)))
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value("AUTH_INVALID"))
             .andExpect(jsonPath("$.message").value("A valid user access token is required."));

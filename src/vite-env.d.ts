@@ -7,7 +7,7 @@ interface ImportMetaEnv {
   readonly VITE_ANDROID_APP_URL?: string;
   readonly VITE_SUPABASE_URL?: string;
   readonly VITE_SUPABASE_ANON_KEY?: string;
-  readonly VITE_SYNC_V2_API_URL?: string;
+  readonly VITE_SYNC_API_URL?: string;
   readonly VITE_APP_VERSION?: string;
   readonly VITE_MINIMUM_PROTOCOL_VERSION?: string;
   readonly VITE_TELEMETRY_RELEASE_VERSION?: string;

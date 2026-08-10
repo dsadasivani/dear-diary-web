@@ -1,6 +1,6 @@
 # Loredays Sync API
 
-Spring Boot modular-monolith foundation for the Sync V2 control plane.
+Spring Boot modular-monolith foundation for the Loredays Sync control plane.
 
 Requirements:
 
@@ -48,22 +48,22 @@ The container listens on `PORT` (default `8080`), runs as a non-root user, and e
 `/actuator/health` for startup and liveness checks. Supply database, JWT, object-store,
 and CORS settings at runtime; never add credentials to the image.
 
-The API exposes `/actuator/health` without authentication. All `/api/v2/**` routes fail closed unless
+The API exposes `/actuator/health` without authentication. All `/api/sync/**` routes fail closed unless
 `SYNC_JWT_ENABLED=true` and a valid Supabase issuer/JWKS configuration is supplied. Only tokens with a
 non-empty subject and the `authenticated` role are accepted; anonymous and service-role tokens are rejected.
 
 Flyway owns the PostgreSQL schema through 27 ordered migrations in `src/main/resources/db/migration`.
 The migration integration test uses PostgreSQL 16 through Testcontainers and skips only when Docker is unavailable.
 
-The authenticated Sync V2 API provides device registration and protocol negotiation, operation initiation,
+The authenticated Loredays Sync API provides device registration and protocol negotiation, operation initiation,
 atomic idempotent commit and reconciliation, gap-checked ordered event pull, monotonic per-device cursor
-acknowledgement under `/api/v2/sync/**`. Encrypted payloads remain in the configured object store; the database
+acknowledgement under `/api/sync/**`. Encrypted payloads remain in the configured object store; the database
 contains synchronization metadata and immutable object references.
 
-Account-wide Sync V2 snapshots use a two-step upload and registration flow. A snapshot is discoverable only
+Account-wide Loredays Sync snapshots use a two-step upload and registration flow. A snapshot is discoverable only
 after object size and SHA-256 verification and an atomic database activation. Restore clients verify size,
 hash, encrypted object kind, key epoch, schema, account, partition, and through-sequence before atomically
-replacing an empty V2 state and its cursor. Partial partition restore is intentionally unavailable while V2
+replacing an empty sync state and its cursor. Partial partition restore is intentionally unavailable while the
 uses a single global event cursor.
 
 Advanced workflows expose durable server state machines for trusted-device companion pairing,
@@ -87,8 +87,8 @@ dead-letters exhausted or non-retryable messages. Enable it only after configuri
 
 Production observability sends structured logs, Micrometer metrics, and sampled traces to Grafana Cloud
 over authenticated OTLP. Logs retain correlation/trace/span identifiers. Runtime flags, emergency mode,
-minimum versions, and deterministic canary percentage are returned by the protocol endpoint and are
+minimum versions and emergency controls are returned by the protocol endpoint and are
 stored in PostgreSQL so an audited operator change takes effect without a client release. See
-`docs/production-operations.md` for dashboards, alerts, emergency controls, and rollout procedure.
+`docs/production-operations.md` for dashboards, alerts, and emergency controls.
 The Prometheus route remains denied because the hosted deployment pushes metrics over OTLP. See
 `docs/observability.md` for Grafana Cloud and AWS setup.

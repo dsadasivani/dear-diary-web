@@ -27,7 +27,6 @@ test('persists and restores account root key material through secret storage', a
   const accountRootKey = Uint8Array.from({ length: 32 }, (_, index) => index);
   await saveSyncSecrets(
     {
-      version: 1,
       accountId: 'account-1',
       accountRootKey,
       devicePrivateKeyJwk: '{"kty":"EC"}',
@@ -42,12 +41,11 @@ test('persists and restores account root key material through secret storage', a
   assert.equal(restored?.primaryRecoveryCredential, undefined);
 });
 
-test('upgrades a legacy version-1 secret with a primary-only recovery credential', async () => {
+test('adds and persists a primary-only recovery credential', async () => {
   const storage = new MemorySecretStorage();
   const accountRootKey = new Uint8Array(32).fill(7);
   const upgraded = withPrimaryRecoveryCredential(
     {
-      version: 1,
       accountId: 'account-1',
       accountRootKey,
       devicePrivateKeyJwk: '{"kty":"EC"}',
@@ -58,9 +56,7 @@ test('upgrades a legacy version-1 secret with a primary-only recovery credential
   await saveSyncSecrets(upgraded, storage);
 
   const restored = await loadSyncSecrets(storage);
-  assert.equal(restored?.version, 2);
   assert.equal(restored?.primaryRecoveryCredential?.passphrase, '12345678');
-  assert.equal(restored?.primaryRecoveryCredential?.version, 1);
 });
 
 test('persists multiple epoch root keys', async () => {
@@ -69,7 +65,6 @@ test('persists multiple epoch root keys', async () => {
   const epoch2 = Uint8Array.from({ length: 32 }, (_, index) => index + 33);
   const secrets = withAccountRootKeyForEpoch(
     {
-      version: 1,
       accountId: 'account-1',
       accountRootKey: epoch1,
       accountRootKeys: { 1: epoch1 },

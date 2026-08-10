@@ -11,11 +11,11 @@ test('maps provider status and codes without parsing external messages', () => {
   );
 });
 
-test('unknown errors default to a non-retryable safety-relevant failure', () => {
+test('unknown provider errors retry without engaging an integrity safety stop', () => {
   const error = mapSupabaseError(new Error('private provider detail'));
   assert.equal(error.code, 'UNKNOWN');
-  assert.equal(error.retryable, false);
-  assert.equal(error.safetyRelevant, true);
+  assert.equal(error.retryable, true);
+  assert.equal(error.safetyRelevant, false);
   assert.equal(error.message.includes('private provider detail'), false);
   assert.ok(error instanceof SyncError);
 });

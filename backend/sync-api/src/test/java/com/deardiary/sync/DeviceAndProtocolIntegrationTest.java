@@ -117,8 +117,6 @@ class DeviceAndProtocolIntegrationTest {
         assertThat(protocol.featureFlags().deviceRevocationEnabled()).isTrue();
         assertThat(protocol.featureFlags().mediaUploadEnabled()).isTrue();
         assertThat(protocol.featureFlags().archiveHydrationEnabled()).isTrue();
-        assertThat(protocol.syncV2RolloutPercentage()).isZero();
-        assertThat(protocol.bootstrapControls().atomicReplayEnabled()).isFalse();
         assertThat(protocol.bootstrapControls().rollingSnapshotsEnabled()).isFalse();
         assertThat(protocol.bootstrapControls().bootstrapManifestEnabled()).isFalse();
         assertThat(protocol.bootstrapControls().retentionDeletionEnabled()).isFalse();

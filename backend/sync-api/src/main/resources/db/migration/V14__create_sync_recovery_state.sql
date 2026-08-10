@@ -4,7 +4,6 @@ CREATE TABLE sync_recovery_state (
     requested_by_device_id UUID,
     recovery_status TEXT NOT NULL,
     requested_at TIMESTAMPTZ,
-    expires_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     last_error_code TEXT,
     updated_at TIMESTAMPTZ NOT NULL,
@@ -13,9 +12,8 @@ CREATE TABLE sync_recovery_state (
     CONSTRAINT ck_sync_recovery_status CHECK (recovery_status IN ('IDLE', 'PENDING', 'VALIDATING', 'READY', 'COMPLETED', 'FAILED')),
     CONSTRAINT ck_sync_recovery_attempt CHECK (
         recovery_status = 'IDLE' OR
-        (recovery_attempt_id IS NOT NULL AND requested_at IS NOT NULL AND expires_at IS NOT NULL)
+        (recovery_attempt_id IS NOT NULL AND requested_at IS NOT NULL)
     ),
-    CONSTRAINT ck_sync_recovery_expiry CHECK (expires_at IS NULL OR requested_at IS NULL OR expires_at > requested_at),
     CONSTRAINT ck_sync_recovery_completed CHECK (
         (recovery_status = 'COMPLETED' AND completed_at IS NOT NULL) OR recovery_status <> 'COMPLETED'
     )

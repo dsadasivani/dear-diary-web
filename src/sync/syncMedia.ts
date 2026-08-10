@@ -15,28 +15,19 @@ export interface DecodedSyncThumbnailPayload extends DecodedSyncMediaPayload {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const LEGACY_MEDIA_REFERENCE = /^ddmedia:(\d+):([a-zA-Z0-9-]+)$/;
-const STABLE_MEDIA_REFERENCE = /^ddmedia:v2:([a-zA-Z0-9-]+):([a-zA-Z0-9_-]+)$/;
+const SYNC_MEDIA_REFERENCE = /^ddmedia:([a-zA-Z0-9-]+):([a-zA-Z0-9_-]+)$/;
 
-export const createSyncMediaReference = (sequence: number, mediaId: string): string => {
-  if (!Number.isInteger(sequence) || sequence < 1 || !mediaId)
-    throw new Error('Sync media reference is invalid.');
-  return `ddmedia:${sequence}:${mediaId}`;
-};
-
-export const createStableSyncMediaReference = (mediaId: string, driveFileId: string): string => {
+export const createSyncMediaReference = (mediaId: string, driveFileId: string): string => {
   if (!mediaId || !driveFileId) throw new Error('Sync media reference is invalid.');
-  return `ddmedia:v2:${mediaId}:${driveFileId}`;
+  return `ddmedia:${mediaId}:${driveFileId}`;
 };
 
 export const parseSyncMediaReference = (
   value: string | undefined,
-): { sequence?: number; mediaId: string; driveFileId?: string } | null => {
+): { mediaId: string; driveFileId: string } | null => {
   if (!value) return null;
-  const stable = STABLE_MEDIA_REFERENCE.exec(value);
-  if (stable) return { mediaId: stable[1], driveFileId: stable[2] };
-  const legacy = LEGACY_MEDIA_REFERENCE.exec(value);
-  return legacy ? { sequence: Number(legacy[1]), mediaId: legacy[2] } : null;
+  const reference = SYNC_MEDIA_REFERENCE.exec(value);
+  return reference ? { mediaId: reference[1], driveFileId: reference[2] } : null;
 };
 
 export const encodeSyncMediaPayload = (

@@ -46,12 +46,12 @@ test('production responses include a restrictive browser security policy', async
 test('development policy permits Vite runtime features without weakening production scripts', () => {
   const developmentPolicy = contentSecurityPolicy(
     'development',
-    'http://localhost:8080/api/v2/sync',
+    'http://localhost:8080/api/sync',
     'http://localhost:9000/dear-diary-sync',
   );
   const productionPolicy = contentSecurityPolicy(
     'production',
-    'http://localhost:8080/api/v2/sync',
+    'http://localhost:8080/api/sync',
     'http://localhost:9000/dear-diary-sync',
     'https://faro-collector-prod-ap-south-1.grafana.net/collect/example',
   );

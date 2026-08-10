@@ -14,14 +14,13 @@ import type {
   Entry,
   Note,
   SecurityConfig,
-  SyncOutboxOperation,
   UserProfile,
 } from '../types';
 import { LocalDiaryRepository } from './localDiaryRepository';
 import { createSyncDomainEvent } from '../sync/domainEvents';
 import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
 import { richTextHtmlToPlainText } from '../domain/richTextSanitizer';
-import { PersistentOutboxRepository, type SyncOutboxOperationV2 } from '../sync/outbox';
+import { PersistentOutboxRepository, type SyncOperation } from '../sync/outbox';
 import { toLocalDateKey } from '../utils/localDate';
 
 class MemoryDataStore implements LocalDataStore {
@@ -322,23 +321,17 @@ class StructuredMemoryDataStore extends MemoryDataStore {
   async commitLocalMutationAndOutbox(input: {
     records: LocalStructuredRecordMutation[];
     items?: Record<string, string>;
-    outboxOperation: SyncOutboxOperation;
-    outboxV2Operation: SyncOutboxOperationV2;
+    outboxOperation: SyncOperation;
   }): Promise<void> {
     this.localMutationCommitCount += 1;
     this.applyStructuredRecordMutations(input.records);
-    const currentOutbox = JSON.parse(
-      (await this.getItem('deardiary_sync_outbox')) || '{}',
-    ) as Record<string, SyncOutboxOperation>;
-    const currentOutboxV2 = JSON.parse(
-      (await this.getItem('deardiary_sync_outbox_v2')) || '{}',
-    ) as Record<string, SyncOutboxOperationV2>;
-    currentOutbox[input.outboxOperation.operationId] = cloneTestValue(input.outboxOperation);
-    currentOutboxV2[input.outboxV2Operation.operationId] = cloneTestValue(input.outboxV2Operation);
+    const currentOperations = JSON.parse(
+      (await this.getItem('deardiary_sync_operations')) || '{}',
+    ) as Record<string, SyncOperation>;
+    currentOperations[input.outboxOperation.operationId] = cloneTestValue(input.outboxOperation);
     await this.setItems({
       ...(input.items || {}),
-      deardiary_sync_outbox: JSON.stringify(currentOutbox),
-      deardiary_sync_outbox_v2: JSON.stringify(currentOutboxV2),
+      deardiary_sync_operations: JSON.stringify(currentOperations),
     });
   }
 
@@ -758,7 +751,7 @@ test('uses atomic structured record and outbox commit for local-first note mutat
     googleUserId: 'google-structured',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 0,
+    appliedSequence: 0,
     linkedAt: 1,
   };
   const note: Note = {
@@ -786,26 +779,16 @@ test('uses atomic structured record and outbox commit for local-first note mutat
   const outbox = await repository.listSyncOutboxOperations();
   assert.equal(outbox.length, 1);
   assert.equal(outbox[0].operationId, 'op-structured-local');
-  assert.equal(outbox[0].state, 'prepared');
-  const outboxV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+  assert.equal(outbox[0].state, 'PENDING');
+  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
     string,
-    SyncOutboxOperationV2
+    SyncOperation
   >;
-  assert.deepEqual(outboxV2['op-structured-local'], {
-    operationId: 'op-structured-local',
-    accountId: 'account-structured',
-    deviceId: 'device-structured',
-    recordType: 'NOTE',
-    recordId: 'note-structured-local',
-    operationType: 'UPSERT',
-    baseRecordVersion: 0,
-    state: 'PENDING',
-    retryCount: 0,
-    nextAttemptAt: outboxV2['op-structured-local'].nextAttemptAt,
-    createdAt: outboxV2['op-structured-local'].createdAt,
-    updatedAt: outboxV2['op-structured-local'].updatedAt,
-  });
-  assert.equal(JSON.stringify(outboxV2).includes(note.body), false);
+  assert.equal(operations['op-structured-local'].recordType, 'NOTE');
+  assert.equal(operations['op-structured-local'].operationType, 'UPSERT');
+  assert.equal(operations['op-structured-local'].baseRecordVersion, 0);
+  assert.equal(operations['op-structured-local'].state, 'PENDING');
+  assert.deepEqual(operations['op-structured-local'].sourceCanonicalPayload, note);
   assert.equal((await repository.getLocalRepositoryMetadata()).contentRevision, 1);
 });
 
@@ -1060,7 +1043,7 @@ test('applies canonical sync events idempotently and tracks record versions', as
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 2,
+    appliedSequence: 2,
     linkedAt: 1,
   });
   const note = {
@@ -1087,7 +1070,7 @@ test('applies canonical sync events idempotently and tracks record versions', as
 
   assert.deepEqual(await repository.getNote(note.id), note);
   assert.equal(await repository.getSyncRecordVersion('note', note.id), 1);
-  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 3);
+  assert.equal((await repository.getLocalSyncAccountState())?.appliedSequence, 3);
 });
 
 test('atomically applies a remote event batch and rejects an invalid version chain', async () => {
@@ -1100,12 +1083,12 @@ test('atomically applies a remote event batch and rejects an invalid version cha
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 0,
+    appliedSequence: 0,
     linkedAt: 1,
   };
   await repository.saveLocalSyncAccountState(account);
   await store.setItem(
-    'deardiary_sync_v2_runtime',
+    'deardiary_sync_runtime',
     JSON.stringify({
       accountId: account.accountId,
       deviceId: account.deviceId,
@@ -1155,9 +1138,9 @@ test('atomically applies a remote event batch and rejects an invalid version cha
     ),
     2,
   );
-  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 2);
+  assert.equal((await repository.getLocalSyncAccountState())?.appliedSequence, 2);
   assert.equal(
-    JSON.parse((await store.getItem('deardiary_sync_v2_runtime'))!).lastAppliedSequence,
+    JSON.parse((await store.getItem('deardiary_sync_account'))!).appliedSequence,
     2,
   );
   assert.equal((await repository.getNote('note-batch-1'))?.title, 'First');
@@ -1179,7 +1162,7 @@ test('atomically applies a remote event batch and rejects an invalid version cha
     ),
   );
   assert.equal(await repository.getNote('note-invalid'), null);
-  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 2);
+  assert.equal((await repository.getLocalSyncAccountState())?.appliedSequence, 2);
 });
 
 test('orders parent diary mutations before child entries in an atomic replay batch', async () => {
@@ -1196,12 +1179,12 @@ test('orders parent diary mutations before child entries in an atomic replay bat
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 0,
+    appliedSequence: 0,
     linkedAt: 1,
   };
   await repository.saveLocalSyncAccountState(account);
   await store.setItem(
-    'deardiary_sync_v2_runtime',
+    'deardiary_sync_runtime',
     JSON.stringify({
       accountId: account.accountId,
       deviceId: account.deviceId,
@@ -1285,7 +1268,7 @@ test('sanitizes malicious rich text during sync event replay', async () => {
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 2,
+    appliedSequence: 2,
     linkedAt: 1,
   });
   const entry = {
@@ -1339,7 +1322,7 @@ test('applies portable settings and profile events without replacing local remin
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 2,
+    appliedSequence: 2,
     linkedAt: 1,
   });
   const settingsEvent = createSyncDomainEvent({
@@ -1396,7 +1379,7 @@ test('skips already-covered historical events during partition replay', async ()
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 50,
+    appliedSequence: 50,
     linkedAt: 1,
   });
   const note = {
@@ -1423,7 +1406,7 @@ test('skips already-covered historical events during partition replay', async ()
 
   assert.deepEqual(await repository.getNote(note.id), note);
   assert.equal(await repository.getSyncRecordVersion('note', note.id), 1);
-  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 50);
+  assert.equal((await repository.getLocalSyncAccountState())?.appliedSequence, 50);
 });
 
 test('exports, imports, and tracks monthly partition hydration state', async () => {
@@ -1499,14 +1482,18 @@ test('persists durable sync outbox operations', async () => {
     deviceId: 'device-1',
     partitionKey: 'month:2026-07',
     affectedPartitionKeys: ['month:2026-07'],
-    recordType: 'entry',
+    recordType: 'ENTRY',
     recordId: 'entry-1',
-    state: 'prepared',
+    operationType: 'UPSERT',
+    baseRecordVersion: 0,
+    state: 'PENDING',
+    retryCount: 0,
+    nextAttemptAt: 0,
     createdAt: 1,
     updatedAt: 1,
   });
 
-  assert.equal((await repository.listSyncOutboxOperations(['prepared'])).length, 1);
+  assert.equal((await repository.listSyncOutboxOperations(['PENDING'])).length, 1);
   await repository.removeSyncOutboxOperation('operation-1');
   assert.equal((await repository.listSyncOutboxOperations()).length, 0);
 });
@@ -1526,9 +1513,13 @@ test('emits sync status changes when durable outbox rows change', async () => {
     deviceId: 'device-1',
     partitionKey: 'month:2026-07',
     affectedPartitionKeys: ['month:2026-07'],
-    recordType: 'entry',
+    recordType: 'ENTRY',
     recordId: 'entry-1',
-    state: 'prepared',
+    operationType: 'UPSERT',
+    baseRecordVersion: 0,
+    state: 'PENDING',
+    retryCount: 0,
+    nextAttemptAt: 0,
     createdAt: 1,
     updatedAt: 1,
   });
@@ -1548,7 +1539,7 @@ test('atomically applies a local note mutation with its durable outbox operation
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 2,
+    appliedSequence: 2,
     linkedAt: 1,
   });
   const changes: string[] = [];
@@ -1576,19 +1567,19 @@ test('atomically applies a local note mutation with its durable outbox operation
   unsubscribe();
 
   assert.deepEqual(await repository.getNote(note.id), note);
-  const [operation] = await repository.listSyncOutboxOperations(['prepared']);
+  const [operation] = await repository.listSyncOutboxOperations(['PENDING']);
   assert.equal(operation.operationId, 'operation-local-first');
   assert.equal(operation.localApplied, true);
   assert.equal(operation.recordId, note.id);
-  assert.deepEqual(operation.payload, note);
-  const outboxV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+  assert.deepEqual(operation.sourceCanonicalPayload, note);
+  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
     string,
-    SyncOutboxOperationV2
+    SyncOperation
   >;
-  assert.equal(outboxV2['operation-local-first'].recordType, 'NOTE');
-  assert.equal(outboxV2['operation-local-first'].state, 'PENDING');
-  assert.equal(outboxV2['operation-local-first'].baseRecordVersion, 0);
-  assert.equal(JSON.stringify(outboxV2).includes('Saved locally.'), false);
+  assert.equal(operations['operation-local-first'].recordType, 'NOTE');
+  assert.equal(operations['operation-local-first'].state, 'PENDING');
+  assert.equal(operations['operation-local-first'].baseRecordVersion, 0);
+  assert.equal(JSON.stringify(operations).includes('Saved locally.'), true);
   assert.deepEqual(changes, ['note-created', 'sync-status-updated']);
 });
 
@@ -1602,7 +1593,7 @@ test('coalesces untouched same-record operations and cancels an unpublished crea
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 0,
+    appliedSequence: 0,
     linkedAt: 1,
   });
   const account = (await repository.getLocalSyncAccountState())!;
@@ -1632,12 +1623,12 @@ test('coalesces untouched same-record operations and cancels an unpublished crea
     localPayload: { ...note, title: 'Latest', updatedAt: 20 },
   });
 
-  const [coalesced] = await repository.listSyncOutboxOperations(['prepared']);
+  const [coalesced] = await repository.listSyncOutboxOperations(['PENDING']);
   assert.equal(coalesced.operationId, 'operation-coalesced-1');
-  assert.equal((coalesced.payload as Note).title, 'Latest');
+  assert.equal((coalesced.sourceCanonicalPayload as Note).title, 'Latest');
   assert.equal((await repository.getNote(note.id))?.title, 'Latest');
   assert.equal(
-    Object.keys(JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}')).length,
+    Object.keys(JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}')).length,
     1,
   );
 
@@ -1652,7 +1643,7 @@ test('coalesces untouched same-record operations and cancels an unpublished crea
   assert.equal(await repository.getNote(note.id), null);
   assert.equal((await repository.listSyncOutboxOperations()).length, 0);
   assert.equal(
-    Object.keys(JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}')).length,
+    Object.keys(JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}')).length,
     0,
   );
 });
@@ -1667,7 +1658,7 @@ test('chains same-record local mutations once an earlier outbox operation is in 
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 2,
+    appliedSequence: 2,
     linkedAt: 1,
   });
   const account = (await repository.getLocalSyncAccountState())!;
@@ -1689,13 +1680,13 @@ test('chains same-record local mutations once an earlier outbox operation is in 
     account,
     localPayload: note,
   });
-  const [firstOperation] = await repository.listSyncOutboxOperations(['prepared']);
+  const [firstOperation] = await repository.listSyncOutboxOperations(['PENDING']);
   await repository.saveSyncOutboxOperation({
     ...firstOperation,
-    state: 'event_uploaded',
-    eventDriveFileId: 'drive-event-1',
-    eventSha256: 'sha',
-    eventSizeBytes: 10,
+    state: 'UPLOADING',
+    encryptedEventObjectKey: 'drive-event-1',
+    encryptedEventSha256: 'sha',
+    encryptedEventSizeBytes: 10,
   });
 
   await repository.applyLocalMutationWithOutbox({
@@ -1707,24 +1698,24 @@ test('chains same-record local mutations once an earlier outbox operation is in 
     localPayload: { ...note, title: 'Second edit', updatedAt: 20 },
   });
 
-  const operations = await repository.listSyncOutboxOperations();
-  const secondOperation = operations.find(
+  const listedOperations = await repository.listSyncOutboxOperations();
+  const secondOperation = listedOperations.find(
     (operation) => operation.operationId === 'operation-chain-2',
   );
-  assert.equal(operations.length, 2);
-  assert.equal(secondOperation?.dependsOnOperationId, 'operation-chain-1');
+  assert.equal(listedOperations.length, 2);
+  assert.equal(secondOperation?.dependencyOperationId, 'operation-chain-1');
   assert.equal(secondOperation?.baseRecordVersion, 1);
-  assert.equal((secondOperation?.payload as Note | undefined)?.title, 'Second edit');
+  assert.equal((secondOperation?.sourceCanonicalPayload as Note | undefined)?.title, 'Second edit');
   assert.equal((await repository.getNote(note.id))?.title, 'Second edit');
-  const outboxV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
     string,
-    SyncOutboxOperationV2
+    SyncOperation
   >;
-  assert.equal(outboxV2['operation-chain-2'].dependencyOperationId, 'operation-chain-1');
-  assert.equal(outboxV2['operation-chain-2'].baseRecordVersion, 1);
+  assert.equal(operations['operation-chain-2'].dependencyOperationId, 'operation-chain-1');
+  assert.equal(operations['operation-chain-2'].baseRecordVersion, 1);
 });
 
-test('rapid same-record saves never reset an in-flight V2 operation', async () => {
+test('rapid same-record saves never reset an in-flight operation', async () => {
   const store = new MemoryDataStore();
   const repository = await createRepository(store);
   await repository.saveLocalSyncAccountState({
@@ -1734,7 +1725,7 @@ test('rapid same-record saves never reset an in-flight V2 operation', async () =
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 0,
+    appliedSequence: 0,
     linkedAt: 1,
   });
   const account = (await repository.getLocalSyncAccountState())!;
@@ -1755,16 +1746,16 @@ test('rapid same-record saves never reset an in-flight V2 operation', async () =
     account,
     localPayload: note,
   });
-  const firstV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+  const firstOperations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
     string,
-    SyncOutboxOperationV2
+    SyncOperation
   >;
   await store.setItem(
-    'deardiary_sync_outbox_v2',
+    'deardiary_sync_operations',
     JSON.stringify({
-      ...firstV2,
+      ...firstOperations,
       'operation-rapid-1': {
-        ...firstV2['operation-rapid-1'],
+        ...firstOperations['operation-rapid-1'],
         state: 'UPLOADING',
         leaseOwner: 'worker-1',
         leaseExpiresAt: 100,
@@ -1781,18 +1772,18 @@ test('rapid same-record saves never reset an in-flight V2 operation', async () =
     localPayload: { ...note, title: 'Second', updatedAt: 20 },
   });
 
-  const v2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
     string,
-    SyncOutboxOperationV2
+    SyncOperation
   >;
-  assert.equal(v2['operation-rapid-1'].state, 'UPLOADING');
-  assert.equal(v2['operation-rapid-1'].leaseOwner, 'worker-1');
-  assert.equal(v2['operation-rapid-2'].state, 'PENDING');
-  assert.equal(v2['operation-rapid-2'].dependencyOperationId, 'operation-rapid-1');
-  assert.equal(v2['operation-rapid-2'].baseRecordVersion, 1);
+  assert.equal(operations['operation-rapid-1'].state, 'UPLOADING');
+  assert.equal(operations['operation-rapid-1'].leaseOwner, 'worker-1');
+  assert.equal(operations['operation-rapid-2'].state, 'PENDING');
+  assert.equal(operations['operation-rapid-2'].dependencyOperationId, 'operation-rapid-1');
+  assert.equal(operations['operation-rapid-2'].baseRecordVersion, 1);
 });
 
-test('local autosaves and V2 worker transitions cannot overwrite each other', async () => {
+test('local autosaves and worker transitions cannot overwrite each other', async () => {
   const store = new PausingMemoryDataStore();
   const repository = await createRepository(store);
   await repository.saveLocalSyncAccountState({
@@ -1802,7 +1793,7 @@ test('local autosaves and V2 worker transitions cannot overwrite each other', as
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 0,
+    appliedSequence: 0,
     linkedAt: 1,
   });
   const account = (await repository.getLocalSyncAccountState())!;
@@ -1826,7 +1817,7 @@ test('local autosaves and V2 worker transitions cannot overwrite each other', as
 
   const worker = new PersistentOutboxRepository(store);
   await worker.transition('operation-concurrent-1', 'PENDING', 'PREPARING');
-  const gate = store.pauseNextWriteContaining('deardiary_sync_outbox_v2');
+  const gate = store.pauseNextWriteContaining('deardiary_sync_operations');
   const autosave = repository.applyLocalMutationWithOutbox({
     operationId: 'operation-concurrent-2',
     recordType: 'note',
@@ -1848,9 +1839,9 @@ test('local autosaves and V2 worker transitions cannot overwrite each other', as
 
   gate.release();
   await Promise.all([autosave, transition]);
-  const outbox = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+  const outbox = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
     string,
-    SyncOutboxOperationV2
+    SyncOperation
   >;
   assert.equal(outbox['operation-concurrent-1'].state, 'UPLOADING');
   assert.equal(outbox['operation-concurrent-2'].state, 'PENDING');
@@ -1874,27 +1865,30 @@ test('manages preserved conflicts separately from retryable outbox failures', as
     isPinned: false,
     tags: [],
   });
-  const operation: SyncOutboxOperation = {
+  const operation: SyncOperation = {
     operationId: 'operation-conflict-preserved',
     accountId: 'account-1',
     deviceId: 'device-1',
     partitionKey: 'core',
     affectedPartitionKeys: ['core'],
-    recordType: 'note',
+    recordType: 'NOTE',
     recordId: original.id,
-    operation: 'upsert',
-    payload: original,
+    operationType: 'UPSERT',
+    baseRecordVersion: 0,
+    sourceCanonicalPayload: original,
     recoveredRecordId: recovered.id,
     localApplied: true,
-    state: 'conflict_preserved',
+    state: 'CONFLICT',
+    retryCount: 1,
+    nextAttemptAt: 0,
     createdAt: 1,
     updatedAt: 2,
-    error: 'stale_record_version',
+    lastErrorCode: 'RECORD_VERSION_CONFLICT',
   };
   await repository.saveSyncOutboxOperation(operation);
 
   const status = await repository.getSyncStatusSummary();
-  assert.equal(status.pendingOutboxCount, 0);
+  assert.equal(status.pendingOutboxCount, 1);
   assert.equal(status.failedOperationCount, 0);
   assert.equal(status.conflictCount, 1);
   const [conflict] = await repository.listPreservedSyncConflicts();
@@ -1905,10 +1899,10 @@ test('manages preserved conflicts separately from retryable outbox failures', as
   assert.equal(await repository.deleteSyncConflictRecoveredCopy(operation.operationId), true);
   assert.equal(await repository.getNote(recovered.id), null);
   await repository.retryPreservedSyncConflict(operation.operationId);
-  const [retryable] = await repository.listSyncOutboxOperations(['prepared']);
+  const [retryable] = await repository.listSyncOutboxOperations(['PENDING']);
   assert.equal(retryable.operationId, operation.operationId);
-  assert.equal(retryable.baseRecordVersion, undefined);
-  assert.equal(retryable.error, undefined);
+  assert.equal(retryable.baseRecordVersion, 0);
+  assert.equal(retryable.lastErrorCode, undefined);
   await repository.markSyncConflictResolved(operation.operationId);
   assert.equal((await repository.listSyncOutboxOperations()).length, 0);
 });
@@ -1923,7 +1917,7 @@ test('keeps local-first mutations and pending outbox rows after repository resta
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 2,
+    appliedSequence: 2,
     linkedAt: 1,
   });
   const note = {
@@ -1948,18 +1942,18 @@ test('keeps local-first mutations and pending outbox rows after repository resta
   const restarted = await createRepository(store);
 
   assert.deepEqual(await restarted.getNote(note.id), note);
-  const [operation] = await restarted.listSyncOutboxOperations(['prepared']);
+  const [operation] = await restarted.listSyncOutboxOperations(['PENDING']);
   assert.equal(operation.operationId, 'operation-restart');
   assert.equal(operation.localApplied, true);
-  assert.deepEqual(operation.payload, note);
-  const outboxV2 = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+  assert.deepEqual(operation.sourceCanonicalPayload, note);
+  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
     string,
-    SyncOutboxOperationV2
+    SyncOperation
   >;
-  assert.equal(outboxV2['operation-restart'].state, 'PENDING');
+  assert.equal(operations['operation-restart'].state, 'PENDING');
 });
 
-test('acknowledges a local mutation without rewriting the local record', async () => {
+test('replays an acknowledged mutation without overwriting a newer pending edit', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({
     accountId: 'account-1',
@@ -1968,7 +1962,7 @@ test('acknowledges a local mutation without rewriting the local record', async (
     googleUserId: 'google-1',
     googleEmail: 'writer@example.com',
     devicePublicKey: '{}',
-    currentSyncSequence: 2,
+    appliedSequence: 2,
     linkedAt: 1,
   });
   const note = {
@@ -1988,6 +1982,21 @@ test('acknowledges a local mutation without rewriting the local record', async (
     account: (await repository.getLocalSyncAccountState())!,
     localPayload: note,
   });
+  const [firstOperation] = await repository.listSyncOutboxOperations(['PENDING']);
+  await repository.saveSyncOutboxOperation({
+    ...firstOperation,
+    state: 'ACKNOWLEDGED',
+    remoteSequence: 3,
+    remoteRecordVersion: 1,
+  });
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-after-ack',
+    recordType: 'note',
+    recordId: note.id,
+    operation: 'upsert',
+    account: (await repository.getLocalSyncAccountState())!,
+    localPayload: { ...note, title: 'Newer local title', updatedAt: 20 },
+  });
   const event = createSyncDomainEvent({
     accountId: 'account-1',
     deviceId: 'device-1',
@@ -1995,13 +2004,23 @@ test('acknowledges a local mutation without rewriting the local record', async (
     operation: 'upsert',
     recordId: note.id,
     baseRecordVersion: 0,
-    payload: { ...note, title: 'Remote event payload should not rewrite local record' },
+    payload: note,
     eventId: 'operation-ack',
   });
 
-  await repository.acknowledgeLocalMutation({ event, sequence: 3 });
+  await repository.applyRemoteEventBatch(
+    [{ event, sequence: 3, operationId: 'operation-ack' }],
+    2,
+  );
 
-  assert.deepEqual(await repository.getNote(note.id), note);
+  assert.equal((await repository.getNote(note.id))?.title, 'Newer local title');
   assert.equal(await repository.getSyncRecordVersion('note', note.id), 1);
-  assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 3);
+  assert.equal((await repository.getLocalSyncAccountState())?.appliedSequence, 3);
+  const remaining = await repository.listSyncOutboxOperations();
+  assert.equal(remaining.some((operation) => operation.operationId === 'operation-ack'), false);
+  assert.equal(
+    remaining.find((operation) => operation.operationId === 'operation-after-ack')
+      ?.baseRecordVersion,
+    1,
+  );
 });

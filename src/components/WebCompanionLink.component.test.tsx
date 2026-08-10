@@ -10,10 +10,10 @@ vi.mock('../sync/webGoogleAuth', () => ({
   startWebGoogleSyncSignIn: vi.fn(),
 }));
 
-vi.mock('../sync/v2/v2CompanionPairing', () => ({
-  completeSyncV2CompanionPairing: vi.fn(),
-  getPendingSyncV2CompanionPairing: vi.fn(),
-  requestSyncV2CompanionPairing: vi.fn(),
+vi.mock('../sync/core/companionPairing', () => ({
+  completeSyncCompanionPairing: vi.fn(),
+  getPendingSyncCompanionPairing: vi.fn(),
+  requestSyncCompanionPairing: vi.fn(),
 }));
 
 vi.mock('../repositories', () => ({

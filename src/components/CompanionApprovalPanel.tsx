@@ -9,21 +9,21 @@ import {
   Trash as Trash2,
 } from 'iconoir-react';
 import { diaryRepository, eventSyncEngine } from '../repositories';
-import type { SyncV2Device, SyncV2Pairing } from '../sync/v2/api/SyncV2ApiTypes';
+import type { SyncDevice, SyncPairing } from '../sync/core/api/SyncApiTypes';
 import {
-  approveSyncV2CompanionPairing,
-  listPendingSyncV2Pairings,
-} from '../sync/v2/v2CompanionPairing';
+  approveSyncCompanionPairing,
+  listPendingSyncPairings,
+} from '../sync/core/companionPairing';
 import {
   enrollPrimaryRecoveryCredential,
   hasPrimaryRecoveryCredential,
-  listSyncV2Devices,
-  resumePendingSyncV2DeviceRevocation,
-  revokeSyncV2Device,
-} from '../sync/v2/v2DeviceManagement';
+  listSyncDevices,
+  resumePendingSyncDeviceRevocation,
+  revokeSyncDevice,
+} from '../sync/core/deviceManagement';
 import { BottomSheet } from './ui/BottomSheet';
 
-const pairingStatusPriority: Record<SyncV2Pairing['status'], number> = {
+const pairingStatusPriority: Record<SyncPairing['status'], number> = {
   REQUESTED: 1,
   SNAPSHOT_PREPARING: 2,
   APPROVED: 3,
@@ -42,8 +42,8 @@ const pairingStatusPriority: Record<SyncV2Pairing['status'], number> = {
  * both are at the same stage, so the phone never asks for two browser codes.
  */
 export const selectCurrentCompanionPairing = (
-  pairings: SyncV2Pairing[],
-): SyncV2Pairing[] => {
+  pairings: SyncPairing[],
+): SyncPairing[] => {
   if (pairings.length < 2) return pairings;
   return [
     pairings.reduce((current, candidate) => {
@@ -59,8 +59,8 @@ export const selectCurrentCompanionPairing = (
 };
 
 export default function CompanionApprovalPanel() {
-  const [sessions, setSessions] = useState<SyncV2Pairing[]>([]);
-  const [devices, setDevices] = useState<SyncV2Device[]>([]);
+  const [sessions, setSessions] = useState<SyncPairing[]>([]);
+  const [devices, setDevices] = useState<SyncDevice[]>([]);
   const [isPrimary, setIsPrimary] = useState<boolean | null>(null);
   const [securityUpgradeRequired, setSecurityUpgradeRequired] = useState(false);
   const [upgradePassphrase, setUpgradePassphrase] = useState('');
@@ -70,7 +70,7 @@ export default function CompanionApprovalPanel() {
   const [workingId, setWorkingId] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [revocationTarget, setRevocationTarget] = useState<SyncV2Device | null>(null);
+  const [revocationTarget, setRevocationTarget] = useState<SyncDevice | null>(null);
   const revocationInFlightRef = useRef(false);
 
   const refresh = async (showLoading = true) => {
@@ -78,18 +78,18 @@ export default function CompanionApprovalPanel() {
     if (showLoading) setLoading(true);
     try {
       const state = await diaryRepository.getLocalSyncAccountState();
-      if (!state || state.syncProtocolVersion !== 2 || state.deviceRole !== 'primary_mobile') {
+      if (!state || state.deviceRole !== 'primary_mobile') {
         setIsPrimary(false);
         return;
       }
       setIsPrimary(true);
       const credentialReady = await hasPrimaryRecoveryCredential();
       setSecurityUpgradeRequired(!credentialReady);
-      const resumed = await resumePendingSyncV2DeviceRevocation();
+      const resumed = await resumePendingSyncDeviceRevocation();
       if (resumed === 'completed') setMessage('Pending device removal completed safely.');
       const [pendingPairings, accountDevices] = await Promise.all([
-        listPendingSyncV2Pairings(state.deviceId),
-        listSyncV2Devices(state.deviceId),
+        listPendingSyncPairings(state.deviceId),
+        listSyncDevices(state.deviceId),
       ]);
       setSessions(selectCurrentCompanionPairing(pendingPairings));
       setDevices(
@@ -112,7 +112,7 @@ export default function CompanionApprovalPanel() {
 
   if (isPrimary !== true) return null;
 
-  const approve = async (session: SyncV2Pairing) => {
+  const approve = async (session: SyncPairing) => {
     const pairingCode = (codes[session.pairingId] || '').trim();
     if (pairingCode.length !== 8) {
       setError('Enter the 8-digit code shown in the companion browser.');
@@ -121,7 +121,7 @@ export default function CompanionApprovalPanel() {
     setWorkingId(session.pairingId);
     setError('');
     try {
-      await approveSyncV2CompanionPairing(session, pairingCode);
+      await approveSyncCompanionPairing(session, pairingCode);
       setMessage('Web browser approved. It is restoring your encrypted memories.');
       setCodes((current) => ({ ...current, [session.pairingId]: '' }));
       await refresh();
@@ -160,7 +160,7 @@ export default function CompanionApprovalPanel() {
       let completed = false;
       try {
         await eventSyncEngine.pullPending();
-        await revokeSyncV2Device(targetDeviceId);
+        await revokeSyncDevice(targetDeviceId);
         completed = true;
         setMessage('Device removed and the encrypted account key was rotated.');
       } catch (revokeError: any) {

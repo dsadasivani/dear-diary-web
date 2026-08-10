@@ -1,8 +1,8 @@
 import { SyncError } from '../errors';
-import type { SyncOutboxStateV2 } from './SyncOutboxOperationV2';
+import type { SyncOperationState } from './SyncOperation';
 
-export const ALLOWED_OUTBOX_V2_TRANSITIONS: Readonly<
-  Record<SyncOutboxStateV2, ReadonlySet<SyncOutboxStateV2>>
+export const ALLOWED_SYNC_OPERATION_TRANSITIONS: Readonly<
+  Record<SyncOperationState, ReadonlySet<SyncOperationState>>
 > = {
   PENDING: new Set([
     'PREPARING',
@@ -88,13 +88,13 @@ export const ALLOWED_OUTBOX_V2_TRANSITIONS: Readonly<
 };
 
 export const isAllowedOutboxTransition = (
-  from: SyncOutboxStateV2,
-  to: SyncOutboxStateV2,
-): boolean => ALLOWED_OUTBOX_V2_TRANSITIONS[from].has(to);
+  from: SyncOperationState,
+  to: SyncOperationState,
+): boolean => ALLOWED_SYNC_OPERATION_TRANSITIONS[from].has(to);
 
 export const assertAllowedOutboxTransition = (
-  from: SyncOutboxStateV2,
-  to: SyncOutboxStateV2,
+  from: SyncOperationState,
+  to: SyncOperationState,
 ): void => {
   if (!isAllowedOutboxTransition(from, to)) {
     throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });

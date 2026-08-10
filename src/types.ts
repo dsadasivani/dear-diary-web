@@ -196,7 +196,7 @@ export interface SyncAccount {
   googleEmail: string;
   createdAt: string;
   activePrimaryDeviceId: string | null;
-  currentSyncSequence: number;
+  appliedSequence: number;
   currentSnapshotSequence: number;
   currentKeyEpoch?: number;
   partitionedSyncEnabled?: boolean;
@@ -321,63 +321,6 @@ export interface PartitionHydrationState {
   hydratedAt?: number;
   failedAt?: number;
   failureCount?: number;
-  nextRetryAt?: number;
-  error?: string;
-}
-
-export type SyncOutboxOperationState =
-  | 'prepared'
-  | 'media_uploading'
-  | 'media_uploaded'
-  | 'event_uploading'
-  | 'event_uploaded'
-  | 'metadata_committing'
-  | 'committed'
-  | 'applied'
-  | 'failed'
-  | 'conflict_preserved';
-
-export interface SyncOutboxDriveObject {
-  driveFileId: string;
-  objectKind: SyncObjectKind;
-  sha256: string;
-  sizeBytes: number;
-  partitionKey?: SyncPartitionKey | string | null;
-  mediaId?: string;
-  localUri?: string;
-  reference?: string;
-  thumbnail?: {
-    driveFileId: string;
-    sha256: string;
-    sizeBytes: number;
-  };
-}
-
-export interface SyncOutboxOperation {
-  operationId: string;
-  accountId: string;
-  deviceId: string;
-  partitionKey: SyncPartitionKey | string;
-  affectedPartitionKeys: string[];
-  recordType: SyncRecordType;
-  recordId: string;
-  operation?: SyncEventOperation;
-  payload?: unknown;
-  baseRecordVersion?: number;
-  dependsOnOperationId?: string;
-  recoveredRecordId?: string;
-  affectedRecords?: Array<Omit<SyncAffectedRecordVersion, 'recordVersion'>>;
-  eventDriveFileId?: string;
-  eventSha256?: string;
-  eventSizeBytes?: number;
-  uploadedObjects?: SyncOutboxDriveObject[];
-  committedObjects?: SyncObjectMetadata[];
-  localApplied?: boolean;
-  state: SyncOutboxOperationState;
-  createdAt: number;
-  updatedAt: number;
-  retryCount?: number;
-  lastErrorAt?: number;
   nextRetryAt?: number;
   error?: string;
 }
@@ -529,13 +472,12 @@ export interface RecoveryKeyPackage {
 
 export interface LocalSyncAccountState {
   accountId: string;
-  syncProtocolVersion?: 2;
   deviceId: string;
   deviceRole: SyncDeviceRole;
   googleUserId: string;
   googleEmail: string;
   devicePublicKey: string;
-  currentSyncSequence: number;
+  appliedSequence: number;
   keyEpoch?: number;
   linkedAt: number;
 }

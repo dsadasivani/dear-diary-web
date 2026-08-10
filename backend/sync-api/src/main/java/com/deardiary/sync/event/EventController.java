@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v2/sync/events")
+@RequestMapping("/api/sync/events")
 public class EventController {
     private final EventPullService pullService;
 

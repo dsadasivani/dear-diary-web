@@ -38,6 +38,17 @@ const finishPageTransition = async (page: Page) => {
 
 const capture = async (page: Page, name: string) => {
   await settle(page);
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    document.querySelectorAll<HTMLElement>('*').forEach((element) => {
+      if (element.scrollTop) element.scrollTop = 0;
+      if (element.scrollLeft) element.scrollLeft = 0;
+    });
+    document.getAnimations().forEach((animation) => animation.finish());
+  });
+  await page.waitForTimeout(50);
   await expect(page).toHaveScreenshot(`${name}.png`, {
     animations: 'disabled',
     caret: 'hide',

@@ -41,7 +41,7 @@ import { isValidPin, updatePinWithCurrentPin } from '../domain/security';
 import type { PinLength } from '../domain/security';
 import { isNativePlatform } from '../platform';
 import { secureAuthService } from '../platform/security';
-import { diaryRepository, eventSyncEngine, syncV2Application } from '../repositories';
+import { diaryRepository, eventSyncEngine, syncApplication } from '../repositories';
 import { createDefaultUserProfile } from '../repositories/defaults';
 import { pruneOrphanedMedia } from '../mobile/mediaGarbageCollector';
 import { persistOptimizedImageFile } from '../mobile/mediaStorage';
@@ -75,7 +75,7 @@ import {
 import { DEFAULT_ACCENT_THEME_ID, type AccentThemeId } from '../design/accentThemes';
 import AccentThemeSelector from './AccentThemeSelector';
 import { calculateLocalStorageUsage, type LocalStorageUsage } from '../utils/localStorageUsage';
-import type { SyncV2Quota } from '../sync/v2/api/SyncV2ApiTypes';
+import type { SyncQuota } from '../sync/core/api/SyncApiTypes';
 import { DEFAULT_ACCOUNT_QUOTA } from '../domain/quota';
 
 interface AppSettingsScreenProps {
@@ -91,7 +91,7 @@ interface AppSettingsScreenProps {
   onThemeChange?: (theme: 'light' | 'dark') => void;
   accentTheme?: AccentThemeId;
   onAccentThemeChange?: (accentTheme: AccentThemeId) => void;
-  quota?: SyncV2Quota;
+  quota?: SyncQuota;
   onRefreshQuota?: () => Promise<void>;
 }
 
@@ -826,7 +826,7 @@ export default function AppSettingsScreen({
     setIsUnlinking(true);
     setAuthError('');
     try {
-      await syncV2Application.unlinkThisCompanion();
+      await syncApplication.unlinkThisCompanion();
     } catch (error: any) {
       setAuthError(error?.message || 'Could not unlink this browser.');
       setIsUnlinking(false);

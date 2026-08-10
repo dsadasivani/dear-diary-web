@@ -75,7 +75,6 @@ CREATE TABLE sync_event_retention_candidates (
 );
 
 ALTER TABLE sync_protocol_config
-    ADD COLUMN atomic_replay_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN rolling_snapshots_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN bootstrap_manifest_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN retention_deletion_enabled BOOLEAN NOT NULL DEFAULT FALSE,

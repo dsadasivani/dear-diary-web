@@ -15,7 +15,7 @@ npm run test:server
 npm run build
 ```
 
-The suites cover domain rules, Google-verified PIN recovery, encrypted local storage, repository behavior, outbox transitions, Sync V2 protocol and replay, media handling, React components, and the Express host.
+The suites cover domain rules, Google-verified PIN recovery, encrypted local storage, repository behavior, outbox transitions, Loredays Sync protocol and replay, media handling, React components, and the Express host.
 
 ## Service and platform checks
 
@@ -24,7 +24,7 @@ These commands require additional tooling:
 | Command                      | Requirement                                             | Coverage                                                                                                         |
 | ---------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `npm run backend:test`       | Java 21 and Docker for Testcontainers integration cases | Spring API, Flyway migrations, authentication, operations, replay, snapshots, workflows, and garbage collection. |
-| `npm run backend:test`       | Docker for integration cases                            | Sync V2 authorization, device, recovery, rotation, and object workflows.                                         |
+| `npm run backend:test`       | Docker for integration cases                            | Loredays Sync authorization, device, recovery, rotation, and object workflows.                                         |
 | `npm run test:e2e`           | Installed Playwright browsers                           | Browser launch and application workflows.                                                                        |
 | `npm run test:accessibility` | Installed Playwright browsers                           | Axe checks for tagged application routes.                                                                        |
 | `npm run android:test`       | Android SDK and JDK                                     | Android unit tests.                                                                                              |
@@ -46,7 +46,7 @@ Automated checks do not replace physical-device and staging validation. Before a
 - Camera or picker, microphone, speech recognition, notifications, keyboard resize, Back behavior, deep links, and status-bar appearance.
 - Preferences-to-SQLite and data-URI-to-file migration with interruption and low storage.
 - Android clear-storage recovery, production signing, OAuth fingerprints, icons, splash assets, release APK/AAB installation, and disabled WebView debugging.
-- Staging dashboards, alerts, telemetry redaction, emergency switches, canary assignment, snapshots, notification delivery, and garbage collection in dry-run mode.
+- Staging dashboards, alerts, telemetry redaction, emergency switches, snapshots, notification delivery, and garbage collection in dry-run mode.
 
 `VITE_ENABLE_MD_FLOW_HOOKS` enables deterministic manual recovery and rotation checkpoints in non-release builds. Keep it unset for normal development and production builds.
 

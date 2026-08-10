@@ -12,7 +12,6 @@ import type {
   Note,
   PartitionHydrationState,
   SyncMediaPointer,
-  SyncOutboxOperation,
 } from '../../types';
 import type {
   LocalDataStore,
@@ -24,7 +23,7 @@ import type {
   LocalStructuredRecordMutation,
 } from './LocalDataStore';
 import { measureAsync } from '../../utils/performance';
-import type { SyncOutboxOperationV2 } from '../../sync/outbox/SyncOutboxOperationV2';
+import type { SyncOperation } from '../../sync/outbox/SyncOperation';
 import {
   decodePageCursor,
   encodeKeysetCursor,
@@ -66,8 +65,7 @@ const STRUCTURED_COMPATIBILITY_KEYS = [
   'deardiary_sync_record_versions',
   'deardiary_sync_media_pointers',
   'deardiary_sync_partition_hydration',
-  'deardiary_sync_outbox',
-  'deardiary_sync_outbox_v2',
+  'deardiary_sync_operations',
 ] as const;
 
 const now = (): number => Date.now();
@@ -185,8 +183,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         DELETE FROM sync_record_versions;
         DELETE FROM sync_media_pointers;
         DELETE FROM sync_partition_hydration;
-        DELETE FROM sync_outbox;
-        DELETE FROM sync_outbox_v2;
+        DELETE FROM sync_operations;
         DELETE FROM storage_meta;
       `);
       await this.setMeta(db, 'storage_schema_version', String(STORAGE_SCHEMA_VERSION));
@@ -318,8 +315,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
   async commitLocalMutationAndOutbox(input: {
     records: LocalStructuredRecordMutation[];
     items?: Record<string, string>;
-    outboxOperation: SyncOutboxOperation;
-    outboxV2Operation: SyncOutboxOperationV2;
+    outboxOperation: SyncOperation;
   }): Promise<void> {
     await measureAsync(
       'sqlite.structured.localMutationAndOutbox',
@@ -336,8 +332,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
               }
             }
             if (input.items) await this.writeSerializedItemsInTransaction(db, input.items, false);
-            await this.upsertOutboxOperation(db, input.outboxOperation, false);
-            await this.upsertOutboxV2Operation(db, input.outboxV2Operation, false);
+            await this.upsertSyncOperation(db, input.outboxOperation, false);
             await db.commitTransaction();
           } catch (error) {
             await db.rollbackTransaction().catch(() => undefined);
@@ -680,25 +675,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
 
       CREATE INDEX IF NOT EXISTS idx_sync_partition_status ON sync_partition_hydration(status);
 
-      CREATE TABLE IF NOT EXISTS sync_outbox (
-        operation_id TEXT PRIMARY KEY NOT NULL,
-        account_id TEXT NOT NULL,
-        device_id TEXT NOT NULL,
-        partition_key TEXT NOT NULL,
-        record_type TEXT NOT NULL,
-        record_id TEXT NOT NULL,
-        state TEXT NOT NULL,
-        next_retry_at INTEGER,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        raw_json TEXT NOT NULL,
-        CHECK (record_type IN ('diary', 'entry', 'note', 'settings', 'profile'))
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_sync_outbox_state_retry ON sync_outbox(state, next_retry_at);
-      CREATE INDEX IF NOT EXISTS idx_sync_outbox_record ON sync_outbox(record_type, record_id);
-
-      CREATE TABLE IF NOT EXISTS sync_outbox_v2 (
+      CREATE TABLE IF NOT EXISTS sync_operations (
         operation_id TEXT PRIMARY KEY NOT NULL,
         account_id TEXT NOT NULL,
         device_id TEXT NOT NULL,
@@ -719,10 +696,10 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         CHECK (operation_type IN ('UPSERT', 'DELETE'))
       );
 
-      CREATE INDEX IF NOT EXISTS idx_sync_outbox_v2_runnable
-        ON sync_outbox_v2(account_id, state, next_attempt_at, lease_expires_at);
-      CREATE INDEX IF NOT EXISTS idx_sync_outbox_v2_record
-        ON sync_outbox_v2(account_id, record_type, record_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_sync_operations_runnable
+        ON sync_operations(account_id, state, next_attempt_at, lease_expires_at);
+      CREATE INDEX IF NOT EXISTS idx_sync_operations_record
+        ON sync_operations(account_id, record_type, record_id, created_at);
     `);
 
     await this.migrateRelationalIntegritySchema(db);
@@ -959,19 +936,6 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         SELECT RAISE(ABORT, 'sync_record_version_type_invalid');
       END;
 
-      CREATE TRIGGER IF NOT EXISTS trg_sync_outbox_type_insert
-      BEFORE INSERT ON sync_outbox
-      WHEN NEW.record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile')
-      BEGIN
-        SELECT RAISE(ABORT, 'sync_outbox_record_type_invalid');
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS trg_sync_outbox_type_update
-      BEFORE UPDATE ON sync_outbox
-      WHEN NEW.record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile')
-      BEGIN
-        SELECT RAISE(ABORT, 'sync_outbox_record_type_invalid');
-      END;
     `);
   }
 
@@ -986,8 +950,6 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       DELETE FROM sync_record_versions
       WHERE record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile');
 
-      DELETE FROM sync_outbox
-      WHERE record_type NOT IN ('diary', 'entry', 'note', 'settings', 'profile');
     `);
   }
 
@@ -1214,16 +1176,10 @@ export class NativeSQLiteDataStore implements LocalDataStore {
           'SELECT partition_key AS key, raw_json FROM sync_partition_hydration ORDER BY rowid;',
           compatibilityValue,
         );
-      case 'deardiary_sync_outbox':
+      case 'deardiary_sync_operations':
         return this.readJsonMapRows(
           db,
-          'SELECT operation_id AS key, raw_json FROM sync_outbox ORDER BY created_at, rowid;',
-          compatibilityValue,
-        );
-      case 'deardiary_sync_outbox_v2':
-        return this.readJsonMapRows(
-          db,
-          'SELECT operation_id AS key, raw_json FROM sync_outbox_v2 ORDER BY created_at, rowid;',
+          'SELECT operation_id AS key, raw_json FROM sync_operations ORDER BY created_at, rowid;',
           compatibilityValue,
         );
       case 'deardiary_security':
@@ -1664,11 +1620,8 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       case 'deardiary_sync_partition_hydration':
         await db.run('DELETE FROM sync_partition_hydration;');
         break;
-      case 'deardiary_sync_outbox':
-        await db.run('DELETE FROM sync_outbox;');
-        break;
-      case 'deardiary_sync_outbox_v2':
-        await db.run('DELETE FROM sync_outbox_v2;');
+      case 'deardiary_sync_operations':
+        await db.run('DELETE FROM sync_operations;');
         break;
       case 'deardiary_security':
       case 'deardiary_drive_backup':
@@ -1743,11 +1696,8 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       case 'deardiary_sync_partition_hydration':
         await this.syncPartitionHydration(db, value, transaction);
         break;
-      case 'deardiary_sync_outbox':
-        await this.syncOutbox(db, value, transaction);
-        break;
-      case 'deardiary_sync_outbox_v2':
-        await this.syncOutboxV2(db, value, transaction);
+      case 'deardiary_sync_operations':
+        await this.syncOperations(db, value, transaction);
         break;
       case 'deardiary_security':
       case 'deardiary_drive_backup':
@@ -1776,7 +1726,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         current_sync_sequence = excluded.current_sync_sequence,
         value = excluded.value,
         updated_at = excluded.updated_at;`,
-      [state.accountId, state.deviceId, state.currentSyncSequence || 0, value, now()],
+      [state.accountId, state.deviceId, state.appliedSequence || 0, value, now()],
       transaction,
     );
   }
@@ -1934,63 +1884,6 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     }
   }
 
-  private async syncOutbox(
-    db: SQLiteDBConnection,
-    value: string,
-    transaction = true,
-  ): Promise<void> {
-    const operations = safeJsonParse<Record<string, SyncOutboxOperation>>(value);
-    if (!operations || typeof operations !== 'object') return;
-
-    const incomingKeys = new Set(Object.keys(operations));
-    const existingRows =
-      (await db.query('SELECT operation_id, raw_json FROM sync_outbox;')).values || [];
-    const existingByKey = new Map(
-      existingRows.map((row) => [String(row.operation_id), String(row.raw_json)]),
-    );
-    for (const row of existingRows) {
-      const operationId = String(row.operation_id);
-      if (!incomingKeys.has(operationId))
-        await db.run('DELETE FROM sync_outbox WHERE operation_id = ?;', [operationId], transaction);
-    }
-    for (const [operationId, operation] of Object.entries(operations)) {
-      if (!operation?.operationId) continue;
-      const rawJson = JSON.stringify(operation);
-      if (existingByKey.get(operationId) === rawJson) continue;
-      await db.run(
-        `INSERT INTO sync_outbox (
-          operation_id, account_id, device_id, partition_key, record_type, record_id,
-          state, next_retry_at, created_at, updated_at, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(operation_id) DO UPDATE SET
-          account_id = excluded.account_id,
-          device_id = excluded.device_id,
-          partition_key = excluded.partition_key,
-          record_type = excluded.record_type,
-          record_id = excluded.record_id,
-          state = excluded.state,
-          next_retry_at = excluded.next_retry_at,
-          created_at = excluded.created_at,
-          updated_at = excluded.updated_at,
-          raw_json = excluded.raw_json;`,
-        [
-          operationId,
-          operation.accountId,
-          operation.deviceId,
-          String(operation.partitionKey || ''),
-          operation.recordType,
-          operation.recordId,
-          operation.state,
-          operation.nextRetryAt || null,
-          operation.createdAt || now(),
-          operation.updatedAt || now(),
-          rawJson,
-        ],
-        transaction,
-      );
-    }
-  }
-
   async queryEntryProjections(
     options: LocalEntryQueryOptions,
   ): Promise<LocalQueryPageResult<LocalEntryProjection> | undefined> {
@@ -2120,16 +2013,16 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     );
   }
 
-  private async syncOutboxV2(
+  private async syncOperations(
     db: SQLiteDBConnection,
     value: string,
     transaction = true,
   ): Promise<void> {
-    const operations = safeJsonParse<Record<string, SyncOutboxOperationV2>>(value);
+    const operations = safeJsonParse<Record<string, SyncOperation>>(value);
     if (!operations || typeof operations !== 'object') return;
     const incomingKeys = new Set(Object.keys(operations));
     const existingRows =
-      (await db.query('SELECT operation_id, raw_json FROM sync_outbox_v2;')).values || [];
+      (await db.query('SELECT operation_id, raw_json FROM sync_operations;')).values || [];
     const existingByKey = new Map(
       existingRows.map((row) => [String(row.operation_id), String(row.raw_json)]),
     );
@@ -2137,7 +2030,7 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       const operationId = String(row.operation_id);
       if (!incomingKeys.has(operationId))
         await db.run(
-          'DELETE FROM sync_outbox_v2 WHERE operation_id = ?;',
+          'DELETE FROM sync_operations WHERE operation_id = ?;',
           [operationId],
           transaction,
         );
@@ -2146,17 +2039,17 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       if (!operation?.operationId) continue;
       const rawJson = JSON.stringify(operation);
       if (existingByKey.get(operationId) === rawJson) continue;
-      await this.upsertOutboxV2Operation(db, operation, transaction);
+      await this.upsertSyncOperation(db, operation, transaction);
     }
   }
 
-  private async upsertOutboxV2Operation(
+  private async upsertSyncOperation(
     db: SQLiteDBConnection,
-    operation: SyncOutboxOperationV2,
+    operation: SyncOperation,
     transaction = true,
   ): Promise<void> {
     await db.run(
-      `INSERT INTO sync_outbox_v2 (
+      `INSERT INTO sync_operations (
         operation_id, account_id, device_id, record_type, record_id, operation_type,
         base_record_version, state, retry_count, next_attempt_at, lease_owner,
         lease_expires_at, dependency_operation_id, created_at, updated_at, raw_json
@@ -2759,44 +2652,6 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     transaction = true,
   ): Promise<void> {
     await db.run('DELETE FROM notes_fts WHERE id = ?;', [id], transaction);
-  }
-
-  private async upsertOutboxOperation(
-    db: SQLiteDBConnection,
-    operation: SyncOutboxOperation,
-    transaction = true,
-  ): Promise<void> {
-    await db.run(
-      `INSERT INTO sync_outbox (
-        operation_id, account_id, device_id, partition_key, record_type, record_id,
-        state, next_retry_at, created_at, updated_at, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(operation_id) DO UPDATE SET
-        account_id = excluded.account_id,
-        device_id = excluded.device_id,
-        partition_key = excluded.partition_key,
-        record_type = excluded.record_type,
-        record_id = excluded.record_id,
-        state = excluded.state,
-        next_retry_at = excluded.next_retry_at,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at,
-        raw_json = excluded.raw_json;`,
-      [
-        operation.operationId,
-        operation.accountId,
-        operation.deviceId,
-        String(operation.partitionKey || ''),
-        operation.recordType,
-        operation.recordId,
-        operation.state,
-        operation.nextRetryAt || null,
-        operation.createdAt || now(),
-        operation.updatedAt || now(),
-        JSON.stringify(operation),
-      ],
-      transaction,
-    );
   }
 
   private async insertMediaAsset(

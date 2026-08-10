@@ -12,8 +12,8 @@ vi.mock('../repositories', () => ({
   },
 }));
 
-const syncReference = 'ddmedia:v2:media-1:drive-1';
-const failingSyncReference = 'ddmedia:v2:media-2:drive-2';
+const syncReference = 'ddmedia:media-1:drive-1';
+const failingSyncReference = 'ddmedia:media-2:drive-2';
 const fallbackSrc = 'https://example.test/fallback.jpg';
 const hydratedSrc = 'data:image/webp;base64,aHlkcmF0ZWQ=';
 

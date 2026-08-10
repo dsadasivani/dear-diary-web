@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { WebLocalDataStore } from './webLocalDataStore';
 import { LocalDiaryRepository } from '../../repositories/localDiaryRepository';
-import type { SyncOutboxOperationV2 } from '../../sync/outbox';
+import type { SyncOperation } from '../../sync/outbox';
 import {
   getPlainIndexRecords,
   REPOSITORY_STORE,
@@ -379,42 +379,31 @@ test('web structured local mutation and outbox commit rolls back atomically', as
     createdAt: 1,
     updatedAt: 2,
   };
-  const outboxOperation = {
+  const operation = {
     operationId: 'op-atomic-local',
     accountId: 'account',
     deviceId: 'device',
     partitionKey: 'core',
     affectedPartitionKeys: ['core'],
-    recordType: 'entry' as const,
-    recordId: entry.id,
-    operation: 'upsert' as const,
-    payload: entry,
-    state: 'prepared' as const,
-    localApplied: true,
-    createdAt: 3,
-    updatedAt: 3,
-  };
-  const outboxV2Operation = {
-    operationId: outboxOperation.operationId,
-    accountId: 'account',
-    deviceId: 'device',
     recordType: 'ENTRY',
     recordId: entry.id,
     operationType: 'UPSERT',
     baseRecordVersion: 0,
+    sourceCanonicalPayload: entry,
     state: 'PENDING',
+    localApplied: true,
     retryCount: 0,
     nextAttemptAt: 3,
     createdAt: 3,
     updatedAt: 3,
-  } satisfies SyncOutboxOperationV2;
+  } satisfies SyncOperation;
   const originalPut = IDBObjectStore.prototype.put;
   IDBObjectStore.prototype.put = function patchedPut(
     this: IDBObjectStore,
     value: unknown,
     key?: IDBValidKey,
   ): IDBRequest<IDBValidKey> {
-    if (this.name === WEB_RECORD_STORES.outbox && key === outboxOperation.operationId) {
+    if (this.name === WEB_RECORD_STORES.operations && key === operation.operationId) {
       this.transaction.abort();
       throw new Error('simulated outbox write failure');
     }
@@ -426,8 +415,7 @@ test('web structured local mutation and outbox commit rolls back atomically', as
       () =>
         store.commitLocalMutationAndOutbox({
           records: [{ key: 'deardiary_entries', id: entry.id, value: entry }],
-          outboxOperation,
-          outboxV2Operation,
+          outboxOperation: operation,
         }),
       /simulated outbox write failure|transaction aborted/i,
     );
@@ -437,23 +425,19 @@ test('web structured local mutation and outbox commit rolls back atomically', as
 
   assert.deepEqual(await store.getStructuredCollection('deardiary_entries'), undefined);
   assert.equal(
-    await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.outbox).getItem(
-      outboxOperation.operationId,
+    await new WebEncryptedKeyValueStore(WEB_RECORD_STORES.operations).getItem(
+      operation.operationId,
     ),
     null,
   );
-  assert.equal(await store.getItem('deardiary_sync_outbox_v2'), null);
+  assert.equal(await store.getItem('deardiary_sync_operations'), null);
 
   await store.commitLocalMutationAndOutbox({
     records: [{ key: 'deardiary_entries', id: entry.id, value: entry }],
-    outboxOperation,
-    outboxV2Operation,
+    outboxOperation: operation,
   });
   assert.deepEqual(await store.getStructuredRecord('deardiary_entries', entry.id), entry);
-  assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_outbox'))!), {
-    [outboxOperation.operationId]: outboxOperation,
-  });
-  assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_outbox_v2'))!), {
-    [outboxOperation.operationId]: outboxV2Operation,
+  assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_operations'))!), {
+    [operation.operationId]: operation,
   });
 });

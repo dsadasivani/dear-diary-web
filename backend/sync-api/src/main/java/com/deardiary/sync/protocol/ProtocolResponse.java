@@ -10,8 +10,6 @@ public record ProtocolResponse(
     long maximumMediaBytes,
     long maximumSnapshotBytes,
     String minimumSupportedAppVersion,
-    int syncV2RolloutPercentage,
-    int rolloutSaltVersion,
     boolean emergencyMode,
     FeatureFlags featureFlags,
     BootstrapControls bootstrapControls
@@ -31,7 +29,6 @@ public record ProtocolResponse(
     ) {}
 
     public record BootstrapControls(
-        boolean atomicReplayEnabled,
         boolean rollingSnapshotsEnabled,
         boolean bootstrapManifestEnabled,
         boolean retentionDeletionEnabled,

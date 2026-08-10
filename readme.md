@@ -4,7 +4,7 @@
 
 Loredays is a private personal journaling and memory application designed to help people capture the thoughts, moments and experiences that shape their lives. Android is the primary standalone target. A browser without a local sync account opens the companion-link flow and must be approved from a primary Android device.
 
-Plaintext stays on trusted devices. The current Sync V2 path encrypts payloads on the client, uses Supabase Auth for identity, stores synchronization metadata in the Spring Boot sync service and PostgreSQL, and stores encrypted objects in an S3-compatible object store.
+Plaintext stays on trusted devices. The current Loredays Sync path encrypts payloads on the client, uses Supabase Auth for identity, stores synchronization metadata in the Spring Boot sync service and PostgreSQL, and stores encrypted objects in an S3-compatible object store.
 
 ## Features
 
@@ -16,7 +16,7 @@ Plaintext stays on trusted devices. The current Sync V2 path encrypts payloads o
 - Encrypted, local-first multi-device sync with durable outbox operations, companion pairing, recovery, key rotation, conflict preservation, and encrypted snapshots.
 - Encrypted IndexedDB storage on the web and SQLCipher-backed SQLite plus app-private media files on Android.
 
-The app includes portable backup and legacy sync utilities for compatibility and migration, but the current Settings UI centers on encrypted account sync rather than manual Drive backup scheduling or local import/export.
+The app uses one encrypted account-sync implementation. Portable backup remains a separate user-controlled export feature.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ flowchart TD
     STORE -->|Web| IDB[Encrypted IndexedDB]
     STORE -->|Android| SQL[SQLCipher SQLite]
     REPO --> OUTBOX[Durable local outbox]
-    OUTBOX --> SYNC[Sync V2 client]
+    OUTBOX --> SYNC[Loredays Sync client]
     SYNC --> API[Spring Boot sync API]
     API --> PG[PostgreSQL metadata]
     SYNC --> OBJECTS[S3-compatible encrypted objects]
@@ -39,12 +39,12 @@ flowchart TD
 
 All collection and entry mutations go through the asynchronous `DiaryRepository`. The internal `Diary` terminology is retained for data compatibility. A synced write updates encrypted local storage and its durable outbox record before returning to the UI. Network upload, remote pull, acknowledgement, snapshots, and archive hydration run afterward. Repository change events and targeted queries keep screens current without reloading the entire data set after normal navigation.
 
-The Express host is intentionally small. In development it mounts Vite middleware; in production it serves `dist` with an SPA fallback. `GET /api/health` is the only application API on that host. The separate Spring Boot service under `backend/sync-api` owns Sync V2 endpoints.
+The Express host is intentionally small. In development it mounts Vite middleware; in production it serves `dist` with an SPA fallback. `GET /api/health` is the only application API on that host. The separate Spring Boot service under `backend/sync-api` owns Loredays Sync endpoints.
 
 For details, see:
 
 - [Sync architecture and compatibility](docs/sync-and-supabase.md)
-- [Local Sync V2 environment](docs/local-sync-v2.md)
+- [Local Loredays Sync environment](docs/local-sync.md)
 - [Android and Capacitor](docs/mobile-capacitor.md)
 - [Performance measurement](docs/performance.md)
 - [Production sync operations](docs/production-operations.md)
@@ -57,8 +57,8 @@ For details, see:
 
 - Node.js and npm compatible with the checked-in lockfile.
 - A modern browser.
-- Docker for Supabase integration tests and the complete local Sync V2 stack.
-- Java 21 for the Sync V2 backend.
+- Docker for Supabase integration tests and the complete local Loredays Sync stack.
+- Java 21 for the Loredays Sync backend.
 - Android Studio and a compatible JDK for Android builds and checks.
 
 Install dependencies and start the web host:
@@ -70,13 +70,13 @@ npm run dev
 
 Open `http://localhost:3000`. On Windows systems that block `npm.ps1`, use `npm.cmd` and `npx.cmd`.
 
-To start PostgreSQL, MinIO, the Sync V2 backend, and the web host together on Windows:
+To start PostgreSQL, MinIO, the Loredays Sync backend, and the web host together on Windows:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/start-local-sync-v2.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-local-sync.ps1
 ```
 
-See [docs/local-sync-v2.md](docs/local-sync-v2.md) for endpoints, emulator networking, and reset commands.
+See [docs/local-sync.md](docs/local-sync.md) for endpoints, emulator networking, and reset commands.
 
 ## Common commands
 
@@ -93,7 +93,7 @@ See [docs/local-sync-v2.md](docs/local-sync-v2.md) for endpoints, emulator netwo
 | `npm run backend:bootRun:development` | Start the backend with the development Spring profile.                         |
 | `npm run backend:bootRun:staging`     | Start the backend with the staging Spring profile.                             |
 | `npm run backend:bootRun:production`  | Start the backend with the production Spring profile.                          |
-| `npm run backend:test`                | Run the Sync V2 backend unit and integration tests.                            |
+| `npm run backend:test`                | Run the Loredays Sync backend unit and integration tests.                            |
 | `npm run test:e2e`                    | Run Playwright end-to-end tests.                                               |
 | `npm run test:accessibility`          | Run the accessibility-tagged Playwright checks.                                |
 | `npm run test:ops`                    | Validate dashboards and alert configuration.                                   |
@@ -141,8 +141,8 @@ browser code; such values must never be treated as secrets.
 The main client settings are:
 
 - `VITE_GOOGLE_WEB_CLIENT_ID` for Google identity and legacy Drive compatibility flows.
-- `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth and Sync V2.
-- `VITE_SYNC_V2_API_URL` for the Spring Boot Sync V2 service.
+- `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Supabase Auth and Loredays Sync.
+- `VITE_SYNC_API_URL` for the Spring Boot Loredays Sync service.
 - `VITE_GRAFANA_FARO_URL` for privacy-restricted Grafana Cloud Frontend Observability.
 
 Backend database, JWT, object-store, notification, garbage-collection, Grafana Cloud OTLP, and CORS settings are documented
@@ -176,8 +176,8 @@ Clearing browser site data or Android app storage removes local journal data and
 | `src/repositories` | Local-first repository abstraction and implementations.                       |
 | `src/platform`     | Storage, security, filesystem, audio, and platform adapters.                  |
 | `src/mobile`       | Capacitor bootstrap, native media, reminders, and deep links.                 |
-| `src/sync`         | Encryption, outbox, recovery, and Sync V2 client logic.                       |
-| `backend/sync-api` | Spring Boot Sync V2 API and Flyway migrations.                                |
+| `src/sync`         | Encryption, outbox, recovery, and Loredays Sync client logic.                       |
+| `backend/sync-api` | Spring Boot Loredays Sync API and Flyway migrations.                                |
 | `android`          | Native Android shell and Drive bridge.                                        |
 | `tests/e2e`        | Playwright application and accessibility tests.                               |
 | `docs`             | Maintained architecture, operations, mobile, performance, and testing guides. |
@@ -187,4 +187,4 @@ Clearing browser site data or Android app storage removes local journal data and
 
 - iOS dependencies and scripts are present, but an iOS native project is not checked in and must be generated and validated on macOS.
 - Physical-device validation is still required for real OAuth and object-store environments, biometrics, permission prompts, background behavior, interrupted storage migration, low-storage handling, and production-signed Android builds.
-- Google is used for account identity only; encrypted synchronization uses the Sync V2 service.
+- Google is used for account identity only; encrypted synchronization uses the Loredays Sync service.

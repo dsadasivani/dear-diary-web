@@ -1,5 +1,5 @@
 export interface SyncRuntimeFlags {
-  syncV2Enabled: boolean;
+  syncEnabled: boolean;
   syncWritesEnabled: boolean;
   remotePullEnabled: boolean;
   realtimeEnabled: boolean;
@@ -13,7 +13,7 @@ export interface SyncRuntimeFlags {
 }
 
 export const SAFE_SYNC_RUNTIME_FLAGS: Readonly<SyncRuntimeFlags> = Object.freeze({
-  syncV2Enabled: false,
+  syncEnabled: false,
   syncWritesEnabled: true,
   remotePullEnabled: true,
   realtimeEnabled: false,

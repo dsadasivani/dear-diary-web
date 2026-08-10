@@ -3,11 +3,10 @@ import { LocalDiaryRepository } from './localDiaryRepository';
 import { EventSyncEngine } from '../sync/eventSyncEngine';
 import { createSyncingDiaryRepository } from './syncingDiaryRepository';
 import { PersistentOutboxRepository } from '../sync/outbox';
-import { SyncV2ApplicationLifecycle } from '../sync/v2/SyncV2ApplicationLifecycle';
+import { SyncApplicationLifecycle } from '../sync/core/SyncApplicationLifecycle';
 import { createRepositoryCapabilities } from './capabilities';
 
 export type {
-  AcknowledgeLocalMutationInput,
   ApplyLocalMutationWithOutboxInput,
   DiaryRepository,
   DiaryStatistics,
@@ -52,15 +51,15 @@ export type {
 } from './capabilities';
 
 export const localDiaryRepository = new LocalDiaryRepository(localDataStore);
-export const outboxV2Repository = new PersistentOutboxRepository(localDataStore);
+export const operationsRepository = new PersistentOutboxRepository(localDataStore);
 export const eventSyncEngine = new EventSyncEngine(localDiaryRepository, {
-  outboxRepository: outboxV2Repository,
+  outboxRepository: operationsRepository,
 });
 export const diaryRepository = createSyncingDiaryRepository(localDiaryRepository, eventSyncEngine);
 export const repositoryCapabilities = createRepositoryCapabilities(diaryRepository);
-export const syncV2Application = new SyncV2ApplicationLifecycle(
+export const syncApplication = new SyncApplicationLifecycle(
   localDataStore,
   localDiaryRepository,
-  outboxV2Repository,
+  operationsRepository,
   eventSyncEngine,
 );

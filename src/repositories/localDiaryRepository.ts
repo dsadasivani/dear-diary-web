@@ -11,7 +11,6 @@ import type {
   SecurityConfig,
   SyncDomainEvent,
   SyncMediaPointer,
-  SyncOutboxOperation,
   SyncPartitionKey,
   SyncRecordType,
   UserProfile,
@@ -24,7 +23,6 @@ import type {
 } from '../platform/storage';
 import { toLocalDateKey } from '../utils/localDate';
 import type {
-  AcknowledgeLocalMutationInput,
   ApplyLocalMutationWithOutboxInput,
   DiaryStatistics,
   DiaryRepository,
@@ -86,9 +84,9 @@ import {
   type SyncHealthPatch,
 } from '../sync/health/SyncHealth';
 import {
-  pendingOutboxV2FromLegacy,
+  TERMINAL_SYNC_OPERATION_STATES,
   withSyncOutboxMutationLock,
-  type SyncOutboxOperationV2,
+  type SyncOperation,
 } from '../sync/outbox';
 
 const STORAGE_KEYS = {
@@ -103,17 +101,15 @@ const STORAGE_KEYS = {
   syncRecordVersions: 'deardiary_sync_record_versions',
   syncMediaPointers: 'deardiary_sync_media_pointers',
   syncPartitionHydration: 'deardiary_sync_partition_hydration',
-  syncOutbox: 'deardiary_sync_outbox',
-  syncOutboxV2: 'deardiary_sync_outbox_v2',
-  syncHealth: 'deardiary_sync_health_v1',
+  syncOperations: 'deardiary_sync_operations',
+  syncHealth: 'deardiary_sync_health',
 } as const;
 
-const V2_REPLAY_KEYS = {
-  records: 'deardiary_sync_v2_records',
-  versions: 'deardiary_sync_v2_record_versions',
-  applied: 'deardiary_sync_v2_applied_events',
-  media: 'deardiary_sync_v2_media_pointers',
-  runtime: 'deardiary_sync_v2_runtime',
+const SYNC_REPLAY_KEYS = {
+  records: 'deardiary_sync_records',
+  versions: 'deardiary_sync_base_versions',
+  applied: 'deardiary_sync_applied_events',
+  media: 'deardiary_sync_base_media',
 } as const;
 
 const ARCHIVE_HYDRATION_RETRY_BASE_MS = 5 * 60 * 1000;
@@ -170,9 +166,6 @@ const getLastEntryUpdatedAt = (entries: Entry[]): number | undefined => {
   const latest = entries.reduce((current, entry) => Math.max(current, entry.updatedAt || 0), 0);
   return latest || undefined;
 };
-
-const isRetryableFailedOutboxOperation = (operation: SyncOutboxOperation): boolean =>
-  operation.state === 'failed' && operation.nextRetryAt !== Number.MAX_SAFE_INTEGER;
 
 const entrySummary = (entry: LocalEntryProjection): EntrySummary => ({
   id: entry.id,
@@ -1072,7 +1065,10 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   saveLocalSyncAccountState(state: LocalSyncAccountState): Promise<void> {
-    return this.enqueueWrite(() => this.writeJson(STORAGE_KEYS.syncAccount, state));
+    return this.enqueueWrite(async () => {
+      const existing = await this.readJson<Record<string, unknown>>(STORAGE_KEYS.syncAccount, {});
+      await this.writeJson(STORAGE_KEYS.syncAccount, { ...existing, ...state });
+    });
   }
 
   clearLocalSyncAccountState(): Promise<void> {
@@ -1084,8 +1080,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         [STORAGE_KEYS.syncRecordVersions]: {},
         [STORAGE_KEYS.syncMediaPointers]: {},
         [STORAGE_KEYS.syncPartitionHydration]: {},
-        [STORAGE_KEYS.syncOutbox]: {},
-        [STORAGE_KEYS.syncOutboxV2]: {},
+        [STORAGE_KEYS.syncOperations]: {},
       });
       await this.store.removeItem(STORAGE_KEYS.syncAccount);
     });
@@ -1117,7 +1112,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       if (!syncState || syncState.accountId !== event.accountId) {
         throw new Error('The sync event does not belong to the local account.');
       }
-      if (!options.allowHistorical && sequence <= syncState.currentSyncSequence) return;
+      if (!options.allowHistorical && sequence <= syncState.appliedSequence) return;
 
       const versions = await this.readJson<Record<string, number>>(
         STORAGE_KEYS.syncRecordVersions,
@@ -1146,7 +1141,7 @@ export class LocalDiaryRepository implements DiaryRepository {
           await this.writeManyJson({
             [STORAGE_KEYS.syncAccount]: {
               ...syncState,
-              currentSyncSequence: Math.max(syncState.currentSyncSequence, sequence),
+              appliedSequence: Math.max(syncState.appliedSequence, sequence),
             },
           });
           return;
@@ -1246,7 +1241,7 @@ export class LocalDiaryRepository implements DiaryRepository {
       metadataItems[STORAGE_KEYS.syncRecordVersions] = versions;
       items[STORAGE_KEYS.syncAccount] = {
         ...syncState,
-        currentSyncSequence: Math.max(syncState.currentSyncSequence, sequence),
+        appliedSequence: Math.max(syncState.appliedSequence, sequence),
       };
       metadataItems[STORAGE_KEYS.syncAccount] = items[STORAGE_KEYS.syncAccount];
       const changeFactory = (contentRevision: number): RepositoryChange => ({
@@ -1292,11 +1287,11 @@ export class LocalDiaryRepository implements DiaryRepository {
         initialNotes,
         initialSettings,
         initialProfile,
-        runtime,
-        v2Records,
-        v2Versions,
-        v2Audit,
-        v2Media,
+        replicatedRecords,
+        replicatedVersions,
+        appliedAudit,
+        replicatedMedia,
+        outbox,
       ] = await Promise.all([
         this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount),
         this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}),
@@ -1306,27 +1301,19 @@ export class LocalDiaryRepository implements DiaryRepository {
         this.readCollection<Note>(STORAGE_KEYS.notes, []),
         this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS)),
         this.readJson(STORAGE_KEYS.userProfile, createDefaultUserProfile()),
-        this.readNullableJson<{
-          accountId: string;
-          lastAppliedSequence: number;
-          updatedAt: number;
-          [key: string]: unknown;
-        }>(V2_REPLAY_KEYS.runtime),
-        this.readJson<Record<string, unknown>>(V2_REPLAY_KEYS.records, {}),
-        this.readJson<Record<string, number>>(V2_REPLAY_KEYS.versions, {}),
+        this.readJson<Record<string, unknown>>(SYNC_REPLAY_KEYS.records, {}),
+        this.readJson<Record<string, number>>(SYNC_REPLAY_KEYS.versions, {}),
         this.readJson<
           Array<{ eventId: string; operationId: string; sequence: number; appliedAt: number }>
-        >(V2_REPLAY_KEYS.applied, []),
-        this.readJson<Record<string, string>>(V2_REPLAY_KEYS.media, {}),
+        >(SYNC_REPLAY_KEYS.applied, []),
+        this.readJson<Record<string, string>>(SYNC_REPLAY_KEYS.media, {}),
+        this.readJson<Record<string, SyncOperation>>(STORAGE_KEYS.syncOperations, {}),
       ]);
 
-      if (!syncState || !runtime || syncState.accountId !== runtime.accountId) {
+      if (!syncState) {
         throw new Error('The remote batch does not belong to the local sync account.');
       }
-      if (
-        syncState.currentSyncSequence !== expectedCursor ||
-        runtime.lastAppliedSequence !== expectedCursor
-      ) {
+      if (syncState.appliedSequence !== expectedCursor) {
         throw new Error('The remote batch cursor does not match local canonical state.');
       }
 
@@ -1339,9 +1326,9 @@ export class LocalDiaryRepository implements DiaryRepository {
       let settingsChanged = false;
       const affectedRecords: Array<{ recordType: SyncRecordType; recordId: string }> = [];
       const recordMutations = new Map<string, LocalStructuredRecordMutation>();
-      const appliedIds = new Set(v2Audit.map((row) => row.eventId));
-      const appliedOperationIds = new Set(v2Audit.map((row) => row.operationId));
-      const nextAudit = [...v2Audit];
+      const appliedIds = new Set(appliedAudit.map((row) => row.eventId));
+      const appliedOperationIds = new Set(appliedAudit.map((row) => row.operationId));
+      const nextAudit = [...appliedAudit];
 
       const putMutation = (mutation: LocalStructuredRecordMutation) => {
         recordMutations.set(`${mutation.key}:${mutation.id}`, mutation);
@@ -1362,8 +1349,19 @@ export class LocalDiaryRepository implements DiaryRepository {
             delete pointers[existingKey];
           }
         });
-        pointers[key] = clone(pointer);
-        v2Media[pointer.mediaId] = pointer.driveFileId;
+        const existingPointer = Object.values(pointers).find(
+          (candidate) =>
+            candidate.mediaId === pointer.mediaId ||
+            candidate.driveFileId === pointer.driveFileId,
+        );
+        pointers[key] = clone({
+          ...existingPointer,
+          ...pointer,
+          localUri: pointer.localUri || existingPointer?.localUri,
+          sha256: pointer.sha256 || existingPointer?.sha256 || '',
+          sizeBytes: pointer.sizeBytes || existingPointer?.sizeBytes || 0,
+        });
+        replicatedMedia[pointer.mediaId] = pointer.driveFileId;
       };
 
       for (const item of batch) {
@@ -1443,14 +1441,14 @@ export class LocalDiaryRepository implements DiaryRepository {
         versions[recordKey] = event.recordVersion;
         for (const affected of event.affectedRecords || []) {
           versions[`${affected.recordType}:${affected.recordId}`] = affected.recordVersion;
-          v2Versions[`${affected.recordType.toUpperCase()}:${affected.recordId}`] =
+          replicatedVersions[`${affected.recordType.toUpperCase()}:${affected.recordId}`] =
             affected.recordVersion;
         }
         const canonicalRecordType = event.recordType.toUpperCase();
         const canonicalKey = `${canonicalRecordType}:${event.recordId}`;
-        if (event.operation === 'delete') delete v2Records[canonicalKey];
-        else v2Records[canonicalKey] = event.payload;
-        v2Versions[canonicalKey] = event.recordVersion;
+        if (event.operation === 'delete') delete replicatedRecords[canonicalKey];
+        else replicatedRecords[canonicalKey] = event.payload;
+        replicatedVersions[canonicalKey] = event.recordVersion;
         for (const pointer of item.mediaPointers || []) putPointer(pointer);
         appliedIds.add(event.eventId);
         appliedOperationIds.add(operationId);
@@ -1470,26 +1468,82 @@ export class LocalDiaryRepository implements DiaryRepository {
         cursor = sequence;
       }
 
+      // The replicated versions above are the canonical base. Reapply optimistic
+      // local mutations afterwards so replaying this device's own earlier event
+      // cannot overwrite a newer edit that is still waiting in the outbox.
+      const pendingOverlays = Object.values(outbox)
+        .filter((operation) => !TERMINAL_SYNC_OPERATION_STATES.has(operation.state))
+        .filter((operation) => operation.localApplied)
+        .sort((left, right) => left.createdAt - right.createdAt);
+      for (const operation of pendingOverlays) {
+        const payload = operation.sourceCanonicalPayload;
+        if (operation.recordType === 'DIARY') {
+          diaries =
+            operation.operationType === 'DELETE'
+              ? diaries.filter((diary) => diary.id !== operation.recordId)
+              : this.upsertRecord(diaries, clone(payload as Diary));
+          putMutation({
+            key: STORAGE_KEYS.diaries,
+            id: operation.recordId,
+            value: operation.operationType === 'DELETE' ? null : clone(payload),
+          });
+        } else if (operation.recordType === 'ENTRY') {
+          const entry = operation.operationType === 'DELETE' ? null : sanitizeEntry(clone(payload as Entry));
+          entries = entry
+            ? this.upsertRecord(entries, entry)
+            : entries.filter((candidate) => candidate.id !== operation.recordId);
+          putMutation({ key: STORAGE_KEYS.entries, id: operation.recordId, value: entry });
+        } else if (operation.recordType === 'NOTE') {
+          const note = operation.operationType === 'DELETE' ? null : sanitizeNote(clone(payload as Note));
+          notes = note
+            ? this.upsertRecord(notes, note)
+            : notes.filter((candidate) => candidate.id !== operation.recordId);
+          putMutation({ key: STORAGE_KEYS.notes, id: operation.recordId, value: note });
+        } else if (operation.recordType === 'SETTINGS' && payload) {
+          settings = clone(payload as AppSettings);
+          settingsChanged = true;
+        } else if (operation.recordType === 'PROFILE' && payload) {
+          profile = clone(payload as UserProfile);
+        }
+      }
+
+      // Keep acknowledged rows only until their ordered event has been replayed
+      // and no live operation still depends on them. This bounds the durable
+      // ledger without weakening dependency checks or treating push ACKs as replay.
+      const liveDependencies = new Set(
+        Object.values(outbox)
+          .filter((operation) => !TERMINAL_SYNC_OPERATION_STATES.has(operation.state))
+          .map((operation) => operation.dependencyOperationId)
+          .filter((operationId): operationId is string => Boolean(operationId)),
+      );
+      let operationsCompacted = false;
+      Object.entries(outbox).forEach(([operationId, operation]) => {
+        if (
+          operation.state === 'ACKNOWLEDGED' &&
+          appliedOperationIds.has(operationId) &&
+          !liveDependencies.has(operationId)
+        ) {
+          delete outbox[operationId];
+          operationsCompacted = true;
+        }
+      });
+
       diaries = this.withDiaryStats(diaries, entries);
       diaries.forEach((diary) =>
         putMutation({ key: STORAGE_KEYS.diaries, id: diary.id, value: diary }),
       );
-      const nextSyncState = { ...syncState, currentSyncSequence: cursor };
+      const nextSyncState = { ...syncState, appliedSequence: cursor };
       const metadataItems: Record<string, unknown> = {
         [STORAGE_KEYS.settings]: settings,
         [STORAGE_KEYS.userProfile]: profile,
         [STORAGE_KEYS.syncRecordVersions]: versions,
         [STORAGE_KEYS.syncMediaPointers]: pointers,
         [STORAGE_KEYS.syncAccount]: nextSyncState,
-        [V2_REPLAY_KEYS.records]: v2Records,
-        [V2_REPLAY_KEYS.versions]: v2Versions,
-        [V2_REPLAY_KEYS.applied]: nextAudit.slice(-5_000),
-        [V2_REPLAY_KEYS.media]: v2Media,
-        [V2_REPLAY_KEYS.runtime]: {
-          ...runtime,
-          lastAppliedSequence: cursor,
-          updatedAt: Date.now(),
-        },
+        [SYNC_REPLAY_KEYS.records]: replicatedRecords,
+        [SYNC_REPLAY_KEYS.versions]: replicatedVersions,
+        [SYNC_REPLAY_KEYS.applied]: nextAudit.slice(-5_000),
+        [SYNC_REPLAY_KEYS.media]: replicatedMedia,
+        ...(operationsCompacted ? { [STORAGE_KEYS.syncOperations]: outbox } : {}),
       };
       const changeFactory = (contentRevision: number): RepositoryChange => ({
         type: 'remote-batch-applied',
@@ -1796,24 +1850,24 @@ export class LocalDiaryRepository implements DiaryRepository {
     });
   }
 
-  saveSyncOutboxOperation(operation: SyncOutboxOperation): Promise<void> {
+  saveSyncOutboxOperation(operation: SyncOperation): Promise<void> {
     return this.enqueueWrite(async () => {
-      const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(
-        STORAGE_KEYS.syncOutbox,
+      const outbox = await this.readJson<Record<string, SyncOperation>>(
+        STORAGE_KEYS.syncOperations,
         {},
       );
       outbox[operation.operationId] = clone({ ...operation, updatedAt: Date.now() });
-      await this.writeJson(STORAGE_KEYS.syncOutbox, outbox);
+      await this.writeJson(STORAGE_KEYS.syncOperations, outbox);
       await this.emitSyncStatusChange(outbox, operation.operationId);
     });
   }
 
   async listSyncOutboxOperations(
-    states?: SyncOutboxOperation['state'][],
-  ): Promise<SyncOutboxOperation[]> {
+    states?: SyncOperation['state'][],
+  ): Promise<SyncOperation[]> {
     await this.waitForWrites();
-    const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(
-      STORAGE_KEYS.syncOutbox,
+    const outbox = await this.readJson<Record<string, SyncOperation>>(
+      STORAGE_KEYS.syncOperations,
       {},
     );
     return Object.values(outbox)
@@ -1823,12 +1877,12 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   removeSyncOutboxOperation(operationId: string): Promise<void> {
     return this.enqueueWrite(async () => {
-      const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(
-        STORAGE_KEYS.syncOutbox,
+      const outbox = await this.readJson<Record<string, SyncOperation>>(
+        STORAGE_KEYS.syncOperations,
         {},
       );
       delete outbox[operationId];
-      await this.writeJson(STORAGE_KEYS.syncOutbox, outbox);
+      await this.writeJson(STORAGE_KEYS.syncOperations, outbox);
       await this.emitSyncStatusChange(outbox, operationId);
     });
   }
@@ -1857,7 +1911,7 @@ export class LocalDiaryRepository implements DiaryRepository {
     this.syncCatchUpStatus = { ...status };
     return this.enqueueWrite(async () => {
       const [outbox, backup] = await Promise.all([
-        this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {}),
+        this.readJson<Record<string, SyncOperation>>(STORAGE_KEYS.syncOperations, {}),
         this.readJson<LocalRepositoryMetadata>(
           STORAGE_KEYS.driveBackup,
           createDefaultLocalRepositoryMetadata(),
@@ -1905,20 +1959,20 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   async listPreservedSyncConflicts(): Promise<PreservedSyncConflict[]> {
-    const operations = await this.listSyncOutboxOperations(['conflict_preserved']);
+    const operations = await this.listSyncOutboxOperations(['CONFLICT']);
     const conflicts = await Promise.all(
       operations.map(async (operation) => {
         const recoveredRecord = operation.recoveredRecordId
-          ? operation.recordType === 'entry'
+          ? operation.recordType === 'ENTRY'
             ? await this.getEntry(operation.recoveredRecordId)
-            : operation.recordType === 'note'
+            : operation.recordType === 'NOTE'
               ? await this.getNote(operation.recoveredRecordId)
               : null
           : null;
         const currentRecord =
-          operation.recordType === 'entry'
+          operation.recordType === 'ENTRY'
             ? await this.getEntry(operation.recordId)
-            : operation.recordType === 'note'
+            : operation.recordType === 'NOTE'
               ? await this.getNote(operation.recordId)
               : null;
         return { operation, currentRecord, recoveredRecord };
@@ -1932,36 +1986,37 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   async deleteSyncConflictRecoveredCopy(operationId: string): Promise<boolean> {
-    const operation = (await this.listSyncOutboxOperations(['conflict_preserved'])).find(
+    const operation = (await this.listSyncOutboxOperations(['CONFLICT'])).find(
       (candidate) => candidate.operationId === operationId,
     );
     if (!operation?.recoveredRecordId) return false;
-    if (operation.recordType === 'entry') return this.deleteEntry(operation.recoveredRecordId);
-    if (operation.recordType === 'note') return this.deleteNote(operation.recoveredRecordId);
+    if (operation.recordType === 'ENTRY') return this.deleteEntry(operation.recoveredRecordId);
+    if (operation.recordType === 'NOTE') return this.deleteNote(operation.recoveredRecordId);
     return false;
   }
 
   retryPreservedSyncConflict(operationId: string): Promise<void> {
     return measureAsync('repository.sync.retryPreservedConflict', () =>
       this.enqueueWrite(async () => {
-        const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(
-          STORAGE_KEYS.syncOutbox,
+        const outbox = await this.readJson<Record<string, SyncOperation>>(
+          STORAGE_KEYS.syncOperations,
           {},
         );
         const operation = outbox[operationId];
-        if (!operation || operation.state !== 'conflict_preserved') return;
+        if (!operation || operation.state !== 'CONFLICT') return;
         outbox[operationId] = {
           ...operation,
-          state: 'prepared',
-          baseRecordVersion: undefined,
-          dependsOnOperationId: undefined,
-          retryCount: undefined,
+          state: 'PENDING',
+          baseRecordVersion: 0,
+          dependencyOperationId: undefined,
+          retryCount: 0,
           lastErrorAt: undefined,
-          nextRetryAt: undefined,
-          error: undefined,
+          nextAttemptAt: 0,
+          lastErrorCode: undefined,
+          lastErrorMessage: undefined,
           updatedAt: Date.now(),
         };
-        await this.writeJson(STORAGE_KEYS.syncOutbox, outbox);
+        await this.writeJson(STORAGE_KEYS.syncOperations, outbox);
         await this.emitSyncStatusChange(outbox, operationId);
       }),
     );
@@ -1976,29 +2031,38 @@ export class LocalDiaryRepository implements DiaryRepository {
           STORAGE_KEYS.syncRecordVersions,
           {},
         );
-        const outbox = await this.readJson<Record<string, SyncOutboxOperation>>(
-          STORAGE_KEYS.syncOutbox,
-          {},
-        );
-        const outboxV2 = await this.readJson<Record<string, SyncOutboxOperationV2>>(
-          STORAGE_KEYS.syncOutboxV2,
+        const operations = await this.readJson<Record<string, SyncOperation>>(
+          STORAGE_KEYS.syncOperations,
           {},
         );
         const recordKey = `${input.recordType}:${input.recordId}`;
-        const existingSameRecordOperations = Object.values(outbox)
+        const acknowledgedVersionFor = (recordType: SyncRecordType, recordId: string) =>
+          Object.values(operations)
+            .filter(
+              (operation) =>
+                operation.recordType === recordType.toUpperCase() &&
+                operation.recordId === recordId &&
+                operation.state === 'ACKNOWLEDGED' &&
+                Number.isSafeInteger(operation.remoteRecordVersion),
+            )
+            .reduce(
+              (latest, operation) => Math.max(latest, operation.remoteRecordVersion || 0),
+              versions[`${recordType}:${recordId}`] || 0,
+            );
+        const existingSameRecordOperations = Object.values(operations)
           .filter(
             (operation) =>
               operation.localApplied &&
-              operation.recordType === input.recordType &&
+              operation.recordType === input.recordType.toUpperCase() &&
               operation.recordId === input.recordId &&
-              operation.state !== 'applied',
+              !TERMINAL_SYNC_OPERATION_STATES.has(operation.state),
           )
           .sort(
             (left, right) =>
               (right.updatedAt || right.createdAt || 0) - (left.updatedAt || left.createdAt || 0),
           );
         const latestSameRecordOperation = existingSameRecordOperations[0];
-        const coalescibleV2 = Object.values(outboxV2)
+        const coalescible = Object.values(operations)
           .filter(
             (operation) =>
               operation.accountId === input.account.accountId &&
@@ -2009,31 +2073,30 @@ export class LocalDiaryRepository implements DiaryRepository {
               !operation.preparedObjects,
           )
           .sort((left, right) => right.updatedAt - left.updatedAt)[0];
-        const coalescibleLegacy = coalescibleV2 ? outbox[coalescibleV2.operationId] : undefined;
-        const canCoalesce = Boolean(coalescibleV2 && coalescibleLegacy?.state === 'prepared');
-        const operationId = canCoalesce ? coalescibleV2!.operationId : input.operationId;
+        const canCoalesce = Boolean(coalescible);
+        const operationId = canCoalesce ? coalescible!.operationId : input.operationId;
         const dependsOnOperationId = canCoalesce
-          ? coalescibleLegacy?.dependsOnOperationId
+          ? coalescible?.dependencyOperationId
           : latestSameRecordOperation?.operationId;
-        const dependencyV2 = dependsOnOperationId ? outboxV2[dependsOnOperationId] : undefined;
+        const dependency = dependsOnOperationId ? operations[dependsOnOperationId] : undefined;
         const baseRecordVersion = canCoalesce
-          ? coalescibleV2!.baseRecordVersion
+          ? coalescible!.baseRecordVersion
           : dependsOnOperationId
-            ? (dependencyV2?.baseRecordVersion ??
+            ? (dependency?.baseRecordVersion ??
                 latestSameRecordOperation?.baseRecordVersion ??
                 versions[recordKey] ??
                 0) + 1
-            : (versions[recordKey] ?? 0);
+            : acknowledgedVersionFor(input.recordType, input.recordId);
         const nowMs = input.createdAt || Date.now();
         const publishNotBefore = input.publishNotBefore
           ? Math.min(
               input.publishNotBefore,
-              (canCoalesce ? coalescibleLegacy!.createdAt : nowMs) + 60_000,
+              (canCoalesce ? coalescible!.createdAt : nowMs) + 60_000,
             )
           : undefined;
         const syncPayload =
           input.syncPayload === undefined ? input.localPayload : input.syncPayload;
-        const affectedRecords: SyncOutboxOperation['affectedRecords'] = [];
+        const affectedRecords: NonNullable<SyncOperation['affectedRecords']> = [];
         const items: Record<string, unknown> = {};
         const metadataItems: Record<string, unknown> = {};
         const recordMutations: LocalStructuredRecordMutation[] = [];
@@ -2049,9 +2112,9 @@ export class LocalDiaryRepository implements DiaryRepository {
               .filter((entry) => entry.diaryId === input.recordId)
               .forEach((entry) =>
                 affectedRecords.push({
-                  recordType: 'entry',
+                  recordType: 'ENTRY',
                   recordId: entry.id,
-                  baseRecordVersion: versions[`entry:${entry.id}`] || 0,
+                  baseRecordVersion: acknowledgedVersionFor('entry', entry.id),
                 }),
               );
             items[STORAGE_KEYS.entries] = entries.filter(
@@ -2205,64 +2268,54 @@ export class LocalDiaryRepository implements DiaryRepository {
           baseRecordVersion === 0 &&
           !dependsOnOperationId;
         if (cancelUnpublishedCreate) {
-          delete outbox[operationId];
-          delete outboxV2[operationId];
-          items[STORAGE_KEYS.syncOutbox] = outbox;
-          items[STORAGE_KEYS.syncOutboxV2] = outboxV2;
+          delete operations[operationId];
+          items[STORAGE_KEYS.syncOperations] = operations;
           const contentRevision = this.store.commitStructuredRecords
             ? await this.writeStructuredRecordsWithRevision(
                 recordMutations,
                 {
                   ...metadataItems,
-                  [STORAGE_KEYS.syncOutbox]: outbox,
-                  [STORAGE_KEYS.syncOutboxV2]: outboxV2,
+                  [STORAGE_KEYS.syncOperations]: operations,
                 },
                 changeFactory,
               )
             : await this.writePortableItems(items, changeFactory);
-          await this.emitSyncStatusChange(outbox, operationId, contentRevision);
+          await this.emitSyncStatusChange(operations, operationId, contentRevision);
           return clone(result);
         }
 
-        const outboxOperation: SyncOutboxOperation = {
+        const partitionKey = partitionKeyForRecordPayload(input.recordType, syncPayload as any);
+        const outboxOperation: SyncOperation = {
           operationId,
           accountId: input.account.accountId,
           deviceId: input.account.deviceId,
-          partitionKey: partitionKeyForRecordPayload(input.recordType, syncPayload as any),
-          affectedPartitionKeys: [
-            partitionKeyForRecordPayload(input.recordType, syncPayload as any),
-          ],
-          recordType: input.recordType,
+          partitionKey,
+          affectedPartitionKeys: [partitionKey],
+          recordType: input.recordType.toUpperCase() as SyncOperation['recordType'],
           recordId: input.recordId,
-          operation: input.operation,
-          payload: clone(syncPayload),
+          operationType: input.operation === 'delete' ? 'DELETE' : 'UPSERT',
+          sourceCanonicalPayload: clone(syncPayload),
           baseRecordVersion,
-          dependsOnOperationId,
+          dependencyOperationId: dependsOnOperationId,
           affectedRecords,
-          state: 'prepared',
+          state: 'PENDING',
           localApplied: true,
-          createdAt: canCoalesce ? coalescibleLegacy!.createdAt : nowMs,
+          createdAt: canCoalesce ? coalescible!.createdAt : nowMs,
           updatedAt: nowMs,
-          retryCount: undefined,
-          lastErrorAt: undefined,
-          nextRetryAt: publishNotBefore,
-          error: undefined,
+          retryCount: 0,
+          nextAttemptAt: publishNotBefore || 0,
         };
-        outbox[operationId] = outboxOperation;
-        items[STORAGE_KEYS.syncOutbox] = outbox;
-        const outboxV2Operation = pendingOutboxV2FromLegacy(outboxOperation);
-        outboxV2[operationId] = outboxV2Operation;
-        items[STORAGE_KEYS.syncOutboxV2] = outboxV2;
+        operations[operationId] = outboxOperation;
+        items[STORAGE_KEYS.syncOperations] = operations;
 
         const contentRevision = await this.writeLocalMutationWithOutbox(
           recordMutations,
           metadataItems,
           outboxOperation,
-          outboxV2Operation,
           items,
           changeFactory,
         );
-        await this.emitSyncStatusChange(outbox, operationId, contentRevision);
+        await this.emitSyncStatusChange(operations, operationId, contentRevision);
         if (input.recordType === 'settings' && input.localPayload) {
           await syncReminderNotification(input.localPayload as AppSettings);
         }
@@ -2273,84 +2326,27 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   publishPendingEntryDraft(entryId: string): Promise<void> {
     return this.enqueueWrite(async () => {
-      const [outbox, outboxV2] = await Promise.all([
-        this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {}),
-        this.readJson<Record<string, SyncOutboxOperationV2>>(STORAGE_KEYS.syncOutboxV2, {}),
-      ]);
+      const operations = await this.readJson<Record<string, SyncOperation>>(
+        STORAGE_KEYS.syncOperations,
+        {},
+      );
       let changed = false;
-      Object.values(outbox).forEach((operation) => {
+      Object.values(operations).forEach((operation) => {
         if (
-          operation.recordType === 'entry' &&
+          operation.recordType === 'ENTRY' &&
           operation.recordId === entryId &&
-          operation.state === 'prepared'
+          operation.state === 'PENDING' &&
+          !operation.leaseOwner
         ) {
-          operation.nextRetryAt = 0;
+          operation.nextAttemptAt = 0;
           operation.updatedAt = Date.now();
-          const v2 = outboxV2[operation.operationId];
-          if (v2?.state === 'PENDING' && !v2.leaseOwner) {
-            outboxV2[operation.operationId] = { ...v2, nextAttemptAt: 0, updatedAt: Date.now() };
-          }
           changed = true;
         }
       });
       if (!changed) return;
-      await this.writeManyJson({
-        [STORAGE_KEYS.syncOutbox]: outbox,
-        [STORAGE_KEYS.syncOutboxV2]: outboxV2,
-      });
-      await this.emitSyncStatusChange(outbox);
+      await this.writeJson(STORAGE_KEYS.syncOperations, operations);
+      await this.emitSyncStatusChange(operations);
     });
-  }
-
-  acknowledgeLocalMutation(input: AcknowledgeLocalMutationInput): Promise<void> {
-    return measureAsync('repository.sync.acknowledgeLocalMutation', () =>
-      this.enqueueWrite(async () => {
-        const syncState = await this.readNullableJson<LocalSyncAccountState>(
-          STORAGE_KEYS.syncAccount,
-        );
-        if (!syncState || syncState.accountId !== input.event.accountId) {
-          throw new Error('The sync acknowledgement does not belong to the local account.');
-        }
-        const versions = await this.readJson<Record<string, number>>(
-          STORAGE_KEYS.syncRecordVersions,
-          {},
-        );
-        const recordKey = `${input.event.recordType}:${input.event.recordId}`;
-        const currentVersion = versions[recordKey] || 0;
-        if (currentVersion > input.event.recordVersion) return;
-        if (
-          currentVersion !== input.event.baseRecordVersion &&
-          currentVersion !== input.event.recordVersion
-        ) {
-          throw new Error(`Sync record version mismatch while acknowledging ${recordKey}.`);
-        }
-        versions[recordKey] = Math.max(currentVersion, input.event.recordVersion);
-        for (const affected of input.event.affectedRecords || []) {
-          const key = `${affected.recordType}:${affected.recordId}`;
-          versions[key] = Math.max(versions[key] || 0, affected.recordVersion);
-        }
-        await this.writeManyJson({
-          [STORAGE_KEYS.syncRecordVersions]: versions,
-          [STORAGE_KEYS.syncAccount]: {
-            ...syncState,
-            currentSyncSequence: Math.max(syncState.currentSyncSequence, input.sequence),
-          },
-        });
-        const backup = await this.readJson<LocalRepositoryMetadata>(
-          STORAGE_KEYS.driveBackup,
-          createDefaultLocalRepositoryMetadata(),
-        );
-        const outbox = Object.values(
-          await this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {}),
-        );
-        this.emitChange(backup.contentRevision || 0, {
-          type: 'sync-status-updated',
-          operationId: input.event.eventId,
-          status: this.createSyncStatusSummary(outbox),
-          contentRevision: backup.contentRevision || 0,
-        });
-      }),
-    );
   }
 
   resetContent(): Promise<void> {
@@ -2362,8 +2358,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         [STORAGE_KEYS.syncRecordVersions]: {},
         [STORAGE_KEYS.syncMediaPointers]: {},
         [STORAGE_KEYS.syncPartitionHydration]: {},
-        [STORAGE_KEYS.syncOutbox]: {},
-        [STORAGE_KEYS.syncOutboxV2]: {},
+        [STORAGE_KEYS.syncOperations]: {},
       });
     });
   }
@@ -2685,8 +2680,7 @@ export class LocalDiaryRepository implements DiaryRepository {
   private async writeLocalMutationWithOutbox(
     records: LocalStructuredRecordMutation[],
     metadataItems: Record<string, unknown>,
-    outboxOperation: SyncOutboxOperation,
-    outboxV2Operation: SyncOutboxOperationV2,
+    outboxOperation: SyncOperation,
     fallbackItems: Record<string, unknown>,
     createChange?: (contentRevision: number) => RepositoryChange,
   ): Promise<number> {
@@ -2708,7 +2702,6 @@ export class LocalDiaryRepository implements DiaryRepository {
         },
       }),
       outboxOperation,
-      outboxV2Operation,
     });
     this.emitChange(contentRevision, createChange?.(contentRevision));
     return contentRevision;
@@ -2740,14 +2733,12 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   private async emitSyncStatusChange(
-    outbox: Record<string, SyncOutboxOperation>,
+    outbox: Record<string, SyncOperation>,
     operationId?: string,
     contentRevision?: number,
   ): Promise<void> {
     const operations = Object.values(outbox);
-    const pending = operations.filter(
-      (operation) => operation.state !== 'applied' && operation.state !== 'conflict_preserved',
-    );
+    const pending = operations.filter((operation) => !TERMINAL_SYNC_OPERATION_STATES.has(operation.state));
     const currentHealth = await this.readJson<SyncHealth>(
       STORAGE_KEYS.syncHealth,
       createDefaultSyncHealth(),
@@ -2762,22 +2753,22 @@ export class LocalDiaryRepository implements DiaryRepository {
       lastLocalWriteAt: operationId ? Date.now() : currentHealth.lastLocalWriteAt,
       pendingOperationCount: pending.length,
       processingOperationCount: pending.filter(
-        (operation) => !['prepared', 'failed'].includes(operation.state),
+        (operation) => !['PENDING', 'RETRY_WAIT'].includes(operation.state),
       ).length,
       retryingOperationCount: pending.filter(
-        (operation) => operation.state === 'failed' && Boolean(operation.nextRetryAt),
+        (operation) => operation.state === 'RETRY_WAIT' && Boolean(operation.nextAttemptAt),
       ).length,
-      blockedOperationCount: pending.filter((operation) => Boolean(operation.dependsOnOperationId))
+      blockedOperationCount: pending.filter((operation) => Boolean(operation.dependencyOperationId))
         .length,
       conflictOperationCount: operations.filter(
-        (operation) => operation.state === 'conflict_preserved',
+        (operation) => operation.state === 'CONFLICT',
       ).length,
-      failedOperationCount: operations.filter(isRetryableFailedOutboxOperation).length,
+      failedOperationCount: operations.filter((operation) => operation.state === 'RETRY_WAIT').length,
       oldestPendingOperationAt:
         pending.length > 0
           ? Math.min(...pending.map((operation) => operation.createdAt))
           : undefined,
-      localSequence: localState?.currentSyncSequence || currentHealth.localSequence,
+      localSequence: localState?.appliedSequence || currentHealth.localSequence,
       connectivityState:
         typeof navigator !== 'undefined' && !navigator.onLine ? 'OFFLINE' : 'ONLINE',
       updatedAt: Date.now(),
@@ -2795,14 +2786,14 @@ export class LocalDiaryRepository implements DiaryRepository {
     });
   }
 
-  private createSyncStatusSummary(outbox: SyncOutboxOperation[]): SyncStatusSummary {
+  private createSyncStatusSummary(outbox: SyncOperation[]): SyncStatusSummary {
     return {
       pendingOutboxCount: outbox.filter(
-        (operation) => operation.state !== 'applied' && operation.state !== 'conflict_preserved',
+        (operation) => !TERMINAL_SYNC_OPERATION_STATES.has(operation.state),
       ).length,
-      failedOperationCount: outbox.filter(isRetryableFailedOutboxOperation).length,
+      failedOperationCount: outbox.filter((operation) => operation.state === 'RETRY_WAIT').length,
       isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
-      conflictCount: outbox.filter((operation) => operation.state === 'conflict_preserved').length,
+      conflictCount: outbox.filter((operation) => operation.state === 'CONFLICT').length,
       ...this.syncCatchUpStatus,
     };
   }

@@ -59,7 +59,7 @@ import { DearDiaryDeepLinkTarget, parseDearDiaryDeepLink } from './mobile/deepLi
 import { isAndroid, isNativePlatform } from './platform';
 
 import { secureAuthService } from './platform/security';
-import { diaryRepository, eventSyncEngine, syncV2Application } from './repositories';
+import { diaryRepository, eventSyncEngine, syncApplication } from './repositories';
 import { isValidPin, unlockWithPin } from './domain/security';
 import useResponsiveLayout from './hooks/useResponsiveLayout';
 import { calculateStreak } from './domain/journalCatalog';
@@ -79,7 +79,7 @@ import { measureAsync } from './utils/performance';
 import { pageMotion } from './components/ui/motion';
 import { BRAND } from './config/brand';
 import { DEFAULT_ACCOUNT_QUOTA } from './domain/quota';
-import type { SyncV2Quota } from './sync/v2/api/SyncV2ApiTypes';
+import type { SyncQuota } from './sync/core/api/SyncApiTypes';
 import {
   legacyNavigationTarget,
   resolveNavigationTarget,
@@ -311,7 +311,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const [userProfile, setUserProfile] = useState<UserProfile>(initialUserProfile);
   const [archiveMonths, setArchiveMonths] = useState<PartitionHydrationState[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSummary | null>(null);
-  const [accountQuota, setAccountQuota] = useState<SyncV2Quota>(DEFAULT_ACCOUNT_QUOTA);
+  const [accountQuota, setAccountQuota] = useState<SyncQuota>(DEFAULT_ACCOUNT_QUOTA);
   const [homeStreak, setHomeStreak] = useState(0);
   const [homeSummary, setHomeSummary] = useState<HomeSummary | null>(null);
 
@@ -498,12 +498,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const completeInitialCatchUp = async (syncAccount: LocalSyncAccountState) => {
     setInitialSyncGate({
       phase: 'starting',
-      startingSequence: syncAccount.currentSyncSequence,
-      appliedSequence: syncAccount.currentSyncSequence,
-      allowOffline: syncAccount.currentSyncSequence > 0,
+      startingSequence: syncAccount.appliedSequence,
+      appliedSequence: syncAccount.appliedSequence,
+      allowOffline: syncAccount.appliedSequence > 0,
     });
     try {
-      await syncV2Application.resumeAfterUnlock();
+      await syncApplication.resumeAfterUnlock();
       await reloadShellData();
       setUnlockedDiaryIds(new Set());
       setIsAuthenticated(true);
@@ -514,10 +514,10 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       setIsAuthenticated(true);
       setInitialSyncGate((current) => ({
         phase: 'failed',
-        startingSequence: current?.startingSequence ?? syncAccount.currentSyncSequence,
-        appliedSequence: current?.appliedSequence || syncAccount.currentSyncSequence,
+        startingSequence: current?.startingSequence ?? syncAccount.appliedSequence,
+        appliedSequence: current?.appliedSequence || syncAccount.appliedSequence,
         targetSequence: current?.targetSequence,
-        allowOffline: syncAccount.currentSyncSequence > 0,
+        allowOffline: syncAccount.appliedSequence > 0,
         error: err?.message || 'Encrypted sync could not load the latest data.',
       }));
     }
@@ -571,7 +571,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       .getLocalSyncAccountState()
       .then(async (syncAccount) => {
         if (cancelled || syncAccount?.deviceRole !== 'web_companion') return;
-        await syncV2Application.startIfActive();
+        await syncApplication.startIfActive();
         eventSyncEngine.startPolling();
       })
       .catch(() => undefined);
@@ -581,14 +581,14 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   }, [isAuthenticated]);
 
   const refreshAccountQuota = useCallback(async (): Promise<void> => {
-    const quota = await syncV2Application.getQuota({ refresh: true });
+    const quota = await syncApplication.getQuota({ refresh: true });
     setAccountQuota(quota);
   }, []);
 
   useEffect(() => {
     if (!isAuthenticated) return;
     void refreshAccountQuota().catch(() =>
-      syncV2Application
+      syncApplication
         .getQuota()
         .then(setAccountQuota)
         .catch(() => setAccountQuota(DEFAULT_ACCOUNT_QUOTA)),

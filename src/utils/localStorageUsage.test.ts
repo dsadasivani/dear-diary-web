@@ -73,7 +73,7 @@ test('does not download cloud-only sync media references', async () => {
   const usage = await calculateLocalStorageUsage(
     {
       ...snapshot,
-      diaries: [{ ...snapshot.diaries[0], coverImage: 'ddmedia:v2:media-1:file-1' }],
+      diaries: [{ ...snapshot.diaries[0], coverImage: 'ddmedia:1:media-1:file-1' }],
       entries: [{ ...snapshot.entries[0], photoUris: [], audioUri: undefined }],
     },
     async () => {

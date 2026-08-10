@@ -28,7 +28,9 @@ export class SyncHealthService {
       return result;
     } catch (error) {
       const typed =
-        error instanceof SyncError ? error : new SyncError({ code: 'UNKNOWN', cause: error });
+        error instanceof SyncError
+          ? error
+          : new SyncError({ code: 'UNKNOWN', retryable: true, safetyRelevant: false, cause: error });
       await this.store.updateSyncHealth({
         lastErrorCode: typed.code,
         lastErrorAt: this.now(),
