@@ -19,6 +19,8 @@ import type {
   SyncV2Device,
   SyncV2MediaDownload,
   SyncV2Quota,
+  SyncV2BootstrapReadiness,
+  SyncV2BootstrapManifest,
 } from './SyncV2ApiTypes';
 
 export type SyncV2AccessTokenProvider = () => Promise<string>;
@@ -48,6 +50,8 @@ const API_CODE_MAP: Record<string, ConstructorParameters<typeof SyncError>[0]['c
   PAIRING_NOT_FOUND: 'PAIRING_NOT_FOUND',
   HASH_MISMATCH: 'HASH_MISMATCH',
   SEQUENCE_GAP: 'SEQUENCE_GAP',
+  SNAPSHOT_REQUIRED: 'SNAPSHOT_REQUIRED',
+  REBOOTSTRAP_REQUIRED: 'SNAPSHOT_REQUIRED',
   CURSOR_AHEAD: 'SEQUENCE_REGRESSION',
   CURSOR_REGRESSION: 'SEQUENCE_REGRESSION',
   RECOVERY_ALREADY_ACTIVE: 'RECOVERY_CONFLICT',
@@ -133,8 +137,44 @@ export class SyncV2ApiClient {
     });
   }
 
-  pullEvents(after: number, limit: number): Promise<PullSyncV2EventsResponse> {
-    return this.json(`/api/v2/sync/events?after=${after}&limit=${limit}`, { method: 'GET' });
+  pullEvents(after: number, limit: number, through?: number): Promise<PullSyncV2EventsResponse> {
+    const fixedWatermark = through === undefined ? '' : `&through=${through}`;
+    return this.json(`/api/v2/sync/events?after=${after}&limit=${limit}${fixedWatermark}`, {
+      method: 'GET',
+    });
+  }
+
+  getBootstrapReadiness(deviceId: string): Promise<SyncV2BootstrapReadiness> {
+    return this.json(`/api/v2/sync/bootstrap-readiness?deviceId=${encodeURIComponent(deviceId)}`, {
+      method: 'GET',
+    });
+  }
+
+  createBootstrap(request: {
+    bootstrapId: string;
+    deviceId: string;
+    pairingId?: string;
+  }): Promise<SyncV2BootstrapManifest> {
+    return this.json('/api/v2/sync/bootstraps', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  getBootstrap(bootstrapId: string): Promise<SyncV2BootstrapManifest> {
+    return this.json(`/api/v2/sync/bootstraps/${encodeURIComponent(bootstrapId)}`, {
+      method: 'GET',
+    });
+  }
+
+  completeBootstrap(
+    bootstrapId: string,
+    request: { deviceId: string; appliedThroughSequence: number; possessionSignature: string },
+  ): Promise<SyncV2BootstrapManifest> {
+    return this.json(`/api/v2/sync/bootstraps/${encodeURIComponent(bootstrapId)}/complete`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
   }
 
   getMediaDownload(objectId: string): Promise<SyncV2MediaDownload> {

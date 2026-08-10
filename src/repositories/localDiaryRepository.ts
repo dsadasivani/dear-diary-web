@@ -44,6 +44,7 @@ import type {
   RepositoryChangeListener,
   RepositoryImportMode,
   RepositorySnapshot,
+  RemoteSyncEventBatchItem,
   SearchFilters,
   StatisticsFilters,
   SyncStatusSummary,
@@ -105,6 +106,14 @@ const STORAGE_KEYS = {
   syncOutbox: 'deardiary_sync_outbox',
   syncOutboxV2: 'deardiary_sync_outbox_v2',
   syncHealth: 'deardiary_sync_health_v1',
+} as const;
+
+const V2_REPLAY_KEYS = {
+  records: 'deardiary_sync_v2_records',
+  versions: 'deardiary_sync_v2_record_versions',
+  applied: 'deardiary_sync_v2_applied_events',
+  media: 'deardiary_sync_v2_media_pointers',
+  runtime: 'deardiary_sync_v2_runtime',
 } as const;
 
 const ARCHIVE_HYDRATION_RETRY_BASE_MS = 5 * 60 * 1000;
@@ -264,7 +273,17 @@ export class LocalDiaryRepository implements DiaryRepository {
   private typedChangeListeners = new Set<TypedRepositoryChangeListener>();
   private syncCatchUpStatus: Pick<
     SyncStatusSummary,
-    'catchUpPhase' | 'appliedSequence' | 'targetSequence' | 'catchUpError' | 'catchUpRecoverable'
+    | 'catchUpPhase'
+    | 'startingSequence'
+    | 'snapshotSequence'
+    | 'appliedSequence'
+    | 'targetSequence'
+    | 'downloadedEvents'
+    | 'appliedEvents'
+    | 'totalEvents'
+    | 'catchUpErrorCode'
+    | 'catchUpError'
+    | 'catchUpRecoverable'
   > = {};
 
   constructor(private readonly store: LocalDataStore) {}
@@ -1258,6 +1277,255 @@ export class LocalDiaryRepository implements DiaryRepository {
     });
   }
 
+  applyRemoteEventBatch(
+    batch: RemoteSyncEventBatchItem[],
+    expectedCursor: number,
+  ): Promise<number> {
+    if (batch.length === 0) return Promise.resolve(expectedCursor);
+    return this.enqueueWrite(async () => {
+      const [
+        syncState,
+        versions,
+        pointers,
+        initialDiaries,
+        initialEntries,
+        initialNotes,
+        initialSettings,
+        initialProfile,
+        runtime,
+        v2Records,
+        v2Versions,
+        v2Audit,
+        v2Media,
+      ] = await Promise.all([
+        this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount),
+        this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}),
+        this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {}),
+        this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES)),
+        this.readCollection<Entry>(STORAGE_KEYS.entries, []),
+        this.readCollection<Note>(STORAGE_KEYS.notes, []),
+        this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS)),
+        this.readJson(STORAGE_KEYS.userProfile, createDefaultUserProfile()),
+        this.readNullableJson<{
+          accountId: string;
+          lastAppliedSequence: number;
+          updatedAt: number;
+          [key: string]: unknown;
+        }>(V2_REPLAY_KEYS.runtime),
+        this.readJson<Record<string, unknown>>(V2_REPLAY_KEYS.records, {}),
+        this.readJson<Record<string, number>>(V2_REPLAY_KEYS.versions, {}),
+        this.readJson<
+          Array<{ eventId: string; operationId: string; sequence: number; appliedAt: number }>
+        >(V2_REPLAY_KEYS.applied, []),
+        this.readJson<Record<string, string>>(V2_REPLAY_KEYS.media, {}),
+      ]);
+
+      if (!syncState || !runtime || syncState.accountId !== runtime.accountId) {
+        throw new Error('The remote batch does not belong to the local sync account.');
+      }
+      if (
+        syncState.currentSyncSequence !== expectedCursor ||
+        runtime.lastAppliedSequence !== expectedCursor
+      ) {
+        throw new Error('The remote batch cursor does not match local canonical state.');
+      }
+
+      let diaries = initialDiaries;
+      let entries = initialEntries;
+      let notes = initialNotes;
+      let settings = initialSettings;
+      let profile = initialProfile;
+      let cursor = expectedCursor;
+      let settingsChanged = false;
+      const affectedRecords: Array<{ recordType: SyncRecordType; recordId: string }> = [];
+      const recordMutations = new Map<string, LocalStructuredRecordMutation>();
+      const appliedIds = new Set(v2Audit.map((row) => row.eventId));
+      const appliedOperationIds = new Set(v2Audit.map((row) => row.operationId));
+      const nextAudit = [...v2Audit];
+
+      const putMutation = (mutation: LocalStructuredRecordMutation) => {
+        recordMutations.set(`${mutation.key}:${mutation.id}`, mutation);
+      };
+      const putPointer = (pointer: SyncMediaPointer) => {
+        const key = pointer.driveFileId.startsWith('accounts/')
+          ? `media:${pointer.mediaId}`
+          : pointer.sequence > 0
+            ? String(pointer.sequence)
+            : `media:${pointer.mediaId}`;
+        Object.entries(pointers).forEach(([existingKey, existing]) => {
+          if (
+            existingKey !== key &&
+            ((pointer.sequence > 0 && existing.sequence === pointer.sequence) ||
+              (!!pointer.mediaId && existing.mediaId === pointer.mediaId) ||
+              existing.driveFileId === pointer.driveFileId)
+          ) {
+            delete pointers[existingKey];
+          }
+        });
+        pointers[key] = clone(pointer);
+        v2Media[pointer.mediaId] = pointer.driveFileId;
+      };
+
+      for (const item of batch) {
+        const { event, sequence } = item;
+        if (sequence !== cursor + 1) throw new Error('The remote batch contains a sequence gap.');
+        if (event.accountId !== syncState.accountId)
+          throw new Error('The remote event does not belong to the local account.');
+        if (appliedIds.has(event.eventId))
+          throw new Error('The remote batch contains a duplicate applied event.');
+        const operationId = item.operationId || event.eventId;
+        if (appliedOperationIds.has(operationId)) {
+          throw new Error('The remote batch contains a duplicate operation identity.');
+        }
+
+        const recordKey = `${event.recordType}:${event.recordId}`;
+        const currentVersion = versions[recordKey] || 0;
+        if (
+          currentVersion !== event.baseRecordVersion ||
+          event.recordVersion !== currentVersion + 1
+        ) {
+          throw new Error(`Sync record version mismatch for ${recordKey}.`);
+        }
+        for (const affected of event.affectedRecords || []) {
+          const affectedKey = `${affected.recordType}:${affected.recordId}`;
+          if ((versions[affectedKey] || 0) !== affected.baseRecordVersion) {
+            throw new Error(`Sync record version mismatch for ${affectedKey}.`);
+          }
+        }
+
+        if (event.recordType === 'diary') {
+          if (event.operation === 'delete') {
+            diaries = diaries.filter((diary) => diary.id !== event.recordId);
+            const removedEntries = entries.filter((entry) => entry.diaryId === event.recordId);
+            entries = entries.filter((entry) => entry.diaryId !== event.recordId);
+            putMutation({ key: STORAGE_KEYS.diaries, id: event.recordId, value: null });
+            removedEntries.forEach((entry) =>
+              putMutation({ key: STORAGE_KEYS.entries, id: entry.id, value: null }),
+            );
+          } else {
+            diaries = this.upsertRecord(diaries, event.payload as Diary);
+          }
+        } else if (event.recordType === 'entry') {
+          entries =
+            event.operation === 'delete'
+              ? entries.filter((entry) => entry.id !== event.recordId)
+              : this.upsertRecord(entries, sanitizeEntry(event.payload as Entry));
+          putMutation({
+            key: STORAGE_KEYS.entries,
+            id: event.recordId,
+            value: event.operation === 'delete' ? null : sanitizeEntry(event.payload as Entry),
+          });
+        } else if (event.recordType === 'note') {
+          notes =
+            event.operation === 'delete'
+              ? notes.filter((note) => note.id !== event.recordId)
+              : this.upsertRecord(notes, sanitizeNote(event.payload as Note));
+          putMutation({
+            key: STORAGE_KEYS.notes,
+            id: event.recordId,
+            value: event.operation === 'delete' ? null : sanitizeNote(event.payload as Note),
+          });
+        } else if (event.recordType === 'settings') {
+          if (event.operation === 'delete' || !event.payload)
+            throw new Error('Settings cannot be deleted.');
+          settings = {
+            ...settings,
+            customTags: event.payload.customTags,
+            customMoods: event.payload.customMoods,
+          };
+          settingsChanged = true;
+        } else {
+          if (event.operation === 'delete' || !event.payload)
+            throw new Error('Profile cannot be deleted.');
+          profile = event.payload;
+        }
+
+        versions[recordKey] = event.recordVersion;
+        for (const affected of event.affectedRecords || []) {
+          versions[`${affected.recordType}:${affected.recordId}`] = affected.recordVersion;
+          v2Versions[`${affected.recordType.toUpperCase()}:${affected.recordId}`] =
+            affected.recordVersion;
+        }
+        const canonicalRecordType = event.recordType.toUpperCase();
+        const canonicalKey = `${canonicalRecordType}:${event.recordId}`;
+        if (event.operation === 'delete') delete v2Records[canonicalKey];
+        else v2Records[canonicalKey] = event.payload;
+        v2Versions[canonicalKey] = event.recordVersion;
+        for (const pointer of item.mediaPointers || []) putPointer(pointer);
+        appliedIds.add(event.eventId);
+        appliedOperationIds.add(operationId);
+        nextAudit.push({
+          eventId: event.eventId,
+          operationId,
+          sequence,
+          appliedAt: Date.now(),
+        });
+        affectedRecords.push(
+          { recordType: event.recordType, recordId: event.recordId },
+          ...(event.affectedRecords || []).map((affected) => ({
+            recordType: affected.recordType,
+            recordId: affected.recordId,
+          })),
+        );
+        cursor = sequence;
+      }
+
+      diaries = this.withDiaryStats(diaries, entries);
+      diaries.forEach((diary) =>
+        putMutation({ key: STORAGE_KEYS.diaries, id: diary.id, value: diary }),
+      );
+      const nextSyncState = { ...syncState, currentSyncSequence: cursor };
+      const metadataItems: Record<string, unknown> = {
+        [STORAGE_KEYS.settings]: settings,
+        [STORAGE_KEYS.userProfile]: profile,
+        [STORAGE_KEYS.syncRecordVersions]: versions,
+        [STORAGE_KEYS.syncMediaPointers]: pointers,
+        [STORAGE_KEYS.syncAccount]: nextSyncState,
+        [V2_REPLAY_KEYS.records]: v2Records,
+        [V2_REPLAY_KEYS.versions]: v2Versions,
+        [V2_REPLAY_KEYS.applied]: nextAudit.slice(-5_000),
+        [V2_REPLAY_KEYS.media]: v2Media,
+        [V2_REPLAY_KEYS.runtime]: {
+          ...runtime,
+          lastAppliedSequence: cursor,
+          updatedAt: Date.now(),
+        },
+      };
+      const changeFactory = (contentRevision: number): RepositoryChange => ({
+        type: 'remote-batch-applied',
+        affectedRecords,
+        contentRevision,
+      });
+      if (this.store.commitStructuredRecords) {
+        const mutationPriority = (mutation: LocalStructuredRecordMutation) => {
+          if (mutation.key === STORAGE_KEYS.diaries) return 0;
+          if (mutation.key === STORAGE_KEYS.entries) return 1;
+          return 2;
+        };
+        const orderedMutations = [...recordMutations.values()].sort(
+          (left, right) => mutationPriority(left) - mutationPriority(right),
+        );
+        await this.writeStructuredRecordsWithRevision(
+          orderedMutations,
+          metadataItems,
+          changeFactory,
+        );
+      } else {
+        await this.writePortableItems(
+          {
+            [STORAGE_KEYS.diaries]: diaries,
+            [STORAGE_KEYS.entries]: entries,
+            [STORAGE_KEYS.notes]: notes,
+            ...metadataItems,
+          },
+          changeFactory,
+        );
+      }
+      if (settingsChanged) await syncReminderNotification(settings);
+      return cursor;
+    });
+  }
+
   async getSyncMediaPointer(sequence: number): Promise<SyncMediaPointer | null> {
     await this.waitForWrites();
     const pointers = await this.readJson<Record<string, SyncMediaPointer>>(
@@ -1573,7 +1841,17 @@ export class LocalDiaryRepository implements DiaryRepository {
   updateSyncCatchUpStatus(
     status: Pick<
       SyncStatusSummary,
-      'catchUpPhase' | 'appliedSequence' | 'targetSequence' | 'catchUpError' | 'catchUpRecoverable'
+      | 'catchUpPhase'
+      | 'startingSequence'
+      | 'snapshotSequence'
+      | 'appliedSequence'
+      | 'targetSequence'
+      | 'downloadedEvents'
+      | 'appliedEvents'
+      | 'totalEvents'
+      | 'catchUpErrorCode'
+      | 'catchUpError'
+      | 'catchUpRecoverable'
     >,
   ): Promise<void> {
     this.syncCatchUpStatus = { ...status };
@@ -1720,16 +1998,39 @@ export class LocalDiaryRepository implements DiaryRepository {
               (right.updatedAt || right.createdAt || 0) - (left.updatedAt || left.createdAt || 0),
           );
         const latestSameRecordOperation = existingSameRecordOperations[0];
-        const operationId = input.operationId;
-        const dependsOnOperationId = latestSameRecordOperation?.operationId;
+        const coalescibleV2 = Object.values(outboxV2)
+          .filter(
+            (operation) =>
+              operation.accountId === input.account.accountId &&
+              operation.recordType === input.recordType.toUpperCase() &&
+              operation.recordId === input.recordId &&
+              operation.state === 'PENDING' &&
+              !operation.leaseOwner &&
+              !operation.preparedObjects,
+          )
+          .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+        const coalescibleLegacy = coalescibleV2 ? outbox[coalescibleV2.operationId] : undefined;
+        const canCoalesce = Boolean(coalescibleV2 && coalescibleLegacy?.state === 'prepared');
+        const operationId = canCoalesce ? coalescibleV2!.operationId : input.operationId;
+        const dependsOnOperationId = canCoalesce
+          ? coalescibleLegacy?.dependsOnOperationId
+          : latestSameRecordOperation?.operationId;
         const dependencyV2 = dependsOnOperationId ? outboxV2[dependsOnOperationId] : undefined;
-        const baseRecordVersion = dependsOnOperationId
-          ? (dependencyV2?.baseRecordVersion ??
-              latestSameRecordOperation?.baseRecordVersion ??
-              versions[recordKey] ??
-              0) + 1
-          : (versions[recordKey] ?? 0);
+        const baseRecordVersion = canCoalesce
+          ? coalescibleV2!.baseRecordVersion
+          : dependsOnOperationId
+            ? (dependencyV2?.baseRecordVersion ??
+                latestSameRecordOperation?.baseRecordVersion ??
+                versions[recordKey] ??
+                0) + 1
+            : (versions[recordKey] ?? 0);
         const nowMs = input.createdAt || Date.now();
+        const publishNotBefore = input.publishNotBefore
+          ? Math.min(
+              input.publishNotBefore,
+              (canCoalesce ? coalescibleLegacy!.createdAt : nowMs) + 60_000,
+            )
+          : undefined;
         const syncPayload =
           input.syncPayload === undefined ? input.localPayload : input.syncPayload;
         const affectedRecords: SyncOutboxOperation['affectedRecords'] = [];
@@ -1898,6 +2199,31 @@ export class LocalDiaryRepository implements DiaryRepository {
           });
         }
 
+        const cancelUnpublishedCreate =
+          input.operation === 'delete' &&
+          canCoalesce &&
+          baseRecordVersion === 0 &&
+          !dependsOnOperationId;
+        if (cancelUnpublishedCreate) {
+          delete outbox[operationId];
+          delete outboxV2[operationId];
+          items[STORAGE_KEYS.syncOutbox] = outbox;
+          items[STORAGE_KEYS.syncOutboxV2] = outboxV2;
+          const contentRevision = this.store.commitStructuredRecords
+            ? await this.writeStructuredRecordsWithRevision(
+                recordMutations,
+                {
+                  ...metadataItems,
+                  [STORAGE_KEYS.syncOutbox]: outbox,
+                  [STORAGE_KEYS.syncOutboxV2]: outboxV2,
+                },
+                changeFactory,
+              )
+            : await this.writePortableItems(items, changeFactory);
+          await this.emitSyncStatusChange(outbox, operationId, contentRevision);
+          return clone(result);
+        }
+
         const outboxOperation: SyncOutboxOperation = {
           operationId,
           accountId: input.account.accountId,
@@ -1915,11 +2241,11 @@ export class LocalDiaryRepository implements DiaryRepository {
           affectedRecords,
           state: 'prepared',
           localApplied: true,
-          createdAt: nowMs,
+          createdAt: canCoalesce ? coalescibleLegacy!.createdAt : nowMs,
           updatedAt: nowMs,
           retryCount: undefined,
           lastErrorAt: undefined,
-          nextRetryAt: undefined,
+          nextRetryAt: publishNotBefore,
           error: undefined,
         };
         outbox[operationId] = outboxOperation;
@@ -1943,6 +2269,37 @@ export class LocalDiaryRepository implements DiaryRepository {
         return clone(result);
       }),
     );
+  }
+
+  publishPendingEntryDraft(entryId: string): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const [outbox, outboxV2] = await Promise.all([
+        this.readJson<Record<string, SyncOutboxOperation>>(STORAGE_KEYS.syncOutbox, {}),
+        this.readJson<Record<string, SyncOutboxOperationV2>>(STORAGE_KEYS.syncOutboxV2, {}),
+      ]);
+      let changed = false;
+      Object.values(outbox).forEach((operation) => {
+        if (
+          operation.recordType === 'entry' &&
+          operation.recordId === entryId &&
+          operation.state === 'prepared'
+        ) {
+          operation.nextRetryAt = 0;
+          operation.updatedAt = Date.now();
+          const v2 = outboxV2[operation.operationId];
+          if (v2?.state === 'PENDING' && !v2.leaseOwner) {
+            outboxV2[operation.operationId] = { ...v2, nextAttemptAt: 0, updatedAt: Date.now() };
+          }
+          changed = true;
+        }
+      });
+      if (!changed) return;
+      await this.writeManyJson({
+        [STORAGE_KEYS.syncOutbox]: outbox,
+        [STORAGE_KEYS.syncOutboxV2]: outboxV2,
+      });
+      await this.emitSyncStatusChange(outbox);
+    });
   }
 
   acknowledgeLocalMutation(input: AcknowledgeLocalMutationInput): Promise<void> {
@@ -2068,6 +2425,14 @@ export class LocalDiaryRepository implements DiaryRepository {
   }
 
   importSnapshot(snapshot: RepositorySnapshot, mode: RepositoryImportMode): Promise<void> {
+    return this.importSnapshotAtomically(snapshot, mode, {});
+  }
+
+  importSnapshotAtomically(
+    snapshot: RepositorySnapshot,
+    mode: RepositoryImportMode,
+    additionalItems: Record<string, unknown>,
+  ): Promise<void> {
     const sanitizedSnapshot = sanitizeRepositorySnapshot(snapshot);
     if (
       !Array.isArray(sanitizedSnapshot.diaries) ||
@@ -2079,11 +2444,14 @@ export class LocalDiaryRepository implements DiaryRepository {
 
     return this.enqueueWrite(async () => {
       const items: Record<string, unknown> = {
-        [STORAGE_KEYS.entries]: clone(sanitizedSnapshot.entries),
+        ...additionalItems,
         [STORAGE_KEYS.diaries]: this.withDiaryStats(
           clone(sanitizedSnapshot.diaries),
           sanitizedSnapshot.entries,
         ),
+        // SQLite enforces entries.diary_id immediately while replaying this
+        // atomic batch, so parent diaries must be replaced before their entries.
+        [STORAGE_KEYS.entries]: clone(sanitizedSnapshot.entries),
         [STORAGE_KEYS.notes]: clone(sanitizedSnapshot.notes),
       };
       if (sanitizedSnapshot.settings) {

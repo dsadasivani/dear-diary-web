@@ -44,6 +44,9 @@ describe('SyncedImage', () => {
     expect(image.getAttribute('src')).toMatch(/^data:image\/gif;base64,/);
     expect(image).not.toHaveAttribute('src', syncReference);
     expect(image).not.toHaveAttribute('src', fallbackSrc);
+    expect(screen.getByRole('status', { name: 'Syncing image' })).toHaveTextContent(
+      'Syncing photo',
+    );
 
     resolveHydration(hydratedSrc);
 

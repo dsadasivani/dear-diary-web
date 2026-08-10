@@ -28,26 +28,54 @@ public class EventPullService {
     }
 
     public PullEventsResponse pull(String ownerSubject, long after, int limit) {
+        return pull(ownerSubject, after, null, limit);
+    }
+
+    public PullEventsResponse pull(String ownerSubject, long after, Long through, int limit) {
         if (after < 0 || limit < 1 || limit > MAXIMUM_PAGE_SIZE) {
             throw new ApiException("INVALID_CURSOR", HttpStatus.BAD_REQUEST, "The event cursor or page size is invalid.");
         }
         var account = accounts.requireActiveAccount(ownerSubject);
+        var boundary = jdbc.queryForObject(
+            "SELECT minimum_available_sequence FROM sync_accounts WHERE account_id = ?",
+            Long.class, account.accountId());
+        if (after < boundary) {
+            var recommended = jdbc.query("""
+                SELECT snapshot_id, sequence FROM sync_snapshots
+                WHERE account_id = ? AND snapshot_status = 'AVAILABLE' AND verified = TRUE
+                  AND sequence >= ?
+                ORDER BY sequence DESC, created_at DESC LIMIT 1
+                """, (rs, row) -> Map.<String, Object>of(
+                    "snapshotId", rs.getObject(1, UUID.class), "snapshotSequence", rs.getLong(2)),
+                account.accountId(), boundary);
+            var details = new java.util.HashMap<String, Object>();
+            details.put("minimumAvailableSequence", boundary);
+            if (!recommended.isEmpty()) details.putAll(recommended.getFirst());
+            throw new ApiException("SNAPSHOT_REQUIRED", HttpStatus.CONFLICT,
+                "The requested event history has been compacted; restore a verified snapshot.",
+                true, true, details);
+        }
         if (after > account.currentSequence()) {
             throw new ApiException("CURSOR_AHEAD", HttpStatus.CONFLICT,
                 "The event cursor is ahead of the account sequence.", false, true, Map.of());
+        }
+        var targetSequence = through == null ? account.currentSequence() : through;
+        if (targetSequence < after || targetSequence > account.currentSequence()) {
+            throw new ApiException("INVALID_CURSOR", HttpStatus.BAD_REQUEST,
+                "The fixed event watermark is invalid.");
         }
         var rows = jdbc.query("""
             SELECT sequence, event_id, operation_id, device_id, record_type, record_id,
                    operation_type, record_version, key_epoch, partition_key, object_key,
                    sha256, size_bytes, event_schema_version
-            FROM sync_events WHERE account_id = ? AND sequence > ?
+            FROM sync_events WHERE account_id = ? AND sequence > ? AND sequence <= ?
             ORDER BY sequence ASC LIMIT ?
             """, (rs, row) -> new EventRow(
                 rs.getLong(1), rs.getObject(2, UUID.class), rs.getObject(3, UUID.class),
                 rs.getObject(4, UUID.class), rs.getString(5), rs.getString(6),
                 rs.getString(7), rs.getLong(8), rs.getInt(9), rs.getString(10),
                 rs.getString(11), rs.getString(12), rs.getLong(13), rs.getInt(14)),
-            account.accountId(), after, limit + 1);
+            account.accountId(), after, targetSequence, limit + 1);
         var expectedSequence = after + 1;
         for (var row : rows) {
             if (row.sequence() != expectedSequence) {
@@ -59,8 +87,8 @@ public class EventPullService {
         }
         var page = rows.stream().limit(limit).map(this::withDownload).toList();
         var lastSequence = page.isEmpty() ? after : page.getLast().sequence();
-        var hasMore = rows.size() > limit || account.currentSequence() > lastSequence;
-        return new PullEventsResponse(page, account.currentSequence(), hasMore);
+        var hasMore = rows.size() > limit || targetSequence > lastSequence;
+        return new PullEventsResponse(page, targetSequence, hasMore);
     }
 
     private PullEventsResponse.Event withDownload(EventRow row) {

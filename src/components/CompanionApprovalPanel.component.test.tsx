@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getLocalSyncAccountState: vi.fn(),
   pullPending: vi.fn(),
   listPendingSyncV2Pairings: vi.fn(),
+  approveSyncV2CompanionPairing: vi.fn(),
   listSyncV2Devices: vi.fn(),
   resumePendingSyncV2DeviceRevocation: vi.fn(),
   hasPrimaryRecoveryCredential: vi.fn(),
@@ -23,7 +24,7 @@ vi.mock('../repositories', () => ({
 
 vi.mock('../sync/v2/v2CompanionPairing', () => ({
   listPendingSyncV2Pairings: mocks.listPendingSyncV2Pairings,
-  approveSyncV2CompanionPairing: vi.fn(),
+  approveSyncV2CompanionPairing: mocks.approveSyncV2CompanionPairing,
 }));
 vi.mock('../sync/v2/v2DeviceManagement', () => ({
   listSyncV2Devices: mocks.listSyncV2Devices,
@@ -113,6 +114,45 @@ describe('CompanionApprovalPanel', () => {
     expect(screen.getByText('web')).toBeInTheDocument();
     expect(mocks.listPendingSyncV2Pairings).toHaveBeenCalledWith('primary-v2');
     view.unmount();
+  });
+
+  it('shows only the newest request when an older service returns duplicate browser pairings', async () => {
+    const pairing = (pairingId: string, requestedAt: string) => ({
+      accountId: 'v2-account',
+      pairingId,
+      requestedDeviceId: `web-${pairingId}`,
+      requestedDeviceEncryptionPublicKey: 'public',
+      platform: 'web',
+      challenge: 'challenge',
+      status: 'REQUESTED',
+      keyEpoch: 1,
+      keyPackageId: null,
+      objectKey: null,
+      sha256: null,
+      sizeBytes: null,
+      downloadUrl: null,
+      downloadExpiresAt: null,
+      upload: null,
+      requestedAt,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    mocks.listPendingSyncV2Pairings.mockResolvedValue([
+      pairing('older', '2026-08-09T10:00:00Z'),
+      pairing('newer', '2026-08-09T10:01:00Z'),
+    ]);
+
+    render(<CompanionApprovalPanel />);
+
+    const codeInput = await screen.findByLabelText('Pairing code for Web browser');
+    expect(screen.getAllByLabelText('Pairing code for Web browser')).toHaveLength(1);
+    fireEvent.change(codeInput, { target: { value: '12345678' } });
+    fireEvent.click(screen.getByTitle('Approve companion'));
+    await waitFor(() =>
+      expect(mocks.approveSyncV2CompanionPairing).toHaveBeenCalledWith(
+        expect.objectContaining({ pairingId: 'newer' }),
+        '12345678',
+      ),
+    );
   });
 
   it('asks existing primaries to finish the security upgrade', async () => {

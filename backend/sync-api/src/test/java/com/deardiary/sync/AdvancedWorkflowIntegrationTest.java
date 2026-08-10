@@ -154,6 +154,36 @@ class AdvancedWorkflowIntegrationTest {
     }
 
     @Test
+    void newestUnapprovedBrowserPairingSupersedesAnAbandonedRequest() throws Exception {
+        var pairings = new PairingService(jdbc, transactions, accounts, devices, new ProtocolService(jdbc),
+            new ObjectKeyFactory(), new InMemoryEncryptedObjectStore(), clock,
+            new com.deardiary.sync.quota.QuotaService(jdbc, accounts));
+        var companionKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
+        var challenge = new byte[32];
+        java.security.SecureRandom.getInstanceStrong().nextBytes(challenge);
+        var firstPairingId = UUID.randomUUID();
+        var secondPairingId = UUID.randomUUID();
+        var codeHash = sha256("12345678".getBytes(StandardCharsets.UTF_8));
+
+        pairings.create("advanced-user", new PairingRequests.Create(
+            firstPairingId, UUID.randomUUID(),
+            Base64.getEncoder().encodeToString(companionKey.getPublic().getEncoded()),
+            "e".repeat(32), "web", codeHash, Base64.getEncoder().encodeToString(challenge)));
+        pairings.create("advanced-user", new PairingRequests.Create(
+            secondPairingId, UUID.randomUUID(),
+            Base64.getEncoder().encodeToString(companionKey.getPublic().getEncoded()),
+            "f".repeat(32), "web", codeHash, Base64.getEncoder().encodeToString(challenge)));
+
+        assertThat(pairings.listPending("advanced-user", primaryDeviceId))
+            .extracting(pairing -> pairing.pairingId())
+            .containsExactly(secondPairingId);
+        assertThat(jdbc.queryForObject("""
+            SELECT pairing_status FROM sync_pairing_requests
+            WHERE account_id = ? AND pairing_id = ?
+            """, String.class, accountId, firstPairingId)).isEqualTo("REJECTED");
+    }
+
+    @Test
     void recoveryRevokesOldPrimaryOnlyAfterKeyProofSnapshotAndCursorValidation() throws Exception {
         enable("primary_recovery_enabled", "PRIMARY_RECOVERY");
         var objectStore = new InMemoryEncryptedObjectStore();
@@ -198,7 +228,7 @@ class AdvancedWorkflowIntegrationTest {
     }
 
     @Test
-    void expiredRecoveryDoesNotBlockAReplacementDevice() throws Exception {
+    void aNewRecoveryImmediatelySupersedesAnUnfinishedAttempt() throws Exception {
         enable("primary_recovery_enabled", "PRIMARY_RECOVERY");
         var objectStore = new InMemoryEncryptedObjectStore();
         var protocols = new ProtocolService(jdbc);
@@ -212,15 +242,6 @@ class AdvancedWorkflowIntegrationTest {
         recovery.begin("advanced-user", new RecoveryRequests.Begin(staleAttempt, staleDevice,
             Base64.getEncoder().encodeToString(staleKey.getPublic().getEncoded()), "test"));
 
-        var competingKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
-        assertApiCode(() -> recovery.begin("advanced-user", new RecoveryRequests.Begin(
-            UUID.randomUUID(), UUID.randomUUID(),
-            Base64.getEncoder().encodeToString(competingKey.getPublic().getEncoded()), "test")),
-            "RECOVERY_ALREADY_ACTIVE");
-
-        jdbc.update("""
-            UPDATE sync_recovery_state SET requested_at = ?, expires_at = ? WHERE account_id = ?
-            """, OffsetDateTime.now(clock).minusDays(2), OffsetDateTime.now(clock).minusDays(1), accountId);
         var replacementKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
         var replacementDevice = UUID.randomUUID();
         var replacementAttempt = UUID.randomUUID();
@@ -235,6 +256,8 @@ class AdvancedWorkflowIntegrationTest {
             String.class, staleDevice)).isEqualTo("REVOKED");
         assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?",
             String.class, replacementDevice)).isEqualTo("RECOVERY_PENDING");
+        assertThat(jdbc.queryForObject("SELECT device_status FROM sync_devices WHERE device_id = ?",
+            String.class, primaryDeviceId)).isEqualTo("ACTIVE");
     }
 
     @Test

@@ -1,12 +1,6 @@
 import type { LocalDataStore } from '../../platform/storage';
 import type { DiaryRepository } from '../../repositories/DiaryRepository';
-import type {
-  GoogleAccountSession,
-  LocalSyncAccountState,
-  SupabaseAuthSession,
-  SyncDomainEvent,
-  SyncRecordType,
-} from '../../types';
+import type { GoogleAccountSession, LocalSyncAccountState, SupabaseAuthSession } from '../../types';
 import { createInitialPin } from '../../domain/security';
 import { populateUserProfileFromGoogle } from '../../utils/googleProfile';
 import {
@@ -48,6 +42,7 @@ import {
   recoverDeletesBlockedByConflictedWrites,
   type OutboxRepository,
   type SyncOutboxOperationV2,
+  TERMINAL_OUTBOX_V2_STATES,
 } from '../outbox';
 import { SyncV2ApiClient } from './api/SyncV2ApiClient';
 import type { SyncV2Protocol } from './api/SyncV2ApiTypes';
@@ -77,9 +72,8 @@ import {
   SYNC_V2_RUNTIME_KEY,
   SYNC_V2_VERSIONS_KEY,
   type DecryptedSyncV2Event,
-  type ReplayBatchEvent,
-  type SyncV2ReplayStore,
 } from './replay/PersistentReplayStore';
+import { RepositoryReplayStore, toDomainEvent } from './replay/RepositoryReplayStore';
 import { RemoteEventPuller } from './replay/RemoteEventPuller';
 import { PersistentSafetyStopStore } from './safety/PersistentSafetyStopStore';
 import { clearRecoverableCompanionSafetyStop } from './safety/companionSafetyRecovery';
@@ -92,26 +86,17 @@ import { signWithDeviceBundle } from './v2CompanionPairing';
 import { clearSyncV2LocalCache } from './clearSyncV2LocalCache';
 import { signOutGoogleAuth } from '../../utils/googleAuth';
 import {
-  repositorySnapshotFromV2State,
   repositorySnapshotToV2State,
+  createAtomicRepositorySnapshotReplacement,
 } from './RepositorySnapshotAdapter';
-import { toPortableSyncPayload } from '../portableMedia';
 import { toPortableDiary, toPortableEntry, toPortableUserProfile } from '../portableMedia';
 import { parseSyncMediaReference } from '../syncMedia';
 
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 const SYNC_V2_QUOTA_CACHE_KEY = 'deardiary_sync_quota_v1';
 const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
 const MAX_WORK_PER_FLUSH = 100;
 const COMPANION_AUTHORIZATION_CHECK_INTERVAL_MS = 5_000;
-
-const recordTypeToLegacy: Record<SyncOutboxOperationV2['recordType'], SyncRecordType> = {
-  DIARY: 'diary',
-  ENTRY: 'entry',
-  NOTE: 'note',
-  SETTINGS: 'settings',
-  PROFILE: 'profile',
-};
 
 const canonicalJson = (value: unknown): string => {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -236,69 +221,6 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     return this.mediaHydrator?.hydrate(reference) || Promise.resolve(reference);
   }
 }
-
-class RepositoryReplayStore implements SyncV2ReplayStore {
-  constructor(
-    private readonly persistent: PersistentReplayStore,
-    private readonly repository: DiaryRepository,
-  ) {}
-  getLastAppliedSequence() {
-    return this.persistent.getLastAppliedSequence();
-  }
-  hasAppliedEvent(eventId: string) {
-    return this.persistent.hasAppliedEvent(eventId);
-  }
-  async applyBatch(events: ReplayBatchEvent[]): Promise<number> {
-    const portableEvents = events.map(({ envelope, event }) => ({
-      envelope,
-      event: {
-        ...event,
-        payload: toPortableSyncPayload(recordTypeToLegacy[event.recordType], event.payload),
-      },
-    }));
-    for (const { envelope, event } of portableEvents) {
-      await this.repository.applySyncEvent(
-        toDomainEvent(envelope.deviceId, envelope.eventId, event),
-        envelope.sequence,
-      );
-      for (const pointer of event.mediaPointers || []) {
-        await this.repository.saveSyncMediaPointer({
-          mediaId: pointer.mediaId,
-          sequence: envelope.sequence,
-          driveFileId: pointer.objectKey,
-          sha256: '',
-          sizeBytes: 0,
-          createdByDeviceId: envelope.deviceId,
-          createdAt: new Date().toISOString(),
-          thumbnailSequence: pointer.thumbnailObjectKey ? envelope.sequence : undefined,
-          thumbnailDriveFileId: pointer.thumbnailObjectKey,
-          keyEpoch: envelope.keyEpoch,
-        });
-      }
-    }
-    return this.persistent.applyBatch(portableEvents);
-  }
-}
-
-const toDomainEvent = (
-  deviceId: string,
-  eventId: string,
-  event: DecryptedSyncV2Event,
-): SyncDomainEvent =>
-  ({
-    version: 1,
-    eventId,
-    accountId: event.accountId,
-    deviceId,
-    createdAt: new Date().toISOString(),
-    operation:
-      event.operationType === 'DELETE' ? 'delete' : event.recordVersion === 1 ? 'create' : 'update',
-    recordType: recordTypeToLegacy[event.recordType],
-    recordId: event.recordId,
-    baseRecordVersion: event.recordVersion - 1,
-    recordVersion: event.recordVersion,
-    payload: event.payload,
-  }) as SyncDomainEvent;
 
 class RepositoryAcknowledgmentStore implements OperationAcknowledgmentStore {
   constructor(
@@ -572,9 +494,14 @@ export class SyncV2ApplicationLifecycle {
     input.onProgress?.('Restoring your encrypted diary...');
     const transfer = new BoundedObjectTransfer({
       maximumObjectBytes: Math.max(protocol.maximumSnapshotBytes, protocol.maximumEventBytes),
+      maximumConcurrency: 6,
     });
     const safety = new PersistentSafetyStopStore(this.store);
-    const snapshotStore = new PersistentSyncV2SnapshotStore(this.store);
+    const snapshotStore = new PersistentSyncV2SnapshotStore(
+      this.store,
+      Date.now,
+      createAtomicRepositorySnapshotReplacement(this.repository),
+    );
     const snapshots = new SyncV2SnapshotCoordinator(
       api,
       transfer,
@@ -595,10 +522,6 @@ export class SyncV2ApplicationLifecycle {
       },
     );
     const restoredSnapshot = await snapshots.restoreLatestWithMetadata();
-    const restoredState = (await snapshotStore.exportAccountState(accountId)).state;
-    const restoredRepositorySnapshot = repositorySnapshotFromV2State(restoredState);
-    await this.repository.importSnapshot(restoredRepositorySnapshot, 'replace-portable');
-
     const recoveredAccount: LocalSyncAccountState = {
       accountId,
       syncProtocolVersion: 2,
@@ -614,9 +537,11 @@ export class SyncV2ApplicationLifecycle {
     await this.repository.saveLocalSyncAccountState(recoveredAccount);
 
     const validator = new SyncInvariantValidator();
+    const atomicReplayEnabled = protocol.bootstrapControls?.atomicReplayEnabled === true;
     const replay = new RepositoryReplayStore(
       new PersistentReplayStore(this.store, validator),
       this.repository,
+      atomicReplayEnabled,
     );
     const puller = new RemoteEventPuller(
       api,
@@ -640,7 +565,9 @@ export class SyncV2ApplicationLifecycle {
         accountId,
         deviceId: pending.deviceId,
         eventSchemaVersion: protocol.eventSchemaVersion,
-        replayBatchSize: 1,
+        replayBatchSize: atomicReplayEnabled
+          ? protocol.bootstrapControls?.replayBatchSize || 25
+          : 1,
         onProgress: (progress) => this.legacyEngine.reportCatchUpProgress(progress),
       },
     );
@@ -855,6 +782,7 @@ export class SyncV2ApplicationLifecycle {
       const queued = await this.queueMediaBackfill(account);
       if (queued) await this.delegate.flushPendingOutbox();
     }
+    await this.delegate.pullPending();
 
     input.onProgress?.('Creating your encrypted restore point...');
     const snapshots = new SyncV2SnapshotCoordinator(
@@ -874,6 +802,7 @@ export class SyncV2ApplicationLifecycle {
         snapshotSchemaVersion: protocol.snapshotSchemaVersion,
         maximumSnapshotBytes: protocol.maximumSnapshotBytes,
         currentKeyEpoch: async () => 1,
+        signMetadata: (message) => signWithDeviceBundle(pending.devicePrivateKeyJwk, message),
       },
     );
     await snapshots.create();
@@ -1166,12 +1095,23 @@ export class SyncV2ApplicationLifecycle {
     if (protocol.featureFlags.mediaUploadEnabled) this.mediaEnabledAccounts.add(account.accountId);
     else this.mediaEnabledAccounts.delete(account.accountId);
     const transfer = new BoundedObjectTransfer({
-      maximumObjectBytes: Math.max(protocol.maximumEventBytes, protocol.maximumMediaBytes, 1),
+      maximumObjectBytes: Math.max(
+        protocol.maximumEventBytes,
+        protocol.maximumMediaBytes,
+        protocol.maximumSnapshotBytes,
+        1,
+      ),
+      maximumConcurrency: 6,
     });
     const validator = new SyncInvariantValidator();
     const safety = new PersistentSafetyStopStore(this.store);
     const persistentReplay = new PersistentReplayStore(this.store, validator);
-    const replay = new RepositoryReplayStore(persistentReplay, this.repository);
+    const atomicReplayEnabled = protocol.bootstrapControls?.atomicReplayEnabled === true;
+    const replay = new RepositoryReplayStore(
+      persistentReplay,
+      this.repository,
+      atomicReplayEnabled,
+    );
     const decryptor = {
       hasKeyEpoch: async (epoch: number) => {
         const secrets = await loadSyncSecrets();
@@ -1197,7 +1137,9 @@ export class SyncV2ApplicationLifecycle {
         accountId: account.accountId,
         deviceId: account.deviceId,
         eventSchemaVersion: protocol.eventSchemaVersion,
-        replayBatchSize: 1,
+        replayBatchSize: atomicReplayEnabled
+          ? protocol.bootstrapControls?.replayBatchSize || 25
+          : 1,
         onProgress: (progress) => this.legacyEngine.reportCatchUpProgress(progress),
       },
     );
@@ -1268,6 +1210,41 @@ export class SyncV2ApplicationLifecycle {
       30_000,
       handleWorkerError('sync.v2.outbox.worker'),
     );
+    const rollingSnapshotWorker = new IntervalWorker(
+      async () => {
+        const rollingEnabled = protocol.bootstrapControls?.rollingSnapshotsEnabled === true;
+        if (!rollingEnabled || account.deviceRole !== 'primary_mobile') return;
+        const readiness = await api.getBootstrapReadiness(account.deviceId);
+        if (!readiness.snapshotRequired && readiness.snapshotLag < readiness.softTailEvents) return;
+        await puller.pull();
+        const pending = (await this.outbox.listByAccount(account.accountId)).some(
+          (operation) => !TERMINAL_OUTBOX_V2_STATES.has(operation.state),
+        );
+        if (pending) return;
+        const secrets = await loadSyncSecrets();
+        if (!secrets) throw new Error('Encrypted sync keys are unavailable.');
+        const snapshots = new SyncV2SnapshotCoordinator(
+          api,
+          transfer,
+          new PersistentSyncV2SnapshotStore(this.store),
+          new AccountKeySyncV2SnapshotCodec((epoch) => this.keyForEpoch(epoch)),
+          safety,
+          {
+            accountId: account.accountId,
+            deviceId: account.deviceId,
+            protocolVersion: PROTOCOL_VERSION,
+            snapshotSchemaVersion: protocol.snapshotSchemaVersion,
+            maximumSnapshotBytes: protocol.maximumSnapshotBytes,
+            currentKeyEpoch: async () =>
+              (await this.repository.getLocalSyncAccountState())?.keyEpoch || 1,
+            signMetadata: (message) => signWithDeviceBundle(secrets.devicePrivateKeyJwk, message),
+          },
+        );
+        await snapshots.create();
+      },
+      5 * 60_000,
+      handleWorkerError('sync.v2.snapshot.worker'),
+    );
     const bootstrap = new ProtocolBootstrap(
       new SyncV2RuntimeStore(this.store),
       api,
@@ -1284,7 +1261,7 @@ export class SyncV2ApplicationLifecycle {
       await api.listDeviceKeyPackages(account.deviceId);
     };
     return new RuntimeDelegate(
-      new SyncV2RuntimeCoordinator(bootstrap, pullWorker, outboxWorker),
+      new SyncV2RuntimeCoordinator(bootstrap, pullWorker, outboxWorker, rollingSnapshotWorker),
       puller,
       processor,
       () =>

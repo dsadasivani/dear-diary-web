@@ -36,6 +36,7 @@ export interface SyncV2SnapshotCoordinatorOptions {
   snapshotSchemaVersion: number;
   maximumSnapshotBytes: number;
   currentKeyEpoch(): Promise<number>;
+  signMetadata?(message: string): Promise<string>;
 }
 
 type SnapshotApi = Pick<
@@ -63,6 +64,13 @@ export class SyncV2SnapshotCoordinator {
       const journal = await this.resumeOrPrepare(exported);
       const encrypted = this.fromBase64(journal.encryptedBase64);
       const snapshotId = journal.snapshotId;
+      const metadataMessage = this.metadataMessage(journal);
+      const metadataSignature = this.options.signMetadata
+        ? await this.options.signMetadata(metadataMessage)
+        : undefined;
+      if (this.options.protocolVersion >= 4 && !metadataSignature) {
+        throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+      }
       await this.faults.hit('BEFORE_UPLOAD_INITIATE');
       const initiated = await this.api.initiateSnapshot({
         snapshotId,
@@ -74,6 +82,7 @@ export class SyncV2SnapshotCoordinator {
         keyEpoch: journal.keyEpoch,
         snapshotSchemaVersion: journal.snapshotSchemaVersion,
         protocolVersion: this.options.protocolVersion,
+        metadataSignature,
       });
       await this.faults.hit('AFTER_UPLOAD_INITIATE');
       await this.faults.hit('DURING_OBJECT_UPLOAD');
@@ -110,9 +119,14 @@ export class SyncV2SnapshotCoordinator {
   }
 
   async restoreLatestWithMetadata(): Promise<SyncV2Snapshot> {
+    return this.restoreSnapshot(
+      await this.api.getLatestSnapshot(this.options.snapshotSchemaVersion),
+    );
+  }
+
+  async restoreSnapshot(snapshot: SyncV2Snapshot): Promise<SyncV2Snapshot> {
     const span = this.telemetry.startSpan('snapshot.restore');
     try {
-      const snapshot = await this.api.getLatestSnapshot(this.options.snapshotSchemaVersion);
       if (!snapshot.downloadUrl || snapshot.partitionKey !== SYNC_V2_ACCOUNT_PARTITION) {
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       }
@@ -236,6 +250,20 @@ export class SyncV2SnapshotCoordinator {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, item]) => `${JSON.stringify(key)}:${this.canonicalJson(item)}`)
       .join(',')}}`;
+  }
+
+  private metadataMessage(journal: SyncV2SnapshotCreationJournal): string {
+    return [
+      'snapshot-metadata',
+      journal.snapshotId,
+      this.options.deviceId,
+      journal.throughSequence,
+      SYNC_V2_ACCOUNT_PARTITION,
+      journal.sha256,
+      journal.sizeBytes,
+      journal.keyEpoch,
+      journal.snapshotSchemaVersion,
+    ].join(':');
   }
 
   private toBase64(bytes: Uint8Array): string {

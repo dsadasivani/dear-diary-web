@@ -115,7 +115,8 @@ class JwtAuthenticationIntegrationTest {
         when(protocolService.current()).thenReturn(new ProtocolResponse(
             2, 2, 2, 2, 2, 10_485_760, 104_857_600, 104_857_600,
             "0.0.0", 0, 1, false,
-            new ProtocolResponse.FeatureFlags(true, true, true, false, false, true, true, false, false, false, false)));
+            new ProtocolResponse.FeatureFlags(true, true, true, false, false, true, true, false, false, false, false),
+            new ProtocolResponse.BootstrapControls(false, false, false, false, 100, 500, 7, 25, 60)));
         mockMvc.perform(get("/api/v2/sync/protocol")
                 .header(HttpHeaders.AUTHORIZATION, bearer(token(
                     TRUSTED_KEY, "user-1", "authenticated", "authenticated", Instant.now().plusSeconds(300)))))

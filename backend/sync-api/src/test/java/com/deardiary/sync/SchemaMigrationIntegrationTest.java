@@ -38,7 +38,7 @@ class SchemaMigrationIntegrationTest {
 
         var migration = flyway.migrate();
 
-        assertThat(migration.migrationsExecuted).isEqualTo(29);
+        assertThat(migration.migrationsExecuted).isEqualTo(31);
         try (Connection connection = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              Statement statement = connection.createStatement()) {
@@ -50,7 +50,7 @@ class SchemaMigrationIntegrationTest {
                 .isTrue();
             assertThat(queryLong(statement,
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'sync_%'"))
-                .isEqualTo(22);
+                .isEqualTo(24);
             assertThat(queryLong(statement,
                 "SELECT maximum_storage_bytes FROM sync_plans WHERE plan_id = 'default'"))
                 .isEqualTo(524_288_000L);
@@ -77,7 +77,11 @@ class SchemaMigrationIntegrationTest {
                     2, 2, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
                 """))
-                .hasMessageContaining("ck_sync_accounts_sequence");
+                // Both the current-sequence constraint and the protocol-4 retention
+                // boundary constraint reject this row. PostgreSQL is free to report
+                // either check first, so assert the account constraint family instead
+                // of depending on constraint evaluation order.
+                .hasMessageContaining("ck_sync_accounts_");
         }
     }
 

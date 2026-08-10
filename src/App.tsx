@@ -151,9 +151,23 @@ const GlobalLoaderOverlay = ({ loading }: { loading: GlobalLoadingState | null }
   </AnimatePresence>
 );
 
-const ScreenFallback = () => (
-  <div className="flex min-h-[12rem] w-full items-center justify-center text-brand-sage">
-    <LoaderCircle className="h-6 w-6 animate-spin" />
+const ScreenFallback = ({
+  message = 'Opening this page…',
+  detail = 'Loading your latest private data from this device.',
+}: {
+  message?: string;
+  detail?: string;
+}) => (
+  <div
+    className="flex min-h-[18rem] w-full flex-col items-center justify-center gap-3 px-6 text-center text-brand-sage"
+    role="status"
+    aria-live="polite"
+  >
+    <LoaderCircle className="h-6 w-6 animate-spin" aria-hidden="true" />
+    <div>
+      <p className="text-sm font-bold text-brand-plum dark:text-brand-text">{message}</p>
+      <p className="mt-1 text-xs text-brand-text-muted">{detail}</p>
+    </div>
   </div>
 );
 
@@ -484,6 +498,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   const completeInitialCatchUp = async (syncAccount: LocalSyncAccountState) => {
     setInitialSyncGate({
       phase: 'starting',
+      startingSequence: syncAccount.currentSyncSequence,
       appliedSequence: syncAccount.currentSyncSequence,
       allowOffline: syncAccount.currentSyncSequence > 0,
     });
@@ -499,6 +514,7 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
       setIsAuthenticated(true);
       setInitialSyncGate((current) => ({
         phase: 'failed',
+        startingSequence: current?.startingSequence ?? syncAccount.currentSyncSequence,
         appliedSequence: current?.appliedSequence || syncAccount.currentSyncSequence,
         targetSequence: current?.targetSequence,
         allowOffline: syncAccount.currentSyncSequence > 0,
@@ -1367,6 +1383,8 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
               onFocusModeChange={setIsEditorFocusMode}
               initialFocusMode={isEditorFocusMode}
               quota={accountQuota}
+              syncStatus={syncStatus}
+              isOnline={isOnline}
               onShowToast={showToast}
               onRunWithLoader={runWithGlobalLoader}
             />
@@ -1462,7 +1480,20 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
   };
 
   const renderSuspendedContent = () => (
-    <Suspense fallback={<ScreenFallback />}>{renderContent()}</Suspense>
+    <Suspense
+      fallback={
+        <ScreenFallback
+          message={currentScreen === 'entryEditor' ? 'Opening your entry…' : undefined}
+          detail={
+            currentScreen === 'entryEditor'
+              ? 'Loading writing and media saved on this device.'
+              : undefined
+          }
+        />
+      }
+    >
+      {renderContent()}
+    </Suspense>
   );
 
   const renderSyncAuthorizationBanner = () =>

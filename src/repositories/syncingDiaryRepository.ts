@@ -21,6 +21,32 @@ const toSyncedSettingsPayload = (settings: AppSettings): AppSettings => {
   return syncedSettings;
 };
 
+const normalizedSyncPayload = (value: unknown): string => {
+  const normalize = (candidate: unknown): unknown => {
+    if (Array.isArray(candidate)) return candidate.map(normalize);
+    if (!candidate || typeof candidate !== 'object') return candidate;
+    return Object.fromEntries(
+      Object.entries(candidate as Record<string, unknown>)
+        .filter(
+          ([key]) =>
+            ![
+              'updatedAt',
+              'createdAt',
+              'wordCount',
+              'photoCount',
+              'wordsWrittenByDate',
+              'entryCount',
+              'lastUpdated',
+              'lastEntryUpdatedAt',
+            ].includes(key),
+        )
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, normalize(item)]),
+    );
+  };
+  return JSON.stringify(normalize(value));
+};
+
 const requestBackgroundFlush = (syncEngine: EventSyncEngine): void => {
   if (typeof syncEngine.requestOutboxFlush === 'function') {
     syncEngine.requestOutboxFlush();
@@ -45,6 +71,7 @@ const SYNC_OVERRIDE_METHODS = [
   'createEntry',
   'updateEntry',
   'deleteEntry',
+  'publishPendingEntryDraft',
   'createNote',
   'updateNote',
   'deleteNote',
@@ -72,6 +99,34 @@ export const createSyncingDiaryRepository = (
   localRepository: DiaryRepository,
   syncEngine: EventSyncEngine,
 ): DiaryRepository => {
+  const publicationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const firstPendingEditAt = new Map<string, number>();
+  const scheduleEntryPublication = (entryId: string): void => {
+    const now = Date.now();
+    const firstEditAt = firstPendingEditAt.get(entryId) || now;
+    firstPendingEditAt.set(entryId, firstEditAt);
+    const delayMs = Math.max(0, Math.min(15_000, firstEditAt + 60_000 - now));
+    const existing = publicationTimers.get(entryId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      publicationTimers.delete(entryId);
+      firstPendingEditAt.delete(entryId);
+      void localRepository
+        .publishPendingEntryDraft(entryId)
+        .then(() => requestBackgroundFlush(syncEngine))
+        .catch((error) => reportUnexpectedError('sync.repository.publish_entry_draft', error));
+    }, delayMs);
+    (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+    publicationTimers.set(entryId, timer);
+  };
+  const publishEntryNow = async (entryId: string): Promise<void> => {
+    const existing = publicationTimers.get(entryId);
+    if (existing) clearTimeout(existing);
+    publicationTimers.delete(entryId);
+    firstPendingEditAt.delete(entryId);
+    await localRepository.publishPendingEntryDraft(entryId);
+    requestBackgroundFlush(syncEngine);
+  };
   const resolveOverride = (property: keyof DiaryRepository): unknown => {
     if (property === 'listDiaries')
       return async (): Promise<Diary[]> =>
@@ -211,8 +266,9 @@ export const createSyncingDiaryRepository = (
           account,
           localPayload: entry,
           syncPayload: toPortableEntry(entry),
+          publishNotBefore: Date.now() + 15_000,
         });
-        requestBackgroundFlush(syncEngine);
+        scheduleEntryPublication(entry.id);
         return saved as Entry;
       };
     if (property === 'updateEntry')
@@ -221,6 +277,12 @@ export const createSyncingDiaryRepository = (
         if (!previous) return null;
         const account = await localRepository.getLocalSyncAccountState();
         if (!account) return localRepository.updateEntry(entry);
+        if (
+          normalizedSyncPayload(toPortableEntry(previous)) ===
+          normalizedSyncPayload(toPortableEntry(entry))
+        ) {
+          return (await syncEngine.hydrateEntries([previous]))[0];
+        }
         const nextWordCount = countWords(entry.body || '');
         const updatedAt = Date.now();
         const updated = sanitizeEntry({
@@ -239,12 +301,17 @@ export const createSyncingDiaryRepository = (
           account,
           localPayload: updated,
           syncPayload: toPortableEntry(updated),
+          publishNotBefore: Date.now() + 15_000,
         });
-        requestBackgroundFlush(syncEngine);
+        scheduleEntryPublication(updated.id);
         return saved ? (await syncEngine.hydrateEntries([saved as Entry]))[0] : null;
       };
     if (property === 'deleteEntry')
       return async (id: string): Promise<boolean> => {
+        const publicationTimer = publicationTimers.get(id);
+        if (publicationTimer) clearTimeout(publicationTimer);
+        publicationTimers.delete(id);
+        firstPendingEditAt.delete(id);
         if (!(await localRepository.getEntry(id))) return false;
         const account = await localRepository.getLocalSyncAccountState();
         if (!account) return localRepository.deleteEntry(id);
@@ -260,6 +327,8 @@ export const createSyncingDiaryRepository = (
         requestBackgroundFlush(syncEngine);
         return true;
       };
+    if (property === 'publishPendingEntryDraft')
+      return (entryId: string): Promise<void> => publishEntryNow(entryId);
     if (property === 'createNote')
       return async (input: NewNote): Promise<Note> => {
         const account = await localRepository.getLocalSyncAccountState();

@@ -269,6 +269,10 @@ class AtomicCommitIntegrationTest {
         assertThat(firstPage.hasMore()).isTrue();
         assertThat(secondPage.events()).extracting(event -> event.sequence()).containsExactly(3L);
         assertThat(secondPage.hasMore()).isFalse();
+        var fixedWatermark = pulls.pull("commit-user", 0, 2L, 100);
+        assertThat(fixedWatermark.events()).extracting(event -> event.sequence()).containsExactly(1L, 2L);
+        assertThat(fixedWatermark.currentSequence()).isEqualTo(2);
+        assertThat(fixedWatermark.hasMore()).isFalse();
         assertThat(firstPage.events()).allSatisfy(event -> {
             assertThat(event.downloadUrl()).isNotNull();
             assertThat(event.downloadExpiresAt()).isAfter(java.time.Instant.now());
@@ -280,6 +284,9 @@ class AtomicCommitIntegrationTest {
         assertThat(cursors.acknowledge("commit-user", deviceId, 2).lastAppliedSequence()).isEqualTo(2);
         assertApiCode(() -> cursors.acknowledge("commit-user", deviceId, 1), "CURSOR_REGRESSION");
         assertApiCode(() -> cursors.acknowledge("commit-user", deviceId, 4), "CURSOR_AHEAD");
+
+        jdbc.update("UPDATE sync_accounts SET minimum_available_sequence = 1 WHERE account_id = ?", accountId);
+        assertApiCode(() -> pulls.pull("commit-user", 0, 2), "SNAPSHOT_REQUIRED");
 
         jdbc.update("UPDATE sync_devices SET device_status = 'REVOKED', revoked_at = CURRENT_TIMESTAMP WHERE device_id = ?", deviceId);
         assertApiCode(() -> cursors.acknowledge("commit-user", deviceId, 3), "DEVICE_REVOKED");

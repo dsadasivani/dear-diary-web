@@ -28,6 +28,7 @@ const SAFE_MESSAGES: Record<SyncErrorCode, string> = {
   DECRYPTION_FAILED: 'An encrypted object could not be opened safely.',
   SEQUENCE_CONFLICT: 'The remote sequence changed unexpectedly.',
   SEQUENCE_GAP: 'A gap was found in the remote event sequence.',
+  SNAPSHOT_REQUIRED: 'This device must restore a current encrypted snapshot before syncing.',
   SEQUENCE_REGRESSION: 'The remote event sequence moved backwards.',
   RECORD_VERSION_CONFLICT: 'A newer version exists on another device.',
   RECOVERY_CONFLICT:

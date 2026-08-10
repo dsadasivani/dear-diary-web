@@ -29,6 +29,7 @@ import {
   Sparks as Sparkles,
   Clock,
   Edit,
+  RefreshDouble as LoaderCircle,
 } from 'iconoir-react';
 import { AppSettings, Diary, Entry, EntryBlock, ResponsiveLayout } from '../types';
 import RichTextEditor from './RichTextEditor';
@@ -57,6 +58,7 @@ import {
 import EntrySaveStatus, { type EntrySaveState } from './editor/EntrySaveStatus';
 import type { SyncV2Quota } from '../sync/v2/api/SyncV2ApiTypes';
 import { DEFAULT_ACCOUNT_QUOTA, entryMediaCounts } from '../domain/quota';
+import type { SyncStatusSummary } from '../repositories/DiaryRepository';
 
 interface EntryEditorScreenProps {
   diaries: Diary[];
@@ -78,6 +80,8 @@ interface EntryEditorScreenProps {
   ) => Promise<void>;
   showDiarySelector?: boolean;
   quota?: SyncV2Quota;
+  syncStatus?: SyncStatusSummary | null;
+  isOnline?: boolean;
 }
 
 interface ComposedEntryDraft {
@@ -103,6 +107,8 @@ export default function EntryEditorScreen({
   onShowToast,
   showDiarySelector = false,
   quota = DEFAULT_ACCOUNT_QUOTA,
+  syncStatus = null,
+  isOnline = true,
 }: EntryEditorScreenProps) {
   // Find current entry if editing
   const isEditing = !!entryId;
@@ -132,6 +138,10 @@ export default function EntryEditorScreen({
   const [mood, setMood] = useState(availableMoods[0] || { name: 'Joyful', emoji: '😊' });
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [photoUris, setPhotoUris] = useState<string[]>([]);
+  const [photoPreparation, setPhotoPreparation] = useState<{
+    total: number;
+    completed: number;
+  } | null>(null);
   const [isPhotoDragActive, setIsPhotoDragActive] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
   const [audioUri, setAudioUri] = useState<string | undefined>(undefined);
@@ -144,6 +154,8 @@ export default function EntryEditorScreen({
   const [autosaveError, setAutosaveError] = useState('');
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isEditorReady, setIsEditorReady] = useState(false);
+  const [entryLoadError, setEntryLoadError] = useState('');
+  const [entryLoadAttempt, setEntryLoadAttempt] = useState(0);
   const [isDirty, setIsDirty] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [showEntryDetails, setShowEntryDetails] = useState(false);
@@ -1489,10 +1501,13 @@ export default function EntryEditorScreen({
     let cancelled = false;
 
     const loadEntry = async () => {
-      if (isEditing && entryId) {
-        const entryObj = await diaryRepository.getEntry(entryId);
-        if (cancelled) return;
-        if (entryObj) {
+      setIsEditorReady(false);
+      setEntryLoadError('');
+      try {
+        if (isEditing && entryId) {
+          const entryObj = await diaryRepository.getEntry(entryId);
+          if (cancelled) return;
+          if (!entryObj) throw new Error('This entry is no longer available on this device.');
           originalEntryRef.current = entryObj;
           persistedMediaCountsRef.current = entryMediaCounts(entryObj);
           setDiaryId(entryObj.diaryId);
@@ -1541,30 +1556,35 @@ export default function EntryEditorScreen({
           } else {
             setAudioUri(undefined);
           }
-        }
-      } else {
-        persistedMediaCountsRef.current = { photoCount: 0, recordingCount: 0 };
-        const now = new Date();
-        setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
+        } else {
+          persistedMediaCountsRef.current = { photoCount: 0, recordingCount: 0 };
+          const now = new Date();
+          setCurrentTimeText(now.toTimeString().split(' ')[0].substring(0, 5));
 
-        if (initialDate) {
-          setDate(initialDate);
+          if (initialDate) {
+            setDate(initialDate);
+          }
+          if (initialPrompt) {
+            setBody(`<blockquote>${initialPrompt}</blockquote><br/>`);
+          }
+          if (availableTags.includes('happy')) {
+            setSelectedTags(['happy']);
+          }
         }
-        if (initialPrompt) {
-          setBody(`<blockquote>${initialPrompt}</blockquote><br/>`);
+      } catch (error: any) {
+        if (!cancelled) {
+          setEntryLoadError(error?.message || 'This entry could not be opened.');
         }
-        if (availableTags.includes('happy')) {
-          setSelectedTags(['happy']);
-        }
+      } finally {
+        if (!cancelled) setIsEditorReady(true);
       }
-      if (!cancelled) setIsEditorReady(true);
     };
 
     void loadEntry();
     return () => {
       cancelled = true;
     };
-  }, [entryId, isEditing, initialDate, initialPrompt]);
+  }, [entryId, entryLoadAttempt, isEditing, initialDate, initialPrompt]);
 
   const liveWordCount = useMemo(() => {
     const previousBlocksWords = blocks
@@ -1652,7 +1672,7 @@ export default function EntryEditorScreen({
         .filter(Boolean)
         .join('<br/><br/>'),
       hasDraftText,
-      hasContent: finalBlocks.length > 0 || Boolean(title.trim()),
+      hasContent: finalBlocks.length > 0 || Boolean(title.trim()) || photoUris.length > 0,
     };
   };
 
@@ -1738,6 +1758,10 @@ export default function EntryEditorScreen({
   }, [draftFingerprint, isDirty, isEditorReady, isSaving, isAutosaving]);
 
   const attachPhotoFiles = async (files: File[]) => {
+    if (photoPreparation) {
+      onShowToast?.('Please wait for the current photos to finish preparing.', 'info');
+      return;
+    }
     const imageFiles = files.filter((file) => file.type.startsWith('image/'));
     if (imageFiles.length === 0) {
       onShowToast?.('Drop an image file to attach it to this entry.', 'warning');
@@ -1762,7 +1786,8 @@ export default function EntryEditorScreen({
       );
     }
 
-    await (async () => {
+    setPhotoPreparation({ total: selectedFiles.length, completed: 0 });
+    try {
       const results: Array<string | null> = new Array(selectedFiles.length).fill(null);
       let nextIndex = 0;
       const worker = async () => {
@@ -1774,6 +1799,10 @@ export default function EntryEditorScreen({
           } catch (error) {
             console.warn('Photo could not be attached:', error);
             onShowToast?.('One photo could not be attached.', 'warning');
+          } finally {
+            setPhotoPreparation((current) =>
+              current ? { ...current, completed: current.completed + 1 } : current,
+            );
           }
         }
       };
@@ -1781,8 +1810,14 @@ export default function EntryEditorScreen({
       const orderedUris = results.filter((uri): uri is string => Boolean(uri));
       if (orderedUris.length > 0) {
         setPhotoUris((prev) => [...prev, ...orderedUris]);
+        onShowToast?.(
+          `${orderedUris.length === 1 ? 'Photo is' : 'Photos are'} ready on this device. Saving and syncing next…`,
+          'info',
+        );
       }
-    })();
+    } finally {
+      setPhotoPreparation(null);
+    }
   };
 
   // Handle local photo file upload
@@ -1814,6 +1849,10 @@ export default function EntryEditorScreen({
   };
 
   const handleSave = async () => {
+    if (photoPreparation) {
+      onShowToast?.('Please wait while the photo finishes preparing on this device.', 'info');
+      return;
+    }
     if (isSaving) return;
     const draft = composeEntryDraft(`block-${Date.now()}`);
     if (!draft.hasContent) {
@@ -1825,6 +1864,9 @@ export default function EntryEditorScreen({
       setIsSaving(true);
       const saveOperation = async () => {
         await persistEntryDraft(draft);
+        if (workingEntryIdRef.current) {
+          await diaryRepository.publishPendingEntryDraft(workingEntryIdRef.current);
+        }
 
         if (draft.hasDraftText || audioUri) {
           setAudioUri(undefined);
@@ -1858,6 +1900,10 @@ export default function EntryEditorScreen({
   };
 
   const handleRequestBack = () => {
+    if (photoPreparation) {
+      onShowToast?.('Please wait while the photo finishes preparing on this device.', 'info');
+      return;
+    }
     if (isDirty || isAutosaving) {
       setShowLeaveConfirm(true);
       return;
@@ -1865,12 +1911,24 @@ export default function EntryEditorScreen({
     isLeavingRef.current = true;
     void (async () => {
       try {
+        if (workingEntryIdRef.current) {
+          await diaryRepository.publishPendingEntryDraft(workingEntryIdRef.current);
+        }
         await onRefreshEntries();
       } finally {
         onBack();
       }
     })();
   };
+
+  useEffect(() => {
+    const publishOnBackground = () => {
+      if (document.visibilityState !== 'hidden' || !workingEntryIdRef.current) return;
+      void diaryRepository.publishPendingEntryDraft(workingEntryIdRef.current);
+    };
+    document.addEventListener('visibilitychange', publishOnBackground);
+    return () => document.removeEventListener('visibilitychange', publishOnBackground);
+  }, []);
 
   const handleDiscardAndLeave = async () => {
     isLeavingRef.current = true;
@@ -2245,13 +2303,20 @@ export default function EntryEditorScreen({
     </section>
   );
 
+  const hasPendingSync = (syncStatus?.pendingOutboxCount || 0) > 0;
   const saveState: EntrySaveState = autosaveError
     ? 'error'
-    : isSaving || isAutosaving
-      ? 'saving'
-      : isDirty
-        ? 'dirty'
-        : 'saved';
+    : photoPreparation
+      ? 'preparing-media'
+      : isSaving || isAutosaving
+        ? 'saving'
+        : isDirty
+          ? 'dirty'
+          : hasPendingSync
+            ? !isOnline || syncStatus?.isOffline
+              ? 'offline-pending'
+              : 'sync-pending'
+            : 'saved';
   const saveStatusUI = (
     <EntrySaveStatus
       state={saveState}
@@ -2259,6 +2324,21 @@ export default function EntryEditorScreen({
       lastSavedAt={lastSavedAt}
     />
   );
+  const photoPreparationUI = photoPreparation ? (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex min-h-14 items-center gap-3 rounded-2xl border border-brand-border bg-brand-card-bg/90 px-4 py-3 text-sm text-brand-plum shadow-sm"
+    >
+      <LoaderCircle className="h-5 w-5 shrink-0 animate-spin text-brand-sage" aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="font-bold">Preparing photos on this device</p>
+        <p className="text-xs text-brand-text-muted">
+          {photoPreparation.completed} of {photoPreparation.total} ready. You can keep writing.
+        </p>
+      </div>
+    </div>
+  ) : null;
 
   const leaveConfirmationUI = (
     <AnimatePresence>
@@ -2317,6 +2397,58 @@ export default function EntryEditorScreen({
       )}
     </AnimatePresence>
   );
+
+  if (!isEditorReady) {
+    return (
+      <div
+        className="flex min-h-[70dvh] w-full flex-col items-center justify-center gap-3 px-6 text-center"
+        role="status"
+        aria-live="polite"
+      >
+        <LoaderCircle className="h-6 w-6 animate-spin text-brand-sage" aria-hidden="true" />
+        <div>
+          <p className="text-sm font-bold text-brand-plum dark:text-brand-text">
+            {isEditing ? 'Opening your entry…' : 'Preparing a new entry…'}
+          </p>
+          <p className="mt-1 text-xs text-brand-text-muted">
+            Loading writing and media saved on this device.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (entryLoadError) {
+    return (
+      <div className="flex min-h-[70dvh] w-full items-center justify-center px-5">
+        <div
+          role="alert"
+          className="w-full max-w-md rounded-3xl border border-brand-border bg-brand-card-bg p-6 text-center shadow-sm"
+        >
+          <h1 className="font-serif-diary text-2xl font-semibold text-brand-plum dark:text-brand-text">
+            This entry could not be opened
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-brand-text-muted">{entryLoadError}</p>
+          <div className="mt-5 flex justify-center gap-2">
+            <button
+              type="button"
+              onClick={onBack}
+              className="rounded-full border border-brand-border px-4 py-2 text-sm font-bold text-brand-sage"
+            >
+              Go back
+            </button>
+            <button
+              type="button"
+              onClick={() => setEntryLoadAttempt((attempt) => attempt + 1)}
+              className="rounded-full bg-brand-sage px-4 py-2 text-sm font-bold text-white"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isFocusMode) {
     return (
@@ -2533,7 +2665,11 @@ export default function EntryEditorScreen({
               <ChevronUp className="w-3.5 h-3.5 ml-0.5 opacity-70" />
             </button>
           ) : (
-            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-brand-card-bg/95 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-brand-border shadow-xl flex items-center gap-1 transition-all">
+            <div
+              role="toolbar"
+              aria-label="Formatting tools"
+              className="focus-formatting-toolbar fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center rounded-2xl border border-brand-border bg-brand-card-bg/95 shadow-xl backdrop-blur-md transition-all"
+            >
               <button
                 type="button"
                 onMouseDown={(e) => {
@@ -2705,7 +2841,7 @@ export default function EntryEditorScreen({
             <button
               type="button"
               onClick={handleSave}
-              disabled={isSaving}
+              disabled={isSaving || Boolean(photoPreparation)}
               className="rounded-full bg-brand-sage px-6 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-brand-sage-dark disabled:cursor-not-allowed disabled:opacity-55"
             >
               {isSaving ? 'Saving...' : 'Done'}
@@ -3093,6 +3229,7 @@ export default function EntryEditorScreen({
                 accept="image/*"
                 className="hidden"
               />
+              {photoPreparationUI && <div className="mt-4">{photoPreparationUI}</div>}
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <button
                   type="button"
@@ -3292,7 +3429,7 @@ export default function EntryEditorScreen({
           {saveStatusUI}
           <button
             onClick={handleSave}
-            disabled={isSaving}
+            disabled={isSaving || Boolean(photoPreparation)}
             className="open-page-editor-done rounded-full bg-brand-sage px-4 py-2 text-xs font-bold text-white transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSaving ? 'Saving...' : 'Done'}
@@ -3649,6 +3786,7 @@ export default function EntryEditorScreen({
         </div>
 
         {/* Thumbnail attachments list */}
+        {photoPreparationUI}
         {photoUris.length > 0 && (
           <div className="flex flex-col gap-1.5 border-t border-brand-border/40 pt-3 mt-2">
             <p className="text-xs font-bold text-brand-sage uppercase tracking-widest">

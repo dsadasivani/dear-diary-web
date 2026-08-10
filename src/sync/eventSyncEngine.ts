@@ -18,9 +18,22 @@ export interface SyncRuntimeDelegate {
 }
 
 export interface SyncCatchUpProgress {
-  phase: 'starting' | 'pulling' | 'complete' | 'failed';
+  phase:
+    | 'starting'
+    | 'restoring-snapshot'
+    | 'downloading-events'
+    | 'applying-events'
+    | 'opening'
+    | 'complete'
+    | 'failed';
+  startingSequence: number;
+  snapshotSequence?: number;
   appliedSequence: number;
   targetSequence?: number;
+  downloadedEvents?: number;
+  appliedEvents?: number;
+  totalEvents?: number;
+  errorCode?: string;
   error?: string;
   recoverable?: boolean;
 }
@@ -66,8 +79,14 @@ export class EventSyncEngine {
     void this.repository
       .updateSyncCatchUpStatus({
         catchUpPhase: progress.phase,
+        startingSequence: progress.startingSequence,
+        snapshotSequence: progress.snapshotSequence,
         appliedSequence: progress.appliedSequence,
         targetSequence: progress.targetSequence,
+        downloadedEvents: progress.downloadedEvents,
+        appliedEvents: progress.appliedEvents,
+        totalEvents: progress.totalEvents,
+        catchUpErrorCode: progress.errorCode,
         catchUpError: progress.error,
         catchUpRecoverable: progress.recoverable,
       })

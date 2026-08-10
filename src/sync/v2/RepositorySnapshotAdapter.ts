@@ -1,6 +1,16 @@
-import type { RepositorySnapshot } from '../../repositories/DiaryRepository';
+import type { DiaryRepository, RepositorySnapshot } from '../../repositories/DiaryRepository';
 import type { SyncRecordType } from '../../types';
-import type { SyncV2CanonicalSnapshotState } from './snapshot/PersistentSyncV2SnapshotStore';
+import type {
+  AtomicSnapshotReplacement,
+  SyncV2CanonicalSnapshotState,
+} from './snapshot/PersistentSyncV2SnapshotStore';
+import {
+  SYNC_V2_APPLIED_KEY,
+  SYNC_V2_MEDIA_KEY,
+  SYNC_V2_RECORDS_KEY,
+  SYNC_V2_RUNTIME_KEY,
+  SYNC_V2_VERSIONS_KEY,
+} from './replay/PersistentReplayStore';
 import { toPortableRepositorySnapshot } from '../portableMedia';
 import { createStableSyncMediaReference, parseSyncMediaReference } from '../syncMedia';
 
@@ -119,3 +129,19 @@ export const repositorySnapshotFromV2State = (
       ]),
     ),
   });
+
+export const createAtomicRepositorySnapshotReplacement =
+  (repository: DiaryRepository) =>
+  async (input: AtomicSnapshotReplacement): Promise<void> => {
+    await repository.importSnapshotAtomically(
+      repositorySnapshotFromV2State(input.state),
+      'replace-portable',
+      {
+        [SYNC_V2_RECORDS_KEY]: input.state.records,
+        [SYNC_V2_VERSIONS_KEY]: input.state.recordVersions,
+        [SYNC_V2_MEDIA_KEY]: input.state.mediaPointers,
+        [SYNC_V2_APPLIED_KEY]: [],
+        [SYNC_V2_RUNTIME_KEY]: input.runtime,
+      },
+    );
+  };

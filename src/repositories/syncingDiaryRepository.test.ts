@@ -68,6 +68,54 @@ test('syncing repository saves locally and requests background flush without awa
   assert.equal(requestedFlush, 1);
 });
 
+test('entry autosave waits for remote idle publication and Done releases it immediately', async () => {
+  const store = new MemoryDataStore();
+  const localRepository = new LocalDiaryRepository(store);
+  await localRepository.initialize();
+  await localRepository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    currentSyncSequence: 0,
+    linkedAt: 1,
+  });
+  let requestedFlushes = 0;
+  const repository = createSyncingDiaryRepository(localRepository, {
+    requestOutboxFlush: () => {
+      requestedFlushes += 1;
+    },
+  } as unknown as EventSyncEngine);
+  const diary = (await localRepository.listDiaries())[0];
+  const before = Date.now();
+  const entry = await repository.createEntry({
+    diaryId: diary.id,
+    date: '2026-08-09',
+    title: 'Draft',
+    body: '<p>Local first.</p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+  });
+  const pending = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+    string,
+    { nextAttemptAt: number }
+  >;
+  assert.equal(requestedFlushes, 0);
+  assert.ok(Object.values(pending)[0].nextAttemptAt >= before + 14_000);
+
+  await repository.publishPendingEntryDraft(entry.id);
+  const released = JSON.parse((await store.getItem('deardiary_sync_outbox_v2')) || '{}') as Record<
+    string,
+    { nextAttemptAt: number }
+  >;
+  assert.equal(Object.values(released)[0].nextAttemptAt, 0);
+  assert.equal(requestedFlushes, 1);
+});
+
 test('syncing repository keeps native profile media locally but excludes it from the outbox', async () => {
   const localRepository = new LocalDiaryRepository(new MemoryDataStore());
   await localRepository.initialize();

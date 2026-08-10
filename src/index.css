@@ -925,6 +925,43 @@ button:disabled {
   padding-right: calc(1.5rem + var(--safe-area-inset-right));
 }
 
+.focus-formatting-toolbar {
+  width: calc(100vw - 2rem);
+  max-width: 28rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.625rem 0.5rem;
+}
+
+.focus-formatting-toolbar > button {
+  flex: 0 0 auto;
+  padding: 0.375rem;
+}
+
+.focus-formatting-toolbar > div {
+  display: none;
+}
+
+@media (min-width: 560px) {
+  .focus-formatting-toolbar {
+    width: calc(100vw - 3rem);
+    max-width: 32rem;
+    flex-wrap: nowrap;
+    padding-inline: 0.75rem;
+  }
+
+  .focus-formatting-toolbar > div {
+    display: block;
+    flex: 0 0 auto;
+    margin-inline: 0.125rem;
+  }
+
+  .focus-formatting-toolbar > button {
+    padding: 0.5rem;
+  }
+}
+
 .mobile-overlay-safe {
   padding-bottom: calc(1rem + var(--safe-area-inset-bottom));
   padding-left: calc(1rem + var(--safe-area-inset-left));

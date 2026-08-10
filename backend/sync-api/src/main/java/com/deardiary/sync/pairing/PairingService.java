@@ -79,9 +79,28 @@ public class PairingService {
                 }
                 return response(existing, null, null, null);
             }
+            var approvalInProgress = jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM sync_pairing_requests
+                    WHERE account_id = ? AND pairing_status = 'KEY_PACKAGE_PENDING'
+                )
+                """, Boolean.class, account.accountId());
+            if (Boolean.TRUE.equals(approvalInProgress)) {
+                throw invalid("PAIRING_ALREADY_ACTIVE",
+                    "Another companion pairing approval is already in progress.");
+            }
             quotas.requireCompanionSlot(account.accountId());
             var now = OffsetDateTime.now(clock);
-            var expires = now.plus(Duration.ofMinutes(10));
+            var expires = now.plus(Duration.ofMinutes(30));
+            // A browser may lose its local journal or start the flow in a new
+            // tab, producing a new device ID. Only the newest unapproved
+            // request should remain actionable on the primary phone.
+            jdbc.update("""
+                UPDATE sync_pairing_requests
+                SET pairing_status = CASE WHEN expires_at <= ? THEN 'EXPIRED' ELSE 'REJECTED' END
+                WHERE account_id = ?
+                  AND pairing_status IN ('REQUESTED', 'SNAPSHOT_PREPARING')
+                """, now, account.accountId());
             jdbc.update("""
                 INSERT INTO sync_pairing_requests (
                     account_id, pairing_id, requested_device_id, requested_device_public_key,
@@ -102,10 +121,13 @@ public class PairingService {
         var now = OffsetDateTime.now(clock);
         jdbc.update("""
             UPDATE sync_pairing_requests SET pairing_status = 'EXPIRED'
-            WHERE account_id = ? AND pairing_status = 'REQUESTED' AND expires_at <= ?
+            WHERE account_id = ? AND pairing_status IN ('REQUESTED', 'SNAPSHOT_PREPARING')
+              AND expires_at <= ?
             """, approver.accountId(), now);
         return jdbc.query(selectPairingRows() + """
-            WHERE p.account_id = ? AND p.pairing_status IN ('REQUESTED', 'KEY_PACKAGE_PENDING')
+            WHERE p.account_id = ? AND p.pairing_status IN (
+                'REQUESTED', 'SNAPSHOT_PREPARING', 'KEY_PACKAGE_PENDING'
+            )
             ORDER BY p.requested_at ASC
             """, pairingRowMapper(), approver.accountId()).stream()
             .map(pair -> response(pair, null, null, null)).toList();
@@ -115,6 +137,8 @@ public class PairingService {
         requireEnabled();
         var approver = devices.requireActiveDevice(ownerSubject, request.approverDeviceId());
         requirePrimary(approver.accountId(), request.approverDeviceId());
+        var waitingForSnapshot = prepareSnapshotGate(approver.accountId(), pairingId);
+        if (waitingForSnapshot != null) return response(waitingForSnapshot, null, null, null);
         var persisted = transactions.execute(status -> approveTransaction(approver.accountId(), pairingId, request));
         try {
             var upload = objectStore.initiateUpload(new UploadObjectCommand(
@@ -141,11 +165,15 @@ public class PairingService {
         var account = accounts.requireActiveAccount(ownerSubject);
         var pair = load(account.accountId(), pairingId, false);
         if (!pair.requestedDeviceId().equals(requestedDeviceId)) throw forbidden();
-        if (OffsetDateTime.now(clock).isAfter(pair.expiresAt()) && "REQUESTED".equals(pair.status())) {
+        if (OffsetDateTime.now(clock).isAfter(pair.expiresAt())
+                && ("REQUESTED".equals(pair.status()) || "SNAPSHOT_PREPARING".equals(pair.status()))) {
             expire(account.accountId(), pairingId);
             pair = load(account.accountId(), pairingId, false);
         }
-        if (!"KEY_PACKAGE_AVAILABLE".equals(pair.status()) && !"COMPLETED".equals(pair.status())) {
+        if (!"KEY_PACKAGE_AVAILABLE".equals(pair.status())
+                && !"BOOTSTRAP_READY".equals(pair.status())
+                && !"ACTIVATING".equals(pair.status())
+                && !"COMPLETED".equals(pair.status())) {
             return response(pair, null, null, null);
         }
         try {
@@ -163,24 +191,34 @@ public class PairingService {
             lockAccount(account.accountId());
             var pair = load(account.accountId(), pairingId, true);
             if (!pair.requestedDeviceId().equals(request.requestedDeviceId())) throw forbidden();
-            if ("COMPLETED".equals(pair.status())) return response(pair, null, null, null);
+            if ("COMPLETED".equals(pair.status()) || "ACTIVATING".equals(pair.status())
+                    || "BOOTSTRAP_READY".equals(pair.status())) {
+                return response(pair, null, null, null);
+            }
             if (!"KEY_PACKAGE_AVAILABLE".equals(pair.status())) throw invalid("PAIRING_NOT_READY",
                 "The pairing key package is not available.");
             verifySignature(pair.publicKey(), completionMessage(pair), request.possessionSignature(),
                 "INVALID_PAIRING_PROOF");
             var now = OffsetDateTime.now(clock);
             jdbc.update("""
-                UPDATE sync_devices SET device_status = 'ACTIVE', last_seen_at = ?
-                WHERE account_id = ? AND device_id = ? AND device_status = 'RECOVERY_PENDING'
-                """, now, account.accountId(), request.requestedDeviceId());
-            jdbc.update("""
                 UPDATE sync_key_packages SET package_status = 'APPLIED', applied_at = ?
                 WHERE account_id = ? AND key_package_id = ?
                 """, now, account.accountId(), pair.keyPackageId());
-            jdbc.update("""
-                UPDATE sync_pairing_requests SET pairing_status = 'COMPLETED', completed_at = ?
-                WHERE account_id = ? AND pairing_id = ?
-                """, now, account.accountId(), pairingId);
+            if (bootstrapEnabled()) {
+                jdbc.update("""
+                    UPDATE sync_pairing_requests SET pairing_status = 'ACTIVATING'
+                    WHERE account_id = ? AND pairing_id = ?
+                    """, account.accountId(), pairingId);
+            } else {
+                jdbc.update("""
+                    UPDATE sync_devices SET device_status = 'ACTIVE', last_seen_at = ?
+                    WHERE account_id = ? AND device_id = ? AND device_status = 'RECOVERY_PENDING'
+                    """, now, account.accountId(), request.requestedDeviceId());
+                jdbc.update("""
+                    UPDATE sync_pairing_requests SET pairing_status = 'COMPLETED', completed_at = ?
+                    WHERE account_id = ? AND pairing_id = ?
+                    """, now, account.accountId(), pairingId);
+            }
             return response(load(account.accountId(), pairingId, false), null, null, null);
         });
     }
@@ -321,6 +359,36 @@ public class PairingService {
             "Companion pairing is temporarily disabled.", true, false, Map.of());
     }
 
+    private boolean bootstrapEnabled() {
+        return protocols.current().bootstrapControls().bootstrapManifestEnabled();
+    }
+
+    private PairRow prepareSnapshotGate(UUID accountId, UUID pairingId) {
+        if (!bootstrapEnabled()) return null;
+        var head = jdbc.queryForObject(
+            "SELECT current_sequence FROM sync_accounts WHERE account_id = ?", Long.class, accountId);
+        var snapshots = jdbc.query("""
+            SELECT sequence FROM sync_snapshots
+            WHERE account_id = ? AND partition_key = 'account'
+              AND snapshot_status = 'AVAILABLE' AND verified = TRUE
+            ORDER BY sequence DESC, created_at DESC LIMIT 1
+            """, (rs, row) -> rs.getLong(1), accountId);
+        var hardTail = protocols.current().bootstrapControls().hardTailEvents();
+        if (snapshots.isEmpty() || head - snapshots.getFirst() > hardTail) {
+            jdbc.update("""
+                UPDATE sync_pairing_requests SET pairing_status = 'SNAPSHOT_PREPARING'
+                WHERE account_id = ? AND pairing_id = ?
+                  AND pairing_status IN ('REQUESTED', 'SNAPSHOT_PREPARING')
+                """, accountId, pairingId);
+            return load(accountId, pairingId, false);
+        }
+        jdbc.update("""
+            UPDATE sync_pairing_requests SET pairing_status = 'REQUESTED'
+            WHERE account_id = ? AND pairing_id = ? AND pairing_status = 'SNAPSHOT_PREPARING'
+            """, accountId, pairingId);
+        return null;
+    }
+
     private void requirePrimary(UUID accountId, UUID deviceId) {
         var role = jdbc.queryForObject("SELECT device_role FROM sync_devices WHERE account_id = ? AND device_id = ?",
             String.class, accountId, deviceId);
@@ -396,7 +464,8 @@ public class PairingService {
     private void expire(UUID accountId, UUID pairingId) {
         jdbc.update("""
             UPDATE sync_pairing_requests SET pairing_status = 'EXPIRED'
-            WHERE account_id = ? AND pairing_id = ? AND pairing_status = 'REQUESTED'
+            WHERE account_id = ? AND pairing_id = ?
+              AND pairing_status IN ('REQUESTED', 'SNAPSHOT_PREPARING')
             """, accountId, pairingId);
     }
 

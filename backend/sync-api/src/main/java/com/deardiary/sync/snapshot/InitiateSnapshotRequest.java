@@ -16,5 +16,6 @@ public record InitiateSnapshotRequest(
     @Min(1) long sizeBytes,
     @Min(1) int keyEpoch,
     @Min(1) int snapshotSchemaVersion,
-    @Min(1) @Max(1_000_000) int protocolVersion
+    @Min(1) @Max(1_000_000) int protocolVersion,
+    String metadataSignature
 ) {}

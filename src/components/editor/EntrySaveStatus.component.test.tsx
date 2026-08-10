@@ -18,4 +18,9 @@ describe('EntrySaveStatus', () => {
     render(<EntrySaveStatus state="error" message="Storage is unavailable" />);
     expect(screen.getByRole('alert')).toHaveTextContent('Storage is unavailable');
   });
+
+  it('announces that photos are being prepared before the local save starts', () => {
+    render(<EntrySaveStatus state="preparing-media" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Preparing photo on this device');
+  });
 });

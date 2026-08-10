@@ -12,6 +12,11 @@ import com.deardiary.sync.protocol.ProtocolService;
 import com.deardiary.sync.quota.QuotaService;
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -57,7 +62,7 @@ public class SnapshotService {
 
     public InitiateSnapshotResponse initiate(String ownerSubject, InitiateSnapshotRequest request) {
         var device = devices.requireActiveDevice(ownerSubject, request.deviceId());
-        validateCreation(device.currentSequence(), device.keyEpoch(), request);
+        validateCreation(device.accountId(), device.keyEpoch(), request);
         var persisted = transactions.execute(status -> persistInitiation(device.accountId(), request));
         try {
             var upload = objectStore.initiateUpload(new UploadObjectCommand(
@@ -110,16 +115,29 @@ public class SnapshotService {
         }
     }
 
-    private void validateCreation(long currentSequence, int currentKeyEpoch, InitiateSnapshotRequest request) {
+    private void validateCreation(UUID accountId, int currentKeyEpoch, InitiateSnapshotRequest request) {
         var protocol = requireCreationEnabled();
         if (!ACCOUNT_PARTITION.equals(request.partitionKey())) {
             throw new ApiException("SNAPSHOT_PARTITION_UNSUPPORTED", HttpStatus.BAD_REQUEST,
                 "This protocol version supports account snapshots only.");
         }
-        if (request.throughSequence() != currentSequence) {
+        var acknowledgedSequence = jdbc.queryForObject("""
+            SELECT last_applied_sequence FROM sync_device_cursors
+            WHERE account_id = ? AND device_id = ?
+            """, Long.class, accountId, request.deviceId());
+        if (request.throughSequence() != acknowledgedSequence) {
             throw new ApiException("SNAPSHOT_SEQUENCE_STALE", HttpStatus.CONFLICT,
-                "The snapshot must cover the current account sequence.", true, false,
-                Map.of("currentSequence", currentSequence));
+                "The snapshot must cover the creating device's acknowledged cursor.", true, false,
+                Map.of("acknowledgedSequence", acknowledgedSequence));
+        }
+        var latestSequence = jdbc.queryForObject("""
+            SELECT COALESCE(MAX(sequence), 0) FROM sync_snapshots
+            WHERE account_id = ? AND partition_key = ? AND snapshot_status = 'AVAILABLE'
+            """, Long.class, accountId, request.partitionKey());
+        if (request.throughSequence() < latestSequence) {
+            throw new ApiException("SNAPSHOT_SEQUENCE_REGRESSION", HttpStatus.CONFLICT,
+                "A snapshot cannot regress the latest verified snapshot.", false, true,
+                Map.of("latestSnapshotSequence", latestSequence));
         }
         if (request.keyEpoch() != currentKeyEpoch) {
             throw new ApiException("KEY_EPOCH_MISMATCH", HttpStatus.CONFLICT,
@@ -135,6 +153,7 @@ public class SnapshotService {
             throw new ApiException("OBJECT_TOO_LARGE", HttpStatus.PAYLOAD_TOO_LARGE,
                 "The encrypted snapshot exceeds the configured size limit.");
         }
+        if (request.protocolVersion() >= 4) verifyMetadataSignature(accountId, request);
     }
 
     private com.deardiary.sync.protocol.ProtocolResponse requireCreationEnabled() {
@@ -169,11 +188,12 @@ public class SnapshotService {
             INSERT INTO sync_snapshots (
                 account_id, snapshot_id, sequence, partition_key, object_key, sha256,
                 size_bytes, key_epoch, snapshot_schema_version, snapshot_status,
-                created_by_device_id, protocol_version, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'UPLOADING', ?, ?, ?)
+                created_by_device_id, protocol_version, metadata_signature, verified, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'UPLOADING', ?, ?, ?, FALSE, ?)
             """, accountId, request.snapshotId(), request.throughSequence(), request.partitionKey(),
             objectKey, request.sha256(), request.sizeBytes(), request.keyEpoch(),
-            request.snapshotSchemaVersion(), request.deviceId(), request.protocolVersion(), now);
+            request.snapshotSchemaVersion(), request.deviceId(), request.protocolVersion(),
+            request.metadataSignature(), now);
         return new PersistedSnapshot(objectKey, "UPLOADING", false);
     }
 
@@ -192,7 +212,7 @@ public class SnapshotService {
             WHERE account_id = ? AND object_key = ?
             """, Math.max(1, snapshot.sequence()), now, accountId, snapshot.objectKey());
         jdbc.update("""
-            UPDATE sync_snapshots SET snapshot_status = 'AVAILABLE'
+            UPDATE sync_snapshots SET snapshot_status = 'AVAILABLE', verified = TRUE
             WHERE account_id = ? AND snapshot_id = ? AND snapshot_status = 'UPLOADING'
             """, accountId, snapshotId);
         jdbc.update("""
@@ -253,6 +273,35 @@ public class SnapshotService {
             && request.sizeBytes() == snapshot.sizeBytes()
             && request.keyEpoch() == snapshot.keyEpoch()
             && request.snapshotSchemaVersion() == snapshot.schemaVersion();
+    }
+
+    private void verifyMetadataSignature(UUID accountId, InitiateSnapshotRequest request) {
+        if (request.metadataSignature() == null || request.metadataSignature().isBlank()) {
+            throw new ApiException("SNAPSHOT_SIGNATURE_REQUIRED", HttpStatus.CONFLICT,
+                "Protocol 4 snapshots require signed metadata.", false, true, Map.of());
+        }
+        try {
+            var publicKey = jdbc.queryForObject("""
+                SELECT device_public_key FROM sync_devices
+                WHERE account_id = ? AND device_id = ?
+                """, byte[].class, accountId, request.deviceId());
+            var key = KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(publicKey));
+            var verifier = Signature.getInstance("SHA256withECDSA");
+            verifier.initVerify(key);
+            verifier.update(metadataMessage(request).getBytes(StandardCharsets.UTF_8));
+            if (!verifier.verify(Base64.getDecoder().decode(request.metadataSignature()))) {
+                throw new IllegalArgumentException("invalid signature");
+            }
+        } catch (Exception error) {
+            throw new ApiException("INVALID_SNAPSHOT_SIGNATURE", HttpStatus.CONFLICT,
+                "The snapshot metadata signature is invalid.", false, true, Map.of());
+        }
+    }
+
+    private String metadataMessage(InitiateSnapshotRequest request) {
+        return "snapshot-metadata:" + request.snapshotId() + ":" + request.deviceId() + ":"
+            + request.throughSequence() + ":" + request.partitionKey() + ":" + request.sha256() + ":"
+            + request.sizeBytes() + ":" + request.keyEpoch() + ":" + request.snapshotSchemaVersion();
     }
 
     private SnapshotResponse response(SnapshotRow row, String downloadUrl, java.time.Instant expiresAt) {
