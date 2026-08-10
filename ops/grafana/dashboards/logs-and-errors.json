@@ -3,11 +3,25 @@
   "uid": "deardiary-logs-errors",
   "schemaVersion": 39,
   "version": 3,
+  "tags": ["loredays", "observability", "logs"],
   "time": { "from": "now-3h", "to": "now" },
   "refresh": "30s",
+  "timepicker": {
+    "refresh_intervals": ["30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+  },
   "templating": {
     "list": [
-      { "name": "logs", "label": "Logs", "type": "datasource", "query": "loki" },
+      {
+        "name": "logs",
+        "label": "Logs",
+        "type": "datasource",
+        "query": "loki",
+        "regex": "^grafanacloud-boldmint1469-logs$",
+        "current": {
+          "text": "grafanacloud-boldmint1469-logs",
+          "value": "grafanacloud-logs"
+        }
+      },
       {
         "name": "environment",
         "label": "Environment",
@@ -16,6 +30,8 @@
         "query": "label_values({service_name=\"dear-diary-sync-api\"}, deployment_environment)",
         "includeAll": true,
         "allValue": ".*",
+        "allowCustomValue": false,
+        "current": { "text": "All", "value": "$__all" },
         "refresh": 1
       },
       {
@@ -24,7 +40,9 @@
         "type": "custom",
         "query": "trace,debug,info,warn,error,fatal",
         "includeAll": true,
-        "allValue": ".*"
+        "allValue": ".*",
+        "allowCustomValue": false,
+        "current": { "text": "All", "value": "$__all" }
       },
       {
         "name": "correlation",
@@ -118,8 +136,9 @@
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         {
-          "expr": "quantile_over_time(0.95, {service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" | unwrap durationMs | __error__=\"\" [$__range])",
+          "expr": "max(quantile_over_time(0.95, {service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" | httpRoute != \"/actuator/health\" | unwrap durationMs | __error__=\"\" [$__range]))",
           "queryType": "instant",
+          "legendFormat": "p95",
           "refId": "A"
         }
       ]
@@ -150,7 +169,7 @@
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
       "targets": [
         {
-          "expr": "sum by (httpStatus, httpRoute) (rate({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" [$__auto]))",
+          "expr": "topk(15, sum by (httpStatus, httpRoute) (rate({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" | httpRoute != \"/actuator/health\" [$__auto])))",
           "legendFormat": "{{httpStatus}} {{httpRoute}}",
           "refId": "A"
         }
