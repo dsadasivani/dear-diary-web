@@ -81,6 +81,15 @@ class PausingMemoryDataStore extends MemoryDataStore {
   }
 }
 
+class RecordingMemoryDataStore extends MemoryDataStore {
+  batches: string[][] = [];
+
+  override async setItems(items: Record<string, string>): Promise<void> {
+    this.batches.push(Object.keys(items));
+    await super.setItems(items);
+  }
+}
+
 test('persists sync health across repository restarts without exposing it only through React state', async () => {
   const store = new MemoryDataStore();
   const first = new LocalDiaryRepository(store);
@@ -130,6 +139,7 @@ class StructuredMemoryDataStore extends MemoryDataStore {
   noteProjectionQueryCount = 0;
   structuredCommitCount = 0;
   localMutationCommitCount = 0;
+  lastStructuredCommitRecords: LocalStructuredRecordMutation[] = [];
 
   constructor(collections: Record<string, StructuredTestRecord[]>) {
     super();
@@ -304,6 +314,7 @@ class StructuredMemoryDataStore extends MemoryDataStore {
     items?: Record<string, string>;
   }): Promise<void> {
     this.structuredCommitCount += 1;
+    this.lastStructuredCommitRecords = cloneTestValue(input.records);
     this.applyStructuredRecordMutations(input.records);
     if (input.items) await this.setItems(input.items);
   }
@@ -891,6 +902,32 @@ test('exports and replaces application content while retaining target device lin
   assert.deepEqual(restored.security, snapshot.security);
 });
 
+test('imports snapshot parent diaries before child entries', async () => {
+  const source = await createRepository();
+  await source.createEntry({
+    diaryId: 'diary-default',
+    date: '2026-08-09',
+    title: 'Restored entry',
+    body: '',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+  });
+  const store = new RecordingMemoryDataStore();
+  const target = new LocalDiaryRepository(store);
+  await target.initialize();
+  store.batches = [];
+
+  await target.importSnapshot(await source.exportSnapshot(), 'replace-portable');
+
+  const restoreBatch = store.batches.find(
+    (keys) => keys.includes('deardiary_diaries') && keys.includes('deardiary_entries'),
+  );
+  assert.ok(restoreBatch);
+  assert.ok(restoreBatch.indexOf('deardiary_diaries') < restoreBatch.indexOf('deardiary_entries'));
+});
+
 test('sanitizes malicious rich text during snapshot import', async () => {
   const source = await createRepository();
   const entry = await source.createEntry({
@@ -1143,6 +1180,100 @@ test('atomically applies a remote event batch and rejects an invalid version cha
   );
   assert.equal(await repository.getNote('note-invalid'), null);
   assert.equal((await repository.getLocalSyncAccountState())?.currentSyncSequence, 2);
+});
+
+test('orders parent diary mutations before child entries in an atomic replay batch', async () => {
+  const store = new StructuredMemoryDataStore({
+    deardiary_diaries: [],
+    deardiary_entries: [],
+    deardiary_notes: [],
+  });
+  const repository = await createRepository(store);
+  const account = {
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    currentSyncSequence: 0,
+    linkedAt: 1,
+  };
+  await repository.saveLocalSyncAccountState(account);
+  await store.setItem(
+    'deardiary_sync_v2_runtime',
+    JSON.stringify({
+      accountId: account.accountId,
+      deviceId: account.deviceId,
+      deviceStatus: 'ACTIVE',
+      protocolVersion: 4,
+      eventSchemaVersion: 2,
+      keyEpoch: 1,
+      lastAppliedSequence: 0,
+      updatedAt: 1,
+    }),
+  );
+  const diary = {
+    id: 'diary-remote',
+    name: 'Remote diary',
+    emoji: '📔',
+    color: '#8A3D55',
+    isLocked: false,
+    entryCount: 0,
+    lastUpdated: 'No entries yet',
+  };
+  const entry = {
+    id: 'entry-remote',
+    diaryId: diary.id,
+    date: '2026-08-09',
+    time: '10:52',
+    title: 'Remote entry',
+    body: '',
+    moodName: 'Joyful',
+    moodEmoji: '😊',
+    tags: [],
+    photoUris: [],
+    photoCount: 0,
+    wordCount: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const diaryEvent = createSyncDomainEvent({
+    accountId: account.accountId,
+    deviceId: 'device-2',
+    recordType: 'diary',
+    operation: 'upsert',
+    recordId: diary.id,
+    baseRecordVersion: 0,
+    payload: diary,
+  });
+  const entryEvent = createSyncDomainEvent({
+    accountId: account.accountId,
+    deviceId: 'device-2',
+    recordType: 'entry',
+    operation: 'upsert',
+    recordId: entry.id,
+    baseRecordVersion: 0,
+    payload: entry,
+  });
+
+  await repository.applyRemoteEventBatch(
+    [
+      { event: diaryEvent, sequence: 1, operationId: 'operation-diary' },
+      { event: entryEvent, sequence: 2, operationId: 'operation-entry' },
+    ],
+    0,
+  );
+
+  const diaryMutationIndex = store.lastStructuredCommitRecords.findIndex(
+    (mutation) => mutation.key === 'deardiary_diaries' && mutation.id === diary.id,
+  );
+  const entryMutationIndex = store.lastStructuredCommitRecords.findIndex(
+    (mutation) => mutation.key === 'deardiary_entries' && mutation.id === entry.id,
+  );
+  assert.ok(diaryMutationIndex >= 0);
+  assert.ok(entryMutationIndex >= 0);
+  assert.ok(diaryMutationIndex < entryMutationIndex);
 });
 
 test('sanitizes malicious rich text during sync event replay', async () => {

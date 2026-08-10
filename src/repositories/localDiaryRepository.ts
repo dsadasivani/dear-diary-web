@@ -1497,8 +1497,16 @@ export class LocalDiaryRepository implements DiaryRepository {
         contentRevision,
       });
       if (this.store.commitStructuredRecords) {
+        const mutationPriority = (mutation: LocalStructuredRecordMutation) => {
+          if (mutation.key === STORAGE_KEYS.diaries) return 0;
+          if (mutation.key === STORAGE_KEYS.entries) return 1;
+          return 2;
+        };
+        const orderedMutations = [...recordMutations.values()].sort(
+          (left, right) => mutationPriority(left) - mutationPriority(right),
+        );
         await this.writeStructuredRecordsWithRevision(
-          [...recordMutations.values()],
+          orderedMutations,
           metadataItems,
           changeFactory,
         );
@@ -2437,11 +2445,13 @@ export class LocalDiaryRepository implements DiaryRepository {
     return this.enqueueWrite(async () => {
       const items: Record<string, unknown> = {
         ...additionalItems,
-        [STORAGE_KEYS.entries]: clone(sanitizedSnapshot.entries),
         [STORAGE_KEYS.diaries]: this.withDiaryStats(
           clone(sanitizedSnapshot.diaries),
           sanitizedSnapshot.entries,
         ),
+        // SQLite enforces entries.diary_id immediately while replaying this
+        // atomic batch, so parent diaries must be replaced before their entries.
+        [STORAGE_KEYS.entries]: clone(sanitizedSnapshot.entries),
         [STORAGE_KEYS.notes]: clone(sanitizedSnapshot.notes),
       };
       if (sanitizedSnapshot.settings) {
