@@ -38,7 +38,7 @@ if (/sourceMappingURL=/.test(artifactText)) failures.push('Source-map references
 if (/VITE_ENABLE_MD_FLOW_HOOKS|deardiary-manual-test-checkpoint/.test(artifactText)) {
   failures.push('Manual test hooks are present in the production artifact.');
 }
-if (/VITE_DEAR_DIARY_E2E|E2E Sanitizer Probe/.test(artifactText)) {
+if (/VITE_DEAR_DIARY_E2E|e2e@example\.test/.test(artifactText)) {
   failures.push('E2E seed hooks are present in the production artifact.');
 }
 

@@ -112,7 +112,7 @@ test('test-mode local app creates a PIN and excludes locked diary content from s
   await openSearch(page);
 
   await searchInput(page).fill('ordinary visible memory');
-  await expect(page.getByText('E2E Public Picnic').first()).toBeVisible();
+  await expect(page.getByText('Picnic by the lake').first()).toBeVisible();
 
   await searchInput(page).fill('secret locked diary body');
   await expect(page.getByText('No results found')).toBeVisible();
@@ -128,7 +128,7 @@ test('local app persists IndexedDB state, supports keyboard navigation, shows of
   if (testInfo.project.name.includes('mobile')) {
     await openSearch(page);
     await searchInput(page).fill('ordinary visible memory');
-    await expect(page.getByText('E2E Public Picnic').first()).toBeVisible();
+    await expect(page.getByText('Picnic by the lake').first()).toBeVisible();
 
     await context.setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event('offline')));
@@ -155,7 +155,7 @@ test('local app persists IndexedDB state, supports keyboard navigation, shows of
   await unlockWithPin(page);
   await openSearch(page);
   await searchInput(page).fill('ordinary visible memory');
-  await expect(page.getByText('E2E Public Picnic').first()).toBeVisible();
+  await expect(page.getByText('Picnic by the lake').first()).toBeVisible();
 
   await context.setOffline(true);
   await page.evaluate(() => window.dispatchEvent(new Event('offline')));
@@ -278,7 +278,7 @@ test('local app renders sanitized content and archive availability without execu
   await openSearch(page);
 
   await searchInput(page).fill('sanitized visible marker');
-  await expect(page.getByText('E2E Sanitizer Probe').first()).toBeVisible();
+  await expect(page.getByText('The first monsoon rain').first()).toBeVisible();
   await expect(page.getByText('sanitized visible marker').first()).toBeVisible();
   await expect(page.getByText(/__e2eXss|javascript:|onerror|srcdoc/i)).toHaveCount(0);
   const xssFlag = await page.evaluate(
