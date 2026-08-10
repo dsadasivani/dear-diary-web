@@ -20,9 +20,16 @@ Useful commands:
 npm run assets:generate
 npm run android:test
 npm run android:lint
+npm run android:apk:staging:install
 npm run android:release
 npm run android:bundle
 ```
+
+`android:apk:staging:install` builds and syncs the staging client, creates an automatically
+debug-signed APK, clean-installs it on a running emulator, and prints the APK path. If no emulator
+is running, it starts the first configured Android Virtual Device and waits for it to boot. Select
+a specific device profile with `npm run android:apk:staging:install -- --avd <name>` or the
+`ANDROID_AVD_NAME` environment variable. The clean install removes existing local app data.
 
 Native WebView inspection is off by default. Set `CAPACITOR_WEBVIEW_DEBUG=true` only for local debug builds. Keep `CAPACITOR_BRIDGE_LOGGING` off during sync and recovery validation so logs cannot accidentally expose sensitive context.
 

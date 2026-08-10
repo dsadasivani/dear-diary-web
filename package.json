@@ -53,6 +53,7 @@
     "android:test": "node scripts/run-gradle.mjs testDebugUnitTest",
     "android:release": "node scripts/run-gradle.mjs assembleRelease",
     "android:bundle": "node scripts/run-gradle.mjs bundleRelease",
+    "android:apk:staging:install": "node scripts/build-install-staging-apk.mjs",
     "assets:generate": "npx @capacitor/assets generate --android --assetPath resources --iconBackgroundColor \"#232427\" --iconBackgroundColorDark \"#17181a\" --splashBackgroundColor \"#232427\" --splashBackgroundColorDark \"#17181a\" --logoSplashScale 0.36",
     "mobile:build": "npm run build",
     "mobile:build:staging": "npm run build:staging",

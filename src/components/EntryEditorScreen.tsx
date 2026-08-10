@@ -89,6 +89,7 @@ interface ComposedEntryDraft {
   finalBlocks: EntryBlock[];
   finalBody: string;
   hasDraftText: boolean;
+  hasTextContent: boolean;
   hasContent: boolean;
 }
 
@@ -161,7 +162,9 @@ export default function EntryEditorScreen({
   const [showEntryDetails, setShowEntryDetails] = useState(false);
   const [showAddTools, setShowAddTools] = useState(false);
   const [showFormattingTools, setShowFormattingTools] = useState(false);
-  const baselineFingerprintRef = useRef<string | null>(null);
+  const baselineTextFingerprintRef = useRef<string | null>(null);
+  const baselineMediaFingerprintRef = useRef<string | null>(null);
+  const autosavePromiseRef = useRef<Promise<void> | null>(null);
   const persistedMediaCountsRef = useRef({ photoCount: 0, recordingCount: 0 });
   const workingEntryIdRef = useRef<string | undefined>(entryId);
   const originalEntryRef = useRef<Entry | null>(null);
@@ -1501,6 +1504,8 @@ export default function EntryEditorScreen({
     let cancelled = false;
 
     const loadEntry = async () => {
+      baselineTextFingerprintRef.current = null;
+      baselineMediaFingerprintRef.current = null;
       setIsEditorReady(false);
       setEntryLoadError('');
       try {
@@ -1598,7 +1603,7 @@ export default function EntryEditorScreen({
     return previousBlocksWords + currentWordsCount;
   }, [blocks, body, activeBlockId]);
 
-  const draftFingerprint = useMemo(
+  const textDraftFingerprint = useMemo(
     () =>
       JSON.stringify({
         diaryId,
@@ -1606,38 +1611,38 @@ export default function EntryEditorScreen({
         time,
         title,
         body,
-        blocks,
+        blocks: blocks.map(({ audioUri: _audioUri, ...block }) => block),
         mood,
         selectedTags,
+      }),
+    [diaryId, date, time, title, body, blocks, mood, selectedTags],
+  );
+  const mediaDraftFingerprint = useMemo(
+    () =>
+      JSON.stringify({
         photoUris,
         audioUri,
-        currentTimeText,
+        blockAudio: blocks.map((block) => ({ id: block.id, audioUri: block.audioUri })),
       }),
-    [
-      diaryId,
-      date,
-      time,
-      title,
-      body,
-      blocks,
-      mood,
-      selectedTags,
-      photoUris,
-      audioUri,
-      currentTimeText,
-    ],
+    [audioUri, blocks, photoUris],
   );
 
   useEffect(() => {
     if (!isEditorReady) return;
-    if (baselineFingerprintRef.current === null) {
-      baselineFingerprintRef.current = draftFingerprint;
+    if (
+      baselineTextFingerprintRef.current === null ||
+      baselineMediaFingerprintRef.current === null
+    ) {
+      baselineTextFingerprintRef.current = textDraftFingerprint;
+      baselineMediaFingerprintRef.current = mediaDraftFingerprint;
       setIsDirty(false);
       return;
     }
-    const changed = draftFingerprint !== baselineFingerprintRef.current;
+    const changed =
+      textDraftFingerprint !== baselineTextFingerprintRef.current ||
+      mediaDraftFingerprint !== baselineMediaFingerprintRef.current;
     setIsDirty(changed);
-  }, [draftFingerprint, isEditorReady]);
+  }, [isEditorReady, mediaDraftFingerprint, textDraftFingerprint]);
 
   useEffect(() => {
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -1672,80 +1677,115 @@ export default function EntryEditorScreen({
         .filter(Boolean)
         .join('<br/><br/>'),
       hasDraftText,
+      hasTextContent:
+        finalBlocks.some((block) => richTextHtmlToPlainText(block.body) !== '') ||
+        Boolean(title.trim()),
       hasContent: finalBlocks.length > 0 || Boolean(title.trim()) || photoUris.length > 0,
     };
   };
 
-  const persistEntryDraft = async (draft: ComposedEntryDraft): Promise<void> => {
-    const draftRecordingCount = draft.finalBlocks.filter((block) => Boolean(block.audioUri)).length;
+  const persistEntryDraft = async (
+    draft: ComposedEntryDraft,
+    includePendingMedia: boolean,
+  ): Promise<void> => {
     const allowedPhotos = maximumAllowedPhotos();
     const allowedRecordings = maximumAllowedRecordings();
-    if (photoUris.length > allowedPhotos) {
+    const pendingRecordingCount = draft.finalBlocks.filter((block) => Boolean(block.audioUri)).length;
+    if (includePendingMedia && photoUris.length > allowedPhotos) {
       throw new Error(`Remove photos until this entry has at most ${allowedPhotos}.`);
     }
-    if (draftRecordingCount > allowedRecordings) {
+    if (includePendingMedia && pendingRecordingCount > allowedRecordings) {
       throw new Error(`Remove recordings until this entry has at most ${allowedRecordings}.`);
     }
     const existingId = workingEntryIdRef.current;
     if (existingId) {
       const existing = await diaryRepository.getEntry(existingId);
       if (!existing) throw new Error('This entry is no longer available.');
+      const persistedBlocks = new Map((existing.blocks || []).map((block) => [block.id, block]));
+      const blocksToSave = includePendingMedia
+        ? draft.finalBlocks
+        : draft.finalBlocks
+            .map((block) => ({
+              ...block,
+              audioUri: persistedBlocks.get(block.id)?.audioUri,
+            }))
+            .filter(
+              (block) => richTextHtmlToPlainText(block.body) !== '' || Boolean(block.audioUri),
+            );
+      const photosToSave = includePendingMedia ? photoUris : existing.photoUris || [];
       await diaryRepository.updateEntry({
         ...existing,
         diaryId,
         date,
-        time: draft.finalBlocks[0]?.time || time,
+        time: blocksToSave[0]?.time || time,
         title: draft.finalTitle,
         body: draft.finalBody,
         moodName: mood.name,
         moodEmoji: mood.emoji,
         tags: selectedTags,
-        photoUris,
-        photoCount: photoUris.length,
+        photoUris: photosToSave,
+        photoCount: photosToSave.length,
         wordCount: liveWordCount,
-        audioUri: undefined,
+        audioUri: includePendingMedia ? undefined : existing.audioUri,
         updatedAt: Date.now(),
-        blocks: draft.finalBlocks,
+        blocks: blocksToSave,
       });
-      persistedMediaCountsRef.current = {
-        photoCount: photoUris.length,
-        recordingCount: draftRecordingCount,
-      };
+      if (includePendingMedia) {
+        persistedMediaCountsRef.current = {
+          photoCount: photoUris.length,
+          recordingCount: pendingRecordingCount,
+        };
+      }
       return;
     }
+    const blocksToSave = includePendingMedia
+      ? draft.finalBlocks
+      : draft.finalBlocks
+          .map(({ audioUri: _audioUri, ...block }) => block)
+          .filter((block) => richTextHtmlToPlainText(block.body) !== '');
+    const photosToSave = includePendingMedia ? photoUris : [];
     const created = await diaryRepository.createEntry({
       diaryId,
       date,
-      time: draft.finalBlocks[0]?.time || time,
+      time: blocksToSave[0]?.time || time,
       title: draft.finalTitle,
       body: draft.finalBody,
       moodName: mood.name,
       moodEmoji: mood.emoji,
       tags: selectedTags,
-      photoUris,
+      photoUris: photosToSave,
       audioUri: undefined,
-      blocks: draft.finalBlocks,
+      blocks: blocksToSave,
     });
     workingEntryIdRef.current = created.id;
-    persistedMediaCountsRef.current = {
-      photoCount: photoUris.length,
-      recordingCount: draftRecordingCount,
-    };
+    if (includePendingMedia) {
+      persistedMediaCountsRef.current = {
+        photoCount: photoUris.length,
+        recordingCount: pendingRecordingCount,
+      };
+    }
   };
 
   useEffect(() => {
-    if (!isEditorReady || !isDirty || isSaving || isAutosaving) return;
+    if (
+      !isEditorReady ||
+      isSaving ||
+      isAutosaving ||
+      baselineTextFingerprintRef.current === null ||
+      textDraftFingerprint === baselineTextFingerprintRef.current
+    )
+      return;
     const timeout = window.setTimeout(() => {
       const draft = composeEntryDraft();
-      if (!draft.hasContent) return;
-      void (async () => {
+      if (!draft.hasTextContent) return;
+      const operation = (async () => {
         if (isLeavingRef.current) return;
         setIsAutosaving(true);
         setAutosaveError('');
         try {
-          await persistEntryDraft(draft);
-          baselineFingerprintRef.current = draftFingerprint;
-          setIsDirty(false);
+          await persistEntryDraft(draft, false);
+          baselineTextFingerprintRef.current = textDraftFingerprint;
+          setIsDirty(mediaDraftFingerprint !== baselineMediaFingerprintRef.current);
           setLastSavedAt(new Date());
         } catch (error: any) {
           setAutosaveError(error?.message || 'Autosave failed. Use Save Entry to try again.');
@@ -1753,9 +1793,13 @@ export default function EntryEditorScreen({
           setIsAutosaving(false);
         }
       })();
+      autosavePromiseRef.current = operation;
+      void operation.finally(() => {
+        if (autosavePromiseRef.current === operation) autosavePromiseRef.current = null;
+      });
     }, 1800);
     return () => window.clearTimeout(timeout);
-  }, [draftFingerprint, isDirty, isEditorReady, isSaving, isAutosaving]);
+  }, [isEditorReady, isSaving, isAutosaving, mediaDraftFingerprint, textDraftFingerprint]);
 
   const attachPhotoFiles = async (files: File[]) => {
     if (photoPreparation) {
@@ -1817,7 +1861,7 @@ export default function EntryEditorScreen({
       if (orderedUris.length > 0) {
         setPhotoUris((prev) => [...prev, ...orderedUris]);
         onShowToast?.(
-          `${orderedUris.length === 1 ? 'Photo is' : 'Photos are'} ready on this device. Saving and syncing next…`,
+          `${orderedUris.length === 1 ? 'Photo is' : 'Photos are'} ready. Tap Done to save.`,
           'info',
         );
       }
@@ -1860,16 +1904,18 @@ export default function EntryEditorScreen({
       return;
     }
     if (isSaving) return;
-    const draft = composeEntryDraft(`block-${Date.now()}`);
-    if (!draft.hasContent) {
-      onBack(); // Just go back if they saved nothing
-      return;
-    }
 
     try {
       setIsSaving(true);
+      await autosavePromiseRef.current;
+      const draft = composeEntryDraft(`block-${Date.now()}`);
+      if (!draft.hasContent) {
+        isLeavingRef.current = true;
+        onBack();
+        return;
+      }
       const saveOperation = async () => {
-        await persistEntryDraft(draft);
+        await persistEntryDraft(draft, true);
         if (workingEntryIdRef.current) {
           await diaryRepository.publishPendingEntryDraft(workingEntryIdRef.current);
         }
@@ -1879,7 +1925,8 @@ export default function EntryEditorScreen({
           setBody('');
         }
         isLeavingRef.current = true;
-        baselineFingerprintRef.current = draftFingerprint;
+        baselineTextFingerprintRef.current = textDraftFingerprint;
+        baselineMediaFingerprintRef.current = mediaDraftFingerprint;
         setIsDirty(false);
         await onRefreshEntries();
         onBack();
@@ -1936,7 +1983,8 @@ export default function EntryEditorScreen({
       } else if (workingEntryIdRef.current) {
         await diaryRepository.deleteEntry(workingEntryIdRef.current);
       }
-      baselineFingerprintRef.current = draftFingerprint;
+      baselineTextFingerprintRef.current = textDraftFingerprint;
+      baselineMediaFingerprintRef.current = mediaDraftFingerprint;
       setIsDirty(false);
       await onRefreshEntries();
       onBack();

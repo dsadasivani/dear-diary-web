@@ -158,7 +158,7 @@ const SETTINGS_SECTIONS: Array<{
   {
     id: 'data-storage',
     label: 'Data & Storage',
-    description: 'Storage used on this device',
+    description: 'Offline and cloud storage usage',
     icon: Database,
   },
   { id: 'about', label: 'About', description: 'App version and privacy principles', icon: Info },
@@ -338,6 +338,20 @@ export default function AppSettingsScreen({
     } finally {
       setIsLocalStorageUsageLoading(false);
     }
+  };
+
+  const refreshCloudQuota = async (): Promise<void> => {
+    if (!syncAccountState || !onRefreshQuota) return;
+    setIsQuotaRefreshing(true);
+    try {
+      await onRefreshQuota();
+    } finally {
+      setIsQuotaRefreshing(false);
+    }
+  };
+
+  const refreshStorageOverview = async (): Promise<void> => {
+    await Promise.allSettled([refreshLocalStorageUsage(), refreshCloudQuota()]);
   };
 
   const refreshLocalSyncStatus = async (): Promise<void> => {
@@ -1523,11 +1537,7 @@ export default function AppSettingsScreen({
                       </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          if (!onRefreshQuota) return;
-                          setIsQuotaRefreshing(true);
-                          void onRefreshQuota().finally(() => setIsQuotaRefreshing(false));
-                        }}
+                        onClick={() => void refreshCloudQuota()}
                         disabled={!onRefreshQuota || isQuotaRefreshing}
                         className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-brand-border text-brand-sage disabled:opacity-40"
                         aria-label="Refresh cloud quota usage"
@@ -1802,49 +1812,116 @@ export default function AppSettingsScreen({
                 {...pageMotion(prefersReducedMotion)}
                 className="flex flex-col gap-5"
               >
-                {syncAccountState && (
-                  <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
-                    <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
-                      {quota.planName} cloud plan
-                    </h3>
-                    <p className="mt-2 text-2xl font-semibold text-brand-plum dark:text-brand-text">
-                      {formatBytes(quota.usage.storageBytesUsed)} /{' '}
-                      {formatBytes(quota.limits.maximumStorageBytes)}
-                    </p>
-                    <p className="mt-2 text-sm text-brand-text-muted">
-                      {quota.usage.companionSlotsUsed}/{quota.limits.maximumCompanions} companion
-                      slots · {quota.limits.maximumPhotosPerEntry} photos and{' '}
-                      {quota.limits.maximumRecordingsPerEntry} recordings per entry
-                    </p>
-                  </div>
-                )}
                 <div className="rounded-3xl border border-brand-border bg-brand-card-bg p-5 journal-shadow">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-bold text-brand-plum dark:text-brand-text">
-                        On this device
+                        Storage overview
                       </h3>
-                      <p className="mt-1 text-sm text-brand-text-muted">Available offline</p>
+                      <p className="mt-1 text-sm text-brand-text-muted">
+                        See what is kept on this device and in your encrypted cloud.
+                      </p>
                     </div>
                     <button
                       type="button"
-                      onClick={() => void refreshLocalStorageUsage()}
-                      disabled={isLocalStorageUsageLoading}
+                      onClick={() => void refreshStorageOverview()}
+                      disabled={isLocalStorageUsageLoading || isQuotaRefreshing}
                       className="flex h-11 min-w-11 items-center justify-center rounded-xl border border-brand-border text-brand-sage disabled:opacity-40"
-                      aria-label="Refresh on-device storage usage"
+                      aria-label="Refresh device and cloud storage usage"
                     >
                       <RefreshCw
-                        className={`h-4 w-4 ${isLocalStorageUsageLoading ? 'animate-spin' : ''}`}
+                        className={`h-4 w-4 ${isLocalStorageUsageLoading || isQuotaRefreshing ? 'animate-spin' : ''}`}
                       />
                     </button>
                   </div>
-                  <p className="mt-4 text-2xl font-semibold text-brand-plum dark:text-brand-text">
-                    {localStorageUsage
-                      ? formatBytes(localStorageUsage.totalBytes)
-                      : isLocalStorageUsageLoading
-                        ? 'Calculating…'
-                        : 'Unavailable'}
-                  </p>
+
+                  <div className="mt-5 grid grid-cols-2 gap-3">
+                    <section
+                      aria-label="On-device storage"
+                      className="min-w-0 rounded-2xl border border-brand-border/70 bg-brand-bg/55 p-4"
+                    >
+                      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-sage/10 text-brand-sage">
+                        <Database className="h-4 w-4" />
+                      </span>
+                      <h4 className="mt-3 text-sm font-bold text-brand-plum dark:text-brand-text">
+                        On this device
+                      </h4>
+                      <p className="mt-0.5 text-xs text-brand-text-muted">Available offline</p>
+                      <p className="mt-3 break-words text-xl font-semibold leading-tight text-brand-plum dark:text-brand-text">
+                        {localStorageUsage
+                          ? formatBytes(localStorageUsage.totalBytes)
+                          : isLocalStorageUsageLoading
+                            ? 'Calculating…'
+                            : 'Unavailable'}
+                      </p>
+                    </section>
+
+                    <section
+                      aria-label="Cloud storage"
+                      className="min-w-0 rounded-2xl border border-brand-border/70 bg-brand-bg/55 p-4"
+                    >
+                      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-sage/10 text-brand-sage">
+                        <Cloud className="h-4 w-4" />
+                      </span>
+                      <h4 className="mt-3 text-sm font-bold text-brand-plum dark:text-brand-text">
+                        Cloud
+                      </h4>
+                      <p className="mt-0.5 text-xs text-brand-text-muted">Available in cloud</p>
+                      <p className="mt-3 break-words text-xl font-semibold leading-tight text-brand-plum dark:text-brand-text">
+                        {syncAccountState
+                          ? `${formatBytes(quota.usage.storageBytesUsed)} / ${formatBytes(quota.limits.maximumStorageBytes)}`
+                          : 'Not connected'}
+                      </p>
+                    </section>
+                  </div>
+
+                  {syncAccountState ? (
+                    <div className="mt-4 rounded-2xl bg-brand-bg/45 p-3">
+                      <div className="flex items-center justify-between gap-3 text-xs">
+                        <span className="font-semibold text-brand-plum dark:text-brand-text">
+                          {quota.planName} plan
+                        </span>
+                        <span className="text-right text-brand-text-muted">
+                          {formatBytes(
+                            Math.max(
+                              0,
+                              quota.limits.maximumStorageBytes - quota.usage.storageBytesUsed,
+                            ),
+                          )}{' '}
+                          cloud space available
+                        </span>
+                      </div>
+                      <div
+                        className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand-card-bg"
+                        role="progressbar"
+                        aria-label="Cloud storage used"
+                        aria-valuemin={0}
+                        aria-valuemax={quota.limits.maximumStorageBytes}
+                        aria-valuenow={Math.min(
+                          quota.usage.storageBytesUsed,
+                          quota.limits.maximumStorageBytes,
+                        )}
+                      >
+                        <div
+                          className="h-full rounded-full bg-brand-sage transition-[width]"
+                          style={{
+                            width: `${quota.limits.maximumStorageBytes > 0 ? Math.min(100, (quota.usage.storageBytesUsed / quota.limits.maximumStorageBytes) * 100) : 0}%`,
+                          }}
+                        />
+                      </div>
+                      <p className="mt-2 text-xs text-brand-text-muted">
+                        {quota.usage.companionSlotsUsed}/{quota.limits.maximumCompanions} companion
+                        slots · {quota.limits.maximumPhotosPerEntry} photos and{' '}
+                        {quota.limits.maximumRecordingsPerEntry} recordings per entry
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="mt-4 rounded-2xl bg-brand-bg/45 p-3 text-xs leading-relaxed text-brand-text-muted">
+                      Cloud sync is not connected. Link it in Sync &amp; Devices to back up your
+                      encrypted entries and see cloud usage.
+                    </p>
+                  )}
+
                   <div className="mt-4 grid gap-2">
                     {[
                       [

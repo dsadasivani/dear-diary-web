@@ -38,11 +38,11 @@ export const seedE2eRepositoryIfRequested = async (): Promise<void> => {
       isLocked: true,
     }));
   const entries = await diaryRepository.listEntries();
-  if (!entries.some((entry) => entry.title === 'E2E Public Picnic'))
+  if (!entries.some((entry) => entry.title === 'Picnic by the lake'))
     await diaryRepository.createEntry({
       diaryId: openDiary.id,
       date: '2026-07-10',
-      title: 'E2E Public Picnic',
+      title: 'Picnic by the lake',
       body: '<p>ordinary visible memory</p>',
       moodName: 'Calm',
       moodEmoji: '',
@@ -60,11 +60,11 @@ export const seedE2eRepositoryIfRequested = async (): Promise<void> => {
       tags: ['private'],
       photoUris: [],
     });
-  if (!entries.some((entry) => entry.title === 'E2E Sanitizer Probe'))
+  if (!entries.some((entry) => entry.title === 'The first monsoon rain'))
     await diaryRepository.createEntry({
       diaryId: openDiary.id,
       date: '2026-07-09',
-      title: 'E2E Sanitizer Probe',
+      title: 'The first monsoon rain',
       body: '<p>sanitized visible marker</p><img src=x onerror="window.__e2eXss=1"><script>window.__e2eXss=1</script>',
       moodName: 'Calm',
       moodEmoji: '',

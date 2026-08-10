@@ -112,7 +112,7 @@ test('test-mode local app creates a PIN and excludes locked diary content from s
   await openSearch(page);
 
   await searchInput(page).fill('ordinary visible memory');
-  await expect(page.getByText('E2E Public Picnic').first()).toBeVisible();
+  await expect(page.getByText('Picnic by the lake').first()).toBeVisible();
 
   await searchInput(page).fill('secret locked diary body');
   await expect(page.getByText('No results found')).toBeVisible();
@@ -128,7 +128,7 @@ test('local app persists IndexedDB state, supports keyboard navigation, shows of
   if (testInfo.project.name.includes('mobile')) {
     await openSearch(page);
     await searchInput(page).fill('ordinary visible memory');
-    await expect(page.getByText('E2E Public Picnic').first()).toBeVisible();
+    await expect(page.getByText('Picnic by the lake').first()).toBeVisible();
 
     await context.setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event('offline')));
@@ -155,7 +155,7 @@ test('local app persists IndexedDB state, supports keyboard navigation, shows of
   await unlockWithPin(page);
   await openSearch(page);
   await searchInput(page).fill('ordinary visible memory');
-  await expect(page.getByText('E2E Public Picnic').first()).toBeVisible();
+  await expect(page.getByText('Picnic by the lake').first()).toBeVisible();
 
   await context.setOffline(true);
   await page.evaluate(() => window.dispatchEvent(new Event('offline')));
@@ -244,6 +244,13 @@ test('local app creates, edits, and deletes a diary entry through the UI', async
     .click();
   await expect(page.getByRole('dialog', { name: /leave this entry/i })).toBeVisible();
   await page.getByRole('button', { name: /save and leave/i }).click();
+  const savedSnackbar = page
+    .getByRole('status')
+    .filter({ hasText: /^Saved to this device$/ })
+    .last();
+  await expect(savedSnackbar).toBeVisible();
+  const snackbarBounds = await savedSnackbar.boundingBox();
+  expect(snackbarBounds?.y).toBeGreaterThan((page.viewportSize()?.height || 0) / 2);
   await expect(page.getByText(entryTitle).first()).toBeVisible();
 
   await page.getByTestId('entry-edit-button').first().click();
@@ -271,7 +278,7 @@ test('local app renders sanitized content and archive availability without execu
   await openSearch(page);
 
   await searchInput(page).fill('sanitized visible marker');
-  await expect(page.getByText('E2E Sanitizer Probe').first()).toBeVisible();
+  await expect(page.getByText('The first monsoon rain').first()).toBeVisible();
   await expect(page.getByText('sanitized visible marker').first()).toBeVisible();
   await expect(page.getByText(/__e2eXss|javascript:|onerror|srcdoc/i)).toHaveCount(0);
   const xssFlag = await page.evaluate(
@@ -305,8 +312,14 @@ test('settings uses responsive section navigation and isolates section content',
   }
 
   await sectionNavigation.getByRole('button', { name: /Data & Storage/ }).click();
-  await expect(page.getByText('Cloud storage', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Storage overview', { exact: true })).toBeVisible();
   await expect(page.getByText('On this device', { exact: true })).toBeVisible();
+  await expect(page.getByText('Available offline', { exact: true })).toBeVisible();
+  await expect(page.getByText('Cloud', { exact: true })).toBeVisible();
+  await expect(page.getByText('Available in cloud', { exact: true })).toBeVisible();
+  await expect(page.locator('section[aria-label="Cloud storage"]')).toContainText(
+    /500 MB|Not connected/,
+  );
   await expect(page.getByText('Delete all saved content')).toBeVisible();
   await expect(page.getByText(/deletion syncs to every linked device/i)).toBeVisible();
   await page.getByRole('button', { name: 'Review clear action' }).click();

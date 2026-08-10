@@ -48,7 +48,7 @@ export function ToastViewport({
   return (
     <div
       aria-label="Notifications"
-      className="toast-safe pointer-events-none fixed left-1/2 top-4 z-[150] flex w-[min(92vw,24rem)] -translate-x-1/2 flex-col gap-2"
+      className="pointer-events-none fixed bottom-[calc(6.25rem+var(--safe-area-inset-bottom))] left-4 right-4 z-[150] flex flex-col gap-2 md:bottom-6 md:left-auto md:right-6 md:w-[min(24rem,calc(100vw-3rem))]"
     >
       {messages.map((message) => (
         <Toast key={message.id} {...message} onDismiss={onDismiss} />

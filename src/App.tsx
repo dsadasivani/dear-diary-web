@@ -11,6 +11,7 @@ import {
   EyeClosed as EyeOff,
   Fingerprint,
   Home,
+  InfoCircle as Info,
   RefreshDouble as LoaderCircle,
   Lock,
   Plus,
@@ -295,9 +296,12 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
 
   useEffect(() => {
     if (toast) {
-      const timer = setTimeout(() => {
-        setToast(null);
-      }, 3500);
+      const timer = setTimeout(
+        () => {
+          setToast(null);
+        },
+        toast.type === 'error' || toast.type === 'warning' ? 6000 : 3500,
+      );
       return () => clearTimeout(timer);
     }
   }, [toast]);
@@ -1569,40 +1573,58 @@ export default function App({ initialSettings, initialSecurity, initialUserProfi
     );
   };
 
-  const renderToast = () => (
-    <AnimatePresence>
-      {toast && (
-        <motion.div
-          initial={{ opacity: 0, y: -40, scale: 0.92, x: '-50%' }}
-          animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
-          exit={{ opacity: 0, y: -15, scale: 0.95, x: '-50%' }}
-          transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-          className="fixed top-6 left-1/2 z-50 flex items-center gap-3 bg-white/95 dark:bg-brand-card-bg/95 backdrop-blur-md px-5 py-3.5 rounded-2xl border border-brand-border/80 shadow-2xl max-w-sm w-[90%] select-none pointer-events-auto toast-safe"
-        >
-          <div
-            className={`w-2.5 h-2.5 rounded-full flex-shrink-0 animate-pulse ${
-              toast.type === 'success'
-                ? 'bg-brand-sage'
-                : toast.type === 'error'
-                  ? 'bg-brand-rose'
-                  : 'bg-brand-pink'
-            }`}
-          />
+  const renderToast = () => {
+    const ToastIcon =
+      toast?.type === 'success' ? Check : toast?.type === 'info' ? Info : AlertCircle;
+    const toneClass =
+      toast?.type === 'success'
+        ? 'border-brand-sage/35 bg-white/96 text-brand-sage dark:bg-brand-card-bg/96'
+        : toast?.type === 'error'
+          ? 'border-red-300/70 bg-red-50/96 text-red-700 dark:border-red-900/60 dark:bg-red-950/90 dark:text-red-300'
+          : toast?.type === 'warning'
+            ? 'border-amber-300/70 bg-amber-50/96 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/90 dark:text-amber-300'
+            : 'border-brand-border/80 bg-white/96 text-brand-pink dark:bg-brand-card-bg/96';
 
-          <p className="text-xs font-bold text-brand-plum leading-snug flex-grow">
-            {toast.message}
-          </p>
-
-          <button
-            onClick={() => setToast(null)}
-            className="text-brand-text-muted hover:text-brand-rose transition-colors p-1 rounded-lg hover:bg-brand-blush-light dark:hover:bg-brand-blush-light/10"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
+    return (
+      <div
+        aria-live={toast?.type === 'error' ? 'assertive' : 'polite'}
+        aria-atomic="true"
+        className="pointer-events-none fixed bottom-[calc(6.25rem+var(--safe-area-inset-bottom))] left-4 right-4 z-[100] md:bottom-6 md:left-auto md:right-6 md:w-[min(24rem,calc(100vw-3rem))]"
+      >
+        <AnimatePresence>
+          {toast && (
+            <motion.div
+              role={toast.type === 'error' ? 'alert' : 'status'}
+              initial={{ opacity: 0, y: 20, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.98 }}
+              transition={
+                prefersReducedMotion
+                  ? { duration: 0.01 }
+                  : { type: 'spring', stiffness: 380, damping: 30 }
+              }
+              className={`pointer-events-auto flex min-h-14 w-full select-none items-center gap-3 rounded-2xl border px-3 py-2.5 shadow-xl backdrop-blur-md ${toneClass}`}
+            >
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-current/10">
+                <ToastIcon className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <p className="min-w-0 flex-1 text-sm font-semibold leading-snug text-brand-plum dark:text-brand-text">
+                {toast.message}
+              </p>
+              <button
+                type="button"
+                onClick={() => setToast(null)}
+                aria-label="Dismiss notification"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-brand-text-muted transition-colors hover:bg-brand-bg hover:text-brand-plum focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sage"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  };
 
   const desktopPageTitle = () => {
     if (activeTab === 'stats' && currentScreen === 'appSettings') return 'Settings';

@@ -3,7 +3,13 @@ import type { DiaryRepository, NewDiary, NewEntry, NewNote } from './DiaryReposi
 import type { EventSyncEngine } from '../sync/eventSyncEngine';
 import { richTextHtmlToPlainText, sanitizeEntry, sanitizeNote } from '../domain/richTextSanitizer';
 import { reportUnexpectedError } from '../infrastructure/telemetry/reportUnexpectedError';
-import { toPortableDiary, toPortableEntry, toPortableUserProfile } from '../sync/portableMedia';
+import {
+  isDeviceLocalMediaUri,
+  toPortableDiary,
+  toPortableEntry,
+  toPortableUserProfile,
+} from '../sync/portableMedia';
+import { createSyncMediaReference } from '../sync/syncMedia';
 import { recordPositiveDailyWordDelta } from '../domain/journalCatalog';
 
 const createId = (prefix: string): string => {
@@ -45,6 +51,32 @@ const normalizedSyncPayload = (value: unknown): string => {
     );
   };
   return JSON.stringify(normalize(value));
+};
+
+const normalizeEntryMediaForComparison = async (
+  entry: Entry,
+  repository: DiaryRepository,
+): Promise<Entry> => {
+  const normalizeUri = async (uri: string | undefined): Promise<string | undefined> => {
+    if (!uri || !isDeviceLocalMediaUri(uri)) return uri;
+    const pointer = await repository.getSyncMediaPointerByLocalUri(uri);
+    return pointer ? createSyncMediaReference(pointer.mediaId, pointer.driveFileId) : uri;
+  };
+  return {
+    ...entry,
+    photoUris: await Promise.all(
+      (entry.photoUris || []).map(async (uri) => (await normalizeUri(uri)) || uri),
+    ),
+    audioUri: await normalizeUri(entry.audioUri),
+    blocks: entry.blocks
+      ? await Promise.all(
+          entry.blocks.map(async (block) => ({
+            ...block,
+            audioUri: await normalizeUri(block.audioUri),
+          })),
+        )
+      : entry.blocks,
+  };
 };
 
 const requestBackgroundFlush = (syncEngine: EventSyncEngine): void => {
@@ -277,10 +309,11 @@ export const createSyncingDiaryRepository = (
         if (!previous) return null;
         const account = await localRepository.getLocalSyncAccountState();
         if (!account) return localRepository.updateEntry(entry);
-        if (
-          normalizedSyncPayload(toPortableEntry(previous)) ===
-          normalizedSyncPayload(toPortableEntry(entry))
-        ) {
+        const [comparablePrevious, comparableEntry] = await Promise.all([
+          normalizeEntryMediaForComparison(previous, localRepository),
+          normalizeEntryMediaForComparison(entry, localRepository),
+        ]);
+        if (normalizedSyncPayload(comparablePrevious) === normalizedSyncPayload(comparableEntry)) {
           return (await syncEngine.hydrateEntries([previous]))[0];
         }
         const nextWordCount = countWords(entry.body || '');

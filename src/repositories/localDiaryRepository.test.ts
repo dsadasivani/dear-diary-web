@@ -1259,6 +1259,185 @@ test('orders parent diary mutations before child entries in an atomic replay bat
   assert.ok(diaryMutationIndex < entryMutationIndex);
 });
 
+test('rebases concurrent photo-only entry conflicts with both device attachments', async () => {
+  const store = new MemoryDataStore();
+  const repository = await createRepository(store);
+  const account = {
+    accountId: 'account-1',
+    deviceId: 'device-mobile',
+    deviceRole: 'primary_mobile' as const,
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    appliedSequence: 0,
+    linkedAt: 1,
+  };
+  await repository.saveLocalSyncAccountState(account);
+  const diary = (await repository.listDiaries())[0];
+  const baseEntry: Entry = {
+    id: 'entry-concurrent-photos',
+    diaryId: diary.id,
+    date: '2026-08-10',
+    time: '13:00',
+    title: 'Shared entry',
+    body: '<p>Same text on both devices.</p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+    photoCount: 0,
+    wordCount: 5,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const baseEvent = createSyncDomainEvent({
+    accountId: account.accountId,
+    deviceId: 'device-web',
+    recordType: 'entry',
+    recordId: baseEntry.id,
+    operation: 'upsert',
+    baseRecordVersion: 0,
+    payload: baseEntry,
+  });
+  await repository.applyRemoteEventBatch(
+    [{ event: baseEvent, sequence: 1, operationId: 'operation-base-entry' }],
+    0,
+  );
+
+  const localPhoto =
+    'http://localhost/_capacitor_file_/data/user/0/com.deardiary.app/files/media/mobile.webp';
+  const localCanonicalPhoto = 'ddmedia:media-mobile:object-mobile';
+  const remotePhoto = 'ddmedia:media-web:object-web';
+  const localEntry = {
+    ...baseEntry,
+    photoUris: [localPhoto],
+    photoCount: 1,
+    updatedAt: 2,
+  };
+  await repository.applyLocalMutationWithOutbox({
+    operationId: 'operation-mobile-photo',
+    recordType: 'entry',
+    recordId: baseEntry.id,
+    operation: 'upsert',
+    account,
+    localPayload: localEntry,
+  });
+  const localOperation = (
+    await repository.listSyncOutboxOperations(['PENDING'])
+  ).find((operation) => operation.operationId === 'operation-mobile-photo')!;
+  await repository.saveSyncOutboxOperation({
+    ...localOperation,
+    state: 'CONFLICT',
+    preparedCanonicalPayload: {
+      ...localEntry,
+      photoUris: [localCanonicalPhoto],
+    },
+    lastErrorCode: 'RECORD_VERSION_CONFLICT',
+  });
+  await store.setItem(
+    'deardiary_sync_conflicts',
+    JSON.stringify({
+      'sync-conflict:operation-mobile-photo': {
+        conflictId: 'sync-conflict:operation-mobile-photo',
+        operationId: 'operation-mobile-photo',
+        recordType: 'ENTRY',
+        recordId: baseEntry.id,
+        localBaseVersion: 1,
+        remoteVersion: 2,
+        state: 'UNRESOLVED',
+        createdAt: 2,
+      },
+    }),
+  );
+  const remoteEntry = {
+    ...baseEntry,
+    photoUris: [remotePhoto],
+    photoCount: 1,
+    updatedAt: 3,
+  };
+  const remoteEvent = createSyncDomainEvent({
+    accountId: account.accountId,
+    deviceId: 'device-web',
+    recordType: 'entry',
+    recordId: baseEntry.id,
+    operation: 'upsert',
+    baseRecordVersion: 1,
+    payload: remoteEntry,
+  });
+
+  await repository.applyRemoteEventBatch(
+    [{ event: remoteEvent, sequence: 2, operationId: 'operation-web-photo' }],
+    1,
+  );
+
+  assert.deepEqual((await repository.getEntry(baseEntry.id))?.photoUris, [remotePhoto, localPhoto]);
+  const operations = await repository.listSyncOutboxOperations();
+  const superseded = operations.find(
+    (operation) => operation.operationId === 'operation-mobile-photo',
+  );
+  const rebased = operations.find(
+    (operation) => operation.operationId === superseded?.supersededByOperationId,
+  );
+  assert.equal(superseded?.state, 'SUPERSEDED');
+  assert.equal(rebased?.state, 'PENDING');
+  assert.equal(rebased?.baseRecordVersion, 2);
+  assert.deepEqual((rebased?.sourceCanonicalPayload as Entry).photoUris, [remotePhoto, localPhoto]);
+  const conflicts = JSON.parse((await store.getItem('deardiary_sync_conflicts')) || '{}');
+  assert.equal(conflicts['sync-conflict:operation-mobile-photo'].state, 'RESOLVED');
+
+  // Recovery also works after the winning remote event was already pulled by
+  // an older client build and no new replay batch remains.
+  await repository.saveSyncOutboxOperation({
+    ...rebased!,
+    state: 'CONFLICT',
+    baseRecordVersion: 1,
+    preparedCanonicalPayload: {
+      ...(rebased!.sourceCanonicalPayload as Entry),
+      photoUris: [remotePhoto, localCanonicalPhoto],
+    },
+    lastErrorCode: 'RECORD_VERSION_CONFLICT',
+  });
+  assert.equal(await repository.recoverConcurrentEntryPhotoConflicts(), 1);
+  const recoveredOperations = await repository.listSyncOutboxOperations();
+  const recoveredConflict = recoveredOperations.find(
+    (operation) => operation.operationId === rebased!.operationId,
+  );
+  const recoveredRebase = recoveredOperations.find(
+    (operation) => operation.operationId === recoveredConflict?.supersededByOperationId,
+  );
+  assert.equal(recoveredConflict?.state, 'SUPERSEDED');
+  assert.equal(recoveredRebase?.state, 'PENDING');
+  assert.equal(recoveredRebase?.baseRecordVersion, 2);
+  assert.deepEqual((await repository.getEntry(baseEntry.id))?.photoUris, [remotePhoto, localPhoto]);
+
+  for (const operation of await repository.listSyncOutboxOperations()) {
+    await repository.removeSyncOutboxOperation(operation.operationId);
+  }
+  const storedConflicts = JSON.parse(
+    (await store.getItem('deardiary_sync_conflicts')) || '{}',
+  );
+  storedConflicts['sync-conflict:operation-missing-outbox'] = {
+    conflictId: 'sync-conflict:operation-missing-outbox',
+    operationId: 'operation-missing-outbox',
+    recordType: 'ENTRY',
+    recordId: baseEntry.id,
+    localBaseVersion: 1,
+    remoteVersion: 2,
+    state: 'UNRESOLVED',
+    createdAt: 4,
+  };
+  await store.setItem('deardiary_sync_conflicts', JSON.stringify(storedConflicts));
+  assert.equal(await repository.recoverConcurrentEntryPhotoConflicts(), 1);
+  const reconstructed = (await repository.listSyncOutboxOperations()).find(
+    (operation) => operation.state === 'PENDING',
+  );
+  assert.equal(reconstructed?.baseRecordVersion, 2);
+  assert.deepEqual((reconstructed?.sourceCanonicalPayload as Entry).photoUris, [
+    remotePhoto,
+    localPhoto,
+  ]);
+});
+
 test('sanitizes malicious rich text during sync event replay', async () => {
   const repository = await createRepository();
   await repository.saveLocalSyncAccountState({

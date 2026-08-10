@@ -88,6 +88,7 @@ import {
   withSyncOutboxMutationLock,
   type SyncOperation,
 } from '../sync/outbox';
+import { createSyncMediaReference } from '../sync/syncMedia';
 
 const STORAGE_KEYS = {
   diaries: 'deardiary_diaries',
@@ -102,6 +103,7 @@ const STORAGE_KEYS = {
   syncMediaPointers: 'deardiary_sync_media_pointers',
   syncPartitionHydration: 'deardiary_sync_partition_hydration',
   syncOperations: 'deardiary_sync_operations',
+  syncConflicts: 'deardiary_sync_conflicts',
   syncHealth: 'deardiary_sync_health',
 } as const;
 
@@ -114,6 +116,141 @@ const SYNC_REPLAY_KEYS = {
 
 const ARCHIVE_HYDRATION_RETRY_BASE_MS = 5 * 60 * 1000;
 const ARCHIVE_HYDRATION_RETRY_MAX_MS = 24 * 60 * 60 * 1000;
+
+interface StoredSyncConflictRecord {
+  conflictId: string;
+  operationId: string;
+  recordType: SyncOperation['recordType'];
+  recordId: string;
+  state: string;
+  resolvedAt?: number;
+  [key: string]: unknown;
+}
+
+const canonicalizeEntryMedia = (
+  entry: Entry,
+  pointers: Record<string, SyncMediaPointer>,
+): Entry => {
+  const canonicalizeUri = (uri: string | undefined): string | undefined => {
+    if (!uri) return undefined;
+    const pointer = Object.values(pointers).find((candidate) => candidate.localUri === uri);
+    if (!pointer) return uri;
+    const objectId = pointer.driveFileId.split('/').filter(Boolean).at(-1);
+    return objectId ? createSyncMediaReference(pointer.mediaId, objectId) : uri;
+  };
+  return {
+    ...entry,
+    photoUris: (entry.photoUris || []).map((uri) => canonicalizeUri(uri) || uri),
+    audioUri: canonicalizeUri(entry.audioUri),
+    blocks: entry.blocks?.map((block) => ({
+      ...block,
+      audioUri: canonicalizeUri(block.audioUri),
+    })),
+  };
+};
+
+const normalizedEntryWithoutPhotos = (entry: Entry): string => {
+  const normalize = (candidate: unknown): unknown => {
+    if (Array.isArray(candidate)) return candidate.map(normalize);
+    if (!candidate || typeof candidate !== 'object') return candidate;
+    return Object.fromEntries(
+      Object.entries(candidate as Record<string, unknown>)
+        .filter(([key]) => !['photoUris', 'photoCount', 'updatedAt'].includes(key))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => [key, normalize(value)]),
+    );
+  };
+  return JSON.stringify(normalize(entry));
+};
+
+const mergeConcurrentEntryPhotos = (
+  localSource: Entry,
+  localCanonical: Entry,
+  remoteCanonical: Entry,
+): Entry | null => {
+  if (normalizedEntryWithoutPhotos(localCanonical) !== normalizedEntryWithoutPhotos(remoteCanonical)) {
+    return null;
+  }
+  const sourceByCanonical = new Map<string, string>();
+  (localCanonical.photoUris || []).forEach((canonicalUri, index) => {
+    sourceByCanonical.set(canonicalUri, localSource.photoUris?.[index] || canonicalUri);
+  });
+  const mergedCanonicalUris = Array.from(
+    new Set([...(remoteCanonical.photoUris || []), ...(localCanonical.photoUris || [])]),
+  );
+  const photoUris = mergedCanonicalUris.map(
+    (canonicalUri) => sourceByCanonical.get(canonicalUri) || canonicalUri,
+  );
+  return sanitizeEntry({
+    ...localSource,
+    photoUris,
+    photoCount: photoUris.length,
+    updatedAt: Math.max(localSource.updatedAt || 0, remoteCanonical.updatedAt || 0, Date.now()),
+  });
+};
+
+const buildConcurrentEntryPhotoRebase = (
+  operation: SyncOperation,
+  remoteCanonical: Entry,
+  remoteVersion: number,
+):
+  | {
+      mergedEntry: Entry;
+      supersededOperation: SyncOperation;
+      rebasedOperation: SyncOperation;
+      conflictId: string;
+    }
+  | undefined => {
+  if (
+    operation.state !== 'CONFLICT' ||
+    operation.recordType !== 'ENTRY' ||
+    operation.operationType !== 'UPSERT' ||
+    !operation.sourceCanonicalPayload ||
+    !operation.preparedCanonicalPayload ||
+    remoteVersion <= operation.baseRecordVersion
+  ) {
+    return undefined;
+  }
+  const mergedEntry = mergeConcurrentEntryPhotos(
+    operation.sourceCanonicalPayload as Entry,
+    operation.preparedCanonicalPayload as Entry,
+    remoteCanonical,
+  );
+  if (!mergedEntry) return undefined;
+  const rebasedOperationId = crypto.randomUUID();
+  const now = Date.now();
+  return {
+    mergedEntry,
+    conflictId: `sync-conflict:${operation.operationId}`,
+    supersededOperation: {
+      ...operation,
+      state: 'SUPERSEDED',
+      supersededByOperationId: rebasedOperationId,
+      leaseOwner: undefined,
+      leaseExpiresAt: undefined,
+      updatedAt: now,
+    },
+    rebasedOperation: {
+      operationId: rebasedOperationId,
+      accountId: operation.accountId,
+      deviceId: operation.deviceId,
+      partitionKey: operation.partitionKey,
+      affectedPartitionKeys: operation.affectedPartitionKeys,
+      recordType: 'ENTRY',
+      recordId: operation.recordId,
+      operationType: 'UPSERT',
+      sourceCanonicalPayload: mergedEntry,
+      baseRecordVersion: remoteVersion,
+      affectedRecords: operation.affectedRecords,
+      state: 'PENDING',
+      localApplied: true,
+      createdAt: now,
+      updatedAt: now,
+      retryCount: 0,
+      nextAttemptAt: 0,
+    },
+  };
+};
 
 const INITIAL_DIARIES: Diary[] = [
   {
@@ -1292,6 +1429,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         appliedAudit,
         replicatedMedia,
         outbox,
+        syncConflicts,
       ] = await Promise.all([
         this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount),
         this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}),
@@ -1308,6 +1446,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         >(SYNC_REPLAY_KEYS.applied, []),
         this.readJson<Record<string, string>>(SYNC_REPLAY_KEYS.media, {}),
         this.readJson<Record<string, SyncOperation>>(STORAGE_KEYS.syncOperations, {}),
+        this.readJson<Record<string, StoredSyncConflictRecord>>(STORAGE_KEYS.syncConflicts, {}),
       ]);
 
       if (!syncState) {
@@ -1468,6 +1607,31 @@ export class LocalDiaryRepository implements DiaryRepository {
         cursor = sequence;
       }
 
+      // A photo-only edit can be merged safely after another device wins the
+      // same entry version. Rebase it as a fresh operation because operation
+      // identities are immutable once the server has recorded a conflict.
+      let operationsChanged = false;
+      let conflictsChanged = false;
+      for (const [operationId, operation] of Object.entries(outbox)) {
+        const recordKey = `ENTRY:${operation.recordId}`;
+        const remoteCanonical = replicatedRecords[recordKey] as Entry | undefined;
+        const remoteVersion = versions[`entry:${operation.recordId}`] || 0;
+        if (!remoteCanonical) continue;
+        const rebase = buildConcurrentEntryPhotoRebase(operation, remoteCanonical, remoteVersion);
+        if (!rebase) continue;
+        outbox[operationId] = rebase.supersededOperation;
+        outbox[rebase.rebasedOperation.operationId] = rebase.rebasedOperation;
+        if (syncConflicts[rebase.conflictId]) {
+          syncConflicts[rebase.conflictId] = {
+            ...syncConflicts[rebase.conflictId],
+            state: 'RESOLVED',
+            resolvedAt: rebase.rebasedOperation.createdAt,
+          };
+          conflictsChanged = true;
+        }
+        operationsChanged = true;
+      }
+
       // The replicated versions above are the canonical base. Reapply optimistic
       // local mutations afterwards so replaying this device's own earlier event
       // cannot overwrite a newer edit that is still waiting in the outbox.
@@ -1516,7 +1680,6 @@ export class LocalDiaryRepository implements DiaryRepository {
           .map((operation) => operation.dependencyOperationId)
           .filter((operationId): operationId is string => Boolean(operationId)),
       );
-      let operationsCompacted = false;
       Object.entries(outbox).forEach(([operationId, operation]) => {
         if (
           operation.state === 'ACKNOWLEDGED' &&
@@ -1524,7 +1687,7 @@ export class LocalDiaryRepository implements DiaryRepository {
           !liveDependencies.has(operationId)
         ) {
           delete outbox[operationId];
-          operationsCompacted = true;
+          operationsChanged = true;
         }
       });
 
@@ -1543,7 +1706,8 @@ export class LocalDiaryRepository implements DiaryRepository {
         [SYNC_REPLAY_KEYS.versions]: replicatedVersions,
         [SYNC_REPLAY_KEYS.applied]: nextAudit.slice(-5_000),
         [SYNC_REPLAY_KEYS.media]: replicatedMedia,
-        ...(operationsCompacted ? { [STORAGE_KEYS.syncOperations]: outbox } : {}),
+        ...(operationsChanged ? { [STORAGE_KEYS.syncOperations]: outbox } : {}),
+        ...(conflictsChanged ? { [STORAGE_KEYS.syncConflicts]: syncConflicts } : {}),
       };
       const changeFactory = (contentRevision: number): RepositoryChange => ({
         type: 'remote-batch-applied',
@@ -1958,6 +2122,155 @@ export class LocalDiaryRepository implements DiaryRepository {
     });
   }
 
+  recoverConcurrentEntryPhotoConflicts(): Promise<number> {
+    return this.enqueueWrite(async () => {
+      const [
+        outbox,
+        versions,
+        replicatedRecords,
+        syncConflicts,
+        pointers,
+        account,
+        initialEntries,
+        diaries,
+      ] = await Promise.all([
+          this.readJson<Record<string, SyncOperation>>(STORAGE_KEYS.syncOperations, {}),
+          this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}),
+          this.readJson<Record<string, unknown>>(SYNC_REPLAY_KEYS.records, {}),
+          this.readJson<Record<string, StoredSyncConflictRecord>>(STORAGE_KEYS.syncConflicts, {}),
+          this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {}),
+          this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount),
+          this.readCollection<Entry>(STORAGE_KEYS.entries, []),
+          this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES)),
+        ]);
+      let entries = initialEntries;
+      const recoveredEntryIds: string[] = [];
+      let conflictsChanged = false;
+      for (const [operationId, operation] of Object.entries(outbox)) {
+        const remoteCanonical = replicatedRecords[`ENTRY:${operation.recordId}`] as
+          | Entry
+          | undefined;
+        if (!remoteCanonical) continue;
+        const rebase = buildConcurrentEntryPhotoRebase(
+          operation,
+          remoteCanonical,
+          versions[`entry:${operation.recordId}`] || 0,
+        );
+        if (!rebase) continue;
+        outbox[operationId] = rebase.supersededOperation;
+        outbox[rebase.rebasedOperation.operationId] = rebase.rebasedOperation;
+        entries = this.upsertRecord(entries, rebase.mergedEntry);
+        recoveredEntryIds.push(operation.recordId);
+        if (syncConflicts[rebase.conflictId]) {
+          syncConflicts[rebase.conflictId] = {
+            ...syncConflicts[rebase.conflictId],
+            state: 'RESOLVED',
+            resolvedAt: rebase.rebasedOperation.createdAt,
+          };
+          conflictsChanged = true;
+        }
+      }
+      if (account) {
+        for (const conflict of Object.values(syncConflicts)) {
+          if (
+            conflict.state !== 'UNRESOLVED' ||
+            conflict.recordType !== 'ENTRY' ||
+            outbox[conflict.operationId]
+          ) {
+            continue;
+          }
+          const localSource = entries.find((entry) => entry.id === conflict.recordId);
+          const remoteCanonical = replicatedRecords[`ENTRY:${conflict.recordId}`] as
+            | Entry
+            | undefined;
+          if (!localSource || !remoteCanonical) continue;
+          const remoteVersion = versions[`entry:${conflict.recordId}`] || 0;
+          const partitionKey = partitionKeyForRecordPayload('entry', localSource);
+          const restoredConflictOperation: SyncOperation = {
+            operationId: conflict.operationId,
+            accountId: account.accountId,
+            deviceId: account.deviceId,
+            partitionKey,
+            affectedPartitionKeys: [partitionKey],
+            recordType: 'ENTRY',
+            recordId: conflict.recordId,
+            operationType: 'UPSERT',
+            sourceCanonicalPayload: localSource,
+            preparedCanonicalPayload: canonicalizeEntryMedia(localSource, pointers),
+            baseRecordVersion: Number(conflict.localBaseVersion) || Math.max(0, remoteVersion - 1),
+            state: 'CONFLICT',
+            localApplied: true,
+            createdAt: Number(conflict.createdAt) || Date.now(),
+            updatedAt: Date.now(),
+            retryCount: 0,
+            nextAttemptAt: 0,
+          };
+          const rebase = buildConcurrentEntryPhotoRebase(
+            restoredConflictOperation,
+            remoteCanonical,
+            remoteVersion,
+          );
+          if (!rebase) continue;
+          outbox[conflict.operationId] = rebase.supersededOperation;
+          outbox[rebase.rebasedOperation.operationId] = rebase.rebasedOperation;
+          entries = this.upsertRecord(entries, rebase.mergedEntry);
+          recoveredEntryIds.push(conflict.recordId);
+          syncConflicts[rebase.conflictId] = {
+            ...syncConflicts[rebase.conflictId],
+            state: 'RESOLVED',
+            resolvedAt: rebase.rebasedOperation.createdAt,
+          };
+          conflictsChanged = true;
+        }
+      }
+      if (recoveredEntryIds.length === 0) return 0;
+
+      const diariesWithStats = this.withDiaryStats(diaries, entries);
+      const metadataItems = {
+        [STORAGE_KEYS.syncOperations]: outbox,
+        ...(conflictsChanged ? { [STORAGE_KEYS.syncConflicts]: syncConflicts } : {}),
+      };
+      const changeFactory = (contentRevision: number): RepositoryChange => ({
+        type: 'remote-batch-applied',
+        affectedRecords: recoveredEntryIds.map((recordId) => ({
+          recordType: 'entry' as const,
+          recordId,
+        })),
+        contentRevision,
+      });
+      let contentRevision: number;
+      if (this.store.commitStructuredRecords) {
+        contentRevision = await this.writeStructuredRecordsWithRevision(
+          [
+            ...recoveredEntryIds.map((recordId) => ({
+              key: STORAGE_KEYS.entries,
+              id: recordId,
+              value: entries.find((entry) => entry.id === recordId) || null,
+            })),
+            ...diariesWithStats.map((diary) => ({
+              key: STORAGE_KEYS.diaries,
+              id: diary.id,
+              value: diary,
+            })),
+          ],
+          metadataItems,
+          changeFactory,
+        );
+      } else {
+        contentRevision = await this.writePortableItems(
+          {
+            [STORAGE_KEYS.entries]: entries,
+            [STORAGE_KEYS.diaries]: diariesWithStats,
+            ...metadataItems,
+          },
+          changeFactory,
+        );
+      }
+      await this.emitSyncStatusChange(outbox, undefined, contentRevision);
+      return recoveredEntryIds.length;
+    });
+  }
+
   async listPreservedSyncConflicts(): Promise<PreservedSyncConflict[]> {
     const operations = await this.listSyncOutboxOperations(['CONFLICT']);
     const conflicts = await Promise.all(
@@ -2294,7 +2607,9 @@ export class LocalDiaryRepository implements DiaryRepository {
           recordType: input.recordType.toUpperCase() as SyncOperation['recordType'],
           recordId: input.recordId,
           operationType: input.operation === 'delete' ? 'DELETE' : 'UPSERT',
-          sourceCanonicalPayload: clone(syncPayload),
+          // Keep the device-local media references in the source payload so the
+          // operation preparer can upload them before producing its portable payload.
+          sourceCanonicalPayload: clone(input.localPayload),
           baseRecordVersion,
           dependencyOperationId: dependsOnOperationId,
           affectedRecords,
