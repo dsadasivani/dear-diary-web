@@ -116,7 +116,7 @@ test('entry autosave waits for remote idle publication and Done releases it imme
   assert.equal(requestedFlushes, 1);
 });
 
-test('syncing repository keeps native profile media locally but excludes it from the outbox', async () => {
+test('syncing repository keeps native profile media available to outbox preparation', async () => {
   const localRepository = new LocalDiaryRepository(new MemoryDataStore());
   await localRepository.initialize();
   await localRepository.saveLocalSyncAccountState({
@@ -143,7 +143,52 @@ test('syncing repository keeps native profile media locally but excludes it from
 
   assert.equal((await localRepository.getUserProfile()).avatarUri, nativeAvatar);
   const [operation] = await localRepository.listSyncOutboxOperations(['PENDING']);
-  assert.equal((operation.sourceCanonicalPayload as UserProfile).avatarUri, undefined);
+  assert.equal((operation.sourceCanonicalPayload as UserProfile).avatarUri, nativeAvatar);
+});
+
+test('entry media-only updates are saved locally and retained for outbox preparation', async () => {
+  const localRepository = new LocalDiaryRepository(new MemoryDataStore());
+  await localRepository.initialize();
+  await localRepository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    appliedSequence: 0,
+    linkedAt: 1,
+  });
+  const repository = createSyncingDiaryRepository(localRepository, {
+    requestOutboxFlush: () => undefined,
+    hydrateEntries: async (entries) => entries,
+  } as unknown as EventSyncEngine);
+  const diary = (await localRepository.listDiaries())[0];
+  const entry = await repository.createEntry({
+    diaryId: diary.id,
+    date: '2026-08-10',
+    title: 'Media draft',
+    body: '<p>Text was already saved.</p>',
+    moodName: 'Calm',
+    moodEmoji: '',
+    tags: [],
+    photoUris: [],
+  });
+  const nativePhoto =
+    'http://localhost/_capacitor_file_/data/user/0/com.deardiary.app/files/media/photo.webp';
+
+  const saved = await repository.updateEntry({
+    ...entry,
+    photoUris: [nativePhoto],
+    photoCount: 1,
+  });
+
+  assert.deepEqual(saved?.photoUris, [nativePhoto]);
+  assert.deepEqual((await localRepository.getEntry(entry.id))?.photoUris, [nativePhoto]);
+  const [operation] = await localRepository.listSyncOutboxOperations(['PENDING']);
+  assert.deepEqual((operation.sourceCanonicalPayload as { photoUris: string[] }).photoUris, [
+    nativePhoto,
+  ]);
 });
 
 test('account-wide reset tombstones local and archived work before creating one blank journal', async () => {

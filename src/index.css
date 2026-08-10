@@ -914,10 +914,6 @@ button:disabled {
   right: calc(1rem + var(--safe-area-inset-right));
 }
 
-.toast-safe {
-  top: calc(1.5rem + var(--safe-area-inset-top));
-}
-
 .focus-mode-safe {
   padding-top: calc(2rem + var(--safe-area-inset-top));
   padding-bottom: calc(7rem + var(--safe-area-inset-bottom));

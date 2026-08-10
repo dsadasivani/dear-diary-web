@@ -354,6 +354,7 @@ export interface DiaryRepository {
   ): Promise<void>;
   getSyncHealth(): Promise<SyncHealth>;
   updateSyncHealth(patch: SyncHealthPatch): Promise<SyncHealth>;
+  recoverConcurrentEntryPhotoConflicts(): Promise<number>;
   listPreservedSyncConflicts(): Promise<PreservedSyncConflict[]>;
   markSyncConflictResolved(operationId: string): Promise<void>;
   deleteSyncConflictRecoveredCopy(operationId: string): Promise<boolean>;

@@ -77,5 +77,6 @@ export const startWebGoogleSyncSignIn = async (): Promise<void> => {
 
 export const signOutWebGoogleSync = async (): Promise<void> => {
   const client = await getClient();
-  await client.auth.signOut();
+  const { error } = await client.auth.signOut({ scope: 'local' });
+  if (error) throw error;
 };

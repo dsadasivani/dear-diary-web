@@ -244,6 +244,13 @@ test('local app creates, edits, and deletes a diary entry through the UI', async
     .click();
   await expect(page.getByRole('dialog', { name: /leave this entry/i })).toBeVisible();
   await page.getByRole('button', { name: /save and leave/i }).click();
+  const savedSnackbar = page
+    .getByRole('status')
+    .filter({ hasText: /^Saved to this device$/ })
+    .last();
+  await expect(savedSnackbar).toBeVisible();
+  const snackbarBounds = await savedSnackbar.boundingBox();
+  expect(snackbarBounds?.y).toBeGreaterThan((page.viewportSize()?.height || 0) / 2);
   await expect(page.getByText(entryTitle).first()).toBeVisible();
 
   await page.getByTestId('entry-edit-button').first().click();
@@ -305,8 +312,14 @@ test('settings uses responsive section navigation and isolates section content',
   }
 
   await sectionNavigation.getByRole('button', { name: /Data & Storage/ }).click();
-  await expect(page.getByText('Cloud storage', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Storage overview', { exact: true })).toBeVisible();
   await expect(page.getByText('On this device', { exact: true })).toBeVisible();
+  await expect(page.getByText('Available offline', { exact: true })).toBeVisible();
+  await expect(page.getByText('Cloud', { exact: true })).toBeVisible();
+  await expect(page.getByText('Available in cloud', { exact: true })).toBeVisible();
+  await expect(page.locator('section[aria-label="Cloud storage"]')).toContainText(
+    /500 MB|Not connected/,
+  );
   await expect(page.getByText('Delete all saved content')).toBeVisible();
   await expect(page.getByText(/deletion syncs to every linked device/i)).toBeVisible();
   await page.getByRole('button', { name: 'Review clear action' }).click();

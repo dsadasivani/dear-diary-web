@@ -151,6 +151,7 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     private readonly puller: RemoteEventPuller,
     private readonly processor: SyncOperationProcessor,
     private readonly recoverBlockedDeletes: () => Promise<void>,
+    private readonly recoverConcurrentEntryPhotos: () => Promise<number>,
     private readonly assertAuthorized: (() => Promise<void>) | null,
     private readonly onError: (context: string, error: unknown) => void | Promise<void>,
     private readonly recoverUnknownPullStop: () => Promise<boolean>,
@@ -198,7 +199,10 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     this.pullInFlight = (async () => {
       try {
         await this.start();
-        if (this.pullAllowed) await this.puller.pull();
+        if (this.pullAllowed) {
+          await this.puller.pull();
+          if ((await this.recoverConcurrentEntryPhotos()) > 0) this.requestOutboxFlush();
+        }
       } catch (error) {
         await this.onError('sync.pull', error);
         throw error;
@@ -215,12 +219,23 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
         await this.start();
         if (!this.writesAllowed) return;
         if (this.pullAllowed) await this.recoverBlockedDeletes();
-        for (
+        await this.recoverConcurrentEntryPhotos();
+        const drain = async (): Promise<number> => {
           let count = 0;
-          count < MAX_WORK_PER_FLUSH && (await this.processor.runOnce());
-          count += 1
-        ) {
-          /* bounded drain */
+          while (count < MAX_WORK_PER_FLUSH && (await this.processor.runOnce())) count += 1;
+          return count;
+        };
+        const firstPassCount = await drain();
+        if (this.pullAllowed && firstPassCount > 0) {
+          // A simultaneous write may have conflicted after preparation. Pulling
+          // here lets repository replay auto-rebase safe photo-only conflicts.
+          await this.puller.pull();
+          await this.recoverConcurrentEntryPhotos();
+          const rebasedCount = await drain();
+          if (rebasedCount > 0) {
+            await this.puller.pull();
+            await this.recoverConcurrentEntryPhotos();
+          }
         }
       } catch (error) {
         await this.onError('sync.outbox', error);
@@ -877,7 +892,6 @@ export class SyncApplicationLifecycle {
       `device-revoke-self:${account.deviceId}`,
     );
     await api.revokeSelf(account.deviceId, possessionSignature);
-    await signOutGoogleAuth().catch(() => undefined);
     await this.handleDeviceRevoked();
   }
 
@@ -940,6 +954,10 @@ export class SyncApplicationLifecycle {
       await this.delegate?.stop();
       this.engine.installRuntimeDelegate(null);
       this.delegate = null;
+      // Revoke the local Google/Supabase app session while its persisted
+      // credentials are still available. This covers both companion self-unlink
+      // and revocation detected after the primary mobile removes this device.
+      await signOutGoogleAuth().catch(() => undefined);
       await clearSyncSecrets();
       await this.repository.clearLocalSyncAccountState();
       await clearSyncLocalCache(this.store);
@@ -1173,12 +1191,16 @@ export class SyncApplicationLifecycle {
     const pullWorker = new IntervalWorker(
       async () => {
         await puller.pull();
+        if ((await this.repository.recoverConcurrentEntryPhotoConflicts()) > 0) {
+          this.engine.requestOutboxFlush();
+        }
       },
       90_000,
       handleWorkerError('sync.pull.worker'),
     );
     const outboxWorker = new IntervalWorker(
       async () => {
+        await this.repository.recoverConcurrentEntryPhotoConflicts();
         for (let count = 0; count < MAX_WORK_PER_FLUSH && (await processor.runOnce()); count += 1) {
           /* bounded drain */
         }
@@ -1246,6 +1268,7 @@ export class SyncApplicationLifecycle {
           outbox: this.outbox,
           pullLatest: () => puller.pull().then(() => undefined),
         }).then(() => undefined),
+      () => this.repository.recoverConcurrentEntryPhotoConflicts(),
       assertAuthorized,
       (context, error) => this.handleRuntimeError(context, error),
       () => safety.clearRecoverableUnknownPull(account.accountId),
