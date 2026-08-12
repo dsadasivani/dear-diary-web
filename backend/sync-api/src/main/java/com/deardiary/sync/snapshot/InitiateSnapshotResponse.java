@@ -9,12 +9,14 @@ public record InitiateSnapshotResponse(
     UUID snapshotId,
     String status,
     boolean existing,
-    Upload upload
+    Upload upload,
+    List<Upload> uploads
 ) {
     public record Upload(
         String objectKey,
         String uploadUrl,
         Map<String, List<String>> headers,
-        Instant expiresAt
+        Instant expiresAt,
+        boolean uploaded
     ) {}
 }

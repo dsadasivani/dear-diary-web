@@ -9,13 +9,7 @@ import type {
   LocalQueryPageResult,
   LocalStructuredRecordMutation,
 } from '../platform/storage';
-import type {
-  AppSettings,
-  Entry,
-  Note,
-  SecurityConfig,
-  UserProfile,
-} from '../types';
+import type { AppSettings, Entry, Note, SecurityConfig, UserProfile } from '../types';
 import { LocalDiaryRepository } from './localDiaryRepository';
 import { createSyncDomainEvent } from '../sync/domainEvents';
 import { pageEntries, pageNotes } from '../platform/storage/queryPagination';
@@ -88,6 +82,30 @@ class RecordingMemoryDataStore extends MemoryDataStore {
     await super.setItems(items);
   }
 }
+
+class StructuredPresenceMemoryDataStore extends MemoryDataStore {
+  readonly collectionGetItemCalls: string[] = [];
+
+  async hasStructuredCollection(key: string): Promise<true | undefined> {
+    return ['deardiary_diaries', 'deardiary_entries', 'deardiary_notes'].includes(key)
+      ? true
+      : undefined;
+  }
+
+  override async getItem(key: string): Promise<string | null> {
+    if (['deardiary_diaries', 'deardiary_entries', 'deardiary_notes'].includes(key)) {
+      this.collectionGetItemCalls.push(key);
+    }
+    return super.getItem(key);
+  }
+}
+
+test('initialization checks structured collection presence without deserializing all records', async () => {
+  const store = new StructuredPresenceMemoryDataStore();
+  await new LocalDiaryRepository(store).initialize();
+
+  assert.deepEqual(store.collectionGetItemCalls, []);
+});
 
 test('persists sync health across repository restarts without exposing it only through React state', async () => {
   const store = new MemoryDataStore();
@@ -780,10 +798,9 @@ test('uses atomic structured record and outbox commit for local-first note mutat
   assert.equal(outbox.length, 1);
   assert.equal(outbox[0].operationId, 'op-structured-local');
   assert.equal(outbox[0].state, 'PENDING');
-  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
-    string,
-    SyncOperation
-  >;
+  const operations = JSON.parse(
+    (await store.getItem('deardiary_sync_operations')) || '{}',
+  ) as Record<string, SyncOperation>;
   assert.equal(operations['op-structured-local'].recordType, 'NOTE');
   assert.equal(operations['op-structured-local'].operationType, 'UPSERT');
   assert.equal(operations['op-structured-local'].baseRecordVersion, 0);
@@ -958,6 +975,41 @@ test('initializes settings, profile, security, and local revision metadata', asy
   const backup = await repository.getLocalRepositoryMetadata();
   assert.ok(backup.deviceId);
   assert.equal(backup.contentRevision, 0);
+});
+
+test('does not expose an interrupted sync runtime journal as a linked account', async () => {
+  const store = new MemoryDataStore();
+  const repository = new LocalDiaryRepository(store);
+  await repository.initialize();
+  await store.setItem(
+    'deardiary_sync_account',
+    JSON.stringify({
+      accountId: 'account-1',
+      deviceId: 'device-1',
+      deviceStatus: 'ACTIVE',
+      protocolVersion: 4,
+      eventSchemaVersion: 1,
+      keyEpoch: 1,
+      appliedSequence: 0,
+      updatedAt: Date.now(),
+    }),
+  );
+
+  assert.equal(await repository.getLocalSyncAccountState(), null);
+
+  await repository.saveLocalSyncAccountState({
+    accountId: 'account-1',
+    deviceId: 'device-1',
+    deviceRole: 'primary_mobile',
+    googleUserId: 'google-1',
+    googleEmail: 'writer@example.com',
+    devicePublicKey: '{}',
+    appliedSequence: 0,
+    keyEpoch: 1,
+    linkedAt: Date.now(),
+  });
+
+  assert.equal((await repository.getLocalSyncAccountState())?.deviceRole, 'primary_mobile');
 });
 
 test('persists device-local PIN lockout state', async () => {
@@ -1139,10 +1191,7 @@ test('atomically applies a remote event batch and rejects an invalid version cha
     2,
   );
   assert.equal((await repository.getLocalSyncAccountState())?.appliedSequence, 2);
-  assert.equal(
-    JSON.parse((await store.getItem('deardiary_sync_account'))!).appliedSequence,
-    2,
-  );
+  assert.equal(JSON.parse((await store.getItem('deardiary_sync_account'))!).appliedSequence, 2);
   assert.equal((await repository.getNote('note-batch-1'))?.title, 'First');
   assert.equal((await repository.getNote('note-batch-2'))?.title, 'Second');
 
@@ -1322,9 +1371,9 @@ test('rebases concurrent photo-only entry conflicts with both device attachments
     account,
     localPayload: localEntry,
   });
-  const localOperation = (
-    await repository.listSyncOutboxOperations(['PENDING'])
-  ).find((operation) => operation.operationId === 'operation-mobile-photo')!;
+  const localOperation = (await repository.listSyncOutboxOperations(['PENDING'])).find(
+    (operation) => operation.operationId === 'operation-mobile-photo',
+  )!;
   await repository.saveSyncOutboxOperation({
     ...localOperation,
     state: 'CONFLICT',
@@ -1413,9 +1462,7 @@ test('rebases concurrent photo-only entry conflicts with both device attachments
   for (const operation of await repository.listSyncOutboxOperations()) {
     await repository.removeSyncOutboxOperation(operation.operationId);
   }
-  const storedConflicts = JSON.parse(
-    (await store.getItem('deardiary_sync_conflicts')) || '{}',
-  );
+  const storedConflicts = JSON.parse((await store.getItem('deardiary_sync_conflicts')) || '{}');
   storedConflicts['sync-conflict:operation-missing-outbox'] = {
     conflictId: 'sync-conflict:operation-missing-outbox',
     operationId: 'operation-missing-outbox',
@@ -1751,10 +1798,9 @@ test('atomically applies a local note mutation with its durable outbox operation
   assert.equal(operation.localApplied, true);
   assert.equal(operation.recordId, note.id);
   assert.deepEqual(operation.sourceCanonicalPayload, note);
-  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
-    string,
-    SyncOperation
-  >;
+  const operations = JSON.parse(
+    (await store.getItem('deardiary_sync_operations')) || '{}',
+  ) as Record<string, SyncOperation>;
   assert.equal(operations['operation-local-first'].recordType, 'NOTE');
   assert.equal(operations['operation-local-first'].state, 'PENDING');
   assert.equal(operations['operation-local-first'].baseRecordVersion, 0);
@@ -1886,10 +1932,9 @@ test('chains same-record local mutations once an earlier outbox operation is in 
   assert.equal(secondOperation?.baseRecordVersion, 1);
   assert.equal((secondOperation?.sourceCanonicalPayload as Note | undefined)?.title, 'Second edit');
   assert.equal((await repository.getNote(note.id))?.title, 'Second edit');
-  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
-    string,
-    SyncOperation
-  >;
+  const operations = JSON.parse(
+    (await store.getItem('deardiary_sync_operations')) || '{}',
+  ) as Record<string, SyncOperation>;
   assert.equal(operations['operation-chain-2'].dependencyOperationId, 'operation-chain-1');
   assert.equal(operations['operation-chain-2'].baseRecordVersion, 1);
 });
@@ -1925,10 +1970,9 @@ test('rapid same-record saves never reset an in-flight operation', async () => {
     account,
     localPayload: note,
   });
-  const firstOperations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
-    string,
-    SyncOperation
-  >;
+  const firstOperations = JSON.parse(
+    (await store.getItem('deardiary_sync_operations')) || '{}',
+  ) as Record<string, SyncOperation>;
   await store.setItem(
     'deardiary_sync_operations',
     JSON.stringify({
@@ -1951,10 +1995,9 @@ test('rapid same-record saves never reset an in-flight operation', async () => {
     localPayload: { ...note, title: 'Second', updatedAt: 20 },
   });
 
-  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
-    string,
-    SyncOperation
-  >;
+  const operations = JSON.parse(
+    (await store.getItem('deardiary_sync_operations')) || '{}',
+  ) as Record<string, SyncOperation>;
   assert.equal(operations['operation-rapid-1'].state, 'UPLOADING');
   assert.equal(operations['operation-rapid-1'].leaseOwner, 'worker-1');
   assert.equal(operations['operation-rapid-2'].state, 'PENDING');
@@ -2125,10 +2168,9 @@ test('keeps local-first mutations and pending outbox rows after repository resta
   assert.equal(operation.operationId, 'operation-restart');
   assert.equal(operation.localApplied, true);
   assert.deepEqual(operation.sourceCanonicalPayload, note);
-  const operations = JSON.parse((await store.getItem('deardiary_sync_operations')) || '{}') as Record<
-    string,
-    SyncOperation
-  >;
+  const operations = JSON.parse(
+    (await store.getItem('deardiary_sync_operations')) || '{}',
+  ) as Record<string, SyncOperation>;
   assert.equal(operations['operation-restart'].state, 'PENDING');
 });
 
@@ -2187,16 +2229,16 @@ test('replays an acknowledged mutation without overwriting a newer pending edit'
     eventId: 'operation-ack',
   });
 
-  await repository.applyRemoteEventBatch(
-    [{ event, sequence: 3, operationId: 'operation-ack' }],
-    2,
-  );
+  await repository.applyRemoteEventBatch([{ event, sequence: 3, operationId: 'operation-ack' }], 2);
 
   assert.equal((await repository.getNote(note.id))?.title, 'Newer local title');
   assert.equal(await repository.getSyncRecordVersion('note', note.id), 1);
   assert.equal((await repository.getLocalSyncAccountState())?.appliedSequence, 3);
   const remaining = await repository.listSyncOutboxOperations();
-  assert.equal(remaining.some((operation) => operation.operationId === 'operation-ack'), false);
+  assert.equal(
+    remaining.some((operation) => operation.operationId === 'operation-ack'),
+    false,
+  );
   assert.equal(
     remaining.find((operation) => operation.operationId === 'operation-after-ack')
       ?.baseRecordVersion,

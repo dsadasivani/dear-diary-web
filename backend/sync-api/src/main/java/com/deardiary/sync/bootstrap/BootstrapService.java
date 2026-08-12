@@ -86,7 +86,7 @@ public class BootstrapService {
                         || !java.util.Objects.equals(existing.pairingId(), request.pairingId())) {
                     throw conflict("IDEMPOTENCY_MISMATCH", "The bootstrap identifier has different metadata.");
                 }
-                return response(existing);
+                return response(account.accountId(), existing);
             }
             requireBootstrapDevice(account.accountId(), request.deviceId(), request.pairingId());
             var state = accountState(account.accountId());
@@ -119,6 +119,19 @@ public class BootstrapService {
                 """, account.accountId(), request.bootstrapId(), request.deviceId(), request.pairingId(),
                 snapshot.snapshotId(), snapshot.sequence(), state.headSequence(), account.accountId(),
                 snapshot.sequence(), state.headSequence(), snapshot.keyEpoch(), expires, now);
+            // A stale device can have acknowledged events newer than the pinned
+            // snapshot. Rebootstrap intentionally replaces its local canonical
+            // state, so pin its server cursor to the same verified restore point.
+            // Active bootstraps block retention until completion or expiry.
+            jdbc.update("""
+                UPDATE sync_device_cursors c
+                SET last_applied_sequence = LEAST(c.last_applied_sequence, ?),
+                    last_acknowledged_at = ?
+                FROM sync_devices d
+                WHERE c.account_id = ? AND c.device_id = ?
+                  AND d.account_id = c.account_id AND d.device_id = c.device_id
+                  AND d.rebootstrap_required = TRUE
+                """, snapshot.sequence(), now, account.accountId(), request.deviceId());
             if (request.pairingId() != null) {
                 jdbc.update("""
                     UPDATE sync_pairing_requests SET pairing_status = 'BOOTSTRAP_READY'
@@ -126,14 +139,14 @@ public class BootstrapService {
                       AND pairing_status IN ('KEY_PACKAGE_AVAILABLE', 'ACTIVATING', 'BOOTSTRAP_READY')
                     """, account.accountId(), request.pairingId());
             }
-            return response(load(account.accountId(), request.bootstrapId(), false));
+            return response(account.accountId(), load(account.accountId(), request.bootstrapId(), false));
         });
     }
 
     public BootstrapManifestResponse get(String ownerSubject, UUID bootstrapId) {
         var account = accounts.requireActiveAccount(ownerSubject);
         expire(account.accountId(), bootstrapId);
-        return response(load(account.accountId(), bootstrapId, false));
+        return response(account.accountId(), load(account.accountId(), bootstrapId, false));
     }
 
     public BootstrapManifestResponse complete(
@@ -143,7 +156,7 @@ public class BootstrapService {
         return transactions.execute(status -> {
             lockAccount(account.accountId());
             var row = load(account.accountId(), bootstrapId, true);
-            if ("COMPLETED".equals(row.status())) return response(row);
+            if ("COMPLETED".equals(row.status())) return response(account.accountId(), row);
             if (OffsetDateTime.now(clock).isAfter(row.expiresAt())) {
                 markExpired(account.accountId(), bootstrapId);
                 throw conflict("BOOTSTRAP_EXPIRED", "The bootstrap manifest expired.");
@@ -154,7 +167,8 @@ public class BootstrapService {
             }
             var device = jdbc.queryForObject("""
                 SELECT device_public_key FROM sync_devices
-                WHERE account_id = ? AND device_id = ? AND device_status = 'RECOVERY_PENDING'
+                WHERE account_id = ? AND device_id = ?
+                  AND device_status IN ('ACTIVE', 'RECOVERY_PENDING')
                 FOR UPDATE
                 """, byte[].class, account.accountId(), request.deviceId());
             verifySignature(device, completionMessage(row), request.possessionSignature());
@@ -180,18 +194,37 @@ public class BootstrapService {
                     WHERE account_id = ? AND pairing_id = ?
                     """, now, account.accountId(), row.pairingId());
             }
-            return response(load(account.accountId(), bootstrapId, false));
+            return response(account.accountId(), load(account.accountId(), bootstrapId, false));
         });
     }
 
-    private BootstrapManifestResponse response(BootstrapRow row) {
+    private BootstrapManifestResponse response(UUID accountId, BootstrapRow row) {
         String downloadUrl = null;
         java.time.Instant downloadExpiresAt = null;
+        var chunks = new ArrayList<BootstrapManifestResponse.Snapshot.Chunk>();
         if (!"EXPIRED".equals(row.status()) && !"FAILED".equals(row.status())) {
             try {
-                var download = objectStore.createDownload(new ObjectKey(row.objectKey()));
-                downloadUrl = download.url().toString();
-                downloadExpiresAt = download.expiresAt();
+                var persisted = jdbc.query("""
+                    SELECT chunk_index, object_key, sha256, size_bytes, key_epoch
+                    FROM sync_snapshot_chunks
+                    WHERE account_id = ? AND snapshot_id = ? ORDER BY chunk_index
+                    """, (rs, index) -> new Object[] { rs.getInt(1), rs.getString(2),
+                        rs.getString(3), rs.getLong(4), rs.getInt(5) }, accountId, row.snapshotId());
+                for (var chunk : persisted) {
+                    var download = objectStore.createDownload(new ObjectKey((String) chunk[1]));
+                    chunks.add(new BootstrapManifestResponse.Snapshot.Chunk(
+                        (Integer) chunk[0], (String) chunk[1], (String) chunk[2],
+                        (Long) chunk[3], (Integer) chunk[4], download.url().toString(),
+                        download.expiresAt()));
+                }
+                if (chunks.isEmpty()) {
+                    var download = objectStore.createDownload(new ObjectKey(row.objectKey()));
+                    downloadUrl = download.url().toString();
+                    downloadExpiresAt = download.expiresAt();
+                } else {
+                    downloadUrl = chunks.getFirst().downloadUrl();
+                    downloadExpiresAt = chunks.getFirst().downloadExpiresAt();
+                }
             } catch (ObjectStoreException error) {
                 throw new ApiException(error.code(), HttpStatus.SERVICE_UNAVAILABLE,
                     "The pinned snapshot is temporarily unavailable.", true, false, Map.of());
@@ -202,7 +235,7 @@ public class BootstrapService {
             new BootstrapManifestResponse.Snapshot(
                 row.snapshotId(), "AVAILABLE", row.snapshotSequence(), row.partitionKey(), row.objectKey(),
                 row.sha256(), row.sizeBytes(), row.keyEpoch(), row.snapshotSchemaVersion(),
-                row.metadataSignature(), downloadUrl, downloadExpiresAt),
+                row.metadataSignature(), downloadUrl, downloadExpiresAt, List.copyOf(chunks)),
             row.headSequence(), row.minimumAvailableSequence(), row.requiredKeyEpochs(),
             Math.toIntExact(row.headSequence() - row.snapshotSequence()),
             row.expiresAt().toInstant(),

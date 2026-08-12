@@ -1,6 +1,8 @@
 import type { Entry, Note } from '../../types';
 import type {
   LocalDataStore,
+  LocalCanonicalSnapshotPage,
+  LocalCanonicalSnapshotRecord,
   LocalEntryProjection,
   LocalEntryQueryOptions,
   LocalNoteProjection,
@@ -11,6 +13,8 @@ import type {
 import { pageEntries, pageNotes } from './queryPagination';
 import {
   commitEncryptedStoreBatch,
+  clearEncryptedSnapshotRestoreStage,
+  commitEncryptedSnapshotRestore,
   getPlainIndexRecords,
   queryIndexToken,
   queryIndexTokens,
@@ -18,9 +22,14 @@ import {
   WEB_QUERY_INDEX_STORES,
   WEB_RECORD_STORES,
   WebEncryptedKeyValueStore,
+  snapshotRestoreStageKey,
   type EncryptedStoreBatch,
 } from './webEncryptedKeyValueStore';
-import { richTextHtmlToPlainText } from '../../domain/richTextSanitizer';
+import {
+  richTextHtmlToPlainText,
+  sanitizeEntry,
+  sanitizeNote,
+} from '../../domain/richTextSanitizer';
 import { toLocalDateKey } from '../../utils/localDate';
 
 interface EntryQueryIndexRecord {
@@ -87,7 +96,10 @@ const STRUCTURED_COLLECTIONS: Record<string, StructuredStorageSpec> = {
     recordKey: 'sync_account',
   },
   deardiary_sync_record_versions: { kind: 'map', storeName: WEB_RECORD_STORES.versions },
+  deardiary_sync_records: { kind: 'map', storeName: WEB_RECORD_STORES.canonicalRecords },
+  deardiary_sync_base_versions: { kind: 'map', storeName: WEB_RECORD_STORES.baseVersions },
   deardiary_sync_media_pointers: { kind: 'map', storeName: WEB_RECORD_STORES.mediaPointers },
+  deardiary_sync_base_media: { kind: 'map', storeName: WEB_RECORD_STORES.baseMedia },
   deardiary_sync_partition_hydration: { kind: 'map', storeName: WEB_RECORD_STORES.partitions },
   deardiary_sync_operations: { kind: 'map', storeName: WEB_RECORD_STORES.operations },
 };
@@ -293,11 +305,19 @@ export class WebLocalDataStore implements LocalDataStore {
     return records ?? undefined;
   }
 
-  async getStructuredRecord<T>(key: string, id: string): Promise<T | null | undefined> {
+  async hasStructuredCollection(key: string): Promise<true | undefined> {
     this.requireEncryptedBrowserStorage();
     if (this.useTestFallback) return undefined;
     const spec = STRUCTURED_COLLECTIONS[key];
     if (!spec || spec.kind !== 'array') return undefined;
+    return (await this.metadataStore.hasItem(metadataKeyForCollection(key))) || undefined;
+  }
+
+  async getStructuredRecord<T>(key: string, id: string): Promise<T | null | undefined> {
+    this.requireEncryptedBrowserStorage();
+    if (this.useTestFallback) return undefined;
+    const spec = STRUCTURED_COLLECTIONS[key];
+    if (!spec || spec.kind === 'single') return undefined;
     const metadata = await this.getStructuredMetadata(key, spec);
     if (!metadata) return undefined;
     const raw = await new WebEncryptedKeyValueStore(spec.storeName).getItem(id);
@@ -367,6 +387,160 @@ export class WebLocalDataStore implements LocalDataStore {
     input.records.forEach((record) => removeLegacyLocalStorageItem(record.key));
     Object.keys(input.items || {}).forEach(removeLegacyLocalStorageItem);
     removeLegacyLocalStorageItem('deardiary_sync_operations');
+  }
+
+  async queryCanonicalSnapshotPage(options: {
+    cursor?: string;
+    limit: number;
+  }): Promise<LocalCanonicalSnapshotPage | undefined> {
+    this.requireEncryptedBrowserStorage();
+    if (this.useTestFallback) return undefined;
+    await this.ensureCanonicalSnapshotMaps();
+    const specs = [
+      { kind: 'record' as const, storeName: WEB_RECORD_STORES.canonicalRecords },
+      { kind: 'recordVersion' as const, storeName: WEB_RECORD_STORES.baseVersions },
+      { kind: 'mediaPointer' as const, storeName: WEB_RECORD_STORES.baseMedia },
+    ];
+    const separator = options.cursor?.indexOf('\u0000') ?? -1;
+    const startKind = separator >= 0 ? Number(options.cursor!.slice(0, separator)) : 0;
+    const startKey = separator >= 0 ? options.cursor!.slice(separator + 1) : undefined;
+    const records: LocalCanonicalSnapshotRecord[] = [];
+    let lastKind = startKind;
+    let lastKey = startKey;
+    for (
+      let kindIndex = startKind;
+      kindIndex < specs.length && records.length < options.limit;
+      kindIndex += 1
+    ) {
+      const spec = specs[kindIndex];
+      const page = await new WebEncryptedKeyValueStore(spec.storeName).getPage(
+        kindIndex === startKind ? startKey : undefined,
+        options.limit - records.length,
+      );
+      for (const [key, raw] of page) {
+        records.push({ kind: spec.kind, key, value: parseJson<unknown>(raw) });
+        lastKind = kindIndex;
+        lastKey = key;
+      }
+    }
+    return {
+      records,
+      nextCursor:
+        records.length === options.limit && lastKey !== undefined
+          ? `${lastKind}\u0000${lastKey}`
+          : undefined,
+    };
+  }
+
+  private async ensureCanonicalSnapshotMaps(): Promise<void> {
+    for (const key of [
+      'deardiary_sync_records',
+      'deardiary_sync_base_versions',
+      'deardiary_sync_base_media',
+    ]) {
+      const spec = STRUCTURED_COLLECTIONS[key];
+      if (!spec || spec.kind !== 'map') continue;
+      if (await this.metadataStore.hasItem(metadataKeyForCollection(key))) continue;
+      const compatibility = await this.encryptedStore.getItem(key);
+      await this.setItem(key, compatibility || '{}');
+    }
+  }
+
+  async clearCanonicalSnapshotRestoreStage(snapshotId: string): Promise<void> {
+    this.requireEncryptedBrowserStorage();
+    if (this.useTestFallback) return;
+    await clearEncryptedSnapshotRestoreStage(snapshotId);
+  }
+
+  async stageCanonicalSnapshotRestoreRecords(
+    snapshotId: string,
+    records: LocalCanonicalSnapshotRecord[],
+  ): Promise<void> {
+    this.requireEncryptedBrowserStorage();
+    if (this.useTestFallback) return;
+    const batch: EncryptedStoreBatch = { puts: [], plainPuts: [] };
+    const stagePut = (kind: string, key: string, value: unknown): void => {
+      batch.puts!.push({
+        storeName: WEB_RECORD_STORES.snapshotStage,
+        key: snapshotRestoreStageKey(snapshotId, kind, key),
+        value: JSON.stringify(value),
+      });
+    };
+    for (const record of records) {
+      if (record.kind === 'recordVersion') {
+        stagePut('baseVersion', record.key, record.value);
+        continue;
+      }
+      if (record.kind === 'mediaPointer') {
+        stagePut('baseMedia', record.key, record.value);
+        stagePut('mediaDetail', record.key, {
+          mediaId: record.key,
+          sequence: 0,
+          driveFileId: record.value,
+          sha256: '',
+          sizeBytes: 0,
+          createdByDeviceId: 'snapshot',
+          createdAt: new Date(0).toISOString(),
+        });
+        continue;
+      }
+      const separator = record.key.indexOf(':');
+      const type = record.key.slice(0, separator);
+      const id = record.key.slice(separator + 1);
+      stagePut('record', record.key, record.value);
+      let value = record.value;
+      if (type === 'ENTRY') value = sanitizeEntry(record.value as Entry);
+      if (type === 'NOTE') value = sanitizeNote(record.value as Note);
+      if (type === 'SETTINGS') {
+        const current = JSON.parse((await this.getItem('deardiary_settings')) || '{}') as Record<
+          string,
+          unknown
+        >;
+        const incoming = value as Record<string, unknown>;
+        value = {
+          ...current,
+          customTags: incoming.customTags,
+          customMoods: incoming.customMoods,
+          theme: current.theme,
+        };
+        stagePut('settingsApp', id, value);
+      }
+      if (type === 'ENTRY') {
+        const entry = value as Entry;
+        stagePut('entryApp', id, entry);
+        stagePut('entryProjection', id, entryProjection(entry));
+        batch.plainPuts!.push({
+          storeName: WEB_RECORD_STORES.snapshotStage,
+          key: snapshotRestoreStageKey(snapshotId, 'entryIndex', id),
+          value: await entryQueryIndexRecord(entry),
+        });
+      }
+      if (type === 'NOTE') {
+        const note = value as Note;
+        stagePut('noteApp', id, note);
+        stagePut('noteProjection', id, noteProjection(note));
+        batch.plainPuts!.push({
+          storeName: WEB_RECORD_STORES.snapshotStage,
+          key: snapshotRestoreStageKey(snapshotId, 'noteIndex', id),
+          value: await noteQueryIndexRecord(note),
+        });
+      }
+      if (type === 'DIARY') stagePut('diaryApp', id, value);
+      if (type === 'PROFILE') stagePut('profileApp', id, value);
+    }
+    await commitEncryptedStoreBatch(batch);
+  }
+
+  async commitCanonicalSnapshotRestore(input: {
+    snapshotId: string;
+    runtimeKey: string;
+    runtimeValue: string;
+    appliedKey: string;
+    appliedValue: string;
+  }): Promise<void> {
+    this.requireEncryptedBrowserStorage();
+    if (this.useTestFallback) return;
+    await commitEncryptedSnapshotRestore(input);
   }
 
   async queryEntries(
@@ -970,7 +1144,25 @@ export class WebLocalDataStore implements LocalDataStore {
     const ordersByKey = new Map<string, string[]>();
     for (const record of records) {
       const spec = STRUCTURED_COLLECTIONS[record.key];
-      if (!spec || spec.kind !== 'array') continue;
+      if (!spec || spec.kind === 'single') continue;
+      if (spec.kind === 'map') {
+        batch.deletes!.push({ storeName: REPOSITORY_STORE, key: record.key });
+        if (record.value === null) {
+          batch.deletes!.push({ storeName: spec.storeName, key: record.id });
+        } else {
+          batch.puts!.push({
+            storeName: spec.storeName,
+            key: record.id,
+            value: JSON.stringify(record.value),
+          });
+        }
+        batch.puts!.push({
+          storeName: WEB_RECORD_STORES.metadata,
+          key: metadataKeyForCollection(record.key),
+          value: JSON.stringify({ ready: true, kind: spec.kind, updatedAt: Date.now() }),
+        });
+        continue;
+      }
       await this.ensureProjectionStore(record.key);
       if (!ordersByKey.has(record.key)) {
         const store = new WebEncryptedKeyValueStore(spec.storeName);

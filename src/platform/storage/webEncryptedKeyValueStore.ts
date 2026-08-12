@@ -1,5 +1,5 @@
 const DATABASE_NAME = 'dear_diary_secure_v1';
-const DATABASE_VERSION = 8;
+const DATABASE_VERSION = 11;
 const KEY_STORE = 'keys';
 const WRAPPING_KEY_ID = 'root';
 const QUERY_INDEX_KEY_ID = 'query_index_hmac';
@@ -14,8 +14,12 @@ export const WEB_RECORD_STORES = {
   metadata: 'repository_metadata',
   operations: 'repository_sync_operations',
   versions: 'repository_versions',
+  canonicalRecords: 'repository_sync_canonical_records',
+  baseVersions: 'repository_sync_base_versions',
   mediaPointers: 'repository_media_pointers',
+  baseMedia: 'repository_sync_base_media',
   partitions: 'repository_partitions',
+  snapshotStage: 'repository_snapshot_restore_stage',
 } as const;
 export const WEB_QUERY_INDEX_STORES = {
   entries: 'repository_entry_index',
@@ -67,8 +71,19 @@ let queryIndexKeyPromise: Promise<CryptoKey> | null = null;
 
 const openDatabase = (): Promise<IDBDatabase> => {
   if (!databasePromise) {
-    databasePromise = new Promise((resolve, reject) => {
+    const pending = new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+      let settled = false;
+      const timeout = setTimeout(() => {
+        settled = true;
+        reject(new Error('Encrypted browser storage took too long to open. Close older tabs and try again.'));
+      }, 15_000);
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      };
       request.onupgradeneeded = (event) => {
         const oldVersion = event.oldVersion;
         [KEY_STORE, SYNC_SECRET_STORE, REPOSITORY_STORE].forEach((store) => {
@@ -111,9 +126,27 @@ const openDatabase = (): Promise<IDBDatabase> => {
         ensureIndex(noteIndexStore, 'tagTokens', 'tagTokens', { multiEntry: true });
         ensureIndex(noteIndexStore, 'searchTokens', 'searchTokens', { multiEntry: true });
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        if (settled) {
+          request.result.close();
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        resolve(request.result);
+      };
+      request.onblocked = () =>
+        fail(
+          new Error(
+            'Encrypted browser storage is open in another tab. Close older Loredays tabs and try again.',
+          ),
+        );
       request.onerror = () =>
-        reject(request.error || new Error('Encrypted browser storage could not be opened.'));
+        fail(request.error || new Error('Encrypted browser storage could not be opened.'));
+    });
+    databasePromise = pending.catch((error) => {
+      databasePromise = null;
+      throw error;
     });
   }
   return databasePromise;
@@ -242,27 +275,37 @@ export const commitEncryptedStoreBatch = async ({
 
   const database = await openDatabase();
   const transaction = database.transaction(storeNames, 'readwrite');
-  [...clears, ...plainClears].forEach((storeName) => {
-    transaction.objectStore(storeName).clear();
-  });
-  encryptedPuts.forEach(({ storeName, key, encrypted }) => {
-    transaction.objectStore(storeName).put(encrypted, key);
-  });
-  plainPuts.forEach(({ storeName, key, value }) => {
-    const store = transaction.objectStore(storeName);
-    if (key === undefined) {
-      store.put(value);
-    } else {
-      store.put(value, key);
-    }
-  });
-  deletes.forEach(({ storeName, key }) => {
-    transaction.objectStore(storeName).delete(key);
-  });
-  plainDeletes.forEach(({ storeName, key }) => {
-    transaction.objectStore(storeName).delete(key);
-  });
-  await transactionDone(transaction);
+  const done = transactionDone(transaction);
+  // A storage primitive may throw synchronously after aborting the transaction.
+  // Attach a rejection observer before issuing requests so the later abort event
+  // can never surface as an unhandled rejection while the original error wins.
+  void done.catch(() => undefined);
+  try {
+    [...clears, ...plainClears].forEach((storeName) => {
+      transaction.objectStore(storeName).clear();
+    });
+    encryptedPuts.forEach(({ storeName, key, encrypted }) => {
+      transaction.objectStore(storeName).put(encrypted, key);
+    });
+    plainPuts.forEach(({ storeName, key, value }) => {
+      const store = transaction.objectStore(storeName);
+      if (key === undefined) {
+        store.put(value);
+      } else {
+        store.put(value, key);
+      }
+    });
+    deletes.forEach(({ storeName, key }) => {
+      transaction.objectStore(storeName).delete(key);
+    });
+    plainDeletes.forEach(({ storeName, key }) => {
+      transaction.objectStore(storeName).delete(key);
+    });
+  } catch (error) {
+    await done.catch(() => undefined);
+    throw error;
+  }
+  await done;
 };
 
 export const getPlainIndexRecords = async <T>(
@@ -280,6 +323,14 @@ export const getPlainIndexRecords = async <T>(
 export class WebEncryptedKeyValueStore {
   constructor(private readonly storeName: string) {}
 
+  async hasItem(key: string): Promise<boolean> {
+    const database = await openDatabase();
+    const record = await requestResult<EncryptedValue | undefined>(
+      database.transaction(this.storeName).objectStore(this.storeName).get(key),
+    );
+    return record !== undefined;
+  }
+
   async getItem(key: string): Promise<string | null> {
     const database = await openDatabase();
     const record = await requestResult<EncryptedValue | undefined>(
@@ -291,14 +342,42 @@ export class WebEncryptedKeyValueStore {
 
   async getAllItems(): Promise<Record<string, string>> {
     const database = await openDatabase();
-    const keys = await requestResult<IDBValidKey[]>(
-      database.transaction(this.storeName).objectStore(this.storeName).getAllKeys(),
-    );
+    const transaction = database.transaction(this.storeName);
+    const store = transaction.objectStore(this.storeName);
+    const [keys, records] = await Promise.all([
+      requestResult<IDBValidKey[]>(store.getAllKeys()),
+      requestResult<EncryptedValue[]>(store.getAll()),
+    ]);
     const entries = await Promise.all(
-      keys.map(async (key) => [String(key), await this.getItem(String(key))] as const),
+      keys.map(
+        async (key, index) => [String(key), await decryptValue(records[index])] as const,
+      ),
     );
-    return Object.fromEntries(
-      entries.filter((entry): entry is readonly [string, string] => entry[1] !== null),
+    return Object.fromEntries(entries);
+  }
+
+  async getPage(afterKey: string | undefined, limit: number): Promise<Array<[string, string]>> {
+    const database = await openDatabase();
+    const transaction = database.transaction(this.storeName);
+    const store = transaction.objectStore(this.storeName);
+    const range = afterKey === undefined ? undefined : IDBKeyRange.lowerBound(afterKey, true);
+    const encrypted = await new Promise<Array<[string, EncryptedValue]>>((resolve, reject) => {
+      const records: Array<[string, EncryptedValue]> = [];
+      const request = store.openCursor(range);
+      request.onerror = () =>
+        reject(request.error || new Error('Encrypted browser cursor failed.'));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || records.length >= limit) {
+          resolve(records);
+          return;
+        }
+        records.push([String(cursor.key), cursor.value as EncryptedValue]);
+        cursor.continue();
+      };
+    });
+    return Promise.all(
+      encrypted.map(async ([key, value]) => [key, await decryptValue(value)] as [string, string]),
     );
   }
 
@@ -324,3 +403,160 @@ export class WebEncryptedKeyValueStore {
     await commitEncryptedStoreBatch({ clears: [this.storeName] });
   }
 }
+
+const SNAPSHOT_STAGE_SEPARATOR = '\u0000';
+
+export const snapshotRestoreStageKey = (snapshotId: string, kind: string, key: string): string =>
+  [snapshotId, kind, key].join(SNAPSHOT_STAGE_SEPARATOR);
+
+const snapshotRestoreStageRange = (snapshotId: string, kind?: string): IDBKeyRange => {
+  const prefix = `${snapshotId}${SNAPSHOT_STAGE_SEPARATOR}${kind ? `${kind}${SNAPSHOT_STAGE_SEPARATOR}` : ''}`;
+  return IDBKeyRange.bound(prefix, `${prefix}\uffff`);
+};
+
+export const clearEncryptedSnapshotRestoreStage = async (snapshotId: string): Promise<void> => {
+  const database = await openDatabase();
+  const transaction = database.transaction(WEB_RECORD_STORES.snapshotStage, 'readwrite');
+  const done = transactionDone(transaction);
+  transaction
+    .objectStore(WEB_RECORD_STORES.snapshotStage)
+    .delete(snapshotRestoreStageRange(snapshotId));
+  await done;
+};
+
+export const commitEncryptedSnapshotRestore = async (input: {
+  snapshotId: string;
+  runtimeKey: string;
+  runtimeValue: string;
+  appliedKey: string;
+  appliedValue: string;
+}): Promise<void> => {
+  const ready = (kind: 'array' | 'map'): Promise<EncryptedValue> =>
+    encryptValue(JSON.stringify({ ready: true, kind, updatedAt: Date.now() }));
+  const [runtime, applied, arrayReady, mapReady, projectionReady] = await Promise.all([
+    encryptValue(input.runtimeValue),
+    encryptValue(input.appliedValue),
+    ready('array'),
+    ready('map'),
+    encryptValue(JSON.stringify({ ready: true, updatedAt: Date.now() })),
+  ]);
+  const database = await openDatabase();
+  const storeNames = [
+    REPOSITORY_STORE,
+    ...Object.values(WEB_RECORD_STORES),
+    ...Object.values(WEB_QUERY_INDEX_STORES),
+  ];
+  const transaction = database.transaction(storeNames, 'readwrite');
+  const done = transactionDone(transaction);
+  void done.catch(() => undefined);
+  const stage = transaction.objectStore(WEB_RECORD_STORES.snapshotStage);
+  const repository = transaction.objectStore(REPOSITORY_STORE);
+  const metadata = transaction.objectStore(WEB_RECORD_STORES.metadata);
+  const encryptedTargets = [
+    WEB_RECORD_STORES.diaries,
+    WEB_RECORD_STORES.entries,
+    WEB_RECORD_STORES.notes,
+    WEB_RECORD_STORES.entryProjections,
+    WEB_RECORD_STORES.noteProjections,
+    WEB_RECORD_STORES.versions,
+    WEB_RECORD_STORES.canonicalRecords,
+    WEB_RECORD_STORES.baseVersions,
+    WEB_RECORD_STORES.mediaPointers,
+    WEB_RECORD_STORES.baseMedia,
+  ];
+  encryptedTargets.forEach((storeName) => transaction.objectStore(storeName).clear());
+  Object.values(WEB_QUERY_INDEX_STORES).forEach((storeName) =>
+    transaction.objectStore(storeName).clear(),
+  );
+  [
+    ['deardiary_diaries', 'array', WEB_RECORD_STORES.diaries],
+    ['deardiary_entries', 'array', WEB_RECORD_STORES.entries],
+    ['deardiary_notes', 'array', WEB_RECORD_STORES.notes],
+    ['deardiary_sync_record_versions', 'map', WEB_RECORD_STORES.versions],
+    ['deardiary_sync_records', 'map', WEB_RECORD_STORES.canonicalRecords],
+    ['deardiary_sync_base_versions', 'map', WEB_RECORD_STORES.baseVersions],
+    ['deardiary_sync_media_pointers', 'map', WEB_RECORD_STORES.mediaPointers],
+    ['deardiary_sync_base_media', 'map', WEB_RECORD_STORES.baseMedia],
+  ].forEach(([key, kind]) => {
+    repository.delete(key);
+    metadata.put(kind === 'array' ? arrayReady : mapReady, `structured:${key}`);
+  });
+  metadata.put(projectionReady, 'projection:deardiary_entries:v1');
+  metadata.put(projectionReady, 'projection:deardiary_notes:v1');
+
+  const copy = (kind: string, write: (key: string, value: unknown) => void): Promise<void> => {
+    const prefix = `${input.snapshotId}${SNAPSHOT_STAGE_SEPARATOR}${kind}${SNAPSHOT_STAGE_SEPARATOR}`;
+    return new Promise((resolve, reject) => {
+      const request = stage.openCursor(snapshotRestoreStageRange(input.snapshotId, kind));
+      request.onerror = () => reject(request.error || new Error('Snapshot restore cursor failed.'));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        try {
+          write(String(cursor.key).slice(prefix.length), cursor.value);
+          cursor.continue();
+        } catch (error) {
+          reject(error);
+        }
+      };
+    });
+  };
+  const copies = [
+    copy('record', (key, value) => {
+      transaction.objectStore(WEB_RECORD_STORES.canonicalRecords).put(value, key);
+    }),
+    copy('diaryApp', (key, value) =>
+      transaction.objectStore(WEB_RECORD_STORES.diaries).put(value, key),
+    ),
+    copy('entryApp', (key, value) =>
+      transaction.objectStore(WEB_RECORD_STORES.entries).put(value, key),
+    ),
+    copy('noteApp', (key, value) =>
+      transaction.objectStore(WEB_RECORD_STORES.notes).put(value, key),
+    ),
+    copy('profileApp', (_key, value) => metadata.put(value, 'profile')),
+    copy('baseVersion', (key, value) => {
+      transaction.objectStore(WEB_RECORD_STORES.baseVersions).put(value, key);
+      const separator = key.indexOf(':');
+      const type = key.slice(0, separator).toLowerCase();
+      if (['diary', 'entry', 'note', 'settings', 'profile'].includes(type)) {
+        transaction
+          .objectStore(WEB_RECORD_STORES.versions)
+          .put(value, `${type}:${key.slice(separator + 1)}`);
+      }
+    }),
+    copy('baseMedia', (key, value) =>
+      transaction.objectStore(WEB_RECORD_STORES.baseMedia).put(value, key),
+    ),
+    copy('mediaDetail', (key, value) =>
+      transaction.objectStore(WEB_RECORD_STORES.mediaPointers).put(value, `media:${key}`),
+    ),
+    copy('entryProjection', (key, value) =>
+      transaction.objectStore(WEB_RECORD_STORES.entryProjections).put(value, key),
+    ),
+    copy('noteProjection', (key, value) =>
+      transaction.objectStore(WEB_RECORD_STORES.noteProjections).put(value, key),
+    ),
+    copy('entryIndex', (_key, value) =>
+      transaction.objectStore(WEB_QUERY_INDEX_STORES.entries).put(value),
+    ),
+    copy('noteIndex', (_key, value) =>
+      transaction.objectStore(WEB_QUERY_INDEX_STORES.notes).put(value),
+    ),
+    copy('settingsApp', (_key, value) => metadata.put(value, 'settings')),
+  ];
+  metadata.put(runtime, 'sync_account');
+  repository.delete(input.runtimeKey);
+  repository.put(applied, input.appliedKey);
+  try {
+    await Promise.all(copies);
+  } catch (error) {
+    await done.catch(() => undefined);
+    throw error;
+  }
+  await done;
+  await clearEncryptedSnapshotRestoreStage(input.snapshotId);
+};

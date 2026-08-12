@@ -106,6 +106,10 @@ export const pruneOrphanedMedia = async (
   if (!getSyncRuntimeFlags().automaticGarbageCollectionEnabled) {
     return { scanned: 0, removed: 0, retained: 0, reclaimedBytes: 0 };
   }
+  // Browser companions have no app-owned filesystem to collect. Avoid scanning
+  // and decrypting the complete diary snapshot during startup, which becomes a
+  // material cold-open penalty for long-lived accounts.
+  if (!isNativePlatform()) return { scanned: 0, removed: 0, retained: 0, reclaimedBytes: 0 };
   const referenced = await collectReferencedNames();
   for (const pointer of referenced.pointers) {
     if (
@@ -116,7 +120,6 @@ export const pruneOrphanedMedia = async (
       await diaryRepository.saveSyncMediaPointer({ ...pointer, localUri: undefined });
     }
   }
-  if (!isNativePlatform()) return { scanned: 0, removed: 0, retained: 0, reclaimedBytes: 0 };
   const files = await fileStorageService.list(MEDIA_DIRECTORY).catch(() => []);
   const result: MediaCleanupResult = {
     scanned: files.length,
@@ -147,6 +150,7 @@ export const pruneOrphanedMedia = async (
 };
 
 export const initializeMediaGarbageCollection = (): void => {
+  if (!isNativePlatform()) return;
   if (initialized) return;
   initialized = true;
   diaryRepository.subscribeChanges(() => {

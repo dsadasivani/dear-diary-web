@@ -91,6 +91,36 @@ test('bootstrap can release every expired account lease without touching active 
   assert.equal((await repository.getById('active'))?.leaseOwner, 'worker-b');
 });
 
+test('manual retry releases retry waits immediately without changing other accounts', async () => {
+  const repository = new PersistentOutboxRepository(new MemoryStore());
+  await repository.enqueue({
+    ...operation('retrying'),
+    state: 'RETRY_WAIT',
+    retryCount: 6,
+    nextAttemptAt: 99_000,
+    leaseOwner: 'old-worker',
+    leaseExpiresAt: 99_000,
+  });
+  await repository.enqueue({
+    ...operation('other-account', 2),
+    accountId: 'account-2',
+    state: 'RETRY_WAIT',
+    retryCount: 2,
+    nextAttemptAt: 88_000,
+  });
+
+  assert.equal(await repository.retryWaitingNow('account-1', 50), 1);
+  assert.deepEqual(
+    {
+      state: (await repository.getById('retrying'))?.state,
+      nextAttemptAt: (await repository.getById('retrying'))?.nextAttemptAt,
+      leaseOwner: (await repository.getById('retrying'))?.leaseOwner,
+    },
+    { state: 'RETRY_WAIT', nextAttemptAt: 0, leaseOwner: undefined },
+  );
+  assert.equal((await repository.getById('other-account'))?.nextAttemptAt, 88_000);
+});
+
 test('a later operation cannot bypass the leased head of the account ledger', async () => {
   const repository = new PersistentOutboxRepository(new MemoryStore());
   await repository.enqueue(operation('first', 1));

@@ -18,6 +18,7 @@ export interface SyncLocalRuntime {
   keyEpoch: number;
   appliedSequence: number;
   lastCommittedSequence?: number;
+  lastRestoredSnapshotId?: string;
   updatedAt: number;
 }
 

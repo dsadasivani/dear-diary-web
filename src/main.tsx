@@ -19,6 +19,7 @@ import {
   applyAccentThemePreference,
   getLocalAccentThemePreference,
 } from './utils/accentPreference';
+import { installManualPerformanceHooks } from './testing/manualSyncFlowHooks';
 
 setPerformanceTelemetry(createConfiguredTelemetry());
 const crashReporter = createConfiguredCrashReporter();
@@ -39,3 +40,4 @@ createRoot(document.getElementById('root')!).render(
 );
 
 void setupCapacitorBootstrap();
+void installManualPerformanceHooks();

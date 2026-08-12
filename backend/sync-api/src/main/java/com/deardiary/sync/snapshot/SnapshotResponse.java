@@ -1,6 +1,7 @@
 package com.deardiary.sync.snapshot;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public record SnapshotResponse(
@@ -14,5 +15,16 @@ public record SnapshotResponse(
     int keyEpoch,
     int snapshotSchemaVersion,
     String downloadUrl,
-    Instant downloadExpiresAt
-) {}
+    Instant downloadExpiresAt,
+    List<Chunk> chunks
+) {
+    public record Chunk(
+        int index,
+        String objectKey,
+        String sha256,
+        long sizeBytes,
+        int keyEpoch,
+        String downloadUrl,
+        Instant downloadExpiresAt
+    ) {}
+}

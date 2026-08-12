@@ -59,7 +59,8 @@ public class DeviceAuthorizationService {
         if (!"ACTIVE".equals(row[5])) {
             throw new ApiException("ACCOUNT_NOT_ACTIVE", HttpStatus.CONFLICT, "The synchronization account is not active.", false, true, java.util.Map.of());
         }
-        if (Boolean.TRUE.equals(row[7])) {
+        var activeBootstrapMayAcknowledge = allowActiveRecovery && Boolean.TRUE.equals(row[9]);
+        if (Boolean.TRUE.equals(row[7]) && !activeBootstrapMayAcknowledge) {
             throw new ApiException("REBOOTSTRAP_REQUIRED", HttpStatus.CONFLICT,
                 "This device must restore a current snapshot before syncing.", true, true,
                 java.util.Map.of());
@@ -67,7 +68,8 @@ public class DeviceAuthorizationService {
         var recoveryMayAcknowledge = allowActiveRecovery
             && "RECOVERY_PENDING".equals(row[6]) && Boolean.TRUE.equals(row[8]);
         var bootstrapMayAcknowledge = allowActiveRecovery
-            && "RECOVERY_PENDING".equals(row[6]) && Boolean.TRUE.equals(row[9]);
+            && ("RECOVERY_PENDING".equals(row[6]) || "ACTIVE".equals(row[6]))
+            && Boolean.TRUE.equals(row[9]);
         if (!"ACTIVE".equals(row[6]) && !recoveryMayAcknowledge && !bootstrapMayAcknowledge) {
             throw new ApiException("DEVICE_REVOKED", HttpStatus.FORBIDDEN, "The device is no longer authorized.", false, true, java.util.Map.of());
         }

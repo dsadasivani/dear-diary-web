@@ -19,6 +19,19 @@ export interface LocalStructuredRecordMutation {
   value: unknown | null;
 }
 
+export type LocalCanonicalSnapshotRecordKind = 'record' | 'recordVersion' | 'mediaPointer';
+
+export interface LocalCanonicalSnapshotRecord {
+  kind: LocalCanonicalSnapshotRecordKind;
+  key: string;
+  value: unknown;
+}
+
+export interface LocalCanonicalSnapshotPage {
+  records: LocalCanonicalSnapshotRecord[];
+  nextCursor?: string;
+}
+
 export interface LocalEntryQueryOptions extends LocalQueryPageOptions {
   diaryId?: string;
   yearMonth?: string;
@@ -71,6 +84,7 @@ export interface LocalDataStore {
   setItems(items: Record<string, string>): Promise<void>;
   removeItem(key: string): Promise<void>;
   clear(): Promise<void>;
+  hasStructuredCollection?(key: string): Promise<true | undefined>;
   getStructuredCollection?<T>(key: string): Promise<T[] | undefined>;
   getStructuredRecord?<T>(key: string, id: string): Promise<T | null | undefined>;
   putStructuredRecord?<T>(key: string, id: string, value: T): Promise<void>;
@@ -92,4 +106,20 @@ export interface LocalDataStore {
   queryNoteProjections?(
     options: LocalNoteQueryOptions,
   ): Promise<LocalQueryPageResult<LocalNoteProjection> | undefined>;
+  queryCanonicalSnapshotPage?(options: {
+    cursor?: string;
+    limit: number;
+  }): Promise<LocalCanonicalSnapshotPage | undefined>;
+  clearCanonicalSnapshotRestoreStage?(snapshotId: string): Promise<void>;
+  stageCanonicalSnapshotRestoreRecords?(
+    snapshotId: string,
+    records: LocalCanonicalSnapshotRecord[],
+  ): Promise<void>;
+  commitCanonicalSnapshotRestore?(input: {
+    snapshotId: string;
+    runtimeKey: string;
+    runtimeValue: string;
+    appliedKey: string;
+    appliedValue: string;
+  }): Promise<void>;
 }

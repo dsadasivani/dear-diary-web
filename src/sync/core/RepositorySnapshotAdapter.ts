@@ -77,7 +77,6 @@ export const repositorySnapshotToSyncState = (
   });
   if (portable.settings) records['SETTINGS:settings'] = portable.settings;
   if (portable.userProfile) records['PROFILE:profile'] = portable.userProfile;
-  if (portable.security) records['SECURITY:security'] = portable.security;
   return {
     records,
     recordVersions: Object.fromEntries(Object.keys(records).map((key) => [key, 0])),

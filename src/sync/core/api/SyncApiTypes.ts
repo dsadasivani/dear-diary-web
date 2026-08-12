@@ -106,6 +106,7 @@ export interface SyncUploadInstruction {
   uploadUrl: string;
   headers: Record<string, string[]>;
   expiresAt: string;
+  uploaded?: boolean;
 }
 
 export interface InitiateSyncOperationResponse {
@@ -176,6 +177,7 @@ export interface InitiateSyncSnapshotRequest {
   snapshotSchemaVersion: number;
   protocolVersion: number;
   metadataSignature?: string;
+  chunks?: Array<{ index: number; sha256: string; sizeBytes: number }>;
 }
 
 export interface InitiateSyncSnapshotResponse {
@@ -183,6 +185,17 @@ export interface InitiateSyncSnapshotResponse {
   status: string;
   existing: boolean;
   upload: SyncUploadInstruction;
+  uploads?: SyncUploadInstruction[];
+}
+
+export interface SyncSnapshotChunk {
+  index: number;
+  objectKey: string;
+  sha256: string;
+  sizeBytes: number;
+  keyEpoch: number;
+  downloadUrl: string | null;
+  downloadExpiresAt: string | null;
 }
 
 export interface SyncSnapshot {
@@ -197,6 +210,7 @@ export interface SyncSnapshot {
   snapshotSchemaVersion: number;
   downloadUrl: string | null;
   downloadExpiresAt: string | null;
+  chunks?: SyncSnapshotChunk[];
 }
 
 export interface SyncBootstrapReadiness {

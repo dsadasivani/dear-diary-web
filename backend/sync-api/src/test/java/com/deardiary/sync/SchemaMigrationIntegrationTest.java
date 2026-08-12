@@ -38,7 +38,7 @@ class SchemaMigrationIntegrationTest {
 
         var migration = flyway.migrate();
 
-        assertThat(migration.migrationsExecuted).isEqualTo(30);
+        assertThat(migration.migrationsExecuted).isEqualTo(34);
         try (Connection connection = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              Statement statement = connection.createStatement()) {
@@ -48,9 +48,24 @@ class SchemaMigrationIntegrationTest {
             assertThat(queryBoolean(statement,
                 "SELECT engaged FROM sync_kill_switches WHERE switch_name = 'GARBAGE_COLLECTION'"))
                 .isTrue();
+            assertThat(queryBoolean(statement,
+                "SELECT rolling_snapshots_enabled FROM sync_protocol_config WHERE config_id = 1"))
+                .isTrue();
+            assertThat(queryBoolean(statement,
+                "SELECT bootstrap_manifest_enabled FROM sync_protocol_config WHERE config_id = 1"))
+                .isTrue();
+            assertThat(queryBoolean(statement,
+                "SELECT retention_deletion_enabled FROM sync_protocol_config WHERE config_id = 1"))
+                .isFalse();
+            assertThat(queryLong(statement,
+                "SELECT maximum_snapshot_bytes FROM sync_protocol_config WHERE config_id = 1"))
+                .isEqualTo(268_435_456L);
+            assertThat(queryLong(statement,
+                "SELECT snapshot_schema_version FROM sync_protocol_config WHERE config_id = 1"))
+                .isEqualTo(3L);
             assertThat(queryLong(statement,
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'sync_%'"))
-                .isEqualTo(23);
+                .isEqualTo(24);
             assertThat(queryLong(statement, """
                 SELECT count(*) FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'sync_migrations'

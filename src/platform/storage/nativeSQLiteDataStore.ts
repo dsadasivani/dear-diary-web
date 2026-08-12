@@ -15,6 +15,8 @@ import type {
 } from '../../types';
 import type {
   LocalDataStore,
+  LocalCanonicalSnapshotPage,
+  LocalCanonicalSnapshotRecord,
   LocalEntryProjection,
   LocalEntryQueryOptions,
   LocalNoteProjection,
@@ -23,6 +25,7 @@ import type {
   LocalStructuredRecordMutation,
 } from './LocalDataStore';
 import { measureAsync } from '../../utils/performance';
+import { sanitizeEntry, sanitizeNote } from '../../domain/richTextSanitizer';
 import type { SyncOperation } from '../../sync/outbox/SyncOperation';
 import {
   decodePageCursor,
@@ -35,7 +38,7 @@ import {
 
 const DATABASE_NAME = 'dear_diary_local';
 const DATABASE_VERSION = 1;
-const STORAGE_SCHEMA_VERSION = 7;
+const STORAGE_SCHEMA_VERSION = 9;
 const SECURE_STORAGE_PREFIX = 'deardiary_';
 const SQLITE_SECRET_KEY = 'sqlite_encryption_secret_v1';
 const MIGRATION_META_KEY = 'legacy_preferences_migrated_at';
@@ -63,6 +66,9 @@ const STRUCTURED_COMPATIBILITY_KEYS = [
   'deardiary_diary_viewmode',
   'deardiary_sync_account',
   'deardiary_sync_record_versions',
+  'deardiary_sync_records',
+  'deardiary_sync_base_versions',
+  'deardiary_sync_base_media',
   'deardiary_sync_media_pointers',
   'deardiary_sync_partition_hydration',
   'deardiary_sync_operations',
@@ -181,6 +187,10 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         DELETE FROM user_profile;
         DELETE FROM sync_account;
         DELETE FROM sync_record_versions;
+        DELETE FROM sync_canonical_records;
+        DELETE FROM sync_base_versions;
+        DELETE FROM sync_base_media;
+        DELETE FROM sync_snapshot_restore_stage;
         DELETE FROM sync_media_pointers;
         DELETE FROM sync_partition_hydration;
         DELETE FROM sync_operations;
@@ -225,6 +235,20 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     );
   }
 
+  async hasStructuredCollection(key: string): Promise<true | undefined> {
+    const table =
+      key === 'deardiary_diaries'
+        ? 'diaries'
+        : key === 'deardiary_entries'
+          ? 'entries'
+          : key === 'deardiary_notes'
+            ? 'notes'
+            : undefined;
+    if (!table) return undefined;
+    const db = await this.ensureInitialized();
+    return (await this.isStructuredCollectionReady(db, key, table)) || undefined;
+  }
+
   async getStructuredRecord<T>(key: string, id: string): Promise<T | null | undefined> {
     return measureAsync(
       'sqlite.structured.record',
@@ -237,6 +261,36 @@ export class NativeSQLiteDataStore implements LocalDataStore {
             return this.readStructuredRecord<T>(db, key, 'entries', id);
           case 'deardiary_notes':
             return this.readStructuredRecord<T>(db, key, 'notes', id);
+          case 'deardiary_sync_records':
+            return this.readStructuredMapRecord<T>(
+              db,
+              key,
+              'SELECT raw_json AS value FROM sync_canonical_records WHERE record_key = ? LIMIT 1;',
+              id,
+            );
+          case 'deardiary_sync_record_versions':
+            return this.readStructuredMapRecord<T>(
+              db,
+              key,
+              'SELECT version AS value FROM sync_record_versions WHERE record_key = ? LIMIT 1;',
+              id,
+              true,
+            );
+          case 'deardiary_sync_base_versions':
+            return this.readStructuredMapRecord<T>(
+              db,
+              key,
+              'SELECT version AS value FROM sync_base_versions WHERE record_key = ? LIMIT 1;',
+              id,
+              true,
+            );
+          case 'deardiary_sync_base_media':
+            return this.readStructuredMapRecord<T>(
+              db,
+              key,
+              'SELECT json_quote(object_key) AS value FROM sync_base_media WHERE pointer_key = ? LIMIT 1;',
+              id,
+            );
           default:
             return undefined;
         }
@@ -312,6 +366,68 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     );
   }
 
+  async replaceNotesForPerformanceTest(notes: Note[]): Promise<void> {
+    await measureAsync(
+      'sqlite.testing.notes.replace',
+      () =>
+        this.enqueueWrite(async () => {
+          const db = await this.ensureInitialized();
+          const serialized = JSON.stringify(notes.map(sanitizeNote));
+          await db.beginTransaction();
+          try {
+            await db.execute(
+              `DELETE FROM notes_fts;
+               DELETE FROM media_assets WHERE owner_type = 'note';
+               DELETE FROM notes;
+               DELETE FROM sync_canonical_records WHERE record_key LIKE 'NOTE:%';
+               DELETE FROM sync_base_versions WHERE record_key LIKE 'NOTE:%';
+               DELETE FROM sync_record_versions WHERE record_type = 'note';`,
+              false,
+            );
+            await db.run(
+              `INSERT INTO notes (
+                 id, title, body, is_pinned, tags_json, created_at, updated_at, raw_json
+               )
+               SELECT
+                 json_extract(value, '$.id'),
+                 COALESCE(json_extract(value, '$.title'), ''),
+                 COALESCE(json_extract(value, '$.body'), ''),
+                 CAST(COALESCE(json_extract(value, '$.isPinned'), 0) AS INTEGER),
+                 COALESCE(json_extract(value, '$.tags'), '[]'),
+                 CAST(json_extract(value, '$.createdAt') AS INTEGER),
+                 CAST(json_extract(value, '$.updatedAt') AS INTEGER),
+                 value
+               FROM json_each(?);`,
+              [serialized],
+              false,
+            );
+            await db.run(
+              `INSERT INTO notes_fts (id, title, body, tags)
+               SELECT id, title, body,
+                 COALESCE((SELECT group_concat(value, ' ') FROM json_each(notes.tags_json)), '')
+               FROM notes;`,
+              [],
+              false,
+            );
+            await db.run(
+              `INSERT INTO sync_canonical_records (record_key, raw_json, updated_at)
+               SELECT 'NOTE:' || json_extract(value, '$.id'), value, ?
+               FROM json_each(?);`,
+              [now(), serialized],
+              false,
+            );
+            await db.run('DELETE FROM kv_store WHERE key = ?;', ['deardiary_notes'], false);
+            await this.setMeta(db, SEARCH_INDEX_META_KEY, '1', false);
+            await db.commitTransaction();
+          } catch (error) {
+            await db.rollbackTransaction().catch(() => undefined);
+            throw error;
+          }
+        }),
+      { noteCount: notes.length },
+    );
+  }
+
   async commitLocalMutationAndOutbox(input: {
     records: LocalStructuredRecordMutation[];
     items?: Record<string, string>;
@@ -341,6 +457,329 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         }),
       { recordCount: input.records.length },
     );
+  }
+
+  async queryCanonicalSnapshotPage(options: {
+    cursor?: string;
+    limit: number;
+  }): Promise<LocalCanonicalSnapshotPage | undefined> {
+    const db = await this.ensureInitialized();
+    const specs = [
+      {
+        kind: 'record' as const,
+        sql: 'SELECT record_key AS key, raw_json AS value FROM sync_canonical_records WHERE record_key > ? ORDER BY record_key LIMIT ?;',
+      },
+      {
+        kind: 'recordVersion' as const,
+        sql: 'SELECT record_key AS key, CAST(version AS TEXT) AS value FROM sync_base_versions WHERE record_key > ? ORDER BY record_key LIMIT ?;',
+      },
+      {
+        kind: 'mediaPointer' as const,
+        sql: 'SELECT pointer_key AS key, json_quote(object_key) AS value FROM sync_base_media WHERE pointer_key > ? ORDER BY pointer_key LIMIT ?;',
+      },
+    ];
+    const separator = options.cursor?.indexOf('\u0000') ?? -1;
+    const startKind = separator >= 0 ? Number(options.cursor!.slice(0, separator)) : 0;
+    const startKey = separator >= 0 ? options.cursor!.slice(separator + 1) : '';
+    const records: LocalCanonicalSnapshotRecord[] = [];
+    let lastKind = startKind;
+    let lastKey = startKey;
+    for (
+      let kindIndex = startKind;
+      kindIndex < specs.length && records.length < options.limit;
+      kindIndex += 1
+    ) {
+      const spec = specs[kindIndex];
+      const result = await db.query(spec.sql, [
+        kindIndex === startKind ? startKey : '',
+        options.limit - records.length,
+      ]);
+      for (const row of result.values || []) {
+        const key = String(row.key);
+        records.push({ kind: spec.kind, key, value: JSON.parse(String(row.value)) });
+        lastKind = kindIndex;
+        lastKey = key;
+      }
+    }
+    return {
+      records,
+      nextCursor: records.length === options.limit ? `${lastKind}\u0000${lastKey}` : undefined,
+    };
+  }
+
+  async clearCanonicalSnapshotRestoreStage(snapshotId: string): Promise<void> {
+    await this.enqueueWrite(async () => {
+      const db = await this.ensureInitialized();
+      await db.run('DELETE FROM sync_snapshot_restore_stage WHERE snapshot_id = ?;', [snapshotId]);
+    });
+  }
+
+  async stageCanonicalSnapshotRestoreRecords(
+    snapshotId: string,
+    records: LocalCanonicalSnapshotRecord[],
+  ): Promise<void> {
+    await this.enqueueWrite(async () => {
+      const db = await this.ensureInitialized();
+      await db.beginTransaction();
+      try {
+        for (const record of records) {
+          let appValue = record.value;
+          if (record.kind === 'record') {
+            const type = record.key.slice(0, record.key.indexOf(':'));
+            if (type === 'ENTRY') appValue = sanitizeEntry(record.value as Entry);
+            if (type === 'NOTE') appValue = sanitizeNote(record.value as Note);
+            if (type === 'SETTINGS') {
+              const currentRaw = await this.readStructuredValue(db, 'deardiary_settings', null);
+              const current = currentRaw ? JSON.parse(currentRaw) : {};
+              const incoming = record.value as Record<string, unknown>;
+              appValue = {
+                ...current,
+                customTags: incoming.customTags,
+                customMoods: incoming.customMoods,
+                theme: current.theme,
+              };
+            }
+          }
+          await db.run(
+            `INSERT OR REPLACE INTO sync_snapshot_restore_stage
+             (snapshot_id, value_kind, record_key, raw_json, app_json)
+             VALUES (?, ?, ?, ?, ?);`,
+            [
+              snapshotId,
+              record.kind,
+              record.key,
+              JSON.stringify(record.value),
+              JSON.stringify(appValue),
+            ],
+            false,
+          );
+        }
+        await db.commitTransaction();
+      } catch (error) {
+        await db.rollbackTransaction().catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
+  async commitCanonicalSnapshotRestore(input: {
+    snapshotId: string;
+    runtimeKey: string;
+    runtimeValue: string;
+    appliedKey: string;
+    appliedValue: string;
+  }): Promise<void> {
+    await this.enqueueWrite(async () => {
+      const db = await this.ensureInitialized();
+      await db.beginTransaction();
+      try {
+        await db.execute(
+          `
+          DELETE FROM entries_fts;
+          DELETE FROM notes_fts;
+          DELETE FROM entry_blocks;
+          DELETE FROM media_assets;
+          DELETE FROM entries;
+          DELETE FROM notes;
+          DELETE FROM diaries;
+          DELETE FROM sync_canonical_records;
+          DELETE FROM sync_base_versions;
+          DELETE FROM sync_record_versions;
+          DELETE FROM sync_base_media;
+          DELETE FROM sync_media_pointers;
+        `,
+          false,
+        );
+        const staged = 'sync_snapshot_restore_stage';
+        await db.run(
+          `INSERT INTO sync_canonical_records (record_key, raw_json, updated_at)
+           SELECT record_key, raw_json, ? FROM ${staged}
+           WHERE snapshot_id = ? AND value_kind = 'record';`,
+          [now(), input.snapshotId],
+          false,
+        );
+        await db.run(
+          `INSERT INTO diaries (id, name, emoji, color, is_locked, entry_count, last_updated,
+             cover_image_uri, foil_icons_json, raw_json, updated_at)
+           SELECT json_extract(app_json, '$.id'), json_extract(app_json, '$.name'),
+             json_extract(app_json, '$.emoji'), json_extract(app_json, '$.color'),
+             coalesce(json_extract(app_json, '$.isLocked'), 0),
+             coalesce(json_extract(app_json, '$.entryCount'), 0),
+             json_extract(app_json, '$.lastUpdated'), json_extract(app_json, '$.coverImage'),
+             coalesce(json_extract(app_json, '$.foilIcons'), '[]'), app_json, ?
+           FROM ${staged} WHERE snapshot_id = ? AND value_kind = 'record'
+             AND record_key LIKE 'DIARY:%';`,
+          [now(), input.snapshotId],
+          false,
+        );
+        await db.run(
+          `INSERT INTO entries (id, diary_id, date, time, title, body, mood_name, mood_emoji,
+             tags_json, photo_uris_json, photo_count, word_count, audio_uri, created_at,
+             updated_at, is_timeline_bifurcated, raw_json)
+           SELECT json_extract(app_json, '$.id'), json_extract(app_json, '$.diaryId'),
+             json_extract(app_json, '$.date'), json_extract(app_json, '$.time'),
+             coalesce(json_extract(app_json, '$.title'), ''), coalesce(json_extract(app_json, '$.body'), ''),
+             coalesce(json_extract(app_json, '$.moodName'), ''), coalesce(json_extract(app_json, '$.moodEmoji'), ''),
+             coalesce(json_extract(app_json, '$.tags'), '[]'), coalesce(json_extract(app_json, '$.photoUris'), '[]'),
+             coalesce(json_extract(app_json, '$.photoCount'), 0), coalesce(json_extract(app_json, '$.wordCount'), 0),
+             json_extract(app_json, '$.audioUri'), coalesce(json_extract(app_json, '$.createdAt'), ?),
+             coalesce(json_extract(app_json, '$.updatedAt'), ?),
+             coalesce(json_extract(app_json, '$.isTimelineBifurcated'), 0), app_json
+           FROM ${staged} WHERE snapshot_id = ? AND value_kind = 'record'
+             AND record_key LIKE 'ENTRY:%';`,
+          [now(), now(), input.snapshotId],
+          false,
+        );
+        await db.run(
+          `INSERT INTO notes (id, title, body, is_pinned, tags_json, created_at, updated_at, raw_json)
+           SELECT json_extract(app_json, '$.id'), coalesce(json_extract(app_json, '$.title'), ''),
+             coalesce(json_extract(app_json, '$.body'), ''), coalesce(json_extract(app_json, '$.isPinned'), 0),
+             coalesce(json_extract(app_json, '$.tags'), '[]'), coalesce(json_extract(app_json, '$.createdAt'), ?),
+             coalesce(json_extract(app_json, '$.updatedAt'), ?), app_json
+           FROM ${staged} WHERE snapshot_id = ? AND value_kind = 'record'
+             AND record_key LIKE 'NOTE:%';`,
+          [now(), now(), input.snapshotId],
+          false,
+        );
+        await db.run(
+          `INSERT INTO entries_fts (id, title, body, tags, mood)
+           SELECT id, title, body, tags_json, mood_name FROM entries;`,
+          [],
+          false,
+        );
+        await db.run(
+          `INSERT INTO notes_fts (id, title, body, tags)
+           SELECT id, title, body, tags_json FROM notes;`,
+          [],
+          false,
+        );
+        await db.run(
+          `INSERT INTO entry_blocks (id, entry_id, position, time, body, audio_uri, raw_json)
+           SELECT json_extract(block.value, '$.id'), json_extract(stage.app_json, '$.id'),
+             CAST(block.key AS INTEGER), json_extract(block.value, '$.time'),
+             coalesce(json_extract(block.value, '$.body'), ''), json_extract(block.value, '$.audioUri'), block.value
+           FROM ${staged} stage, json_each(coalesce(json_extract(stage.app_json, '$.blocks'), '[]')) block
+           WHERE stage.snapshot_id = ? AND stage.value_kind = 'record'
+             AND stage.record_key LIKE 'ENTRY:%';`,
+          [input.snapshotId],
+          false,
+        );
+        await db.run(
+          `INSERT INTO media_assets
+             (id, owner_type, owner_id, field, position, uri, mime_type, byte_size, created_at, raw_json)
+           SELECT 'diary:' || id || ':coverImage:0', 'diary', id, 'coverImage', 0,
+             cover_image_uri, NULL, NULL, ?, NULL
+           FROM diaries WHERE cover_image_uri IS NOT NULL AND cover_image_uri <> '';`,
+          [now()],
+          false,
+        );
+        await db.run(
+          `INSERT INTO media_assets
+             (id, owner_type, owner_id, field, position, uri, mime_type, byte_size, created_at, raw_json)
+           SELECT 'entry:' || entries.id || ':photoUris:' || photo.key, 'entry', entries.id,
+             'photoUris', CAST(photo.key AS INTEGER), photo.value, NULL, NULL, ?, NULL
+           FROM entries, json_each(entries.photo_uris_json) photo
+           WHERE photo.value IS NOT NULL AND photo.value <> '';`,
+          [now()],
+          false,
+        );
+        await db.run(
+          `INSERT INTO media_assets
+             (id, owner_type, owner_id, field, position, uri, mime_type, byte_size, created_at, raw_json)
+           SELECT 'entry:' || id || ':audioUri:0', 'entry', id, 'audioUri', 0,
+             audio_uri, NULL, NULL, ?, NULL
+           FROM entries WHERE audio_uri IS NOT NULL AND audio_uri <> '';`,
+          [now()],
+          false,
+        );
+        await db.run(
+          `INSERT INTO media_assets
+             (id, owner_type, owner_id, field, position, uri, mime_type, byte_size, created_at, raw_json)
+           SELECT 'entry:' || entry_id || ':blocks.' || id || '.audioUri:' || position,
+             'entry', entry_id, 'blocks.' || id || '.audioUri', position,
+             audio_uri, NULL, NULL, ?, NULL
+           FROM entry_blocks WHERE audio_uri IS NOT NULL AND audio_uri <> '';`,
+          [now()],
+          false,
+        );
+        await db.run(
+          `INSERT INTO sync_base_versions (record_key, version, updated_at)
+           SELECT record_key, CAST(raw_json AS INTEGER), ? FROM ${staged}
+           WHERE snapshot_id = ? AND value_kind = 'recordVersion';`,
+          [now(), input.snapshotId],
+          false,
+        );
+        await db.run(
+          `INSERT INTO sync_record_versions (record_key, record_type, record_id, version, updated_at)
+           SELECT lower(substr(record_key, 1, instr(record_key, ':') - 1)) || ':' ||
+             substr(record_key, instr(record_key, ':') + 1),
+             lower(substr(record_key, 1, instr(record_key, ':') - 1)),
+             substr(record_key, instr(record_key, ':') + 1), CAST(raw_json AS INTEGER), ?
+           FROM ${staged} WHERE snapshot_id = ? AND value_kind = 'recordVersion'
+             AND lower(substr(record_key, 1, instr(record_key, ':') - 1))
+               IN ('diary', 'entry', 'note', 'settings', 'profile');`,
+          [now(), input.snapshotId],
+          false,
+        );
+        await db.run(
+          `INSERT INTO sync_base_media (pointer_key, object_key, updated_at)
+           SELECT record_key, json_extract(raw_json, '$'), ? FROM ${staged}
+           WHERE snapshot_id = ? AND value_kind = 'mediaPointer';`,
+          [now(), input.snapshotId],
+          false,
+        );
+        await db.run(
+          `INSERT INTO sync_media_pointers (pointer_key, media_id, sequence, drive_file_id,
+             sha256, size_bytes, local_uri, key_epoch, raw_json, updated_at)
+           SELECT 'media:' || record_key, record_key, 0, json_extract(raw_json, '$'), '', 0,
+             NULL, NULL, json_object('mediaId', record_key, 'sequence', 0,
+             'driveFileId', json_extract(raw_json, '$'), 'sha256', '', 'sizeBytes', 0,
+             'createdByDeviceId', 'snapshot', 'createdAt', '1970-01-01T00:00:00.000Z'), ?
+           FROM ${staged} WHERE snapshot_id = ? AND value_kind = 'mediaPointer';`,
+          [now(), input.snapshotId],
+          false,
+        );
+        for (const [recordKey, table, key] of [
+          ['SETTINGS:settings', 'app_settings', 'current'],
+          ['PROFILE:profile', 'user_profile', 'current'],
+        ]) {
+          await db.run(
+            `INSERT INTO ${table} (${table === 'app_settings' ? 'key' : 'id'}, value, updated_at)
+             SELECT ?, app_json, ? FROM ${staged}
+             WHERE snapshot_id = ? AND value_kind = 'record' AND record_key = ?
+             ON CONFLICT(${table === 'app_settings' ? 'key' : 'id'}) DO UPDATE SET
+               value = excluded.value, updated_at = excluded.updated_at;`,
+            [key, now(), input.snapshotId, recordKey],
+            false,
+          );
+        }
+        await this.writeSerializedItemsInTransaction(
+          db,
+          {
+            [input.runtimeKey]: input.runtimeValue,
+            [input.appliedKey]: input.appliedValue,
+          },
+          false,
+        );
+        await db.run(
+          `DELETE FROM kv_store WHERE key IN ('deardiary_diaries', 'deardiary_entries',
+             'deardiary_notes', 'deardiary_sync_records', 'deardiary_sync_base_versions',
+             'deardiary_sync_record_versions', 'deardiary_sync_base_media',
+             'deardiary_sync_media_pointers');`,
+          [],
+          false,
+        );
+        await db.run(
+          'DELETE FROM sync_snapshot_restore_stage WHERE snapshot_id = ?;',
+          [input.snapshotId],
+          false,
+        );
+        await db.commitTransaction();
+      } catch (error) {
+        await db.rollbackTransaction().catch(() => undefined);
+        throw error;
+      }
+    });
   }
 
   async queryEntries(
@@ -646,6 +1085,33 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_sync_record_versions_type_id ON sync_record_versions(record_type, record_id);
+
+      CREATE TABLE IF NOT EXISTS sync_canonical_records (
+        record_key TEXT PRIMARY KEY NOT NULL,
+        raw_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sync_base_versions (
+        record_key TEXT PRIMARY KEY NOT NULL,
+        version INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sync_base_media (
+        pointer_key TEXT PRIMARY KEY NOT NULL,
+        object_key TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sync_snapshot_restore_stage (
+        snapshot_id TEXT NOT NULL,
+        value_kind TEXT NOT NULL,
+        record_key TEXT NOT NULL,
+        raw_json TEXT NOT NULL,
+        app_json TEXT NOT NULL,
+        PRIMARY KEY (snapshot_id, value_kind, record_key)
+      );
 
       CREATE TABLE IF NOT EXISTS sync_media_pointers (
         pointer_key TEXT PRIMARY KEY NOT NULL,
@@ -1001,6 +1467,33 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     const schemaVersion = Number((await this.getMeta(db, 'storage_schema_version')) || 0);
     if (schemaVersion >= STORAGE_SCHEMA_VERSION) return;
 
+    if (schemaVersion >= 7) {
+      await db.beginTransaction();
+      try {
+        await db.run(
+          `INSERT OR REPLACE INTO sync_canonical_records (record_key, raw_json, updated_at)
+           SELECT entries.key, CAST(entries.value AS TEXT), ?
+           FROM kv_store source, json_each(source.value) entries
+           WHERE source.key = 'deardiary_sync_records';`,
+          [now()],
+          false,
+        );
+        await db.run(
+          `INSERT OR REPLACE INTO sync_base_versions (record_key, version, updated_at)
+           SELECT entries.key, CAST(entries.value AS INTEGER), ?
+           FROM kv_store source, json_each(source.value) entries
+           WHERE source.key = 'deardiary_sync_base_versions';`,
+          [now()],
+          false,
+        );
+        await db.commitTransaction();
+        return;
+      } catch (error) {
+        await db.rollbackTransaction().catch(() => undefined);
+        throw error;
+      }
+    }
+
     const result = await db.query('SELECT key, value FROM kv_store;');
     const compatibilityValues = new Map<string, string>(
       (result.values || []).map((row) => [String(row.key), String(row.value)]),
@@ -1164,6 +1657,24 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       }
       case 'deardiary_sync_record_versions':
         return this.readSyncRecordVersions(db, compatibilityValue);
+      case 'deardiary_sync_records':
+        return this.readJsonMapRows(
+          db,
+          'SELECT record_key AS key, raw_json FROM sync_canonical_records ORDER BY rowid;',
+          compatibilityValue,
+        );
+      case 'deardiary_sync_base_versions':
+        return this.readNumberMapRows(
+          db,
+          'SELECT record_key AS key, version AS value FROM sync_base_versions ORDER BY rowid;',
+          compatibilityValue,
+        );
+      case 'deardiary_sync_base_media':
+        return this.readStringMapRows(
+          db,
+          'SELECT pointer_key AS key, object_key AS value FROM sync_base_media ORDER BY rowid;',
+          compatibilityValue,
+        );
       case 'deardiary_sync_media_pointers':
         return this.readJsonMapRows(
           db,
@@ -1242,6 +1753,35 @@ export class NativeSQLiteDataStore implements LocalDataStore {
       return record === null ? undefined : record;
     }
     return (await this.isStructuredCollectionReady(db, key, table)) ? null : undefined;
+  }
+
+  private async readStructuredMapRecord<T>(
+    db: SQLiteDBConnection,
+    key: string,
+    query: string,
+    id: string,
+    numeric = false,
+  ): Promise<T | null | undefined> {
+    const result = await db.query(query, [id]);
+    const value = result.values?.[0]?.value;
+    if (value !== undefined && value !== null) {
+      return (numeric ? Number(value) : safeJsonParse<T>(String(value))) as T;
+    }
+    const compatibility = await db.query('SELECT value FROM kv_store WHERE key = ? LIMIT 1;', [
+      key,
+    ]);
+    if (compatibility.values?.[0]?.value !== undefined) return null;
+    const table =
+      key === 'deardiary_sync_records'
+        ? 'sync_canonical_records'
+        : key === 'deardiary_sync_record_versions'
+          ? 'sync_record_versions'
+          : key === 'deardiary_sync_base_versions'
+            ? 'sync_base_versions'
+            : undefined;
+    if (!table) return undefined;
+    const readiness = await db.query(`SELECT 1 AS ready FROM ${table} LIMIT 1;`);
+    return readiness.values?.length ? null : undefined;
   }
 
   private async isStructuredCollectionReady(
@@ -1565,6 +2105,30 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     return JSON.stringify(Object.fromEntries(entries));
   }
 
+  private async readNumberMapRows(
+    db: SQLiteDBConnection,
+    query: string,
+    compatibilityValue: string | null,
+  ): Promise<string | null> {
+    const rows = (await db.query(query)).values || [];
+    if (rows.length === 0) return compatibilityValue === null ? null : '{}';
+    return JSON.stringify(
+      Object.fromEntries(rows.map((row) => [String(row.key), Number(row.value || 0)])),
+    );
+  }
+
+  private async readStringMapRows(
+    db: SQLiteDBConnection,
+    query: string,
+    compatibilityValue: string | null,
+  ): Promise<string | null> {
+    const rows = (await db.query(query)).values || [];
+    if (rows.length === 0) return compatibilityValue === null ? null : '{}';
+    return JSON.stringify(
+      Object.fromEntries(rows.map((row) => [String(row.key), String(row.value)])),
+    );
+  }
+
   private async setMeta(
     db: SQLiteDBConnection,
     key: string,
@@ -1613,6 +2177,15 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         break;
       case 'deardiary_sync_record_versions':
         await db.run('DELETE FROM sync_record_versions;');
+        break;
+      case 'deardiary_sync_records':
+        await db.run('DELETE FROM sync_canonical_records;');
+        break;
+      case 'deardiary_sync_base_versions':
+        await db.run('DELETE FROM sync_base_versions;');
+        break;
+      case 'deardiary_sync_base_media':
+        await db.run('DELETE FROM sync_base_media;');
         break;
       case 'deardiary_sync_media_pointers':
         await db.run('DELETE FROM sync_media_pointers;');
@@ -1689,6 +2262,15 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         break;
       case 'deardiary_sync_record_versions':
         await this.syncRecordVersions(db, value, transaction);
+        break;
+      case 'deardiary_sync_records':
+        await this.syncCanonicalRecords(db, value, transaction);
+        break;
+      case 'deardiary_sync_base_versions':
+        await this.syncBaseVersions(db, value, transaction);
+        break;
+      case 'deardiary_sync_base_media':
+        await this.syncBaseMedia(db, value, transaction);
         break;
       case 'deardiary_sync_media_pointers':
         await this.syncMediaPointers(db, value, transaction);
@@ -1768,7 +2350,62 @@ export class NativeSQLiteDataStore implements LocalDataStore {
           record_id = excluded.record_id,
           version = excluded.version,
           updated_at = excluded.updated_at;`,
-        [recordKey, recordType, recordId, numericVersion, now()],
+        [recordKey, recordType.toLowerCase(), recordId, numericVersion, now()],
+        transaction,
+      );
+    }
+  }
+
+  private async syncCanonicalRecords(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
+    const records = safeJsonParse<Record<string, unknown>>(value);
+    if (!records || typeof records !== 'object') return;
+    await db.run('DELETE FROM sync_canonical_records;', [], transaction);
+    for (const [recordKey, record] of Object.entries(records)) {
+      await db.run(
+        `INSERT INTO sync_canonical_records (record_key, raw_json, updated_at)
+         VALUES (?, ?, ?);`,
+        [recordKey, JSON.stringify(record), now()],
+        transaction,
+      );
+    }
+  }
+
+  private async syncBaseVersions(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
+    const versions = safeJsonParse<Record<string, number>>(value);
+    if (!versions || typeof versions !== 'object') return;
+    await db.run('DELETE FROM sync_base_versions;', [], transaction);
+    for (const [recordKey, version] of Object.entries(versions)) {
+      await db.run(
+        `INSERT INTO sync_base_versions (record_key, version, updated_at)
+         VALUES (?, ?, ?);`,
+        [recordKey, Number(version || 0), now()],
+        transaction,
+      );
+    }
+  }
+
+  private async syncBaseMedia(
+    db: SQLiteDBConnection,
+    value: string,
+    transaction = true,
+  ): Promise<void> {
+    const pointers = safeJsonParse<Record<string, string>>(value);
+    if (!pointers || typeof pointers !== 'object') return;
+    await db.run('DELETE FROM sync_base_media;', [], transaction);
+    for (const [pointerKey, objectKey] of Object.entries(pointers)) {
+      if (typeof objectKey !== 'string' || objectKey.length === 0) continue;
+      await db.run(
+        `INSERT INTO sync_base_media (pointer_key, object_key, updated_at)
+         VALUES (?, ?, ?);`,
+        [pointerKey, objectKey, now()],
         transaction,
       );
     }
@@ -2344,8 +2981,10 @@ export class NativeSQLiteDataStore implements LocalDataStore {
     value: T,
     transaction = true,
   ): Promise<void> {
+    const arrayRecord = ['deardiary_diaries', 'deardiary_entries', 'deardiary_notes'].includes(key);
     const recordId = (value as { id?: unknown })?.id;
-    if (recordId !== id) throw new Error(`Structured SQLite record id mismatch for ${key}.`);
+    if (arrayRecord && recordId !== id)
+      throw new Error(`Structured SQLite record id mismatch for ${key}.`);
     switch (key) {
       case 'deardiary_diaries':
         await this.upsertDiaryRow(db, value as Diary, transaction);
@@ -2355,6 +2994,52 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         break;
       case 'deardiary_notes':
         await this.upsertNoteRow(db, value as Note, transaction);
+        break;
+      case 'deardiary_sync_records':
+        await db.run(
+          `INSERT INTO sync_canonical_records (record_key, raw_json, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(record_key) DO UPDATE SET
+             raw_json = excluded.raw_json, updated_at = excluded.updated_at;`,
+          [id, JSON.stringify(value), now()],
+          transaction,
+        );
+        await db.run('DELETE FROM kv_store WHERE key = ?;', [key], transaction);
+        break;
+      case 'deardiary_sync_record_versions': {
+        const separator = id.indexOf(':');
+        await db.run(
+          `INSERT INTO sync_record_versions (record_key, record_type, record_id, version, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(record_key) DO UPDATE SET version = excluded.version,
+             updated_at = excluded.updated_at;`,
+          [id, id.slice(0, separator).toLowerCase(), id.slice(separator + 1), Number(value), now()],
+          transaction,
+        );
+        await db.run('DELETE FROM kv_store WHERE key = ?;', [key], transaction);
+        break;
+      }
+      case 'deardiary_sync_base_versions':
+        await db.run(
+          `INSERT INTO sync_base_versions (record_key, version, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(record_key) DO UPDATE SET version = excluded.version,
+             updated_at = excluded.updated_at;`,
+          [id, Number(value), now()],
+          transaction,
+        );
+        await db.run('DELETE FROM kv_store WHERE key = ?;', [key], transaction);
+        break;
+      case 'deardiary_sync_base_media':
+        await db.run(
+          `INSERT INTO sync_base_media (pointer_key, object_key, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(pointer_key) DO UPDATE SET object_key = excluded.object_key,
+             updated_at = excluded.updated_at;`,
+          [id, String(value), now()],
+          transaction,
+        );
+        await db.run('DELETE FROM kv_store WHERE key = ?;', [key], transaction);
         break;
       default:
         break;
@@ -2392,6 +3077,22 @@ export class NativeSQLiteDataStore implements LocalDataStore {
         await db.run('DELETE FROM notes WHERE id = ?;', [id], transaction);
         await this.deleteNoteSearchRow(db, id, transaction);
         await this.markStructuredCollectionReadyIfEmpty(db, key, 'notes', transaction);
+        break;
+      case 'deardiary_sync_records':
+        await db.run('DELETE FROM sync_canonical_records WHERE record_key = ?;', [id], transaction);
+        await db.run('DELETE FROM kv_store WHERE key = ?;', [key], transaction);
+        break;
+      case 'deardiary_sync_record_versions':
+        await db.run('DELETE FROM sync_record_versions WHERE record_key = ?;', [id], transaction);
+        await db.run('DELETE FROM kv_store WHERE key = ?;', [key], transaction);
+        break;
+      case 'deardiary_sync_base_versions':
+        await db.run('DELETE FROM sync_base_versions WHERE record_key = ?;', [id], transaction);
+        await db.run('DELETE FROM kv_store WHERE key = ?;', [key], transaction);
+        break;
+      case 'deardiary_sync_base_media':
+        await db.run('DELETE FROM sync_base_media WHERE pointer_key = ?;', [id], transaction);
+        await db.run('DELETE FROM kv_store WHERE key = ?;', [key], transaction);
         break;
       default:
         break;

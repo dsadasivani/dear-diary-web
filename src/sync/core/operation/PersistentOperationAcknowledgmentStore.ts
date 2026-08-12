@@ -1,6 +1,6 @@
 import type { LocalDataStore } from '../../../platform/storage';
 import { SyncError } from '../../errors';
-import type { SyncOperation } from '../../outbox';
+import { TERMINAL_SYNC_OPERATION_STATES, type SyncOperation } from '../../outbox';
 import type { SyncCommitResult } from '../api/SyncApiTypes';
 import type { SyncLocalRuntime } from '../protocol/ProtocolBootstrap';
 import { withSyncOutboxMutationLock } from '../../outbox/SyncOutboxMutationLock';
@@ -70,6 +70,10 @@ export class PersistentOperationAcknowledgmentStore implements OperationAcknowle
         },
       ].slice(-this.historyLimit);
       const health = healthRaw ? (JSON.parse(healthRaw) as Record<string, unknown>) : {};
+      const operations = Object.values(outbox);
+      const pending = operations.filter(
+        (candidate) => !TERMINAL_SYNC_OPERATION_STATES.has(candidate.state),
+      );
       await this.store.setItems({
         [OUTBOX_KEY]: JSON.stringify(outbox),
         [RUNTIME_KEY]: JSON.stringify({
@@ -77,7 +81,29 @@ export class PersistentOperationAcknowledgmentStore implements OperationAcknowle
           lastCommittedSequence: Math.max(runtime.lastCommittedSequence || 0, result.sequence),
           updatedAt: now,
         }),
-        [HEALTH_KEY]: JSON.stringify({ ...health, lastSuccessfulPushAt: now, updatedAt: now }),
+        [HEALTH_KEY]: JSON.stringify({
+          ...health,
+          pendingOperationCount: pending.length,
+          processingOperationCount: pending.filter(
+            (candidate) => !['PENDING', 'RETRY_WAIT'].includes(candidate.state),
+          ).length,
+          retryingOperationCount: pending.filter(
+            (candidate) => candidate.state === 'RETRY_WAIT' && Boolean(candidate.nextAttemptAt),
+          ).length,
+          blockedOperationCount: pending.filter((candidate) =>
+            Boolean(candidate.dependencyOperationId),
+          ).length,
+          conflictOperationCount: operations.filter((candidate) => candidate.state === 'CONFLICT')
+            .length,
+          failedOperationCount: operations.filter((candidate) => candidate.state === 'RETRY_WAIT')
+            .length,
+          oldestPendingOperationAt:
+            pending.length > 0
+              ? Math.min(...pending.map((candidate) => candidate.createdAt))
+              : undefined,
+          lastSuccessfulPushAt: now,
+          updatedAt: now,
+        }),
         [HISTORY_KEY]: JSON.stringify(nextHistory),
       });
     });

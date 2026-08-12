@@ -38,6 +38,7 @@
     "test:accessibility": "playwright test --grep @accessibility",
     "benchmark:seed": "node scripts/create-benchmark-fixture.mjs",
     "benchmark:run": "node scripts/run-benchmark-fixture.mjs",
+    "benchmark:notes:android": "node scripts/run-android-notes-benchmark.mjs",
     "benchmark:production-scale": "npm run benchmark:seed -- --entries 100000 --notes 25000 --outbox 1000 --media 10000 --sync-events 10000 && npm run benchmark:run -- --runs 5",
     "test:all": "npm run lint && npm run test:navigation && npm run test:storage && npm run test:component && npm run test:server && npm run backend:test && npm run build && npm run test:e2e && npm run test:accessibility && npm run android:test && npm run android:lint && npm run scan:secrets",
     "scan:secrets": "node scripts/secret-and-artifact-scan.mjs",

@@ -1,4 +1,4 @@
-import type { LocalDataStore } from '../../../platform/storage';
+import type { LocalCanonicalSnapshotPage, LocalDataStore } from '../../../platform/storage';
 import { SyncError } from '../../errors';
 import {
   SYNC_OPERATIONS_STORAGE_KEY,
@@ -30,7 +30,13 @@ export interface SyncSnapshotCreationJournal {
   snapshotSchemaVersion: number;
   sha256: string;
   sizeBytes: number;
-  encryptedBase64: string;
+  encryptedBase64?: string;
+  format?: 'single-v1' | 'chunked-v1' | 'record-stream-v2';
+  chunks?: Array<{ index: number; sha256: string; sizeBytes: number }>;
+  plaintextSize?: number;
+  chunkSizeBytes?: number;
+  streamCursor?: string;
+  streamComplete?: boolean;
 }
 
 export interface SyncSnapshotStateStore {
@@ -41,10 +47,42 @@ export interface SyncSnapshotStateStore {
     accountId: string;
     throughSequence: number;
     state: SyncCanonicalSnapshotState;
+    allowExistingStateReplacement?: boolean;
   }): Promise<void>;
   loadCreationJournal(): Promise<SyncSnapshotCreationJournal | null>;
   saveCreationJournal(journal: SyncSnapshotCreationJournal): Promise<void>;
+  loadCreationChunk(snapshotId: string, index: number): Promise<string | null>;
+  saveCreationChunk(snapshotId: string, index: number, encryptedBase64: string): Promise<void>;
   clearCreationJournal(snapshotId: string): Promise<void>;
+  supportsRecordStreamSnapshots(): boolean;
+  getAccountSequence(accountId: string): Promise<number>;
+  queryAccountStatePage(
+    accountId: string,
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<LocalCanonicalSnapshotPage>;
+  supportsRecordStreamRestore(): boolean;
+  isRecordStreamRestoreCommitted(input: {
+    snapshotId: string;
+    accountId: string;
+    throughSequence: number;
+  }): Promise<boolean>;
+  beginRecordStreamRestore(input: {
+    snapshotId: string;
+    accountId: string;
+    throughSequence: number;
+    allowExistingStateReplacement?: boolean;
+  }): Promise<void>;
+  stageRecordStreamRestore(
+    snapshotId: string,
+    records: LocalCanonicalSnapshotPage['records'],
+  ): Promise<void>;
+  commitRecordStreamRestore(input: {
+    snapshotId: string;
+    accountId: string;
+    throughSequence: number;
+  }): Promise<void>;
+  abortRecordStreamRestore(snapshotId: string): Promise<void>;
 }
 
 export interface AtomicSnapshotReplacement {
@@ -63,6 +101,122 @@ export class PersistentSyncSnapshotStore implements SyncSnapshotStateStore {
     private readonly replaceCanonical?: (input: AtomicSnapshotReplacement) => Promise<void>,
   ) {}
 
+  supportsRecordStreamSnapshots(): boolean {
+    return typeof this.store.queryCanonicalSnapshotPage === 'function';
+  }
+
+  supportsRecordStreamRestore(): boolean {
+    return Boolean(
+      this.store.clearCanonicalSnapshotRestoreStage &&
+      this.store.stageCanonicalSnapshotRestoreRecords &&
+      this.store.commitCanonicalSnapshotRestore,
+    );
+  }
+
+  async isRecordStreamRestoreCommitted(input: {
+    snapshotId: string;
+    accountId: string;
+    throughSequence: number;
+  }): Promise<boolean> {
+    const runtime = await this.runtime();
+    return (
+      runtime.accountId === input.accountId &&
+      runtime.appliedSequence === input.throughSequence &&
+      runtime.lastRestoredSnapshotId === input.snapshotId
+    );
+  }
+
+  beginRecordStreamRestore(input: {
+    snapshotId: string;
+    accountId: string;
+    throughSequence: number;
+    allowExistingStateReplacement?: boolean;
+  }): Promise<void> {
+    return this.exclusive(async () => {
+      await this.assertRestoreAllowed(input);
+      await this.store.clearCanonicalSnapshotRestoreStage!(input.snapshotId);
+    });
+  }
+
+  stageRecordStreamRestore(
+    snapshotId: string,
+    records: LocalCanonicalSnapshotPage['records'],
+  ): Promise<void> {
+    return this.exclusive(() =>
+      this.store.stageCanonicalSnapshotRestoreRecords!(snapshotId, records),
+    );
+  }
+
+  commitRecordStreamRestore(input: {
+    snapshotId: string;
+    accountId: string;
+    throughSequence: number;
+  }): Promise<void> {
+    return this.exclusive(async () => {
+      const runtime = await this.runtime();
+      if (runtime.accountId !== input.accountId) {
+        throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+      }
+      await this.store.commitCanonicalSnapshotRestore!({
+        snapshotId: input.snapshotId,
+        runtimeKey: SYNC_RUNTIME_KEY,
+        runtimeValue: JSON.stringify({
+          ...runtime,
+          appliedSequence: input.throughSequence,
+          lastRestoredSnapshotId: input.snapshotId,
+          updatedAt: this.now(),
+        }),
+        appliedKey: SYNC_APPLIED_KEY,
+        appliedValue: '[]',
+      });
+      if ((await this.runtime()).appliedSequence !== input.throughSequence) {
+        throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
+      }
+    });
+  }
+
+  abortRecordStreamRestore(snapshotId: string): Promise<void> {
+    return this.exclusive(() => this.store.clearCanonicalSnapshotRestoreStage!(snapshotId));
+  }
+
+  async getAccountSequence(accountId: string): Promise<number> {
+    const runtime = await this.runtime();
+    if (runtime.accountId !== accountId) {
+      throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+    }
+    return runtime.appliedSequence;
+  }
+
+  async queryAccountStatePage(
+    accountId: string,
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<LocalCanonicalSnapshotPage> {
+    if (!this.store.queryCanonicalSnapshotPage) {
+      throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
+    }
+    await this.getAccountSequence(accountId);
+    const page = await this.store.queryCanonicalSnapshotPage({ cursor, limit });
+    if (!page) throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
+    for (const record of page.records) {
+      if (!record.key || record.key.includes('\u0000')) {
+        throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+      }
+      if (record.kind === 'recordVersion') {
+        if (!Number.isInteger(record.value) || Number(record.value) < 0) {
+          throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+        }
+      } else if (record.kind === 'mediaPointer') {
+        if (typeof record.value !== 'string' || record.value.length === 0) {
+          throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+        }
+      } else if (!record.value || typeof record.value !== 'object') {
+        throw new SyncError({ code: 'SCHEMA_INCOMPATIBLE', safetyRelevant: true });
+      }
+    }
+    return page;
+  }
+
   exportAccountState(
     accountId: string,
   ): Promise<{ throughSequence: number; state: SyncCanonicalSnapshotState }> {
@@ -80,33 +234,14 @@ export class PersistentSyncSnapshotStore implements SyncSnapshotStateStore {
     accountId: string;
     throughSequence: number;
     state: SyncCanonicalSnapshotState;
+    allowExistingStateReplacement?: boolean;
   }): Promise<void> {
     return this.exclusive(async () => {
       if (!Number.isInteger(input.throughSequence) || input.throughSequence < 0) {
         throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
       }
       this.validateState(input.state);
-      const runtime = await this.runtime();
-      if (runtime.accountId !== input.accountId) {
-        throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
-      }
-      const existing = await this.read<Record<string, unknown>>(SYNC_RECORDS_KEY, {});
-      const outbox = await this.read<Record<string, SyncOperation>>(
-        SYNC_OPERATIONS_STORAGE_KEY,
-        {},
-      );
-      const hasUnresolvedLocalWrites = Object.values(outbox).some(
-        (operation) =>
-          operation.accountId === input.accountId &&
-          !TERMINAL_SYNC_OPERATION_STATES.has(operation.state),
-      );
-      if (
-        runtime.appliedSequence !== 0 ||
-        Object.keys(existing).length !== 0 ||
-        hasUnresolvedLocalWrites
-      ) {
-        throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
-      }
+      const runtime = await this.assertRestoreAllowed(input);
       const nextRuntime: SyncLocalRuntime = {
         ...runtime,
         appliedSequence: input.throughSequence,
@@ -140,6 +275,42 @@ export class PersistentSyncSnapshotStore implements SyncSnapshotStateStore {
     });
   }
 
+  private async assertRestoreAllowed(input: {
+    accountId: string;
+    throughSequence: number;
+    allowExistingStateReplacement?: boolean;
+  }): Promise<SyncLocalRuntime> {
+    if (!Number.isInteger(input.throughSequence) || input.throughSequence < 0) {
+      throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+    }
+    const runtime = await this.runtime();
+    if (runtime.accountId !== input.accountId) {
+      throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+    }
+    const outbox = await this.read<Record<string, SyncOperation>>(SYNC_OPERATIONS_STORAGE_KEY, {});
+    if (
+      Object.values(outbox).some(
+        (operation) =>
+          operation.accountId === input.accountId &&
+          !TERMINAL_SYNC_OPERATION_STATES.has(operation.state),
+      )
+    ) {
+      throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
+    }
+    if (!input.allowExistingStateReplacement) {
+      const first = this.store.queryCanonicalSnapshotPage
+        ? await this.store.queryCanonicalSnapshotPage({ limit: 1 })
+        : undefined;
+      const hasState = first
+        ? first.records.length > 0
+        : Object.keys(await this.read<Record<string, unknown>>(SYNC_RECORDS_KEY, {})).length > 0;
+      if (runtime.appliedSequence !== 0 || hasState) {
+        throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
+      }
+    }
+    return runtime;
+  }
+
   loadCreationJournal(): Promise<SyncSnapshotCreationJournal | null> {
     return this.exclusive(async () => {
       const raw = await this.store.getItem(CREATION_JOURNAL_KEY);
@@ -151,13 +322,31 @@ export class PersistentSyncSnapshotStore implements SyncSnapshotStateStore {
     return this.exclusive(() => this.store.setItem(CREATION_JOURNAL_KEY, JSON.stringify(journal)));
   }
 
+  loadCreationChunk(snapshotId: string, index: number): Promise<string | null> {
+    return this.exclusive(() => this.store.getItem(this.creationChunkKey(snapshotId, index)));
+  }
+
+  saveCreationChunk(snapshotId: string, index: number, encryptedBase64: string): Promise<void> {
+    return this.exclusive(() =>
+      this.store.setItem(this.creationChunkKey(snapshotId, index), encryptedBase64),
+    );
+  }
+
   clearCreationJournal(snapshotId: string): Promise<void> {
     return this.exclusive(async () => {
       const raw = await this.store.getItem(CREATION_JOURNAL_KEY);
       if (!raw || (JSON.parse(raw) as SyncSnapshotCreationJournal).snapshotId !== snapshotId)
         return;
+      const journal = JSON.parse(raw) as SyncSnapshotCreationJournal;
+      for (const chunk of journal.chunks || []) {
+        await this.store.removeItem(this.creationChunkKey(snapshotId, chunk.index));
+      }
       await this.store.removeItem(CREATION_JOURNAL_KEY);
     });
+  }
+
+  private creationChunkKey(snapshotId: string, index: number): string {
+    return `${CREATION_JOURNAL_KEY}:${snapshotId}:${index}`;
   }
 
   private async readState(): Promise<SyncCanonicalSnapshotState> {
