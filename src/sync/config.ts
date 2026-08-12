@@ -17,8 +17,11 @@ import {
 } from '../infrastructure/telemetry/GrafanaFaro';
 import type { Faro } from '@grafana/faro-web-sdk';
 
+const readOptionalViteEnv = (key: string): string | undefined =>
+  (import.meta.env?.[key] as string | undefined)?.trim() || undefined;
+
 const readViteEnv = (key: string): string => {
-  const value = (import.meta.env[key] as string | undefined)?.trim();
+  const value = readOptionalViteEnv(key);
   if (!value)
     throw new Error(
       `Missing ${key} for ${APP_ENVIRONMENT}. Add it to the environment-specific configuration before enabling multi-device sync.`,
@@ -46,12 +49,12 @@ let configuredFaro: Faro | undefined;
 let configuredTelemetry: Telemetry | undefined;
 
 const getConfiguredFaro = (): Faro | undefined => {
-  const url = (import.meta.env.VITE_GRAFANA_FARO_URL as string | undefined)?.trim();
+  const url = readOptionalViteEnv('VITE_GRAFANA_FARO_URL');
   if (!url) return undefined;
   configuredFaro ??= createGrafanaFaro(
     url,
     APP_ENVIRONMENT,
-    (import.meta.env.VITE_TELEMETRY_RELEASE_VERSION as string | undefined)?.trim() || 'unknown',
+    readOptionalViteEnv('VITE_TELEMETRY_RELEASE_VERSION') || 'unknown',
   );
   return configuredFaro;
 };
