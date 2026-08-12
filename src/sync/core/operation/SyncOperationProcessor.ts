@@ -116,6 +116,15 @@ export class SyncOperationProcessor {
       leaseDurationMs: this.leaseDurationMs,
     });
     if (!claimed) return false;
+    this.telemetry.histogram(
+      'deardiary.outbox.oldest_pending_age_ms',
+      Math.max(0, this.now() - claimed.createdAt),
+      { outbox_state: claimed.state },
+    );
+    this.telemetry.histogram('deardiary.outbox.retry_count', claimed.retryCount, {
+      retry_count_bucket:
+        claimed.retryCount === 0 ? '0' : claimed.retryCount < 3 ? '1_2' : claimed.retryCount < 6 ? '3_5' : 'gte_6',
+    });
     const span = this.telemetry.startSpan('outbox.operation', {
       operation_type: claimed.operationType,
       record_type: claimed.recordType,

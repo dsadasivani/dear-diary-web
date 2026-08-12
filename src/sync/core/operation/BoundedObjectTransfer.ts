@@ -168,6 +168,10 @@ export class BoundedObjectTransfer {
       } finally {
         clearTimeout(timeout);
       }
+      this.telemetry.counter('deardiary.sync.transfer.retry', 1, {
+        retry_count_bucket: String(attempt),
+        error_code: failureCode,
+      });
       await this.sleep(this.retryBaseDelayMs * 2 ** (attempt - 1));
     }
     throw new SyncError({ code: failureCode, retryable: true, cause: lastError });

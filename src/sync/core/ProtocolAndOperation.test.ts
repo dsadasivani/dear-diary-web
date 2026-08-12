@@ -23,6 +23,7 @@ import { TestSyncFaultInjector } from './faults/SyncFaultInjector';
 import { exportDeviceSigningPublicKeySpki, generateDeviceKeyPair } from '../deviceKeys';
 import { clearSyncLocalCache, SYNC_LOCAL_CACHE_KEYS } from './clearSyncLocalCache';
 import { clearRecoverableCompanionSafetyStop } from './safety/companionSafetyRecovery';
+import { NOOP_TELEMETRY } from '../../infrastructure/telemetry/Telemetry';
 
 const runtime = (): SyncLocalRuntime => ({
   accountId: 'account-1',
@@ -463,10 +464,19 @@ test('bounded transfer preserves order and respects its concurrency bound', asyn
 test('bounded transfer retries transient object failures and verifies the final download', async () => {
   const bytes = new Uint8Array([7, 8, 9]);
   let attempts = 0;
+  const retries: Array<{ value: number; bucket?: string | number | boolean }> = [];
   const transfer = new BoundedObjectTransfer({
     maximumObjectBytes: 10,
     maximumAttempts: 3,
     retryBaseDelayMs: 0,
+    telemetry: {
+      ...NOOP_TELEMETRY,
+      counter: (name, value, attributes) => {
+        if (name === 'deardiary.sync.transfer.retry') {
+          retries.push({ value, bucket: attributes?.retry_count_bucket });
+        }
+      },
+    },
     fetch: async () => {
       attempts += 1;
       return attempts < 3
@@ -484,6 +494,10 @@ test('bounded transfer retries transient object failures and verifies the final 
   ]);
   assert.deepEqual(downloaded, bytes);
   assert.equal(attempts, 3);
+  assert.deepEqual(retries, [
+    { value: 1, bucket: '1' },
+    { value: 1, bucket: '2' },
+  ]);
 });
 
 test('bounded transfer aborts hung object requests after its deadline', async () => {

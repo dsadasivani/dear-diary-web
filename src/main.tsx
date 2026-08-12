@@ -20,8 +20,11 @@ import {
   getLocalAccentThemePreference,
 } from './utils/accentPreference';
 import { installManualPerformanceHooks } from './testing/manualSyncFlowHooks';
+import { installRuntimeHealthTelemetry } from './infrastructure/telemetry/runtimeHealthTelemetry';
 
-setPerformanceTelemetry(createConfiguredTelemetry());
+const telemetry = createConfiguredTelemetry();
+setPerformanceTelemetry(telemetry);
+installRuntimeHealthTelemetry(telemetry);
 const crashReporter = createConfiguredCrashReporter();
 window.addEventListener('error', (event) => crashReporter.capture(event.error));
 window.addEventListener('unhandledrejection', (event) => crashReporter.capture(event.reason));

@@ -76,6 +76,7 @@ export class SyncSnapshotCoordinator {
   ) {}
 
   async create(): Promise<SyncSnapshot> {
+    const startedAt = Date.now();
     await this.safetyStop.assertDestructiveActionAllowed(this.options.accountId);
     const span = this.telemetry.startSpan('snapshot.create');
     try {
@@ -139,6 +140,14 @@ export class SyncSnapshotCoordinator {
       const registered = await this.api.registerSnapshot(snapshotId, this.options.deviceId);
       await this.state.clearCreationJournal(snapshotId);
       this.telemetry.counter('deardiary.sync.snapshot_create.success', 1);
+      this.telemetry.histogram('deardiary.sync.snapshot.bytes', journal.sizeBytes, {
+        sync_mode: 'create',
+      });
+      this.telemetry.histogram(
+        'deardiary.sync.snapshot.throughput_bytes_per_second',
+        (journal.sizeBytes * 1_000) / Math.max(1, Date.now() - startedAt),
+        { sync_mode: 'create' },
+      );
       span.end();
       return registered;
     } catch (error) {
@@ -196,6 +205,7 @@ export class SyncSnapshotCoordinator {
   }
 
   async restoreSnapshot(snapshot: SyncSnapshot): Promise<SyncSnapshot> {
+    const startedAt = Date.now();
     const span = this.telemetry.startSpan('snapshot.restore');
     let stagedRecordStream = false;
     try {
@@ -295,6 +305,14 @@ export class SyncSnapshotCoordinator {
       await this.faults.hit('AFTER_LOCAL_COMMIT_BEFORE_SERVER_ACK');
       await this.api.acknowledgeCursor(this.options.deviceId, snapshot.throughSequence);
       this.telemetry.counter('deardiary.sync.snapshot_restore.success', 1);
+      this.telemetry.histogram('deardiary.sync.snapshot.bytes', snapshot.sizeBytes, {
+        sync_mode: 'restore',
+      });
+      this.telemetry.histogram(
+        'deardiary.sync.snapshot.throughput_bytes_per_second',
+        (snapshot.sizeBytes * 1_000) / Math.max(1, Date.now() - startedAt),
+        { sync_mode: 'restore' },
+      );
       span.end();
       return snapshot;
     } catch (error) {

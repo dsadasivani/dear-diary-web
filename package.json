@@ -24,6 +24,8 @@
     "test:journal-catalog": "tsx --test src/domain/journalCatalog.test.ts",
     "test:navigation": "tsx --test src/navigation/appNavigation.test.ts",
     "test:sync-client": "tsx --test src/sync/core/ProtocolAndOperation.test.ts src/sync/core/ReplayAndConflict.test.ts src/sync/core/Snapshot.test.ts src/sync/core/MultiDevice.property.test.ts src/sync/core/AdvancedWorkflows.test.ts src/sync/core/MediaSync.test.ts",
+    "test:sync-soak": "tsx --test src/sync/core/SyncSoak.test.ts",
+    "test:sync-soak:long": "cross-env SYNC_SOAK_CYCLES=1000 tsx --test src/sync/core/SyncSoak.test.ts",
     "test:priority0": "tsx --test src/infrastructure/http/executeRequest.test.ts && tsx --test src/infrastructure/telemetry/Telemetry.test.ts && tsx --test src/sync/errors/SyncError.test.ts",
     "test:sync-health": "tsx --test src/sync/health/SyncHealth.test.ts && tsx --test src/sync/health/SyncHealthService.test.ts",
     "test:sync-operations": "tsx --test src/sync/outbox/OutboxStateMachine.test.ts && tsx --test src/sync/outbox/PersistentOutboxRepository.test.ts && tsx --test src/sync/outbox/retryScheduling.test.ts",

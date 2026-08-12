@@ -89,11 +89,33 @@ The Notes screen previously loaded, filtered, sorted, converted rich text, and r
 - Test fixture preparation was reduced from more than 10 minutes of per-record bridge calls to a 7,022 ms atomic JSON-to-SQL/FTS/canonical bulk seed.
 - Diary editor and Today/Recent views remained usable after emulator restart and continued to sync correctly.
 
-## Remaining work
+## Release telemetry
 
-1. Run a production-like soak with repeated offline/online transitions, process death during every outbox state, and at least two active companions.
-2. Repeat the full live test against staging after the staging sync endpoint is healthy. It returned HTTP 503 during this work, so the live end-to-end exercise used the local production-shaped stack with a real authentication token.
-3. Add release telemetry for bootstrap duration, snapshot throughput, outbox age, retry count, WebView long tasks, and memory pressure.
+Production telemetry now records end-to-end bootstrap spans, snapshot byte counts and throughput, oldest pending outbox age, per-operation retry count, object-transfer retry count, WebView long-task count and duration, JavaScript heap use and utilization, and an explicit memory-pressure warning above 80% heap utilization. Metric attributes remain restricted to the existing low-cardinality privacy allowlist; record contents, identifiers, object URLs, and user data are never attached.
+
+The reconnect overlay now switches to explicit slow-transfer feedback after eight seconds, explains that automatic retries are in progress and local changes remain safe, and offers an offline-copy action when the device already has a usable local state. Object-transfer attempts use a 15-second base timeout so a dead endpoint no longer leaves the interface apparently frozen for the former full timeout window.
+
+## Staging validation on 2026-08-12
+
+The staging sync service recovered from its earlier HTTP 503 state: its health endpoint returned HTTP 200/UP, its protected protocol endpoint returned the expected HTTP 401 without a token, and an authenticated Android staging build completed Google/Supabase verification and found the existing encrypted account. The staging web companion also reached the pairing-request flow.
+
+The full recovery/offline/reconnect/convergence scenario was not completed in this run. Primary recovery intentionally revokes the previous primary and companions, so continuing would invalidate the already-open staging companion before it could participate in the same scenario. The production-shaped local run remains the completed evidence for Android plus two companions, process death, outage, and convergence; staging now has confirmed endpoint, authentication, and encrypted-account discovery coverage.
+
+## Multi-device soak and process-death gate
+
+The sync engine now has a deterministic persistent-store soak gate covering one primary and two simultaneously active web companions. Each cycle takes the service offline, accepts one durable local write per device, observes the operations enter retry wait, reconstructs all three clients over their existing stores to model abrupt process death, restores connectivity, drains the ordered outboxes, and pulls remote events into every device. Periodic additional restarts verify that a clean process can continue from only persisted runtime, outbox, acknowledgment, replay, and cursor state.
+
+The extended run completed 1,000 offline/online cycles and 3,000 committed operations in 194.345 seconds. All three clients reached sequence 3,000, retained no non-acknowledged operations, and held identical 3,000-record views at the end. Convergence was also checked every ten cycles during the run.
+
+A separate restart matrix covers all 15 durable outbox states. `PENDING`, `PREPARING`, `UPLOADING`, `READY_TO_COMMIT`, `COMMITTING`, `COMMITTED`, and `RETRY_WAIT` resumed to `ACKNOWLEDGED` after lease recovery. `CONFLICT`, all four `BLOCKED_*` states, and `SAFETY_STOP` remained safely blocked across restart instead of being bypassed. `ACKNOWLEDGED` and `SUPERSEDED` remained terminal.
+
+Run the normal 250-cycle gate with `npm run test:sync-soak`, or the 1,000-cycle extended gate with `npm run test:sync-soak:long`.
+
+The original Android `Pixel_8` AVD became `offline` to ADB after the 10,000-note benchmark and was left unmodified. The deterministic three-client soak was initially added while that AVD was unavailable. A second AVD was subsequently recovered for the live three-device run below.
+
+An additional live run on 2026-08-12 recovered the second Android AVD and exercised one Android primary plus two independent browser companion origins against an isolated local database. The service reported one `ACTIVE` primary and two `ACTIVE` companions simultaneously. With the API stopped, all three devices created distinct notes, both browser applications were reloaded, and the Android application was force-stopped and relaunched. After API and object-store connectivity returned, all three outboxes committed exactly once and all three clients displayed the same three-note result.
+
+This run found a local-stack bootstrap defect: MinIO allowed the original development origins but omitted the additional companion origins. An approved companion therefore remained safely `RECOVERY_PENDING` while its encrypted key package could not be downloaded. The Compose CORS configuration now includes ports 3002 and 3003 for both `localhost` and `127.0.0.1`. Android also demonstrated bounded but visually long recovery when object-store forwarding was temporarily unavailable: the catch-up overlay remained at `0 of 2` until the transfer retry window elapsed, then completed without data loss once connectivity was restored.
 
 Cloud retention and storage-growth policy is intentionally deferred to the planned subscription/storage-tier work.
 
@@ -106,5 +128,9 @@ Cloud retention and storage-growth policy is intentionally deferred to the plann
 - Notes component tests: 5/5 pass
 - Local repository tests: 39/39 pass
 - Automated 10,000-note Android regression gate: pass
+- Persistent primary plus two-companion soak, 1,000 offline/online cycles and 3,000 writes: pass
+- Forced-restart matrix across all 15 outbox states: pass
+- Live Android primary plus two simultaneously active browser companions: pass
+- Live three-device offline writes, browser reloads, Android force-stop, reconnect, and three-way convergence: pass
 - Android debug build: pass
 - Final APK installed in place on the emulator: pass

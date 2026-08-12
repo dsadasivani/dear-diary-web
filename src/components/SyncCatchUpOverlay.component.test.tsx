@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import SyncCatchUpOverlay from './SyncCatchUpOverlay';
 
 describe('SyncCatchUpOverlay', () => {
+  afterEach(() => vi.useRealTimers());
   it('shows session-relative progress while stale content is blocked', () => {
     render(
       <SyncCatchUpOverlay
@@ -25,6 +26,31 @@ describe('SyncCatchUpOverlay', () => {
     expect(screen.getByLabelText(/initial sync progress/i).firstElementChild).toHaveStyle({
       width: '100%',
     });
+  });
+
+  it('explains a slow secure retry and allows an existing device to continue offline', () => {
+    vi.useFakeTimers();
+    const onContinueOffline = vi.fn();
+    render(
+      <SyncCatchUpOverlay
+        gate={{
+          phase: 'applying-events',
+          startingSequence: 12,
+          appliedSequence: 12,
+          targetSequence: 14,
+          totalEvents: 2,
+          allowOffline: true,
+        }}
+        onRetry={vi.fn()}
+        onContinueOffline={onContinueOffline}
+      />,
+    );
+
+    act(() => vi.advanceTimersByTime(8_000));
+    expect(screen.getByText(/still reconnecting securely/i)).toBeInTheDocument();
+    expect(screen.getByText(/retrying automatically/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /use offline copy while retrying/i }));
+    expect(onContinueOffline).toHaveBeenCalledOnce();
   });
 
   it('allows retry but keeps a new empty companion blocked from offline use', () => {

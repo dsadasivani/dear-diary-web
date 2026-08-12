@@ -43,6 +43,7 @@ export const createConfiguredSyncApiClient = (
   });
 
 let configuredFaro: Faro | undefined;
+let configuredTelemetry: Telemetry | undefined;
 
 const getConfiguredFaro = (): Faro | undefined => {
   const url = (import.meta.env.VITE_GRAFANA_FARO_URL as string | undefined)?.trim();
@@ -56,8 +57,12 @@ const getConfiguredFaro = (): Faro | undefined => {
 };
 
 export const createConfiguredTelemetry = (): Telemetry => {
+  if (configuredTelemetry) return configuredTelemetry;
   const faro = getConfiguredFaro();
-  return faro ? new PrivacySafeTelemetry(new GrafanaFaroTelemetryExporter(faro)) : NOOP_TELEMETRY;
+  configuredTelemetry = faro
+    ? new PrivacySafeTelemetry(new GrafanaFaroTelemetryExporter(faro))
+    : NOOP_TELEMETRY;
+  return configuredTelemetry;
 };
 
 export const createConfiguredCrashReporter = (): CrashReporter => {

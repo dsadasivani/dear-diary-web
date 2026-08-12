@@ -81,6 +81,7 @@ import { AccountKeySyncSnapshotCodec } from './snapshot/SyncSnapshotCodec';
 import { SyncSnapshotCoordinator } from './snapshot/SyncSnapshotCoordinator';
 import { SyncRuntimeCoordinator, type SyncBackgroundWorker } from './SyncRuntimeCoordinator';
 import { reportUnexpectedError } from '../../infrastructure/telemetry/reportUnexpectedError';
+import { NOOP_TELEMETRY, type Telemetry } from '../../infrastructure/telemetry/Telemetry';
 import { signWithDeviceBundle } from './companionPairing';
 import { clearSyncLocalCache } from './clearSyncLocalCache';
 import { signOutGoogleAuth } from '../../utils/googleAuth';
@@ -378,6 +379,7 @@ export class SyncApplicationLifecycle {
     private readonly repository: DiaryRepository,
     private readonly outbox: OutboxRepository,
     private readonly engine: EventSyncEngine,
+    private readonly telemetry: Telemetry = NOOP_TELEMETRY,
   ) {}
 
   async hasExistingPrimaryAccount(supabaseSession: SupabaseAuthSession): Promise<boolean> {
@@ -452,6 +454,8 @@ export class SyncApplicationLifecycle {
       }
       const transfer = new BoundedObjectTransfer({
         maximumObjectBytes: protocol.maximumSnapshotBytes,
+        requestTimeoutMs: 15_000,
+        telemetry: this.telemetry,
       });
       const [recoveryBytes] = await transfer.download([
         {
@@ -520,6 +524,8 @@ export class SyncApplicationLifecycle {
     const transfer = new BoundedObjectTransfer({
       maximumObjectBytes: Math.max(protocol.maximumSnapshotBytes, protocol.maximumEventBytes),
       maximumConcurrency: 6,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
     });
     const safety = new PersistentSafetyStopStore(this.store);
     const snapshotStore = new PersistentSyncSnapshotStore(
@@ -545,6 +551,7 @@ export class SyncApplicationLifecycle {
         maximumSnapshotBytes: protocol.maximumSnapshotBytes,
         currentKeyEpoch: async () => keyEpoch,
       },
+      this.telemetry,
     );
     const restoredSnapshot = await snapshots.restoreLatestWithMetadata();
     const recoveredAccount: LocalSyncAccountState = {
@@ -590,6 +597,7 @@ export class SyncApplicationLifecycle {
         replayBatchSize: protocol.bootstrapControls?.replayBatchSize || 25,
         onProgress: (progress) => this.engine.reportCatchUpProgress(progress),
       },
+      this.telemetry,
     );
     let currentSequence: number;
     try {
@@ -773,6 +781,8 @@ export class SyncApplicationLifecycle {
     if (!recoveryUpload.upload) throw new Error('Secure recovery storage is unavailable.');
     const transfer = new BoundedObjectTransfer({
       maximumObjectBytes: protocol.maximumSnapshotBytes,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
     });
     await transfer.upload(
       [{ objectKey: recoveryUpload.upload.objectKey, bytes: recoveryBytes }],
@@ -826,6 +836,7 @@ export class SyncApplicationLifecycle {
         currentKeyEpoch: async () => 1,
         signMetadata: (message) => signWithDeviceBundle(pending.devicePrivateKeyJwk, message),
       },
+      this.telemetry,
     );
     if (!(await snapshots.reuseLatestAtCurrentSequence())) await snapshots.create();
     input.onProgress?.('Finishing secure setup...');
@@ -875,6 +886,8 @@ export class SyncApplicationLifecycle {
       new BoundedObjectTransfer({
         maximumObjectBytes: Math.max(protocol.maximumSnapshotBytes, protocol.maximumEventBytes),
         maximumConcurrency: 6,
+        requestTimeoutMs: 15_000,
+        telemetry: this.telemetry,
       }),
       new PersistentSyncSnapshotStore(this.store),
       new AccountKeySyncSnapshotCodec((epoch) => this.keyForEpoch(epoch)),
@@ -889,6 +902,7 @@ export class SyncApplicationLifecycle {
           (await this.repository.getLocalSyncAccountState())?.keyEpoch || 1,
         signMetadata: (message) => signWithDeviceBundle(secrets.devicePrivateKeyJwk, message),
       },
+      this.telemetry,
     );
     await snapshots.create();
   }
@@ -959,8 +973,12 @@ export class SyncApplicationLifecycle {
   }
 
   async startIfActive(): Promise<boolean> {
+    const bootstrapSpan = this.telemetry.startSpan('deardiary.sync.bootstrap');
     let account = await this.repository.getLocalSyncAccountState();
-    if (!account) return false;
+    if (!account) {
+      bootstrapSpan.end();
+      return false;
+    }
     try {
       account = await this.applyAvailableDeviceKeyPackage(account);
       if (!this.companionRecoveryAttempts.has(account.accountId)) {
@@ -984,10 +1002,18 @@ export class SyncApplicationLifecycle {
         if (queued) await this.delegate.flushPendingOutbox();
       }
       await this.store.removeItem(EXISTING_BOOTSTRAP_JOURNAL_KEY);
+      this.telemetry.counter('deardiary.sync.bootstrap.success', 1, {
+        device_role: account.deviceRole,
+      });
+      bootstrapSpan.end();
       return true;
     } catch (error) {
       if (isSyncError(error) && error.code === 'DEVICE_REVOKED') {
         await this.handleDeviceRevoked();
+        this.telemetry.counter('deardiary.sync.bootstrap.failure', 1, {
+          error_code: error.code,
+        });
+        bootstrapSpan.end(error.code);
         return false;
       }
       if (isSyncError(error) && error.code === 'SNAPSHOT_REQUIRED') {
@@ -999,8 +1025,15 @@ export class SyncApplicationLifecycle {
         this.engine.installRuntimeDelegate(this.delegate);
         await this.delegate.start();
         await this.store.removeItem(EXISTING_BOOTSTRAP_JOURNAL_KEY);
+        this.telemetry.counter('deardiary.sync.bootstrap.success', 1, {
+          device_role: account.deviceRole,
+        });
+        bootstrapSpan.end();
         return true;
       }
+      const code = isSyncError(error) ? error.code : 'UNKNOWN';
+      this.telemetry.counter('deardiary.sync.bootstrap.failure', 1, { error_code: code });
+      bootstrapSpan.end(code);
       throw error;
     }
   }
@@ -1049,6 +1082,8 @@ export class SyncApplicationLifecycle {
     const protocol = await this.client().getProtocol();
     const transfer = new BoundedObjectTransfer({
       maximumObjectBytes: protocol.maximumSnapshotBytes,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
     });
     const [bytes] = await transfer.download([
       {
@@ -1149,6 +1184,8 @@ export class SyncApplicationLifecycle {
     const transfer = new BoundedObjectTransfer({
       maximumObjectBytes: Math.max(protocol.maximumSnapshotBytes, protocol.maximumEventBytes),
       maximumConcurrency: 6,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
     });
     const safety = new PersistentSafetyStopStore(this.store);
     const snapshots = new SyncSnapshotCoordinator(
@@ -1170,6 +1207,7 @@ export class SyncApplicationLifecycle {
         currentKeyEpoch: async () => account.keyEpoch || 1,
         allowExistingStateReplacement: true,
       },
+      this.telemetry,
     );
     const restored = await snapshots.restoreSnapshot(manifest.snapshot);
     await safety.clearAfterVerifiedRecovery(account.accountId);
@@ -1211,6 +1249,7 @@ export class SyncApplicationLifecycle {
         throughSequence: manifest.headSequence,
         onProgress: (progress) => this.engine.reportCatchUpProgress(progress),
       },
+      this.telemetry,
     );
     const appliedSequence = await puller.pull();
     const possessionSignature = await signWithDeviceBundle(
@@ -1357,6 +1396,8 @@ export class SyncApplicationLifecycle {
         1,
       ),
       maximumConcurrency: 6,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
     });
     const validator = new SyncInvariantValidator();
     const safety = new PersistentSafetyStopStore(this.store);
@@ -1390,6 +1431,7 @@ export class SyncApplicationLifecycle {
         replayBatchSize: protocol.bootstrapControls?.replayBatchSize || 25,
         onProgress: (progress) => this.engine.reportCatchUpProgress(progress),
       },
+      this.telemetry,
     );
     const mediaPreparer = protocol.featureFlags.mediaUploadEnabled
       ? new SyncMediaPreparer({
@@ -1438,6 +1480,7 @@ export class SyncApplicationLifecycle {
         protocolVersion: PROTOCOL_VERSION,
         workerId: `app:${account.deviceId}`,
       },
+      this.telemetry,
     );
     const handleWorkerError = (context: string) => (error: unknown) =>
       this.handleRuntimeError(context, error);
@@ -1497,6 +1540,7 @@ export class SyncApplicationLifecycle {
               (await this.repository.getLocalSyncAccountState())?.keyEpoch || 1,
             signMetadata: (message) => signWithDeviceBundle(secrets.devicePrivateKeyJwk, message),
           },
+          this.telemetry,
         );
         await snapshots.create();
       },
