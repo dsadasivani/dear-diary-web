@@ -41,6 +41,32 @@ Automated checks do not replace physical-device and staging validation. Before a
 - New Android account creation and web companion approval with real Google and backend credentials.
 - Offline local writes, reconnect, outbox drain, remote replay, conflict preservation, and multi-device convergence.
 - Primary recovery, companion revocation, key rotation, restart during each resumable workflow, and recovery after a lost response.
+
+## Sync soak and process-death coverage
+
+Run the repeatable primary-plus-two-companion soak with:
+
+```bash
+npm run test:sync-soak
+```
+
+The default gate performs 250 offline/online cycles. The longer release-candidate gate performs 1,000 cycles:
+
+```bash
+npm run test:sync-soak:long
+```
+
+Both variants also reconstruct the sync runtime across every durable outbox state. Resumable states must reach acknowledgment after lease recovery, blocked states must remain blocked, and terminal states must remain terminal.
+
+For the live local three-device check, use separate browser origins so each companion owns an independent encrypted IndexedDB store (for example, `http://localhost:3003` and `http://127.0.0.1:3003`). The local object store CORS list includes both origins. When testing an Android emulator against host services, reverse both the sync API and object-store ports; restarting the ADB server clears these mappings:
+
+```bash
+adb reverse tcp:8081 tcp:8081
+adb reverse tcp:9000 tcp:9000
+```
+
+Verify the service has one active primary and at least two active companions before beginning the outage. Queue a distinct local write on every device while the API is stopped, reload both browser applications, force-stop and relaunch Android, restore connectivity, and require exactly-once commits plus visible convergence on all three clients.
+
 - Correct, wrong, changed, and unavailable recovery material without logging secrets.
 - Biometric success, cancellation, lockout, and PIN fallback.
 - Camera or picker, microphone, speech recognition, notifications, keyboard resize, Back behavior, deep links, and status-bar appearance.

@@ -13,6 +13,7 @@ export interface SyncRuntimeDelegate {
   stop(): void | Promise<void>;
   pullPending(): Promise<void>;
   flushPendingOutbox(): Promise<void>;
+  retryPendingOutboxNow(): Promise<void>;
   requestOutboxFlush(delayMs?: number): void;
   hydrateMediaReference?(reference: string): Promise<string>;
 }
@@ -104,6 +105,10 @@ export class EventSyncEngine {
 
   flushPendingOutbox(): Promise<void> {
     return this.runtimeDelegate?.flushPendingOutbox() ?? Promise.resolve();
+  }
+
+  retryPendingOutboxNow(): Promise<void> {
+    return this.runtimeDelegate?.retryPendingOutboxNow() ?? Promise.resolve();
   }
 
   async reauthorize(): Promise<void> {

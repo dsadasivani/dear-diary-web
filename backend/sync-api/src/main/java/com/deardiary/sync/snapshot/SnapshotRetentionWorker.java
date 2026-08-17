@@ -73,15 +73,22 @@ public class SnapshotRetentionWorker {
             """, now, candidate.accountId(), candidate.snapshotId(),
             candidate.accountId(), candidate.snapshotId());
         if (updated == 0) return;
-        jdbc.update("""
-            UPDATE sync_object_references SET deleted_sequence = ?
-            WHERE account_id = ? AND object_key = ? AND reference_kind = 'SNAPSHOT'
-              AND deleted_sequence IS NULL
-            """, Math.max(1, candidate.sequence()), candidate.accountId(), candidate.objectKey());
-        jdbc.update("""
-            UPDATE sync_objects SET retired_sequence = ?, updated_at = ?
-            WHERE account_id = ? AND object_key = ? AND retired_sequence IS NULL
-            """, Math.max(1, candidate.sequence()), now, candidate.accountId(), candidate.objectKey());
+        var objectKeys = jdbc.query("""
+            SELECT object_key FROM sync_snapshot_chunks
+            WHERE account_id = ? AND snapshot_id = ? ORDER BY chunk_index
+            """, (rs, row) -> rs.getString(1), candidate.accountId(), candidate.snapshotId());
+        if (objectKeys.isEmpty()) objectKeys = java.util.List.of(candidate.objectKey());
+        for (var objectKey : objectKeys) {
+            jdbc.update("""
+                UPDATE sync_object_references SET deleted_sequence = ?
+                WHERE account_id = ? AND object_key = ? AND reference_kind = 'SNAPSHOT'
+                  AND deleted_sequence IS NULL
+                """, Math.max(1, candidate.sequence()), candidate.accountId(), objectKey);
+            jdbc.update("""
+                UPDATE sync_objects SET retired_sequence = ?, updated_at = ?
+                WHERE account_id = ? AND object_key = ? AND retired_sequence IS NULL
+                """, Math.max(1, candidate.sequence()), now, candidate.accountId(), objectKey);
+        }
     }
 
     private record Candidate(

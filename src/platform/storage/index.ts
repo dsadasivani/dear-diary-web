@@ -5,6 +5,9 @@ import { WebLocalDataStore } from './webLocalDataStore';
 
 export type {
   LocalDataStore,
+  LocalCanonicalSnapshotPage,
+  LocalCanonicalSnapshotRecord,
+  LocalCanonicalSnapshotRecordKind,
   LocalEntryProjection,
   LocalEntryQueryOptions,
   LocalNoteProjection,

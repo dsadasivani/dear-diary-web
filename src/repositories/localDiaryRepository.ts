@@ -168,7 +168,9 @@ const mergeConcurrentEntryPhotos = (
   localCanonical: Entry,
   remoteCanonical: Entry,
 ): Entry | null => {
-  if (normalizedEntryWithoutPhotos(localCanonical) !== normalizedEntryWithoutPhotos(remoteCanonical)) {
+  if (
+    normalizedEntryWithoutPhotos(localCanonical) !== normalizedEntryWithoutPhotos(remoteCanonical)
+  ) {
     return null;
   }
   const sourceByCanonical = new Map<string, string>();
@@ -431,11 +433,15 @@ export class LocalDiaryRepository implements DiaryRepository {
   async initialize(): Promise<void> {
     await measureAsync('repository.initialize', () =>
       this.enqueueWrite(async () => {
-        const [diaries, entries, notes, settings, profile, security, driveBackup] =
+        const collectionExists = async (key: string): Promise<boolean> => {
+          if ((await this.store.hasStructuredCollection?.(key)) === true) return true;
+          return (await this.store.getItem(key)) !== null;
+        };
+        const [diariesExist, entriesExist, notesExist, settings, profile, security, driveBackup] =
           await Promise.all([
-            this.store.getItem(STORAGE_KEYS.diaries),
-            this.store.getItem(STORAGE_KEYS.entries),
-            this.store.getItem(STORAGE_KEYS.notes),
+            collectionExists(STORAGE_KEYS.diaries),
+            collectionExists(STORAGE_KEYS.entries),
+            collectionExists(STORAGE_KEYS.notes),
             this.store.getItem(STORAGE_KEYS.settings),
             this.store.getItem(STORAGE_KEYS.userProfile),
             this.store.getItem(STORAGE_KEYS.security),
@@ -443,9 +449,9 @@ export class LocalDiaryRepository implements DiaryRepository {
           ]);
 
         const missingItems: Record<string, unknown> = {};
-        if (diaries === null) missingItems[STORAGE_KEYS.diaries] = clone(INITIAL_DIARIES);
-        if (entries === null) missingItems[STORAGE_KEYS.entries] = [];
-        if (notes === null) missingItems[STORAGE_KEYS.notes] = [];
+        if (!diariesExist) missingItems[STORAGE_KEYS.diaries] = clone(INITIAL_DIARIES);
+        if (!entriesExist) missingItems[STORAGE_KEYS.entries] = [];
+        if (!notesExist) missingItems[STORAGE_KEYS.notes] = [];
         if (settings === null) missingItems[STORAGE_KEYS.settings] = DEFAULT_APP_SETTINGS;
         if (security === null) missingItems[STORAGE_KEYS.security] = DEFAULT_SECURITY_CONFIG;
         const backupDefaults = createDefaultLocalRepositoryMetadata();
@@ -770,12 +776,17 @@ export class LocalDiaryRepository implements DiaryRepository {
       });
       if (projectedPage) return { ...projectedPage, items: projectedPage.items.map(noteSummary) };
     }
-    if (options && !options.query) {
+    if (options) {
       const storedPage = await this.store.queryNotes?.({
         ...options,
         sort: 'pinned-updated-desc',
       });
-      if (storedPage) return this.notePageForOptions(storedPage, options);
+      if (storedPage) {
+        const page = this.notePageForOptions(storedPage, options);
+        return options.includeBody === false
+          ? { ...page, items: page.items.map(noteSummary) }
+          : page;
+      }
     }
 
     const notes = await measureAsync('repository.query.notes.list', () =>
@@ -1198,7 +1209,30 @@ export class LocalDiaryRepository implements DiaryRepository {
 
   async getLocalSyncAccountState(): Promise<LocalSyncAccountState | null> {
     await this.waitForWrites();
-    return this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount);
+    const state = await this.readNullableJson<Partial<LocalSyncAccountState>>(
+      STORAGE_KEYS.syncAccount,
+    );
+    if (
+      !state ||
+      typeof state.accountId !== 'string' ||
+      !state.accountId ||
+      typeof state.deviceId !== 'string' ||
+      !state.deviceId ||
+      !['primary_mobile', 'web_companion'].includes(state.deviceRole || '') ||
+      typeof state.googleUserId !== 'string' ||
+      !state.googleUserId ||
+      typeof state.googleEmail !== 'string' ||
+      !state.googleEmail ||
+      typeof state.devicePublicKey !== 'string' ||
+      !state.devicePublicKey ||
+      !Number.isSafeInteger(state.appliedSequence) ||
+      (state.appliedSequence ?? -1) < 0 ||
+      !Number.isFinite(state.linkedAt) ||
+      (state.linkedAt ?? 0) <= 0
+    ) {
+      return null;
+    }
+    return state as LocalSyncAccountState;
   }
 
   saveLocalSyncAccountState(state: LocalSyncAccountState): Promise<void> {
@@ -1415,39 +1449,96 @@ export class LocalDiaryRepository implements DiaryRepository {
   ): Promise<number> {
     if (batch.length === 0) return Promise.resolve(expectedCursor);
     return this.enqueueWrite(async () => {
+      const lowerVersionKeys = [
+        ...new Set(
+          batch.flatMap(({ event }) => [
+            `${event.recordType}:${event.recordId}`,
+            ...(event.affectedRecords || []).map(
+              (affected) => `${affected.recordType}:${affected.recordId}`,
+            ),
+          ]),
+        ),
+      ];
+      const canonicalKeys = [
+        ...new Set(batch.map(({ event }) => `${event.recordType.toUpperCase()}:${event.recordId}`)),
+      ];
+      const [outbox, syncConflicts] = await Promise.all([
+        this.readJson<Record<string, SyncOperation>>(STORAGE_KEYS.syncOperations, {}),
+        this.readJson<Record<string, StoredSyncConflictRecord>>(STORAGE_KEYS.syncConflicts, {}),
+      ]);
+      const structuredCollections = Boolean(
+        this.store.getStructuredRecord && this.store.commitStructuredRecords,
+      );
+      const replayRecordTypes = new Set<string>([
+        ...batch.map(({ event }) => event.recordType.toUpperCase()),
+        ...Object.values(outbox)
+          .filter((operation) => !TERMINAL_SYNC_OPERATION_STATES.has(operation.state))
+          .filter((operation) => operation.localApplied)
+          .map((operation) => operation.recordType),
+      ]);
+      const touchesDiaryGraph =
+        !structuredCollections || replayRecordTypes.has('DIARY') || replayRecordTypes.has('ENTRY');
+      const touchesNotes = !structuredCollections;
+      const readStructuredSubset = async <T>(
+        key: string,
+        ids: string[],
+        fallback: Record<string, T>,
+      ): Promise<{ values: Record<string, T>; structured: boolean }> => {
+        if (!this.store.getStructuredRecord || !this.store.commitStructuredRecords) {
+          return { values: await this.readJson(key, fallback), structured: false };
+        }
+        const values = await Promise.all(
+          ids.map((id) => this.store.getStructuredRecord!<T>(key, id)),
+        );
+        if (values.some((value) => value === undefined)) {
+          return { values: await this.readJson(key, fallback), structured: false };
+        }
+        return {
+          values: Object.fromEntries(
+            ids.flatMap((id, index) =>
+              values[index] === null ? [] : [[id, values[index] as T] as const],
+            ),
+          ),
+          structured: true,
+        };
+      };
       const [
         syncState,
-        versions,
         pointers,
         initialDiaries,
         initialEntries,
         initialNotes,
         initialSettings,
         initialProfile,
-        replicatedRecords,
-        replicatedVersions,
         appliedAudit,
         replicatedMedia,
-        outbox,
-        syncConflicts,
       ] = await Promise.all([
         this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount),
-        this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}),
         this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {}),
-        this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES)),
-        this.readCollection<Entry>(STORAGE_KEYS.entries, []),
-        this.readCollection<Note>(STORAGE_KEYS.notes, []),
+        touchesDiaryGraph
+          ? this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES))
+          : Promise.resolve([]),
+        touchesDiaryGraph
+          ? this.readCollection<Entry>(STORAGE_KEYS.entries, [])
+          : Promise.resolve([]),
+        touchesNotes ? this.readCollection<Note>(STORAGE_KEYS.notes, []) : Promise.resolve([]),
         this.readJson(STORAGE_KEYS.settings, clone(DEFAULT_APP_SETTINGS)),
         this.readJson(STORAGE_KEYS.userProfile, createDefaultUserProfile()),
-        this.readJson<Record<string, unknown>>(SYNC_REPLAY_KEYS.records, {}),
-        this.readJson<Record<string, number>>(SYNC_REPLAY_KEYS.versions, {}),
         this.readJson<
           Array<{ eventId: string; operationId: string; sequence: number; appliedAt: number }>
         >(SYNC_REPLAY_KEYS.applied, []),
         this.readJson<Record<string, string>>(SYNC_REPLAY_KEYS.media, {}),
-        this.readJson<Record<string, SyncOperation>>(STORAGE_KEYS.syncOperations, {}),
-        this.readJson<Record<string, StoredSyncConflictRecord>>(STORAGE_KEYS.syncConflicts, {}),
       ]);
+      const [versionState, canonicalState, baseVersionState] = await Promise.all([
+        readStructuredSubset<number>(STORAGE_KEYS.syncRecordVersions, lowerVersionKeys, {}),
+        readStructuredSubset<unknown>(SYNC_REPLAY_KEYS.records, canonicalKeys, {}),
+        readStructuredSubset<number>(SYNC_REPLAY_KEYS.versions, canonicalKeys, {}),
+      ]);
+      const versions = versionState.values;
+      const replicatedRecords = canonicalState.values;
+      const replicatedVersions = baseVersionState.values;
+      const structuredReplay =
+        versionState.structured && canonicalState.structured && baseVersionState.structured;
 
       if (!syncState) {
         throw new Error('The remote batch does not belong to the local sync account.');
@@ -1490,8 +1581,7 @@ export class LocalDiaryRepository implements DiaryRepository {
         });
         const existingPointer = Object.values(pointers).find(
           (candidate) =>
-            candidate.mediaId === pointer.mediaId ||
-            candidate.driveFileId === pointer.driveFileId,
+            candidate.mediaId === pointer.mediaId || candidate.driveFileId === pointer.driveFileId,
         );
         pointers[key] = clone({
           ...existingPointer,
@@ -1578,16 +1668,48 @@ export class LocalDiaryRepository implements DiaryRepository {
         }
 
         versions[recordKey] = event.recordVersion;
+        if (structuredReplay) {
+          putMutation({
+            key: STORAGE_KEYS.syncRecordVersions,
+            id: recordKey,
+            value: event.recordVersion,
+          });
+        }
         for (const affected of event.affectedRecords || []) {
-          versions[`${affected.recordType}:${affected.recordId}`] = affected.recordVersion;
-          replicatedVersions[`${affected.recordType.toUpperCase()}:${affected.recordId}`] =
-            affected.recordVersion;
+          const affectedKey = `${affected.recordType}:${affected.recordId}`;
+          const canonicalAffectedKey = `${affected.recordType.toUpperCase()}:${affected.recordId}`;
+          versions[affectedKey] = affected.recordVersion;
+          replicatedVersions[canonicalAffectedKey] = affected.recordVersion;
+          if (structuredReplay) {
+            putMutation({
+              key: STORAGE_KEYS.syncRecordVersions,
+              id: affectedKey,
+              value: affected.recordVersion,
+            });
+            putMutation({
+              key: SYNC_REPLAY_KEYS.versions,
+              id: canonicalAffectedKey,
+              value: affected.recordVersion,
+            });
+          }
         }
         const canonicalRecordType = event.recordType.toUpperCase();
         const canonicalKey = `${canonicalRecordType}:${event.recordId}`;
         if (event.operation === 'delete') delete replicatedRecords[canonicalKey];
         else replicatedRecords[canonicalKey] = event.payload;
         replicatedVersions[canonicalKey] = event.recordVersion;
+        if (structuredReplay) {
+          putMutation({
+            key: SYNC_REPLAY_KEYS.records,
+            id: canonicalKey,
+            value: event.operation === 'delete' ? null : event.payload,
+          });
+          putMutation({
+            key: SYNC_REPLAY_KEYS.versions,
+            id: canonicalKey,
+            value: event.recordVersion,
+          });
+        }
         for (const pointer of item.mediaPointers || []) putPointer(pointer);
         appliedIds.add(event.eventId);
         appliedOperationIds.add(operationId);
@@ -1652,13 +1774,15 @@ export class LocalDiaryRepository implements DiaryRepository {
             value: operation.operationType === 'DELETE' ? null : clone(payload),
           });
         } else if (operation.recordType === 'ENTRY') {
-          const entry = operation.operationType === 'DELETE' ? null : sanitizeEntry(clone(payload as Entry));
+          const entry =
+            operation.operationType === 'DELETE' ? null : sanitizeEntry(clone(payload as Entry));
           entries = entry
             ? this.upsertRecord(entries, entry)
             : entries.filter((candidate) => candidate.id !== operation.recordId);
           putMutation({ key: STORAGE_KEYS.entries, id: operation.recordId, value: entry });
         } else if (operation.recordType === 'NOTE') {
-          const note = operation.operationType === 'DELETE' ? null : sanitizeNote(clone(payload as Note));
+          const note =
+            operation.operationType === 'DELETE' ? null : sanitizeNote(clone(payload as Note));
           notes = note
             ? this.upsertRecord(notes, note)
             : notes.filter((candidate) => candidate.id !== operation.recordId);
@@ -1691,19 +1815,21 @@ export class LocalDiaryRepository implements DiaryRepository {
         }
       });
 
-      diaries = this.withDiaryStats(diaries, entries);
-      diaries.forEach((diary) =>
-        putMutation({ key: STORAGE_KEYS.diaries, id: diary.id, value: diary }),
-      );
+      if (touchesDiaryGraph) {
+        diaries = this.withDiaryStats(diaries, entries);
+        diaries.forEach((diary) =>
+          putMutation({ key: STORAGE_KEYS.diaries, id: diary.id, value: diary }),
+        );
+      }
       const nextSyncState = { ...syncState, appliedSequence: cursor };
       const metadataItems: Record<string, unknown> = {
         [STORAGE_KEYS.settings]: settings,
         [STORAGE_KEYS.userProfile]: profile,
-        [STORAGE_KEYS.syncRecordVersions]: versions,
+        ...(!structuredReplay ? { [STORAGE_KEYS.syncRecordVersions]: versions } : {}),
         [STORAGE_KEYS.syncMediaPointers]: pointers,
         [STORAGE_KEYS.syncAccount]: nextSyncState,
-        [SYNC_REPLAY_KEYS.records]: replicatedRecords,
-        [SYNC_REPLAY_KEYS.versions]: replicatedVersions,
+        ...(!structuredReplay ? { [SYNC_REPLAY_KEYS.records]: replicatedRecords } : {}),
+        ...(!structuredReplay ? { [SYNC_REPLAY_KEYS.versions]: replicatedVersions } : {}),
         [SYNC_REPLAY_KEYS.applied]: nextAudit.slice(-5_000),
         [SYNC_REPLAY_KEYS.media]: replicatedMedia,
         ...(operationsChanged ? { [STORAGE_KEYS.syncOperations]: outbox } : {}),
@@ -2026,9 +2152,7 @@ export class LocalDiaryRepository implements DiaryRepository {
     });
   }
 
-  async listSyncOutboxOperations(
-    states?: SyncOperation['state'][],
-  ): Promise<SyncOperation[]> {
+  async listSyncOutboxOperations(states?: SyncOperation['state'][]): Promise<SyncOperation[]> {
     await this.waitForWrites();
     const outbox = await this.readJson<Record<string, SyncOperation>>(
       STORAGE_KEYS.syncOperations,
@@ -2134,22 +2258,21 @@ export class LocalDiaryRepository implements DiaryRepository {
         initialEntries,
         diaries,
       ] = await Promise.all([
-          this.readJson<Record<string, SyncOperation>>(STORAGE_KEYS.syncOperations, {}),
-          this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}),
-          this.readJson<Record<string, unknown>>(SYNC_REPLAY_KEYS.records, {}),
-          this.readJson<Record<string, StoredSyncConflictRecord>>(STORAGE_KEYS.syncConflicts, {}),
-          this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {}),
-          this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount),
-          this.readCollection<Entry>(STORAGE_KEYS.entries, []),
-          this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES)),
-        ]);
+        this.readJson<Record<string, SyncOperation>>(STORAGE_KEYS.syncOperations, {}),
+        this.readJson<Record<string, number>>(STORAGE_KEYS.syncRecordVersions, {}),
+        this.readJson<Record<string, unknown>>(SYNC_REPLAY_KEYS.records, {}),
+        this.readJson<Record<string, StoredSyncConflictRecord>>(STORAGE_KEYS.syncConflicts, {}),
+        this.readJson<Record<string, SyncMediaPointer>>(STORAGE_KEYS.syncMediaPointers, {}),
+        this.readNullableJson<LocalSyncAccountState>(STORAGE_KEYS.syncAccount),
+        this.readCollection<Entry>(STORAGE_KEYS.entries, []),
+        this.readCollection(STORAGE_KEYS.diaries, clone(INITIAL_DIARIES)),
+      ]);
       let entries = initialEntries;
       const recoveredEntryIds: string[] = [];
       let conflictsChanged = false;
       for (const [operationId, operation] of Object.entries(outbox)) {
         const remoteCanonical = replicatedRecords[`ENTRY:${operation.recordId}`] as
-          | Entry
-          | undefined;
+          Entry | undefined;
         if (!remoteCanonical) continue;
         const rebase = buildConcurrentEntryPhotoRebase(
           operation,
@@ -2181,8 +2304,7 @@ export class LocalDiaryRepository implements DiaryRepository {
           }
           const localSource = entries.find((entry) => entry.id === conflict.recordId);
           const remoteCanonical = replicatedRecords[`ENTRY:${conflict.recordId}`] as
-            | Entry
-            | undefined;
+            Entry | undefined;
           if (!localSource || !remoteCanonical) continue;
           const remoteVersion = versions[`entry:${conflict.recordId}`] || 0;
           const partitionKey = partitionKeyForRecordPayload('entry', localSource);
@@ -3053,7 +3175,9 @@ export class LocalDiaryRepository implements DiaryRepository {
     contentRevision?: number,
   ): Promise<void> {
     const operations = Object.values(outbox);
-    const pending = operations.filter((operation) => !TERMINAL_SYNC_OPERATION_STATES.has(operation.state));
+    const pending = operations.filter(
+      (operation) => !TERMINAL_SYNC_OPERATION_STATES.has(operation.state),
+    );
     const currentHealth = await this.readJson<SyncHealth>(
       STORAGE_KEYS.syncHealth,
       createDefaultSyncHealth(),
@@ -3075,10 +3199,10 @@ export class LocalDiaryRepository implements DiaryRepository {
       ).length,
       blockedOperationCount: pending.filter((operation) => Boolean(operation.dependencyOperationId))
         .length,
-      conflictOperationCount: operations.filter(
-        (operation) => operation.state === 'CONFLICT',
-      ).length,
-      failedOperationCount: operations.filter((operation) => operation.state === 'RETRY_WAIT').length,
+      conflictOperationCount: operations.filter((operation) => operation.state === 'CONFLICT')
+        .length,
+      failedOperationCount: operations.filter((operation) => operation.state === 'RETRY_WAIT')
+        .length,
       oldestPendingOperationAt:
         pending.length > 0
           ? Math.min(...pending.map((operation) => operation.createdAt))

@@ -11,6 +11,7 @@ export interface OutboxRepository {
   renewLease(operationId: string, workerId: string, leaseExpiresAt: number): Promise<boolean>;
   releaseLease(operationId: string, workerId: string): Promise<void>;
   releaseExpiredLeases(accountId: string, now: number): Promise<number>;
+  retryWaitingNow(accountId: string, now: number): Promise<number>;
   supersedeConflictAndRebaseDependentDelete(
     deleteOperationId: string,
     conflictOperationId: string,

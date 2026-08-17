@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Low-cost Lambda Function URL runtime for the Dear Diary staging sync API
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: Immutable ECR image URI for the Lambda image target
+  DbUrl:
+    Type: String
+    NoEcho: true
+  DbUsername:
+    Type: String
+    NoEcho: true
+  DbPassword:
+    Type: String
+    NoEcho: true
+Resources:
+  SyncApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/dear-diary-sync-staging
+      RetentionInDays: 14
+      Tags:
+        - Key: Project
+          Value: DearDiary
+        - Key: Environment
+          Value: Staging
+
+  SyncApiExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DearDiarySyncLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LogsAndStagingObjects
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub '${SyncApiLogGroup.Arn}:*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:PutObjectTagging
+                Resource: arn:aws:s3:::dear-diary-sync-staging-908027418886/*
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: arn:aws:s3:::dear-diary-sync-staging-908027418886
+      Tags:
+        - Key: Project
+          Value: DearDiary
+        - Key: Environment
+          Value: Staging
+
+  SyncApiFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: SyncApiLogGroup
+    Properties:
+      FunctionName: dear-diary-sync-staging
+      Description: Dear Diary staging sync API served through Lambda Web Adapter
+      PackageType: Image
+      Code:
+        ImageUri: !Ref ImageUri
+      Role: !GetAtt SyncApiExecutionRole.Arn
+      Architectures:
+        - arm64
+      MemorySize: 2048
+      Timeout: 60
+      TracingConfig:
+        Mode: PassThrough
+      Environment:
+        Variables:
+          AWS_LWA_ASYNC_INIT: 'true'
+          AWS_LWA_PORT: '8080'
+          AWS_LWA_READINESS_CHECK_PATH: /actuator/health
+          JAVA_TOOL_OPTIONS: -XX:InitialRAMPercentage=10.0 -XX:MaxRAMPercentage=65.0 -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/urandom -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -XX:+UseSerialGC
+          PORT: '8080'
+          SPRING_PROFILES_ACTIVE: staging
+          SYNC_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://staging.d33b4rjnv35mrn.amplifyapp.com
+          SYNC_DB_URL: !Ref DbUrl
+          SYNC_DB_USERNAME: !Ref DbUsername
+          SYNC_DB_PASSWORD: !Ref DbPassword
+          SYNC_DB_MAX_POOL_SIZE: '2'
+          SYNC_DB_MIN_IDLE: '0'
+          SYNC_DEPLOYMENT_ENVIRONMENT: staging
+          SYNC_GC_DRY_RUN: 'true'
+          SYNC_GC_WORKER_ENABLED: 'false'
+          SYNC_JWT_AUDIENCE: authenticated
+          SYNC_JWT_ENABLED: 'true'
+          SYNC_JWT_ISSUER_URI: https://rephepalwmzlmsphigms.supabase.co/auth/v1
+          SYNC_JWT_JWK_SET_URI: https://rephepalwmzlmsphigms.supabase.co/auth/v1/.well-known/jwks.json
+          SYNC_NOTIFICATION_PUBLISHER_ENABLED: 'false'
+          SYNC_NOTIFICATION_WORKER_ENABLED: 'false'
+          SYNC_OBJECT_STORE_BUCKET: dear-diary-sync-staging-908027418886
+          SYNC_OBJECT_STORE_ENABLED: 'true'
+          SYNC_OBJECT_STORE_PATH_STYLE: 'false'
+          SYNC_OBJECT_STORE_REGION: ap-south-1
+          SYNC_OTLP_LOGS_ENABLED: 'false'
+          SYNC_OTLP_METRICS_ENABLED: 'false'
+          SYNC_RELEASE_VERSION: staging-lambda
+          SYNC_SCHEDULING_ENABLED: 'false'
+          SYNC_TRACING_ENABLED: 'false'
+          SYNC_TRACING_SAMPLE_PROBABILITY: '0.1'
+      Tags:
+        - Key: Project
+          Value: DearDiary
+        - Key: Environment
+          Value: Staging
+
+  SyncApiUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      InvokeMode: BUFFERED
+      TargetFunctionArn: !GetAtt SyncApiFunction.Arn
+
+  SyncApiUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Ref SyncApiFunction
+      FunctionUrlAuthType: NONE
+      Principal: '*'
+
+  SyncApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SyncApiFunction
+      InvokedViaFunctionUrl: true
+      Principal: '*'
+
+Outputs:
+  FunctionArn:
+    Value: !GetAtt SyncApiFunction.Arn
+  FunctionUrl:
+    Value: !GetAtt SyncApiUrl.FunctionUrl

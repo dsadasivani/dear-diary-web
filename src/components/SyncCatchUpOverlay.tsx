@@ -1,4 +1,5 @@
 import { WarningCircle as AlertCircle, RefreshDouble as LoaderCircle } from 'iconoir-react';
+import { useEffect, useState } from 'react';
 import type { SyncCatchUpProgress } from '../sync/eventSyncEngine';
 import OverlayPortal from './OverlayPortal';
 
@@ -13,6 +14,13 @@ export default function SyncCatchUpOverlay({
   onRetry: () => void;
   onContinueOffline: () => void;
 }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    setSlow(false);
+    if (!gate || gate.phase === 'failed') return;
+    const timer = setTimeout(() => setSlow(true), 8_000);
+    return () => clearTimeout(timer);
+  }, [gate?.phase, gate?.startingSequence, gate?.targetSequence]);
   if (!gate) return null;
   const target = gate.targetSequence || gate.startingSequence;
   const total = gate.totalEvents ?? Math.max(0, target - gate.startingSequence);
@@ -49,6 +57,17 @@ export default function SyncCatchUpOverlay({
               ? gate.error || 'Your latest encrypted data could not be loaded.'
               : progressMessage}
           </p>
+          {!failed && slow && (
+            <div className="mt-4 rounded-2xl bg-brand-blush-light/70 px-4 py-3 text-left text-xs leading-relaxed text-brand-text-muted dark:bg-brand-bg/45">
+              <p className="font-bold text-brand-plum dark:text-brand-text">
+                Still reconnecting securely
+              </p>
+              <p className="mt-1">
+                A transfer is taking longer than usual. Loredays is retrying automatically; your
+                local changes remain safe.
+              </p>
+            </div>
+          )}
           {!failed && total > 0 && (
             <div
               className="mt-5 h-2 overflow-hidden rounded-full bg-brand-border/60"
@@ -79,6 +98,15 @@ export default function SyncCatchUpOverlay({
                 </button>
               )}
             </div>
+          )}
+          {!failed && slow && gate.allowOffline && (
+            <button
+              type="button"
+              onClick={onContinueOffline}
+              className="mt-4 min-h-11 w-full rounded-xl border border-brand-border px-4 text-sm font-bold text-brand-plum dark:text-brand-text"
+            >
+              Use offline copy while retrying
+            </button>
           )}
         </div>
       </div>

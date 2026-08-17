@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Book as BookOpen,
@@ -47,6 +47,8 @@ const NOTES_PANE_WIDTH_KEY = 'deardiary_notes_pane_width';
 const NOTES_PANE_COLLAPSED_KEY = 'deardiary_notes_pane_collapsed';
 const MIN_NOTES_PANE_WIDTH = 280;
 const MAX_NOTES_PANE_WIDTH = 520;
+const NOTES_PAGE_SIZE = 40;
+const NOTES_SEARCH_DEBOUNCE_MS = 250;
 
 const clampNotesPaneWidth = (width: number) =>
   Math.min(MAX_NOTES_PANE_WIDTH, Math.max(MIN_NOTES_PANE_WIDTH, width));
@@ -61,12 +63,16 @@ export default function NotesScreen({
   onFocusedFlowChange,
 }: NotesScreenProps) {
   const [notes, setNotes] = useState<Note[]>([]);
+  const [totalNotes, setTotalNotes] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState(emptyDraft);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState('');
@@ -89,18 +95,71 @@ export default function NotesScreen({
       window.localStorage.getItem(NOTES_PANE_COLLAPSED_KEY) === 'true',
   );
   const resizeStart = useRef<{ x: number; width: number } | null>(null);
+  const noteRequestVersion = useRef(0);
+  const noteQueryKey = `${filter}\u0000${debouncedQuery}`;
+  const activeNoteQueryKey = useRef(noteQueryKey);
+  activeNoteQueryKey.current = noteQueryKey;
   const availableTags = getTagsForSettings(settings);
 
-  const loadNotes = useCallback(async () => {
-    try {
-      setNotes(await diaryRepository.listNotes());
-      setError('');
-    } catch (loadError: any) {
-      setError(loadError?.message || 'Notes could not be loaded.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedQuery(query.trim()),
+      NOTES_SEARCH_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const loadNotes = useCallback(
+    async (options: { append?: boolean; cursor?: string } = {}) => {
+      const requestQueryKey = `${filter}\u0000${debouncedQuery}`;
+      if (requestQueryKey !== activeNoteQueryKey.current) return;
+      const requestVersion = ++noteRequestVersion.current;
+      if (options.append) setLoadingMore(true);
+      else setLoading(true);
+      try {
+        const page = await diaryRepository.listNotes({
+          filter,
+          query: debouncedQuery || undefined,
+          includeBody: true,
+          limit: NOTES_PAGE_SIZE,
+          cursor: options.cursor,
+        });
+        if (
+          requestVersion !== noteRequestVersion.current ||
+          requestQueryKey !== activeNoteQueryKey.current
+        )
+          return;
+        const pageNotes = page.items as Note[];
+        setNotes((current) => {
+          if (!options.append) return pageNotes;
+          const existingIds = new Set(current.map((note) => note.id));
+          return [...current, ...pageNotes.filter((note) => !existingIds.has(note.id))];
+        });
+        setTotalNotes(
+          (current) =>
+            page.total ?? (options.append ? current + pageNotes.length : pageNotes.length),
+        );
+        setNextCursor(page.nextCursor);
+        setError('');
+      } catch (loadError: any) {
+        if (
+          requestVersion !== noteRequestVersion.current ||
+          requestQueryKey !== activeNoteQueryKey.current
+        )
+          return;
+        setError(loadError?.message || 'Notes could not be loaded.');
+      } finally {
+        if (
+          requestVersion === noteRequestVersion.current &&
+          requestQueryKey === activeNoteQueryKey.current
+        ) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
+      }
+    },
+    [debouncedQuery, filter],
+  );
 
   useEffect(() => {
     void loadNotes();
@@ -116,43 +175,20 @@ export default function NotesScreen({
       onClearInitialNoteId?.();
       return;
     }
-    if (!initialNoteId || notes.length === 0) return;
-    const note = notes.find((item) => item.id === initialNoteId);
-    if (note) openEditor(note);
-    onClearInitialNoteId?.();
-  }, [initialNoteId, notes, onClearInitialNoteId]);
+    if (!initialNoteId) return;
+    let cancelled = false;
+    void diaryRepository.getNote(initialNoteId).then((note) => {
+      if (!cancelled && note) openEditor(note);
+      if (!cancelled) onClearInitialNoteId?.();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialNoteId, onClearInitialNoteId]);
 
   useEffect(() => {
     if (!conversionJournalId && diaries[0]) setConversionJournalId(diaries[0].id);
   }, [conversionJournalId, diaries]);
-
-  const visible = useMemo(
-    () =>
-      notes
-        .filter(
-          (note) =>
-            filter === 'all' ||
-            (filter === 'pinned'
-              ? note.isPinned
-              : filter === 'tagged'
-                ? note.tags.length > 0
-                : note.tags.length === 0),
-        )
-        .filter((note) => {
-          const needle = query.trim().toLowerCase();
-          return (
-            !needle ||
-            note.title.toLowerCase().includes(needle) ||
-            richTextHtmlToPlainText(note.body).toLowerCase().includes(needle) ||
-            note.tags.some((tag) => tag.includes(needle))
-          );
-        })
-        .sort(
-          (left, right) =>
-            Number(right.isPinned) - Number(left.isPinned) || right.updatedAt - left.updatedAt,
-        ),
-    [filter, notes, query],
-  );
 
   function openEditor(note: Note) {
     setEditingId(note.id);
@@ -213,7 +249,7 @@ export default function NotesScreen({
         richTextHtmlToPlainText(draft.body).trim().slice(0, 48) ||
         'Untitled note';
       if (editingId) {
-        const original = notes.find((note) => note.id === editingId);
+        const original = await diaryRepository.getNote(editingId);
         if (original) await diaryRepository.updateNote({ ...original, ...draft, title });
       } else {
         await diaryRepository.createNote({ ...draft, title });
@@ -383,7 +419,7 @@ export default function NotesScreen({
     </section>
   );
 
-  const ListPanel = () => (
+  const renderListPanel = () => (
     <section className="min-w-0" aria-label="Notes list">
       <div className="open-page-notes-controls mb-4 grid gap-2 border-y border-brand-border/60 py-3 sm:grid-cols-[minmax(0,1fr)_auto]">
         <label className="open-page-note-search relative">
@@ -414,7 +450,7 @@ export default function NotesScreen({
 
       {loading ? (
         <LoadingSkeleton lines={5} className="py-8" label="Loading notes" />
-      ) : visible.length === 0 ? (
+      ) : notes.length === 0 ? (
         <EmptyState
           icon={<BookOpen className="h-5 w-5" />}
           title="No notes found"
@@ -427,7 +463,7 @@ export default function NotesScreen({
         />
       ) : (
         <div className="open-page-note-list divide-y divide-brand-border/60 border-y border-brand-border/60 overflow-hidden">
-          {visible.map((note) => (
+          {notes.map((note) => (
             <article
               key={note.id}
               data-testid="note-card"
@@ -501,6 +537,16 @@ export default function NotesScreen({
               </div>
             </article>
           ))}
+          {nextCursor && (
+            <div className="flex justify-center border-t border-brand-border/60 px-3 py-4">
+              <AppButton
+                onClick={() => void loadNotes({ append: true, cursor: nextCursor })}
+                disabled={loadingMore}
+              >
+                {loadingMore ? 'Loading…' : `Load more (${notes.length} of ${totalNotes})`}
+              </AppButton>
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -514,7 +560,7 @@ export default function NotesScreen({
             <p className="open-page-eyebrow">Quick capture</p>
             <h1>Notes</h1>
             <p className="open-page-notes-summary">
-              {notes.length} {notes.length === 1 ? 'note' : 'notes'} · Thoughts kept close
+              {totalNotes} {totalNotes === 1 ? 'note' : 'notes'} · Thoughts kept close
             </p>
           </div>
         )}
@@ -567,7 +613,7 @@ export default function NotesScreen({
                 id="desktop-notes-list"
                 className="h-[calc(100%-3.25rem)] overflow-y-auto px-1 pr-5"
               >
-                <ListPanel />
+                {renderListPanel()}
               </div>
             )}
           </aside>
@@ -644,7 +690,7 @@ export default function NotesScreen({
         </div>
       ) : (
         <>
-          <ListPanel />
+          {renderListPanel()}
           {(creating || editingId) && renderEditor(true)}
         </>
       )}

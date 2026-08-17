@@ -3,13 +3,47 @@
   "uid": "deardiary-observability",
   "schemaVersion": 39,
   "version": 2,
+  "tags": ["loredays", "observability", "overview"],
   "time": { "from": "now-3h", "to": "now" },
   "refresh": "30s",
+  "timepicker": {
+    "refresh_intervals": ["30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+  },
   "templating": {
     "list": [
-      { "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" },
-      { "name": "logs", "label": "Logs", "type": "datasource", "query": "loki" },
-      { "name": "traces", "label": "Traces", "type": "datasource", "query": "tempo" },
+      {
+        "name": "metrics",
+        "label": "Metrics",
+        "type": "datasource",
+        "query": "prometheus",
+        "regex": "^grafanacloud-boldmint1469-prom$",
+        "current": {
+          "text": "grafanacloud-boldmint1469-prom",
+          "value": "grafanacloud-prom"
+        }
+      },
+      {
+        "name": "logs",
+        "label": "Logs",
+        "type": "datasource",
+        "query": "loki",
+        "regex": "^grafanacloud-boldmint1469-logs$",
+        "current": {
+          "text": "grafanacloud-boldmint1469-logs",
+          "value": "grafanacloud-logs"
+        }
+      },
+      {
+        "name": "traces",
+        "label": "Traces",
+        "type": "datasource",
+        "query": "tempo",
+        "regex": "^grafanacloud-boldmint1469-traces$",
+        "current": {
+          "text": "grafanacloud-boldmint1469-traces",
+          "value": "grafanacloud-traces"
+        }
+      },
       {
         "name": "environment",
         "label": "Environment",
@@ -17,6 +51,7 @@
         "query": "staging,production",
         "includeAll": true,
         "allValue": ".*",
+        "allowCustomValue": false,
         "current": { "text": "staging", "value": "staging" }
       }
     ]
@@ -25,14 +60,28 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Sync API uptime",
-      "description": "Process uptime for the selected environment. No data means the metrics path needs investigation.",
+      "title": "Backend telemetry age",
+      "description": "Seconds since the latest backend metric sample. Yellow after 60 seconds; red after 5 minutes.",
       "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "${metrics}" },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 60 },
+              { "color": "red", "value": 300 }
+            ]
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
-          "expr": "max(process_uptime_seconds{application=\"dear-diary-sync-api\", environment=~\"${environment:regex}\"})",
+          "expr": "time() - max(timestamp(sync_database_pool_active{environment=~\"${environment:regex}\"}))",
           "refId": "A"
         }
       ]
@@ -41,14 +90,14 @@
       "id": 2,
       "type": "timeseries",
       "title": "HTTP requests / second",
-      "description": "Inbound request rate grouped by method, route, and status.",
+      "description": "Log-derived inbound request rate grouped by route and status; remains available when HTTP server metrics are not exported.",
       "gridPos": { "h": 8, "w": 10, "x": 4, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${metrics}" },
+      "datasource": { "type": "loki", "uid": "${logs}" },
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
       "targets": [
         {
-          "expr": "sum by (method, uri, status) (rate(http_server_requests_seconds_count{application=\"dear-diary-sync-api\", environment=~\"${environment:regex}\"}[$__rate_interval]))",
-          "legendFormat": "{{method}} {{uri}} {{status}}",
+          "expr": "topk(15, sum by (httpStatus, httpRoute) (rate({service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" | httpRoute != \"/actuator/health\" [$__auto])))",
+          "legendFormat": "{{httpStatus}} {{httpRoute}}",
           "refId": "A"
         }
       ]
@@ -56,15 +105,15 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "HTTP latency p95",
-      "description": "Server request latency from the Micrometer histogram.",
+      "title": "HTTP latency p95 (logs)",
+      "description": "Log-derived 95th-percentile request duration, aggregated across streams.",
       "gridPos": { "h": 8, "w": 10, "x": 14, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${metrics}" },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "datasource": { "type": "loki", "uid": "${logs}" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{application=\"dear-diary-sync-api\", environment=~\"${environment:regex}\"}[$__rate_interval])))",
-          "legendFormat": "{{uri}}",
+          "expr": "max(quantile_over_time(0.95, {service_name=\"dear-diary-sync-api\", deployment_environment=~\"${environment:regex}\"} |= \"HTTP request completed\" | httpRoute != \"/actuator/health\" | unwrap durationMs | __error__=\"\" [$__auto]))",
+          "legendFormat": "p95",
           "refId": "A"
         }
       ]

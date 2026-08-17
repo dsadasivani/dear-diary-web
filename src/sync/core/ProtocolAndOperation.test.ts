@@ -18,14 +18,12 @@ import { PersistentSafetyStopStore } from './safety/PersistentSafetyStopStore';
 import { SyncRuntimeCoordinator } from './SyncRuntimeCoordinator';
 import type { SyncProtocol } from './api/SyncApiTypes';
 import { SyncApiClient } from './api/SyncApiClient';
-import {
-  RuntimeControlStore,
-  isVersionAtLeast,
-} from './protocol/RuntimeControlStore';
+import { RuntimeControlStore, isVersionAtLeast } from './protocol/RuntimeControlStore';
 import { TestSyncFaultInjector } from './faults/SyncFaultInjector';
 import { exportDeviceSigningPublicKeySpki, generateDeviceKeyPair } from '../deviceKeys';
 import { clearSyncLocalCache, SYNC_LOCAL_CACHE_KEYS } from './clearSyncLocalCache';
 import { clearRecoverableCompanionSafetyStop } from './safety/companionSafetyRecovery';
+import { NOOP_TELEMETRY } from '../../infrastructure/telemetry/Telemetry';
 
 const runtime = (): SyncLocalRuntime => ({
   accountId: 'account-1',
@@ -463,6 +461,76 @@ test('bounded transfer preserves order and respects its concurrency bound', asyn
   assert.equal(maximumActive, 2);
 });
 
+test('bounded transfer retries transient object failures and verifies the final download', async () => {
+  const bytes = new Uint8Array([7, 8, 9]);
+  let attempts = 0;
+  const retries: Array<{ value: number; bucket?: string | number | boolean }> = [];
+  const transfer = new BoundedObjectTransfer({
+    maximumObjectBytes: 10,
+    maximumAttempts: 3,
+    retryBaseDelayMs: 0,
+    telemetry: {
+      ...NOOP_TELEMETRY,
+      counter: (name, value, attributes) => {
+        if (name === 'deardiary.sync.transfer.retry') {
+          retries.push({ value, bucket: attributes?.retry_count_bucket });
+        }
+      },
+    },
+    fetch: async () => {
+      attempts += 1;
+      return attempts < 3
+        ? new Response(null, { status: 503 })
+        : new Response(bytes, { status: 200 });
+    },
+  });
+
+  const [downloaded] = await transfer.download([
+    {
+      downloadUrl: 'https://objects.invalid/retry',
+      sizeBytes: bytes.byteLength,
+      sha256: await sha256Hex(bytes),
+    },
+  ]);
+  assert.deepEqual(downloaded, bytes);
+  assert.equal(attempts, 3);
+  assert.deepEqual(retries, [
+    { value: 1, bucket: '1' },
+    { value: 1, bucket: '2' },
+  ]);
+});
+
+test('bounded transfer aborts hung object requests after its deadline', async () => {
+  let attempts = 0;
+  const transfer = new BoundedObjectTransfer({
+    maximumObjectBytes: 10,
+    requestTimeoutMs: 5,
+    maximumAttempts: 2,
+    retryBaseDelayMs: 0,
+    fetch: async (_input, init) => {
+      attempts += 1;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')),
+        );
+      });
+    },
+  });
+
+  await assert.rejects(
+    transfer.download([
+      {
+        downloadUrl: 'https://objects.invalid/hung',
+        sizeBytes: 1,
+        sha256: '0'.repeat(64),
+      },
+    ]),
+    (error) =>
+      error instanceof SyncError && error.code === 'OBJECT_DOWNLOAD_FAILED' && error.retryable,
+  );
+  assert.equal(attempts, 2);
+});
+
 test('large uploads use the configured resumable transfer adapter', async () => {
   let resumableCalls = 0;
   const transfer = new BoundedObjectTransfer({
@@ -522,6 +590,10 @@ test('canonical preparation loads, sanitizes, validates, encrypts, and releases 
 test('operation processor reconciles a lost commit response and acknowledges it', async () => {
   const store = new MemoryDataStore();
   await new SyncRuntimeStore(store).save(runtime());
+  await store.setItem(
+    'deardiary_sync_health',
+    JSON.stringify({ pendingOperationCount: 1, oldestPendingOperationAt: 1 }),
+  );
   await store.setItem(
     'deardiary_sync_record_versions',
     JSON.stringify({
@@ -587,6 +659,10 @@ test('operation processor reconciles a lost commit response and acknowledges it'
   assert.equal(completed?.state, 'ACKNOWLEDGED');
   assert.equal(completed?.remoteSequence, 7);
   assert.equal(completed?.remoteRecordVersion, 1);
+  assert.equal(
+    JSON.parse((await store.getItem('deardiary_sync_health')) || '{}').pendingOperationCount,
+    0,
+  );
   assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_record_versions')) || '{}'), {
     'NOTE:11111111-1111-4111-8111-111111111111': 0,
   });

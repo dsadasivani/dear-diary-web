@@ -109,7 +109,7 @@ class DeviceAndProtocolIntegrationTest {
 
         assertThat(protocol.currentProtocolVersion()).isEqualTo(4);
           assertThat(protocol.maximumEventBytes()).isEqualTo(10_485_760);
-          assertThat(protocol.maximumSnapshotBytes()).isEqualTo(104_857_600);
+          assertThat(protocol.maximumSnapshotBytes()).isEqualTo(268_435_456);
         assertThat(protocol.featureFlags().syncWritesEnabled()).isTrue();
         assertThat(protocol.featureFlags().snapshotCreationEnabled()).isFalse();
         assertThat(protocol.featureFlags().garbageCollectionEnabled()).isFalse();
@@ -117,8 +117,8 @@ class DeviceAndProtocolIntegrationTest {
         assertThat(protocol.featureFlags().deviceRevocationEnabled()).isTrue();
         assertThat(protocol.featureFlags().mediaUploadEnabled()).isTrue();
         assertThat(protocol.featureFlags().archiveHydrationEnabled()).isTrue();
-        assertThat(protocol.bootstrapControls().rollingSnapshotsEnabled()).isFalse();
-        assertThat(protocol.bootstrapControls().bootstrapManifestEnabled()).isFalse();
+        assertThat(protocol.bootstrapControls().rollingSnapshotsEnabled()).isTrue();
+        assertThat(protocol.bootstrapControls().bootstrapManifestEnabled()).isTrue();
         assertThat(protocol.bootstrapControls().retentionDeletionEnabled()).isFalse();
         assertThat(protocol.bootstrapControls().hardTailEvents()).isEqualTo(500);
         assertThat(protocol.bootstrapControls().replayBatchSize()).isEqualTo(25);

@@ -5,6 +5,7 @@ import { createSyncingDiaryRepository } from './syncingDiaryRepository';
 import { PersistentOutboxRepository } from '../sync/outbox';
 import { SyncApplicationLifecycle } from '../sync/core/SyncApplicationLifecycle';
 import { createRepositoryCapabilities } from './capabilities';
+import { createConfiguredTelemetry } from '../sync/config';
 
 export type {
   ApplyLocalMutationWithOutboxInput,
@@ -62,4 +63,5 @@ export const syncApplication = new SyncApplicationLifecycle(
   localDiaryRepository,
   operationsRepository,
   eventSyncEngine,
+  createConfiguredTelemetry(),
 );

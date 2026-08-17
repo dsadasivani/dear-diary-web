@@ -29,6 +29,17 @@ public record BootstrapManifestResponse(
         int snapshotSchemaVersion,
         String metadataSignature,
         String downloadUrl,
-        Instant downloadExpiresAt
-    ) {}
+        Instant downloadExpiresAt,
+        List<Chunk> chunks
+    ) {
+        public record Chunk(
+            int index,
+            String objectKey,
+            String sha256,
+            long sizeBytes,
+            int keyEpoch,
+            String downloadUrl,
+            Instant downloadExpiresAt
+        ) {}
+    }
 }

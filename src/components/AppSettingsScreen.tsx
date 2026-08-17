@@ -418,7 +418,7 @@ export default function AppSettingsScreen({
     setIsRetryingSync(true);
     setSyncStatusError('');
     try {
-      await eventSyncEngine.flushPendingOutbox();
+      await eventSyncEngine.retryPendingOutboxNow();
       await refreshLocalSyncStatus();
       onShowToast?.('Sync retry completed.', 'success');
     } catch (error: any) {

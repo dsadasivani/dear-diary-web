@@ -9,7 +9,7 @@ COPY --chown=gradle:gradle src ./src
 RUN gradle --no-daemon clean bootJar \
     && cp "$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-plain.jar' -print -quit)" /workspace/app.jar
 
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:21-jre-alpine AS runtime
 
 RUN apk upgrade --no-cache
 
@@ -25,3 +25,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
   CMD wget -qO- http://127.0.0.1:${PORT:-8080}/actuator/health >/dev/null || exit 1
 
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+
+# Lambda keeps the same Spring Boot image and adds only the HTTP adapter. The
+# default final stage remains ECS so the existing deployment is unchanged.
+FROM runtime AS lambda
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.0 \
+  /lambda-adapter /opt/extensions/lambda-adapter
+
+FROM runtime AS ecs

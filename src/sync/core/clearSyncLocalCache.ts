@@ -21,6 +21,7 @@ export const SYNC_LOCAL_CACHE_KEYS = [
   'deardiary_sync_snapshot_creation',
   'deardiary_sync_migration_journal',
   'deardiary_sync_health',
+  'deardiary_sync_existing_bootstrap',
 ] as const;
 
 export const clearSyncLocalCache = async (store: LocalDataStore): Promise<void> => {

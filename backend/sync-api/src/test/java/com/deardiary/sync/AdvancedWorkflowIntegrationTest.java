@@ -69,7 +69,10 @@ class AdvancedWorkflowIntegrationTest {
     @BeforeEach
     void reset() throws Exception {
         jdbc.execute("TRUNCATE TABLE sync_accounts CASCADE");
-        jdbc.update("UPDATE sync_protocol_config SET companion_pairing_enabled = TRUE WHERE config_id = 1");
+        jdbc.update("""
+            UPDATE sync_protocol_config SET companion_pairing_enabled = TRUE,
+                bootstrap_manifest_enabled = FALSE WHERE config_id = 1
+            """);
         jdbc.update("UPDATE sync_kill_switches SET engaged = FALSE, reason_code = NULL WHERE switch_name = 'COMPANION_PAIRING'");
         primaryKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
         primaryDeviceId = UUID.randomUUID();

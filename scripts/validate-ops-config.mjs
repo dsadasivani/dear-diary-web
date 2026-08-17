@@ -114,15 +114,15 @@ await access('.github/workflows/security.yml');
 
 const stagingTask = JSON.parse(await readFile('ops/aws/ecs/task-definition.staging.json', 'utf8'));
 if (
-  stagingTask.cpu !== '512' ||
+  stagingTask.cpu !== '256' ||
   stagingTask.memory !== '1024' ||
   stagingTask.runtimePlatform?.cpuArchitecture !== 'ARM64'
 ) {
-  throw new Error('Staging ECS task must use the approved 0.5 vCPU, 1 GiB ARM64 profile.');
+  throw new Error('Staging ECS task must use the approved 0.25 vCPU, 1 GiB ARM64 profile.');
 }
 
 const stagingContainer = stagingTask.containerDefinitions?.find(({ name }) => name === 'Main');
-if (stagingContainer?.cpu !== 512 || stagingContainer?.memoryReservation !== 1024) {
+if (stagingContainer?.cpu !== 256 || stagingContainer?.memoryReservation !== 1024) {
   throw new Error('Staging container resources must match the ARM64 task profile.');
 }
 
@@ -168,13 +168,18 @@ if (!webHeaders.includes('https://*.grafana.net')) {
 const stagingWorkflow = await readFile('.github/workflows/deploy-staging.yml', 'utf8');
 for (const requiredDeploymentSetting of [
   '--platform linux/arm64',
-  '--desired-count 1',
-  '--health-check-grace-period-seconds 300',
-  '--cache-from type=gha,scope=staging-backend-arm64',
-  '--cache-to type=gha,mode=max,scope=staging-backend-arm64',
+  '--target lambda',
+  '--cache-from type=gha,scope=staging-lambda-arm64',
+  '--cache-to type=gha,mode=max,scope=staging-lambda-arm64',
   'docker/setup-qemu-action@v3',
   'docker/setup-buildx-action@v3',
-  'SYNC_RELEASE_VERSION=${{ github.sha }}',
+  'aws lambda update-function-code',
+  'aws lambda update-function-configuration',
+  'aws lambda wait function-updated',
+  'aws ssm get-parameter',
+  'Require staging vacation mode to be off',
+  'aws lambda get-function-concurrency',
+  'Protected endpoint returned $auth_status without a JWT; expected 401.',
 ]) {
   if (!stagingWorkflow.includes(requiredDeploymentSetting)) {
     throw new Error(`Missing staging deployment setting: ${requiredDeploymentSetting}`);
@@ -187,6 +192,7 @@ for (const requiredScheduleSetting of [
   'Asia/Kolkata',
   'DesiredCount":1',
   'DesiredCount":0',
+  'State: DISABLED',
 ]) {
   if (!stagingSchedule.includes(requiredScheduleSetting)) {
     throw new Error(`Missing staging schedule setting: ${requiredScheduleSetting}`);
@@ -194,6 +200,64 @@ for (const requiredScheduleSetting of [
 }
 if ((stagingSchedule.match(/Mode: 'OFF'/g) ?? []).length !== 2) {
   throw new Error('Scheduler flexible-window OFF values must be quoted to remain strings in YAML.');
+}
+if ((stagingSchedule.match(/State: DISABLED/g) ?? []).length !== 2) {
+  throw new Error('Both legacy ECS schedules must remain disabled after the Lambda migration.');
+}
+
+const ecrLifecyclePolicy = JSON.parse(
+  await readFile('ops/aws/ecr/lifecycle-policy.staging.json', 'utf8'),
+);
+const ecrRetentionRule = ecrLifecyclePolicy.rules?.find(
+  ({ selection }) => selection?.tagStatus === 'any',
+);
+if (
+  ecrRetentionRule?.selection?.countType !== 'imageCountMoreThan' ||
+  ecrRetentionRule.selection.countNumber !== 10 ||
+  ecrRetentionRule.action?.type !== 'expire'
+) {
+  throw new Error('Staging ECR lifecycle policy must retain the latest 10 images.');
+}
+
+const lambdaTemplate = await readFile('ops/aws/lambda/sync-api.staging.yml', 'utf8');
+for (const requiredLambdaSetting of [
+  'PackageType: Image',
+  '- arm64',
+  'MemorySize: 2048',
+  "SYNC_DB_MAX_POOL_SIZE: '2'",
+  "SYNC_SCHEDULING_ENABLED: 'false'",
+  "SYNC_TRACING_ENABLED: 'false'",
+  'AWS_LWA_ASYNC_INIT',
+  'AWS_LWA_READINESS_CHECK_PATH',
+  'Type: AWS::Lambda::Url',
+  'InvokedViaFunctionUrl: true',
+]) {
+  if (!lambdaTemplate.includes(requiredLambdaSetting)) {
+    throw new Error(`Missing staging Lambda setting: ${requiredLambdaSetting}`);
+  }
+}
+
+const syncApiDockerfile = await readFile('backend/sync-api/Dockerfile', 'utf8');
+for (const requiredLambdaImageSetting of [
+  'AS lambda',
+  'public.ecr.aws/awsguru/aws-lambda-adapter:1.0.0',
+  'FROM runtime AS ecs',
+]) {
+  if (!syncApiDockerfile.includes(requiredLambdaImageSetting)) {
+    throw new Error(`Missing Lambda image setting: ${requiredLambdaImageSetting}`);
+  }
+}
+
+const schedulingConfig = await readFile(
+  'backend/sync-api/src/main/java/com/deardiary/sync/config/SchedulingConfig.java',
+  'utf8',
+);
+if (
+  !schedulingConfig.includes(
+    '@ConditionalOnProperty(name = "sync.scheduling.enabled", havingValue = "true", matchIfMissing = true)',
+  )
+) {
+  throw new Error('Spring scheduling must be explicitly disableable for Lambda containers.');
 }
 
 const stagingDeployPolicy = JSON.parse(
@@ -204,6 +268,42 @@ const stagingImageActions =
   [];
 if (!stagingImageActions.includes('ecr:BatchGetImage')) {
   throw new Error('Staging deployment role must be able to read ECR manifests for Buildx pushes.');
+}
+const stagingLambdaActions =
+  stagingDeployPolicy.Statement.find(({ Sid }) => Sid === 'DeployTheStagingLambda')?.Action ?? [];
+for (const action of [
+  'lambda:GetFunction',
+  'lambda:GetFunctionConcurrency',
+  'lambda:GetFunctionUrlConfig',
+  'lambda:PutFunctionConcurrency',
+  'lambda:DeleteFunctionConcurrency',
+  'lambda:UpdateFunctionCode',
+  'lambda:UpdateFunctionConfiguration',
+  'lambda:UpdateFunctionUrlConfig',
+]) {
+  if (!stagingLambdaActions.includes(action)) {
+    throw new Error(`Staging deployment role is missing ${action}.`);
+  }
+}
+
+const vacationWorkflow = await readFile('.github/workflows/staging-vacation-mode.yml', 'utf8');
+for (const requiredVacationSetting of [
+  'Staging vacation mode',
+  '--auth-type AWS_IAM',
+  '--reserved-concurrent-executions 0',
+  'delete-function-concurrency',
+  '--auth-type NONE',
+  'mode=INCONSISTENT',
+]) {
+  if (!vacationWorkflow.includes(requiredVacationSetting)) {
+    throw new Error(`Missing staging vacation-mode setting: ${requiredVacationSetting}`);
+  }
+}
+if (
+  stagingDeployPolicy.Statement.find(({ Sid }) => Sid === 'ReadStagingParametersForLambda')
+    ?.Action !== 'ssm:GetParameter'
+) {
+  throw new Error('Staging deployment role must read the scoped staging parameters for Lambda.');
 }
 
 console.log('Operational dashboards, alerts, and security workflow validation passed.');

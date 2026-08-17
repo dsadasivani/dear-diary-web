@@ -24,13 +24,26 @@ activity but does not block local reading or local-first editing.
 
 Keep `snapshot_creation_enabled` and the `SNAPSHOT_CREATION` kill switch disabled until staging
 has stable ordered replay and object-storage metrics. Creation exports one account-wide canonical
-partition at the current global sequence, encrypts it locally, and retains only encrypted upload bytes
-in the restart journal. The server exposes a snapshot only after its object metadata is verified and
-the snapshot plus its object reference are committed atomically.
+partition at the current global sequence. Small snapshots remain one encrypted object; large snapshots
+use ordered, independently encrypted 4 MiB chunks and a durable per-chunk restart journal. A retry
+continues preparation from the last durable chunk and skips uploads that object storage already verifies.
+Snapshot schema v3 pages canonical records directly from SQLite or IndexedDB and emits self-contained
+record chunks, avoiding a full canonical-map read and whole-snapshot JSON/encryption buffer during creation.
+Schema v2 byte-chunk snapshots remain readable.
+The server exposes a snapshot only after every chunk's metadata is verified and the snapshot plus all
+object references are committed atomically. The protocol ceiling is 256 MiB per complete snapshot;
+storage-plan quota and retention controls remain independent.
 
-Restore is accepted only into an empty sync state. Clients verify encrypted size, SHA-256, object kind,
-key epoch, schema, account, partition, and through-sequence before atomically installing state and the
-cursor. A failed or interrupted import leaves the previous local state unchanged. Monthly partial
+Restore is accepted only into an empty sync state, except for the explicit stale-device rebootstrap path.
+Clients download and decrypt chunks in order, verify each encrypted size and SHA-256 plus the signed
+aggregate manifest, then verify schema, account, partition, and through-sequence before atomically
+installing state and the cursor. Schema v3 record chunks are decoded one at a time, so restore no longer
+retains all encrypted chunks, a duplicate plaintext buffer, or a full in-memory canonical map. Each page is
+written to encrypted IndexedDB or SQLite staging, then canonical data, application records, indexes, media
+references, and the cursor become visible in one local transaction. A failed or interrupted import leaves the
+previous local state unchanged. If the app stops after that transaction but before cursor acknowledgement,
+the matching snapshot receipt makes the restart acknowledge-only rather than attempting a second import.
+Monthly partial
 snapshot restore remains disabled because the event API uses one global cursor; enabling it
 without partition cursors could skip events.
 

@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.deardiary.sync.account.AccountAuthorizationService;
+import com.deardiary.sync.bootstrap.BootstrapRequests;
+import com.deardiary.sync.bootstrap.BootstrapService;
 import com.deardiary.sync.common.ApiException;
+import com.deardiary.sync.cursor.CursorService;
 import com.deardiary.sync.device.DeviceAuthorizationService;
 import com.deardiary.sync.device.DeviceRegistrationRequest;
 import com.deardiary.sync.device.DeviceRegistrationService;
@@ -13,10 +16,18 @@ import com.deardiary.sync.objectstore.ObjectKey;
 import com.deardiary.sync.objectstore.ObjectKeyFactory;
 import com.deardiary.sync.protocol.ProtocolService;
 import com.deardiary.sync.snapshot.InitiateSnapshotRequest;
+import com.deardiary.sync.snapshot.InitiateSnapshotResponse;
 import com.deardiary.sync.snapshot.SnapshotService;
+import com.deardiary.sync.snapshot.SnapshotResponse;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.MessageDigest;
+import java.security.Signature;
 import java.time.Clock;
 import java.util.Base64;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
@@ -34,10 +45,12 @@ class SnapshotIntegrationTest {
     @Container
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16.9-alpine");
     private static JdbcTemplate jdbc;
+    private DataSourceTransactionManager transactions;
     private SnapshotService snapshots;
     private InMemoryEncryptedObjectStore objectStore;
     private UUID accountId;
     private UUID deviceId;
+    private KeyPair deviceKey;
 
     @BeforeAll
     static void migrate() {
@@ -63,13 +76,15 @@ class SnapshotIntegrationTest {
             """);
         var dataSource = new DriverManagerDataSource(
             POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-        var transactionManager = new DataSourceTransactionManager(dataSource);
-        var registrations = new DeviceRegistrationService(jdbc, transactionManager, Clock.systemUTC());
+        transactions = new DataSourceTransactionManager(dataSource);
+        var registrations = new DeviceRegistrationService(jdbc, transactions, Clock.systemUTC());
         deviceId = UUID.randomUUID();
+        deviceKey = KeyPairGenerator.getInstance("EC").generateKeyPair();
         accountId = registrations.register("snapshot-user", new DeviceRegistrationRequest(
-            deviceId, publicKey(), "PRIMARY", 2, "test")).accountId();
+            deviceId, Base64.getEncoder().encodeToString(deviceKey.getPublic().getEncoded()),
+            "PRIMARY", 2, "test")).accountId();
         objectStore = new InMemoryEncryptedObjectStore();
-        snapshots = new SnapshotService(jdbc, transactionManager,
+        snapshots = new SnapshotService(jdbc, transactions,
             new DeviceAuthorizationService(jdbc), new AccountAuthorizationService(jdbc),
             new ProtocolService(jdbc), new ObjectKeyFactory(), objectStore, Clock.systemUTC(),
             new com.deardiary.sync.quota.QuotaService(jdbc, new AccountAuthorizationService(jdbc)));
@@ -110,9 +125,94 @@ class SnapshotIntegrationTest {
         var changed = new InitiateSnapshotRequest(id, deviceId, 0, "account", "b".repeat(64),
             512, 1, 2, 3, null);
         assertApiCode(() -> snapshots.initiate("snapshot-user", changed), "IDEMPOTENCY_MISMATCH");
+        assertApiCode(() -> snapshots.initiate("snapshot-user", request(UUID.randomUUID(), 0)),
+            "SNAPSHOT_SEQUENCE_EXISTS");
 
         jdbc.update("UPDATE sync_kill_switches SET engaged = TRUE, reason_code = 'TEST' WHERE switch_name = 'SNAPSHOT_CREATION'");
         assertApiCode(() -> snapshots.initiate("snapshot-user", request(UUID.randomUUID(), 0)), "SNAPSHOT_CREATION_DISABLED");
+    }
+
+    @Test
+    void chunkedSnapshotRegistersOnlyAfterEveryChunkIsVerified() throws Exception {
+        var snapshotId = UUID.randomUUID();
+        var chunks = List.of(
+            new InitiateSnapshotRequest.Chunk(0, "a".repeat(64), 256),
+            new InitiateSnapshotRequest.Chunk(1, "b".repeat(64), 384));
+        var request = new InitiateSnapshotRequest(
+            snapshotId, deviceId, 0, "account", chunkDigest(chunks), 640,
+            1, 2, 3, null, chunks);
+
+        var initiated = snapshots.initiate("snapshot-user", request);
+        assertThat(initiated.uploads()).hasSize(2);
+        objectStore.markUploaded(new ObjectKey(initiated.uploads().getFirst().objectKey()));
+        var resumed = snapshots.initiate("snapshot-user", request);
+        assertThat(resumed.uploads()).extracting(InitiateSnapshotResponse.Upload::uploaded)
+            .containsExactly(true, false);
+        assertApiCode(() -> snapshots.register("snapshot-user", snapshotId, deviceId), "OBJECT_MISSING");
+
+        objectStore.markUploaded(new ObjectKey(initiated.uploads().get(1).objectKey()));
+        var registered = snapshots.register("snapshot-user", snapshotId, deviceId);
+        var latest = snapshots.latest("snapshot-user", "account", 2);
+
+        assertThat(registered.status()).isEqualTo("AVAILABLE");
+        assertThat(latest.chunks()).hasSize(2);
+        assertThat(latest.chunks()).extracting(SnapshotResponse.Chunk::index).containsExactly(0, 1);
+        assertThat(latest.chunks()).allSatisfy(chunk ->
+            assertThat(chunk.downloadUrl()).contains("/download/"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sync_object_references", Long.class))
+            .isEqualTo(2);
+        assertThat(jdbc.queryForObject("""
+            SELECT count(*) FROM sync_objects WHERE storage_status = 'COMMITTED'
+            """, Long.class)).isEqualTo(2);
+    }
+
+    @Test
+    void staleActiveDeviceCanRebootstrapFromPinnedSnapshotAndAcknowledgeItsHead() throws Exception {
+        var request = request(UUID.randomUUID(), 0);
+        var initiated = snapshots.initiate("snapshot-user", request);
+        objectStore.markUploaded(new ObjectKey(initiated.upload().objectKey()));
+        snapshots.register("snapshot-user", request.snapshotId(), deviceId);
+        jdbc.update("""
+            UPDATE sync_protocol_config SET bootstrap_manifest_enabled = TRUE,
+                remote_pull_enabled = TRUE WHERE config_id = 1
+            """);
+        jdbc.update("UPDATE sync_accounts SET current_sequence = 7 WHERE account_id = ?", accountId);
+        jdbc.update("""
+            UPDATE sync_device_cursors SET last_applied_sequence = 7
+            WHERE account_id = ? AND device_id = ?
+            """, accountId, deviceId);
+        jdbc.update("""
+            UPDATE sync_devices SET rebootstrap_required = TRUE
+            WHERE account_id = ? AND device_id = ?
+            """, accountId, deviceId);
+
+        var devices = new DeviceAuthorizationService(jdbc);
+        var bootstraps = new BootstrapService(jdbc, transactions,
+            new AccountAuthorizationService(jdbc), devices, new ProtocolService(jdbc),
+            objectStore, Clock.systemUTC());
+        var bootstrapId = UUID.randomUUID();
+        var manifest = bootstraps.create("snapshot-user",
+            new BootstrapRequests.Create(bootstrapId, deviceId, null));
+
+        assertThat(manifest.snapshot().throughSequence()).isZero();
+        assertThat(manifest.headSequence()).isEqualTo(7);
+        assertThat(jdbc.queryForObject("""
+            SELECT last_applied_sequence FROM sync_device_cursors
+            WHERE account_id = ? AND device_id = ?
+            """, Long.class, accountId, deviceId)).isZero();
+
+        var cursors = new CursorService(jdbc, transactions, devices, Clock.systemUTC());
+        assertThat(cursors.acknowledge("snapshot-user", deviceId, 7).lastAppliedSequence())
+            .isEqualTo(7);
+        var proof = sign("bootstrap-complete:" + bootstrapId + ":7");
+        var completed = bootstraps.complete("snapshot-user", bootstrapId,
+            new BootstrapRequests.Complete(deviceId, 7, proof));
+
+        assertThat(completed.status()).isEqualTo("COMPLETED");
+        assertThat(jdbc.queryForObject("""
+            SELECT rebootstrap_required FROM sync_devices
+            WHERE account_id = ? AND device_id = ?
+            """, Boolean.class, accountId, deviceId)).isFalse();
     }
 
     private InitiateSnapshotRequest request(UUID snapshotId, long sequence) {
@@ -125,10 +225,20 @@ class SnapshotIntegrationTest {
             "SELECT snapshot_status FROM sync_snapshots WHERE snapshot_id = ?", String.class, snapshotId);
     }
 
-    private static String publicKey() throws Exception {
-        var generator = KeyPairGenerator.getInstance("EC");
-        generator.initialize(256);
-        return Base64.getEncoder().encodeToString(generator.generateKeyPair().getPublic().getEncoded());
+    private String sign(String message) throws Exception {
+        var signer = Signature.getInstance("SHA256withECDSA");
+        signer.initSign(deviceKey.getPrivate());
+        signer.update(message.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(signer.sign());
+    }
+
+    private static String chunkDigest(List<InitiateSnapshotRequest.Chunk> chunks) throws Exception {
+        var digest = MessageDigest.getInstance("SHA-256");
+        for (var chunk : chunks) {
+            digest.update((chunk.index() + ":" + chunk.sha256() + ":" + chunk.sizeBytes() + "\n")
+                .getBytes(StandardCharsets.UTF_8));
+        }
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     private static void assertApiCode(Runnable action, String code) {

@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Start Loredays staging on weekday mornings and stop it every evening.
+Description: Disabled legacy ECS staging schedule retained only for rollback.
 
 Parameters:
   ClusterName:
@@ -43,12 +43,12 @@ Resources:
   WeekdayStartSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
-      Description: Start Loredays staging at the beginning of each weekday.
+      Description: Legacy ECS start schedule; disabled after the Lambda migration.
       FlexibleTimeWindow:
         Mode: 'OFF'
       ScheduleExpression: !Ref StartSchedule
       ScheduleExpressionTimezone: !Ref ScheduleTimezone
-      State: ENABLED
+      State: DISABLED
       Target:
         Arn: arn:aws:scheduler:::aws-sdk:ecs:updateService
         RoleArn: !GetAtt SchedulerExecutionRole.Arn
@@ -57,12 +57,12 @@ Resources:
   DailyStopSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
-      Description: Stop Loredays staging every evening, including weekends.
+      Description: Legacy ECS stop schedule; disabled after the Lambda migration.
       FlexibleTimeWindow:
         Mode: 'OFF'
       ScheduleExpression: !Ref StopSchedule
       ScheduleExpressionTimezone: !Ref ScheduleTimezone
-      State: ENABLED
+      State: DISABLED
       Target:
         Arn: arn:aws:scheduler:::aws-sdk:ecs:updateService
         RoleArn: !GetAtt SchedulerExecutionRole.Arn

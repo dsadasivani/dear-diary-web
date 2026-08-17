@@ -42,6 +42,20 @@ test('setItems commits all encrypted IndexedDB writes or none', async () => {
   assert.equal(await store.getItem('atomic_b'), 'old-b');
 });
 
+test('bulk encrypted reads preserve every key and decrypted value', async () => {
+  const store = new WebEncryptedKeyValueStore(WEB_RECORD_STORES.entryProjections);
+  await store.clear();
+  const values = Object.fromEntries(
+    Array.from({ length: 250 }, (_, index) => [
+      `entry-${String(index).padStart(3, '0')}`,
+      JSON.stringify({ id: `entry-${index}`, title: `Memory ${index}` }),
+    ]),
+  );
+  await store.setItems(values);
+
+  assert.deepEqual(await store.getAllItems(), values);
+});
+
 test('web local data store reads repository collections from encrypted record stores', async () => {
   const store = new WebLocalDataStore();
   await store.clear();
@@ -102,6 +116,177 @@ test('web local data store reads repository collections from encrypted record st
   assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_record_versions'))!), {
     'entry:entry-structured-1': 4,
   });
+});
+
+test('web canonical snapshot paging stays ordered and includes base media without full-map reads', async () => {
+  const store = new WebLocalDataStore();
+  await store.clear();
+  await store.setItems({
+    deardiary_sync_records: JSON.stringify({
+      'ENTRY:entry-2': { id: 'entry-2' },
+      'DIARY:diary-1': { id: 'diary-1' },
+    }),
+    deardiary_sync_base_versions: JSON.stringify({
+      'ENTRY:entry-2': 2,
+      'DIARY:diary-1': 1,
+    }),
+    deardiary_sync_base_media: JSON.stringify({ 'media-1': 'objects/media-1' }),
+  });
+
+  const records = [];
+  let cursor: string | undefined;
+  do {
+    const page = await store.queryCanonicalSnapshotPage({ cursor, limit: 2 });
+    assert.ok(page);
+    records.push(...page.records);
+    cursor = page.nextCursor;
+  } while (cursor);
+
+  assert.deepEqual(
+    records.map((record) => [record.kind, record.key, record.value]),
+    [
+      ['record', 'DIARY:diary-1', { id: 'diary-1' }],
+      ['record', 'ENTRY:entry-2', { id: 'entry-2' }],
+      ['recordVersion', 'DIARY:diary-1', 1],
+      ['recordVersion', 'ENTRY:entry-2', 2],
+      ['mediaPointer', 'media-1', 'objects/media-1'],
+    ],
+  );
+  assert.equal(
+    await store.getStructuredRecord('deardiary_sync_base_media', 'media-1'),
+    'objects/media-1',
+  );
+});
+
+test('web staged snapshot restore swaps canonical and application records atomically', async () => {
+  const store = new WebLocalDataStore();
+  await store.clear();
+  await store.setItems({
+    deardiary_diaries: JSON.stringify([{ id: 'old-diary', name: 'Old', entryCount: 0 }]),
+    deardiary_entries: '[]',
+    deardiary_notes: '[]',
+    deardiary_sync_records: JSON.stringify({ 'DIARY:old-diary': { id: 'old-diary' } }),
+    deardiary_sync_base_versions: JSON.stringify({ 'DIARY:old-diary': 1 }),
+    deardiary_sync_base_media: '{}',
+    deardiary_sync_account: JSON.stringify({ accountId: 'account-1', appliedSequence: 0 }),
+  });
+  const snapshotId = 'snapshot-staged-web';
+  await store.clearCanonicalSnapshotRestoreStage(snapshotId);
+  await store.stageCanonicalSnapshotRestoreRecords(snapshotId, [
+    {
+      kind: 'record',
+      key: 'DIARY:diary-1',
+      value: { id: 'diary-1', name: 'Restored', emoji: '', color: '', entryCount: 1 },
+    },
+    {
+      kind: 'record',
+      key: 'ENTRY:entry-1',
+      value: {
+        id: 'entry-1',
+        diaryId: 'diary-1',
+        date: '2026-08-10',
+        title: 'Restored entry',
+        body: '<p>safe</p>',
+        moodName: '',
+        moodEmoji: '',
+        tags: [],
+        photoUris: [],
+        photoCount: 0,
+        wordCount: 1,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    },
+    { kind: 'recordVersion', key: 'DIARY:diary-1', value: 2 },
+    { kind: 'recordVersion', key: 'ENTRY:entry-1', value: 3 },
+    { kind: 'mediaPointer', key: 'media-1', value: 'objects/media-1' },
+  ]);
+
+  assert.equal(
+    (await store.getStructuredCollection<{ id: string }>('deardiary_diaries'))?.[0].id,
+    'old-diary',
+  );
+  await store.commitCanonicalSnapshotRestore({
+    snapshotId,
+    runtimeKey: 'deardiary_sync_account',
+    runtimeValue: JSON.stringify({ accountId: 'account-1', appliedSequence: 9 }),
+    appliedKey: 'deardiary_sync_applied_events',
+    appliedValue: '[]',
+  });
+
+  assert.deepEqual(
+    (await store.getStructuredCollection<{ id: string }>('deardiary_diaries'))?.map(
+      (row) => row.id,
+    ),
+    ['diary-1'],
+  );
+  assert.equal(
+    (await store.queryEntries({ diaryId: 'diary-1', limit: 10 }))?.items[0].id,
+    'entry-1',
+  );
+  assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_base_versions'))!), {
+    'DIARY:diary-1': 2,
+    'ENTRY:entry-1': 3,
+  });
+  assert.deepEqual(JSON.parse((await store.getItem('deardiary_sync_record_versions'))!), {
+    'diary:diary-1': 2,
+    'entry:entry-1': 3,
+  });
+  assert.equal(JSON.parse((await store.getItem('deardiary_sync_account'))!).appliedSequence, 9);
+});
+
+test('web staged snapshot restore rolls back the live diary when its final swap fails', async () => {
+  const store = new WebLocalDataStore();
+  await store.clear();
+  await store.setItems({
+    deardiary_diaries: JSON.stringify([{ id: 'old-diary', name: 'Old', entryCount: 0 }]),
+    deardiary_entries: '[]',
+    deardiary_notes: '[]',
+    deardiary_sync_records: JSON.stringify({ 'DIARY:old-diary': { id: 'old-diary' } }),
+    deardiary_sync_base_versions: JSON.stringify({ 'DIARY:old-diary': 1 }),
+    deardiary_sync_base_media: '{}',
+    deardiary_sync_account: JSON.stringify({ accountId: 'account-1', appliedSequence: 0 }),
+  });
+  const snapshotId = 'snapshot-staged-rollback';
+  await store.stageCanonicalSnapshotRestoreRecords(snapshotId, [
+    { kind: 'record', key: 'DIARY:new-diary', value: { id: 'new-diary', name: 'New' } },
+    { kind: 'recordVersion', key: 'DIARY:new-diary', value: 2 },
+  ]);
+  const originalPut = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function failCanonicalSwap(
+    this: IDBObjectStore,
+    value: unknown,
+    key?: IDBValidKey,
+  ): IDBRequest<IDBValidKey> {
+    if (this.name === WEB_RECORD_STORES.canonicalRecords && key === 'DIARY:new-diary') {
+      this.transaction.abort();
+      throw new Error('simulated final snapshot swap failure');
+    }
+    return originalPut.call(this, value, key);
+  };
+  try {
+    await assert.rejects(
+      store.commitCanonicalSnapshotRestore({
+        snapshotId,
+        runtimeKey: 'deardiary_sync_account',
+        runtimeValue: JSON.stringify({ accountId: 'account-1', appliedSequence: 9 }),
+        appliedKey: 'deardiary_sync_applied_events',
+        appliedValue: '[]',
+      }),
+      /snapshot swap failure|transaction aborted|request was aborted/i,
+    );
+  } finally {
+    IDBObjectStore.prototype.put = originalPut;
+  }
+  assert.deepEqual(
+    (await store.getStructuredCollection<{ id: string }>('deardiary_diaries'))?.map(
+      (row) => row.id,
+    ),
+    ['old-diary'],
+  );
+  assert.deepEqual(Object.keys(JSON.parse((await store.getItem('deardiary_sync_records'))!)), [
+    'DIARY:old-diary',
+  ]);
 });
 
 test('empty encrypted record collections override stale compatibility arrays', async () => {
@@ -228,6 +413,46 @@ test('web structured record mutations update one encrypted record without rewrit
   assert.equal(await store.getStructuredRecord('deardiary_entries', entry.id), null);
   assert.deepEqual(await store.getStructuredCollection('deardiary_entries'), []);
   assert.deepEqual((await store.queryEntryProjections({ limit: 1 }))?.items, []);
+});
+
+test('web replay maps update affected canonical records without rewriting the full ledger', async () => {
+  const store = new WebLocalDataStore();
+  await store.clear();
+  await store.setItems({
+    deardiary_sync_records: JSON.stringify({
+      'NOTE:note-a': { id: 'note-a', body: 'A' },
+      'NOTE:note-b': { id: 'note-b', body: 'B' },
+    }),
+    deardiary_sync_base_versions: JSON.stringify({
+      'NOTE:note-a': 1,
+      'NOTE:note-b': 3,
+    }),
+  });
+
+  await store.commitStructuredRecords({
+    records: [
+      {
+        key: 'deardiary_sync_records',
+        id: 'NOTE:note-a',
+        value: { id: 'note-a', body: 'updated' },
+      },
+      { key: 'deardiary_sync_base_versions', id: 'NOTE:note-a', value: 2 },
+    ],
+  });
+
+  assert.deepEqual(await store.getStructuredRecord('deardiary_sync_records', 'NOTE:note-a'), {
+    id: 'note-a',
+    body: 'updated',
+  });
+  assert.deepEqual(await store.getStructuredRecord('deardiary_sync_records', 'NOTE:note-b'), {
+    id: 'note-b',
+    body: 'B',
+  });
+  assert.equal(await store.getStructuredRecord('deardiary_sync_base_versions', 'NOTE:note-a'), 2);
+  assert.equal(
+    await new WebEncryptedKeyValueStore(REPOSITORY_STORE).getItem('deardiary_sync_records'),
+    null,
+  );
 });
 
 test('projection rebuild removes stale rows and restores missing body-free summaries', async () => {

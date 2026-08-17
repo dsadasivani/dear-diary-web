@@ -1,0 +1,147 @@
+name: Staging vacation mode
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Turn the staging API off, turn it on, or inspect its current state
+        required: true
+        default: status
+        type: choice
+        options:
+          - status
+          - off
+          - on
+
+concurrency:
+  group: staging-vacation-mode
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_ACCOUNT_ID: '908027418886'
+  AWS_REGION: ap-south-1
+  LAMBDA_FUNCTION: dear-diary-sync-staging
+
+jobs:
+  control:
+    name: ${{ inputs.action }} staging API
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - name: Validate deployment role
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$AWS_DEPLOY_ROLE_ARN" ]]; then
+            echo "Repository environment variable AWS_DEPLOY_ROLE_ARN is required." >&2
+            exit 1
+          fi
+
+      - name: Configure temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: staging-vacation-${{ github.run_id }}
+
+      - name: Turn staging off
+        if: inputs.action == 'off'
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws lambda update-function-url-config \
+            --function-name "$LAMBDA_FUNCTION" \
+            --auth-type AWS_IAM \
+            --query 'FunctionUrl' \
+            --output text
+          aws lambda put-function-concurrency \
+            --function-name "$LAMBDA_FUNCTION" \
+            --reserved-concurrent-executions 0 \
+            --query 'ReservedConcurrentExecutions' \
+            --output text
+
+          function_url=$(aws lambda get-function-url-config \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'FunctionUrl' \
+            --output text)
+          status=$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' "${function_url}actuator/health")
+          if [[ "$status" != "403" ]]; then
+            echo "Vacation mode expected the public endpoint to return 403; got $status." >&2
+            exit 1
+          fi
+
+      - name: Turn staging on
+        if: inputs.action == 'on'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! error=$(aws lambda delete-function-concurrency \
+            --function-name "$LAMBDA_FUNCTION" 2>&1); then
+            if [[ "$error" != *ResourceNotFoundException* ]]; then
+              echo "$error" >&2
+              exit 1
+            fi
+          fi
+          aws lambda update-function-url-config \
+            --function-name "$LAMBDA_FUNCTION" \
+            --auth-type NONE \
+            --query 'FunctionUrl' \
+            --output text
+
+          function_url=$(aws lambda get-function-url-config \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'FunctionUrl' \
+            --output text)
+          health=$(curl --fail --silent --show-error \
+            --max-time 70 \
+            --retry 12 --retry-all-errors --retry-delay 5 \
+            "${function_url}actuator/health")
+          jq -e '.status == "UP"' <<< "$health" >/dev/null
+
+      - name: Report staging state
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth_type=$(aws lambda get-function-url-config \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'AuthType' \
+            --output text)
+          reserved=$(aws lambda get-function-concurrency \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'ReservedConcurrentExecutions' \
+            --output text)
+          if [[ -z "$reserved" || "$reserved" == "None" ]]; then
+            reserved=unreserved
+          fi
+
+          if [[ "$auth_type" == "AWS_IAM" && "$reserved" == "0" ]]; then
+            mode=OFF
+          elif [[ "$auth_type" == "NONE" && "$reserved" == "unreserved" ]]; then
+            mode=ON
+          else
+            mode=INCONSISTENT
+          fi
+
+          {
+            echo "## Staging vacation mode"
+            echo
+            echo "- Requested action: \`${{ inputs.action }}\`"
+            echo "- Mode: \`$mode\`"
+            echo "- Function URL authentication: \`$auth_type\`"
+            echo "- Reserved concurrency: \`$reserved\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$mode" == "INCONSISTENT" ]]; then
+            echo "Staging has a partial vacation-mode configuration." >&2
+            exit 1
+          fi

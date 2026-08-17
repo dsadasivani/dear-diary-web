@@ -3,12 +3,36 @@
   "uid": "deardiary-integrity",
   "schemaVersion": 39,
   "version": 2,
+  "tags": ["loredays", "observability", "integrity"],
   "time": { "from": "now-24h", "to": "now" },
   "refresh": "30s",
+  "timepicker": {
+    "refresh_intervals": ["30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+  },
   "templating": {
     "list": [
-      { "name": "metrics", "label": "Metrics", "type": "datasource", "query": "prometheus" },
-      { "name": "logs", "label": "Logs", "type": "datasource", "query": "loki" },
+      {
+        "name": "metrics",
+        "label": "Metrics",
+        "type": "datasource",
+        "query": "prometheus",
+        "regex": "^grafanacloud-boldmint1469-prom$",
+        "current": {
+          "text": "grafanacloud-boldmint1469-prom",
+          "value": "grafanacloud-prom"
+        }
+      },
+      {
+        "name": "logs",
+        "label": "Logs",
+        "type": "datasource",
+        "query": "loki",
+        "regex": "^grafanacloud-boldmint1469-logs$",
+        "current": {
+          "text": "grafanacloud-boldmint1469-logs",
+          "value": "grafanacloud-logs"
+        }
+      },
       {
         "name": "environment",
         "label": "Environment",
@@ -16,6 +40,7 @@
         "query": "staging,production",
         "includeAll": true,
         "allValue": ".*",
+        "allowCustomValue": false,
         "current": { "text": "staging", "value": "staging" }
       }
     ]

@@ -139,6 +139,25 @@ export class PersistentOutboxRepository implements OutboxRepository {
     });
   }
 
+  retryWaitingNow(accountId: string, now: number): Promise<number> {
+    return this.exclusive(async () => {
+      const operations = await this.read();
+      let released = 0;
+      Object.entries(operations).forEach(([operationId, operation]) => {
+        if (operation.accountId !== accountId || operation.state !== 'RETRY_WAIT') return;
+        const { leaseOwner: _owner, leaseExpiresAt: _expiry, ...rest } = operation;
+        operations[operationId] = {
+          ...rest,
+          nextAttemptAt: 0,
+          updatedAt: now,
+        };
+        released += 1;
+      });
+      if (released > 0) await this.write(operations);
+      return released;
+    });
+  }
+
   supersedeConflictAndRebaseDependentDelete(
     deleteOperationId: string,
     conflictOperationId: string,

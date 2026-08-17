@@ -44,7 +44,7 @@ import {
   TERMINAL_SYNC_OPERATION_STATES,
 } from '../outbox';
 import { SyncApiClient } from './api/SyncApiClient';
-import type { SyncProtocol } from './api/SyncApiTypes';
+import type { SyncBootstrapManifest, SyncProtocol } from './api/SyncApiTypes';
 import type { SyncQuota } from './api/SyncApiTypes';
 import { DEFAULT_ACCOUNT_QUOTA } from '../../domain/quota';
 import { PersistentSyncConflictStore } from './conflict/PersistentSyncConflictStore';
@@ -81,6 +81,7 @@ import { AccountKeySyncSnapshotCodec } from './snapshot/SyncSnapshotCodec';
 import { SyncSnapshotCoordinator } from './snapshot/SyncSnapshotCoordinator';
 import { SyncRuntimeCoordinator, type SyncBackgroundWorker } from './SyncRuntimeCoordinator';
 import { reportUnexpectedError } from '../../infrastructure/telemetry/reportUnexpectedError';
+import { NOOP_TELEMETRY, type Telemetry } from '../../infrastructure/telemetry/Telemetry';
 import { signWithDeviceBundle } from './companionPairing';
 import { clearSyncLocalCache } from './clearSyncLocalCache';
 import { signOutGoogleAuth } from '../../utils/googleAuth';
@@ -96,6 +97,7 @@ const SYNC_QUOTA_CACHE_KEY = 'deardiary_sync_quota';
 const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined)?.trim() || '1.0.0';
 const MAX_WORK_PER_FLUSH = 100;
 const COMPANION_AUTHORIZATION_CHECK_INTERVAL_MS = 5_000;
+const EXISTING_BOOTSTRAP_JOURNAL_KEY = 'deardiary_sync_existing_bootstrap';
 
 const canonicalJson = (value: unknown): string => {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -152,6 +154,7 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     private readonly processor: SyncOperationProcessor,
     private readonly recoverBlockedDeletes: () => Promise<void>,
     private readonly recoverConcurrentEntryPhotos: () => Promise<number>,
+    private readonly retryWaitingNow: () => Promise<void>,
     private readonly assertAuthorized: (() => Promise<void>) | null,
     private readonly onError: (context: string, error: unknown) => void | Promise<void>,
     private readonly recoverUnknownPullStop: () => Promise<boolean>,
@@ -246,6 +249,10 @@ class RuntimeDelegate implements SyncRuntimeDelegate {
     })();
     return this.flushInFlight;
   }
+  async retryPendingOutboxNow(): Promise<void> {
+    await this.retryWaitingNow();
+    await this.flushPendingOutbox();
+  }
   requestOutboxFlush(delayMs = 0): void {
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
@@ -295,6 +302,10 @@ class RepositoryAcknowledgmentStore implements OperationAcknowledgmentStore {
       });
     }
     await this.persistent.acknowledge(operation, result);
+    const acknowledged = (await this.repository.listSyncOutboxOperations()).find(
+      (candidate) => candidate.operationId === operation.operationId,
+    );
+    if (acknowledged) await this.repository.saveSyncOutboxOperation(acknowledged);
   }
 }
 
@@ -368,6 +379,7 @@ export class SyncApplicationLifecycle {
     private readonly repository: DiaryRepository,
     private readonly outbox: OutboxRepository,
     private readonly engine: EventSyncEngine,
+    private readonly telemetry: Telemetry = NOOP_TELEMETRY,
   ) {}
 
   async hasExistingPrimaryAccount(supabaseSession: SupabaseAuthSession): Promise<boolean> {
@@ -442,6 +454,8 @@ export class SyncApplicationLifecycle {
       }
       const transfer = new BoundedObjectTransfer({
         maximumObjectBytes: protocol.maximumSnapshotBytes,
+        requestTimeoutMs: 15_000,
+        telemetry: this.telemetry,
       });
       const [recoveryBytes] = await transfer.download([
         {
@@ -510,6 +524,8 @@ export class SyncApplicationLifecycle {
     const transfer = new BoundedObjectTransfer({
       maximumObjectBytes: Math.max(protocol.maximumSnapshotBytes, protocol.maximumEventBytes),
       maximumConcurrency: 6,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
     });
     const safety = new PersistentSafetyStopStore(this.store);
     const snapshotStore = new PersistentSyncSnapshotStore(
@@ -535,6 +551,7 @@ export class SyncApplicationLifecycle {
         maximumSnapshotBytes: protocol.maximumSnapshotBytes,
         currentKeyEpoch: async () => keyEpoch,
       },
+      this.telemetry,
     );
     const restoredSnapshot = await snapshots.restoreLatestWithMetadata();
     const recoveredAccount: LocalSyncAccountState = {
@@ -580,6 +597,7 @@ export class SyncApplicationLifecycle {
         replayBatchSize: protocol.bootstrapControls?.replayBatchSize || 25,
         onProgress: (progress) => this.engine.reportCatchUpProgress(progress),
       },
+      this.telemetry,
     );
     let currentSequence: number;
     try {
@@ -624,8 +642,12 @@ export class SyncApplicationLifecycle {
     };
     await this.repository.saveLocalSyncAccountState(account);
     await runtimeStore.save({
-      ...(await runtimeStore.load())!,
+      accountId,
+      deviceId: pending.deviceId,
       deviceStatus: 'ACTIVE',
+      protocolVersion: PROTOCOL_VERSION,
+      eventSchemaVersion: protocol.eventSchemaVersion,
+      keyEpoch,
       appliedSequence: currentSequence,
       updatedAt: Date.now(),
     });
@@ -759,6 +781,8 @@ export class SyncApplicationLifecycle {
     if (!recoveryUpload.upload) throw new Error('Secure recovery storage is unavailable.');
     const transfer = new BoundedObjectTransfer({
       maximumObjectBytes: protocol.maximumSnapshotBytes,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
     });
     await transfer.upload(
       [{ objectKey: recoveryUpload.upload.objectKey, bytes: recoveryBytes }],
@@ -812,8 +836,9 @@ export class SyncApplicationLifecycle {
         currentKeyEpoch: async () => 1,
         signMetadata: (message) => signWithDeviceBundle(pending.devicePrivateKeyJwk, message),
       },
+      this.telemetry,
     );
-    await snapshots.create();
+    if (!(await snapshots.reuseLatestAtCurrentSequence())) await snapshots.create();
     input.onProgress?.('Finishing secure setup...');
     await this.repository.saveLocalSyncAccountState(account);
     await clearPendingPrimaryAccountSetupSecret();
@@ -830,6 +855,56 @@ export class SyncApplicationLifecycle {
         reason: 'Encrypted sync is not configured.',
       };
     return { mode: 'ACTIVE', eligible: true };
+  }
+
+  async createCurrentRestorePoint(): Promise<void> {
+    let account = await this.repository.getLocalSyncAccountState();
+    if (!account || account.deviceRole !== 'primary_mobile') {
+      throw new Error('Only the primary mobile device can create an account restore point.');
+    }
+    if (!this.delegate && !(await this.startIfActive())) {
+      throw new Error('Encrypted sync is not active on this device.');
+    }
+    await this.delegate!.flushPendingOutbox();
+    await this.delegate!.pullPending();
+    account = await this.repository.getLocalSyncAccountState();
+    if (!account) throw new Error('Encrypted sync account state is unavailable.');
+    const unresolved = (await this.outbox.listByAccount(account.accountId)).filter(
+      (operation) => !TERMINAL_SYNC_OPERATION_STATES.has(operation.state),
+    );
+    if (unresolved.length > 0) {
+      throw new Error('Wait for pending encrypted changes before creating a restore point.');
+    }
+    const api = this.client();
+    const protocol = await api.getProtocol();
+    const secrets = await loadSyncSecrets();
+    if (!secrets || secrets.accountId !== account.accountId) {
+      throw new Error('Encrypted sync keys are unavailable.');
+    }
+    const snapshots = new SyncSnapshotCoordinator(
+      api,
+      new BoundedObjectTransfer({
+        maximumObjectBytes: Math.max(protocol.maximumSnapshotBytes, protocol.maximumEventBytes),
+        maximumConcurrency: 6,
+        requestTimeoutMs: 15_000,
+        telemetry: this.telemetry,
+      }),
+      new PersistentSyncSnapshotStore(this.store),
+      new AccountKeySyncSnapshotCodec((epoch) => this.keyForEpoch(epoch)),
+      new PersistentSafetyStopStore(this.store),
+      {
+        accountId: account.accountId,
+        deviceId: account.deviceId,
+        protocolVersion: PROTOCOL_VERSION,
+        snapshotSchemaVersion: protocol.snapshotSchemaVersion,
+        maximumSnapshotBytes: protocol.maximumSnapshotBytes,
+        currentKeyEpoch: async () =>
+          (await this.repository.getLocalSyncAccountState())?.keyEpoch || 1,
+        signMetadata: (message) => signWithDeviceBundle(secrets.devicePrivateKeyJwk, message),
+      },
+      this.telemetry,
+    );
+    await snapshots.create();
   }
 
   async getQuota(options: { refresh?: boolean } = {}): Promise<SyncQuota> {
@@ -879,11 +954,7 @@ export class SyncApplicationLifecycle {
       this.repository.getLocalSyncAccountState(),
       loadSyncSecrets(),
     ]);
-    if (
-      !account ||
-      account.deviceRole !== 'web_companion' ||
-      !secrets
-    ) {
+    if (!account || account.deviceRole !== 'web_companion' || !secrets) {
       throw new Error('Only a linked browser companion can unlink itself.');
     }
     const api = createConfiguredSyncApiClient(() => this.accessToken());
@@ -902,8 +973,12 @@ export class SyncApplicationLifecycle {
   }
 
   async startIfActive(): Promise<boolean> {
+    const bootstrapSpan = this.telemetry.startSpan('deardiary.sync.bootstrap');
     let account = await this.repository.getLocalSyncAccountState();
-    if (!account) return false;
+    if (!account) {
+      bootstrapSpan.end();
+      return false;
+    }
     try {
       account = await this.applyAvailableDeviceKeyPackage(account);
       if (!this.companionRecoveryAttempts.has(account.accountId)) {
@@ -926,12 +1001,39 @@ export class SyncApplicationLifecycle {
         const queued = await this.queueMediaBackfill(account);
         if (queued) await this.delegate.flushPendingOutbox();
       }
+      await this.store.removeItem(EXISTING_BOOTSTRAP_JOURNAL_KEY);
+      this.telemetry.counter('deardiary.sync.bootstrap.success', 1, {
+        device_role: account.deviceRole,
+      });
+      bootstrapSpan.end();
       return true;
     } catch (error) {
       if (isSyncError(error) && error.code === 'DEVICE_REVOKED') {
         await this.handleDeviceRevoked();
+        this.telemetry.counter('deardiary.sync.bootstrap.failure', 1, {
+          error_code: error.code,
+        });
+        bootstrapSpan.end(error.code);
         return false;
       }
+      if (isSyncError(error) && error.code === 'SNAPSHOT_REQUIRED') {
+        await this.delegate?.stop();
+        this.engine.installRuntimeDelegate(null);
+        this.delegate = null;
+        account = await this.rebootstrapExistingDevice(account);
+        this.delegate = await this.composeRuntime(account);
+        this.engine.installRuntimeDelegate(this.delegate);
+        await this.delegate.start();
+        await this.store.removeItem(EXISTING_BOOTSTRAP_JOURNAL_KEY);
+        this.telemetry.counter('deardiary.sync.bootstrap.success', 1, {
+          device_role: account.deviceRole,
+        });
+        bootstrapSpan.end();
+        return true;
+      }
+      const code = isSyncError(error) ? error.code : 'UNKNOWN';
+      this.telemetry.counter('deardiary.sync.bootstrap.failure', 1, { error_code: code });
+      bootstrapSpan.end(code);
       throw error;
     }
   }
@@ -980,6 +1082,8 @@ export class SyncApplicationLifecycle {
     const protocol = await this.client().getProtocol();
     const transfer = new BoundedObjectTransfer({
       maximumObjectBytes: protocol.maximumSnapshotBytes,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
     });
     const [bytes] = await transfer.download([
       {
@@ -1043,6 +1147,184 @@ export class SyncApplicationLifecycle {
     return supabaseSession.accessToken;
   }
 
+  private async rebootstrapExistingDevice(
+    account: LocalSyncAccountState,
+  ): Promise<LocalSyncAccountState> {
+    const api = this.client();
+    const protocol = await api.getProtocol();
+    if (
+      protocol.bootstrapControls?.bootstrapManifestEnabled !== true ||
+      !protocol.featureFlags.remotePullEnabled
+    ) {
+      throw new SyncError({ code: 'SNAPSHOT_REQUIRED', userActionRequired: true });
+    }
+    const unresolved = (await this.outbox.listByAccount(account.accountId)).filter(
+      (operation) => !TERMINAL_SYNC_OPERATION_STATES.has(operation.state),
+    );
+    if (unresolved.length > 0) {
+      throw new Error(
+        'This device has unsynced changes. Export a backup before restoring its cloud snapshot.',
+      );
+    }
+    const secrets = await loadSyncSecrets();
+    if (!secrets || secrets.accountId !== account.accountId) {
+      throw new SyncError({ code: 'KEY_EPOCH_UNAVAILABLE', userActionRequired: true });
+    }
+    const manifest = await this.loadOrCreateExistingBootstrap(account, api);
+    for (const epoch of manifest.requiredKeyEpochs) await this.keyForEpoch(epoch);
+
+    this.engine.reportCatchUpProgress({
+      phase: 'restoring-snapshot',
+      startingSequence: account.appliedSequence,
+      snapshotSequence: manifest.snapshot.throughSequence,
+      appliedSequence: account.appliedSequence,
+      targetSequence: manifest.headSequence,
+      totalEvents: manifest.tailCount,
+    });
+    const transfer = new BoundedObjectTransfer({
+      maximumObjectBytes: Math.max(protocol.maximumSnapshotBytes, protocol.maximumEventBytes),
+      maximumConcurrency: 6,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
+    });
+    const safety = new PersistentSafetyStopStore(this.store);
+    const snapshots = new SyncSnapshotCoordinator(
+      api,
+      transfer,
+      new PersistentSyncSnapshotStore(
+        this.store,
+        Date.now,
+        createAtomicRepositorySnapshotReplacement(this.repository),
+      ),
+      new AccountKeySyncSnapshotCodec((epoch) => this.keyForEpoch(epoch)),
+      safety,
+      {
+        accountId: account.accountId,
+        deviceId: account.deviceId,
+        protocolVersion: PROTOCOL_VERSION,
+        snapshotSchemaVersion: protocol.snapshotSchemaVersion,
+        maximumSnapshotBytes: protocol.maximumSnapshotBytes,
+        currentKeyEpoch: async () => account.keyEpoch || 1,
+        allowExistingStateReplacement: true,
+      },
+      this.telemetry,
+    );
+    const restored = await snapshots.restoreSnapshot(manifest.snapshot);
+    await safety.clearAfterVerifiedRecovery(account.accountId);
+    await this.repository.saveLocalSyncAccountState({
+      ...account,
+      appliedSequence: restored.throughSequence,
+    });
+
+    const puller = new RemoteEventPuller(
+      api,
+      transfer,
+      {
+        hasKeyEpoch: async (epoch) => {
+          try {
+            await this.keyForEpoch(epoch);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        decrypt: async (bytes, epoch) => {
+          const decrypted = await decryptSyncPayload(await this.keyForEpoch(epoch), bytes);
+          if (decrypted.objectKind !== 'event') {
+            throw new SyncError({ code: 'INVARIANT_VIOLATION', safetyRelevant: true });
+          }
+          return JSON.parse(new TextDecoder().decode(decrypted.payload)) as DecryptedSyncEvent;
+        },
+      },
+      new RepositoryReplayStore(new PersistentReplayStore(this.store), this.repository),
+      new SyncInvariantValidator(),
+      safety,
+      this.repository,
+      {
+        accountId: account.accountId,
+        deviceId: account.deviceId,
+        eventSchemaVersion: protocol.eventSchemaVersion,
+        pageSize: 100,
+        replayBatchSize: protocol.bootstrapControls.replayBatchSize || 25,
+        throughSequence: manifest.headSequence,
+        onProgress: (progress) => this.engine.reportCatchUpProgress(progress),
+      },
+      this.telemetry,
+    );
+    const appliedSequence = await puller.pull();
+    const possessionSignature = await signWithDeviceBundle(
+      secrets.devicePrivateKeyJwk,
+      `bootstrap-complete:${manifest.bootstrapId}:${manifest.headSequence}`,
+    );
+    await api.completeBootstrap(manifest.bootstrapId, {
+      deviceId: account.deviceId,
+      appliedThroughSequence: appliedSequence,
+      possessionSignature,
+    });
+    const updated = { ...account, appliedSequence };
+    await this.repository.saveLocalSyncAccountState(updated);
+    const runtimeStore = new SyncRuntimeStore(this.store);
+    const runtime = await runtimeStore.load();
+    if (!runtime) throw new SyncError({ code: 'LOCAL_DATABASE_FAILURE', safetyRelevant: true });
+    await runtimeStore.save({
+      ...runtime,
+      deviceStatus: 'ACTIVE',
+      appliedSequence,
+      updatedAt: Date.now(),
+    });
+    this.engine.reportCatchUpProgress({
+      phase: 'complete',
+      startingSequence: account.appliedSequence,
+      snapshotSequence: manifest.snapshot.throughSequence,
+      appliedSequence,
+      targetSequence: manifest.headSequence,
+      appliedEvents: manifest.tailCount,
+      totalEvents: manifest.tailCount,
+    });
+    return updated;
+  }
+
+  private async loadOrCreateExistingBootstrap(
+    account: LocalSyncAccountState,
+    api: SyncApiClient,
+  ): Promise<SyncBootstrapManifest> {
+    const raw = await this.store.getItem(EXISTING_BOOTSTRAP_JOURNAL_KEY);
+    let bootstrapId: string | undefined;
+    if (raw) {
+      try {
+        const journal = JSON.parse(raw) as {
+          accountId?: string;
+          deviceId?: string;
+          bootstrapId?: string;
+        };
+        if (journal.accountId === account.accountId && journal.deviceId === account.deviceId) {
+          bootstrapId = journal.bootstrapId;
+        }
+      } catch {
+        /* replace the invalid journal below */
+      }
+    }
+    if (bootstrapId) {
+      try {
+        const existing = await api.getBootstrap(bootstrapId);
+        if (
+          (existing.status === 'READY' || existing.status === 'ACTIVATING') &&
+          Date.parse(existing.expiresAt) > Date.now()
+        ) {
+          return existing;
+        }
+      } catch (error) {
+        if (!isSyncError(error) || error.code !== 'OBJECT_MISSING') throw error;
+      }
+    }
+    bootstrapId = crypto.randomUUID();
+    await this.store.setItem(
+      EXISTING_BOOTSTRAP_JOURNAL_KEY,
+      JSON.stringify({ accountId: account.accountId, deviceId: account.deviceId, bootstrapId }),
+    );
+    return api.createBootstrap({ bootstrapId, deviceId: account.deviceId });
+  }
+
   private async seedSyncState(
     account: LocalSyncAccountState,
     accountId: string,
@@ -1088,9 +1370,22 @@ export class SyncApplicationLifecycle {
         return value;
       })
       .catch(async () => controls.asProtocol(await controls.loadSafeFallback()));
-    const runtime = await new SyncRuntimeStore(this.store).load();
+    const runtimeStore = new SyncRuntimeStore(this.store);
+    let runtime = await runtimeStore.load();
     if (!runtime || runtime.accountId !== account.accountId)
       throw new Error('Loredays Sync runtime state does not match the local account.');
+    if (
+      !Number.isInteger(runtime.protocolVersion) ||
+      !Number.isInteger(runtime.eventSchemaVersion)
+    ) {
+      runtime = {
+        ...runtime,
+        protocolVersion: PROTOCOL_VERSION,
+        eventSchemaVersion: protocol.eventSchemaVersion,
+        updatedAt: Date.now(),
+      };
+      await runtimeStore.save(runtime);
+    }
     if (protocol.featureFlags.mediaUploadEnabled) this.mediaEnabledAccounts.add(account.accountId);
     else this.mediaEnabledAccounts.delete(account.accountId);
     const transfer = new BoundedObjectTransfer({
@@ -1101,14 +1396,13 @@ export class SyncApplicationLifecycle {
         1,
       ),
       maximumConcurrency: 6,
+      requestTimeoutMs: 15_000,
+      telemetry: this.telemetry,
     });
     const validator = new SyncInvariantValidator();
     const safety = new PersistentSafetyStopStore(this.store);
     const persistentReplay = new PersistentReplayStore(this.store);
-    const replay = new RepositoryReplayStore(
-      persistentReplay,
-      this.repository,
-    );
+    const replay = new RepositoryReplayStore(persistentReplay, this.repository);
     const decryptor = {
       hasKeyEpoch: async (epoch: number) => {
         const secrets = await loadSyncSecrets();
@@ -1137,6 +1431,7 @@ export class SyncApplicationLifecycle {
         replayBatchSize: protocol.bootstrapControls?.replayBatchSize || 25,
         onProgress: (progress) => this.engine.reportCatchUpProgress(progress),
       },
+      this.telemetry,
     );
     const mediaPreparer = protocol.featureFlags.mediaUploadEnabled
       ? new SyncMediaPreparer({
@@ -1185,6 +1480,7 @@ export class SyncApplicationLifecycle {
         protocolVersion: PROTOCOL_VERSION,
         workerId: `app:${account.deviceId}`,
       },
+      this.telemetry,
     );
     const handleWorkerError = (context: string) => (error: unknown) =>
       this.handleRuntimeError(context, error);
@@ -1212,6 +1508,13 @@ export class SyncApplicationLifecycle {
       async () => {
         const rollingEnabled = protocol.bootstrapControls?.rollingSnapshotsEnabled === true;
         if (!rollingEnabled || account.deviceRole !== 'primary_mobile') return;
+        const committedAccount = await this.repository.getLocalSyncAccountState();
+        if (
+          committedAccount?.accountId !== account.accountId ||
+          committedAccount.deviceId !== account.deviceId
+        ) {
+          return;
+        }
         const readiness = await api.getBootstrapReadiness(account.deviceId);
         if (!readiness.snapshotRequired && readiness.snapshotLag < readiness.softTailEvents) return;
         await puller.pull();
@@ -1237,6 +1540,7 @@ export class SyncApplicationLifecycle {
               (await this.repository.getLocalSyncAccountState())?.keyEpoch || 1,
             signMetadata: (message) => signWithDeviceBundle(secrets.devicePrivateKeyJwk, message),
           },
+          this.telemetry,
         );
         await snapshots.create();
       },
@@ -1269,6 +1573,7 @@ export class SyncApplicationLifecycle {
           pullLatest: () => puller.pull().then(() => undefined),
         }).then(() => undefined),
       () => this.repository.recoverConcurrentEntryPhotoConflicts(),
+      () => this.outbox.retryWaitingNow(account.accountId, Date.now()).then(() => undefined),
       assertAuthorized,
       (context, error) => this.handleRuntimeError(context, error),
       () => safety.clearRecoverableUnknownPull(account.accountId),
