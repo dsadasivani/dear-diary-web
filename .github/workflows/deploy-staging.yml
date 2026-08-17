@@ -102,7 +102,7 @@ jobs:
             frontend=false
             for path in "${paths[@]}"; do
               case "$path" in
-                backend/sync-api/*|ops/aws/ecs/task-definition.staging.json)
+                backend/sync-api/*|ops/aws/lambda/sync-api.staging.yml)
                   backend=true
                   ;;
               esac
@@ -225,15 +225,10 @@ jobs:
     environment: staging
     env:
       ECR_REPOSITORY: dear-diary-sync-api
-      ECS_CLUSTER: default
-      ECS_SERVICE: dear-diary-sync-staging
-      ECS_CONTAINER_NAME: Main
-      ECS_TASK_DEFINITION: ops/aws/ecs/task-definition.staging.json
-      ECS_ROLLBACK_ALARM: default/dear-diary-sync-staging/RollbackAlarm
-      STAGING_HEALTH_URL: https://de-95a19ada9bcf4598832bc6673d977727.ecs.ap-south-1.on.aws/actuator/health
+      LAMBDA_FUNCTION: dear-diary-sync-staging
     outputs:
       image: ${{ steps.image.outputs.image }}
-      active-task-definition: ${{ steps.backend-verification.outputs.active-task-definition }}
+      function-url: ${{ steps.backend-verification.outputs.function-url }}
       scan-critical: ${{ steps.scan.outputs.critical }}
       scan-high: ${{ steps.scan.outputs.high }}
       scan-medium: ${{ steps.scan.outputs.medium }}
@@ -280,19 +275,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tagged_image="$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+          tagged_image="$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA-lambda"
           if digest=$(aws ecr describe-images \
             --repository-name "$ECR_REPOSITORY" \
-            --image-ids "imageTag=$GITHUB_SHA" \
+            --image-ids "imageTag=$GITHUB_SHA-lambda" \
             --query 'imageDetails[0].imageDigest' \
             --output text 2>/dev/null); then
             echo "Reusing existing immutable image $tagged_image@$digest"
           else
             docker buildx build \
               --platform linux/arm64 \
+              --target lambda \
               --pull \
-              --cache-from type=gha,scope=staging-backend-arm64 \
-              --cache-to type=gha,mode=max,scope=staging-backend-arm64 \
+              --cache-from type=gha,scope=staging-lambda-arm64 \
+              --cache-to type=gha,mode=max,scope=staging-lambda-arm64 \
               --label "org.opencontainers.image.revision=$GITHUB_SHA" \
               --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
               --provenance=false \
@@ -301,7 +297,7 @@ jobs:
               backend/sync-api
             digest=$(aws ecr describe-images \
               --repository-name "$ECR_REPOSITORY" \
-              --image-ids "imageTag=$GITHUB_SHA" \
+              --image-ids "imageTag=$GITHUB_SHA-lambda" \
               --query 'imageDetails[0].imageDigest' \
               --output text)
           fi
@@ -368,102 +364,118 @@ jobs:
             exit 1
           fi
 
-      - name: Capture pre-deployment staging capacity
-        id: staging-state
+      - name: Deploy Lambda image and staging configuration
+        env:
+          IMAGE_URI: ${{ steps.image.outputs.image }}
         shell: bash
         run: |
           set -euo pipefail
-          original_desired_count=$(aws ecs describe-services \
-            --cluster "$ECS_CLUSTER" \
-            --services "$ECS_SERVICE" \
-            --query 'services[0].desiredCount' \
-            --output text)
-          if [[ ! "$original_desired_count" =~ ^[0-9]+$ ]]; then
-            echo "ECS returned an invalid desired count: $original_desired_count" >&2
-            exit 1
-          fi
-          echo "original-desired-count=$original_desired_count" >> "$GITHUB_OUTPUT"
+          environment_file=$(mktemp)
+          trap 'rm -f "$environment_file"' EXIT
 
-      - name: Wake staging for deployment verification
-        run: |
-          set -euo pipefail
-          aws ecs update-service \
-            --cluster "$ECS_CLUSTER" \
-            --service "$ECS_SERVICE" \
-            --desired-count 1 \
-            --health-check-grace-period-seconds 300 \
-            --no-cli-pager
+          parameter() {
+            aws ssm get-parameter \
+              --name "$1" \
+              --with-decryption \
+              --query 'Parameter.Value' \
+              --output text
+          }
 
-      - name: Render task definition with the scanned image digest
-        id: task-definition
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: ${{ env.ECS_TASK_DEFINITION }}
-          container-name: ${{ env.ECS_CONTAINER_NAME }}
-          image: ${{ steps.image.outputs.image }}
-          environment-variables: |
-            SYNC_RELEASE_VERSION=${{ github.sha }}
+          jq -n \
+            --arg db_url "$(parameter /dear-diary/staging/sync-db-url)" \
+            --arg db_username "$(parameter /dear-diary/staging/sync-db-username)" \
+            --arg db_password "$(parameter /dear-diary/staging/sync-db-password)" \
+            '{Variables: {
+              AWS_LWA_ASYNC_INIT: "true",
+              AWS_LWA_PORT: "8080",
+              AWS_LWA_READINESS_CHECK_PATH: "/actuator/health",
+              JAVA_TOOL_OPTIONS: "-XX:InitialRAMPercentage=10.0 -XX:MaxRAMPercentage=65.0 -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/urandom -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -XX:+UseSerialGC",
+              PORT: "8080",
+              SPRING_PROFILES_ACTIVE: "staging",
+              SYNC_CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,https://localhost,capacitor://localhost,https://staging.d33b4rjnv35mrn.amplifyapp.com",
+              SYNC_DB_URL: $db_url,
+              SYNC_DB_USERNAME: $db_username,
+              SYNC_DB_PASSWORD: $db_password,
+              SYNC_DB_MAX_POOL_SIZE: "2",
+              SYNC_DB_MIN_IDLE: "0",
+              SYNC_DEPLOYMENT_ENVIRONMENT: "staging",
+              SYNC_GC_DRY_RUN: "true",
+              SYNC_GC_WORKER_ENABLED: "false",
+              SYNC_JWT_AUDIENCE: "authenticated",
+              SYNC_JWT_ENABLED: "true",
+              SYNC_JWT_ISSUER_URI: "https://rephepalwmzlmsphigms.supabase.co/auth/v1",
+              SYNC_JWT_JWK_SET_URI: "https://rephepalwmzlmsphigms.supabase.co/auth/v1/.well-known/jwks.json",
+              SYNC_NOTIFICATION_PUBLISHER_ENABLED: "false",
+              SYNC_NOTIFICATION_WORKER_ENABLED: "false",
+              SYNC_OBJECT_STORE_BUCKET: "dear-diary-sync-staging-908027418886",
+              SYNC_OBJECT_STORE_ENABLED: "true",
+              SYNC_OBJECT_STORE_PATH_STYLE: "false",
+              SYNC_OBJECT_STORE_REGION: "ap-south-1",
+              SYNC_OTLP_LOGS_ENABLED: "false",
+              SYNC_OTLP_METRICS_ENABLED: "false",
+              SYNC_RELEASE_VERSION: env.GITHUB_SHA,
+              SYNC_SCHEDULING_ENABLED: "false",
+              SYNC_TRACING_ENABLED: "false",
+              SYNC_TRACING_SAMPLE_PROBABILITY: "0.1"
+            }}' > "$environment_file"
 
-      - name: Deploy backend to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ steps.task-definition.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true
-          wait-max-delay-seconds: 15
+          aws lambda update-function-code \
+            --function-name "$LAMBDA_FUNCTION" \
+            --image-uri "$IMAGE_URI" \
+            --query 'FunctionArn' \
+            --output text
+          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION"
+          aws lambda update-function-configuration \
+            --function-name "$LAMBDA_FUNCTION" \
+            --environment "file://$environment_file" \
+            --query 'FunctionArn' \
+            --output text
+          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION"
 
-      - name: Verify backend image, health, and rollback alarm
+      - name: Verify backend image, health, authentication, and CORS
         id: backend-verification
         env:
           EXPECTED_IMAGE: ${{ steps.image.outputs.image }}
         shell: bash
         run: |
           set -euo pipefail
-          # JMESPath requires literal backticks.
-          # shellcheck disable=SC2016
-          active_task_definition=$(aws ecs describe-services \
-            --cluster "$ECS_CLUSTER" \
-            --services "$ECS_SERVICE" \
-            --query 'services[0].deployments[?status==`PRIMARY`].taskDefinition | [0]' \
-            --output text)
-          active_image=$(aws ecs describe-task-definition \
-            --task-definition "$active_task_definition" \
-            --query "taskDefinition.containerDefinitions[?name=='$ECS_CONTAINER_NAME'].image | [0]" \
+          active_image=$(aws lambda get-function \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'Code.ImageUri' \
             --output text)
           if [[ "$active_image" != "$EXPECTED_IMAGE" ]]; then
-            echo "ECS is running $active_image; expected $EXPECTED_IMAGE." >&2
+            echo "Lambda is running $active_image; expected $EXPECTED_IMAGE." >&2
             exit 1
           fi
 
+          function_url=$(aws lambda get-function-url-config \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'FunctionUrl' \
+            --output text)
           health=$(curl --fail --silent --show-error \
             --retry 12 --retry-all-errors --retry-delay 10 \
-            "$STAGING_HEALTH_URL")
+            "${function_url}actuator/health")
           jq -e '.status == "UP"' <<< "$health" >/dev/null
 
-          alarm_state=$(aws cloudwatch describe-alarms \
-            --alarm-names "$ECS_ROLLBACK_ALARM" \
-            --query 'MetricAlarms[0].StateValue' \
-            --output text)
-          if [[ "$alarm_state" != "OK" ]]; then
-            echo "Rollback alarm is $alarm_state; expected OK." >&2
+          auth_status=$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' "${function_url}api/sync/protocol")
+          if [[ "$auth_status" != "401" ]]; then
+            echo "Protected endpoint returned $auth_status without a JWT; expected 401." >&2
             exit 1
           fi
 
-          echo "active-task-definition=$active_task_definition" >> "$GITHUB_OUTPUT"
+          cors_headers=$(mktemp)
+          trap 'rm -f "$cors_headers"' EXIT
+          curl --fail --silent --show-error --output /dev/null \
+            --dump-header "$cors_headers" \
+            --request OPTIONS \
+            --header 'Origin: https://staging.d33b4rjnv35mrn.amplifyapp.com' \
+            --header 'Access-Control-Request-Method: GET' \
+            --header 'Access-Control-Request-Headers: authorization,content-type' \
+            "${function_url}api/sync/protocol"
+          grep -qi '^access-control-allow-origin: https://staging.d33b4rjnv35mrn.amplifyapp.com' "$cors_headers"
 
-      - name: Restore pre-deployment staging capacity
-        if: always() && steps.staging-state.outputs.original-desired-count != ''
-        env:
-          ORIGINAL_DESIRED_COUNT: ${{ steps.staging-state.outputs.original-desired-count }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws ecs update-service \
-            --cluster "$ECS_CLUSTER" \
-            --service "$ECS_SERVICE" \
-            --desired-count "$ORIGINAL_DESIRED_COUNT" \
-            --no-cli-pager
+          echo "function-url=$function_url" >> "$GITHUB_OUTPUT"
 
   frontend:
     name: Deploy web
@@ -593,7 +605,7 @@ jobs:
           BACKEND_RESULT: ${{ needs.backend.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           IMAGE: ${{ needs.backend.outputs.image }}
-          ACTIVE_TASK_DEFINITION: ${{ needs.backend.outputs.active-task-definition }}
+          FUNCTION_URL: ${{ needs.backend.outputs.function-url }}
           SCAN_CRITICAL: ${{ needs.backend.outputs.scan-critical }}
           SCAN_HIGH: ${{ needs.backend.outputs.scan-high }}
           SCAN_MEDIUM: ${{ needs.backend.outputs.scan-medium }}
@@ -609,7 +621,7 @@ jobs:
             echo "- Frontend requested: \`${FRONTEND_REQUESTED:-false}\`; result: \`$FRONTEND_RESULT\`"
             if [[ -n "$IMAGE" ]]; then
               echo "- Backend image: \`$IMAGE\`"
-              echo "- ECS task definition: \`$ACTIVE_TASK_DEFINITION\`"
+              echo "- Lambda Function URL: $FUNCTION_URL"
               echo "- ECR findings: critical=$SCAN_CRITICAL, high=$SCAN_HIGH, medium=$SCAN_MEDIUM, low=$SCAN_LOW"
             fi
             if [[ -n "$AMPLIFY_JOB_ID" ]]; then

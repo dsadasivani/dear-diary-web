@@ -21,7 +21,7 @@ For a `main` push, the workflow compares the pushed commit range. For a manual f
 Backend deployment paths:
 
 - `backend/sync-api/**`
-- `ops/aws/ecs/task-definition.staging.json`
+- `ops/aws/lambda/sync-api.staging.yml`
 
 Frontend deployment paths:
 
@@ -47,13 +47,11 @@ then verify successful CI for that PR's exact feature-head commit before deployi
 ### Backend
 
 1. Authenticate to AWS with a short-lived GitHub OIDC token.
-2. Reuse the commit-tagged ECR image when present; otherwise build and push it.
+2. Reuse the commit-tagged Lambda image when present; otherwise build and push its ARM64 target.
 3. Wait for ECR scanning and reject Critical or High findings.
-4. Capture the service's pre-deployment desired count and wake staging for verification.
-5. Render the immutable digest into the ECS task definition.
-6. Deploy ECS and wait for service stability.
-7. Verify the active digest, public health response, and rollback alarm.
-8. Restore the pre-deployment desired count, including after a failed deployment step.
+4. Read the staging secrets from Parameter Store without writing them to logs.
+5. Deploy the immutable digest and configuration to Lambda.
+6. Verify the active digest, health response, JWT boundary, and staging CORS response.
 
 ### Frontend
 
@@ -88,8 +86,8 @@ aws iam put-role-policy `
 ```
 
 The trust policy accepts tokens only from the `staging` GitHub environment. The permissions policy
-can update only the existing ECS service, push to the sync API ECR repository, and start/inspect jobs
-for the Amplify `staging` branch.
+can update only the staging Lambda, read staging parameters, push to the sync API ECR repository,
+and start or inspect jobs for the Amplify `staging` branch.
 
 ## One-time staging branch setup
 
@@ -124,31 +122,41 @@ Run these steps after this workflow is available on `main`:
      --region ap-south-1
    ```
 
+8. Deploy the Lambda Function URL stack. Fetch secret parameters into the current PowerShell
+   process so they are not committed or printed:
+
+   ```powershell
+   $region = 'ap-south-1'
+   $imageUri = '<immutable ECR image URI produced by the Lambda image build>'
+   $dbUrl = aws ssm get-parameter --region $region --name /dear-diary/staging/sync-db-url --with-decryption --query 'Parameter.Value' --output text
+   $dbUsername = aws ssm get-parameter --region $region --name /dear-diary/staging/sync-db-username --with-decryption --query 'Parameter.Value' --output text
+   $dbPassword = aws ssm get-parameter --region $region --name /dear-diary/staging/sync-db-password --with-decryption --query 'Parameter.Value' --output text
+
+   aws cloudformation deploy `
+     --region $region `
+     --stack-name dear-diary-sync-lambda-staging `
+     --template-file ops/aws/lambda/sync-api.staging.yml `
+     --capabilities CAPABILITY_NAMED_IAM `
+     --parameter-overrides "ImageUri=$imageUri" "DbUrl=$dbUrl" "DbUsername=$dbUsername" "DbPassword=$dbPassword"
+   ```
+
 Do not enable branch protection that prevents GitHub Actions from force-updating the machine-managed
 `staging` branch.
 
-## Staging compute schedule
+## Staging compute and rollback
 
-The backend uses a 0.25 vCPU, 1 GiB ARM64 Fargate task. GitHub Actions publishes a Linux ARM64 image
-and temporarily wakes the service before deployment verification.
+The backend runs as a 2 GiB ARM64 Lambda container behind a Function URL. The account has a total
+Lambda concurrency quota of 10, and each instance uses a two-connection database pool. Lambda Web
+Adapter exposes the unchanged Spring Boot server on port 8080. CloudWatch retains logs for 14 days;
+the Lambda-specific runtime disables duplicate OTLP export.
 
-Staging normally runs from 09:00 to 21:00 Asia/Kolkata on weekdays. A daily stop also catches
-manually started weekend tasks. Deploy the version-controlled EventBridge Scheduler resources once:
+The former ECS Express service, managed ALB, target groups, public IPv4 addresses, security group,
+rollback alarm, and scheduler stack were retired after the Lambda cutover passed health,
+authentication, CORS, and published-asset verification. The disabled scheduler template and ECS task
+definition remain only as reconstruction references; they are not deployed and incur no charge.
 
-```powershell
-aws cloudformation deploy `
-  --template-file ops/aws/scheduler/staging-hours.yml `
-  --stack-name dear-diary-staging-hours `
-  --capabilities CAPABILITY_IAM `
-  --region ap-south-1
-```
-
-To override the hours, pass `StartSchedule`, `StopSchedule`, or `ScheduleTimezone` parameters to the
-stack. Deployments restore the desired count captured before deployment. During off-hours, this
-prevents a deployment from leaving the backend running until the next scheduled stop.
-
-The schedule is appropriate only for the shared staging environment. Production services must not
-inherit scheduled shutdown or a single-task availability model.
+Lambda rollback uses the previous immutable ECR digest with `aws lambda update-function-code`. A
+return to ECS requires creating a new Express Gateway service rather than waking an existing service.
 
 ## One-time GitHub setup
 

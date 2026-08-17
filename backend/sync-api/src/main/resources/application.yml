@@ -77,6 +77,8 @@ logging:
   config: classpath:logback-spring.xml
 
 sync:
+  scheduling:
+    enabled: ${SYNC_SCHEDULING_ENABLED:true}
   cors:
     allowed-origins: ${SYNC_CORS_ALLOWED_ORIGINS:}
   observability:

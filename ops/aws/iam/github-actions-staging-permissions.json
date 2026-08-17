@@ -23,36 +23,22 @@
       "Resource": "arn:aws:ecr:ap-south-1:908027418886:repository/dear-diary-sync-api"
     },
     {
-      "Sid": "RegisterAndReadTaskDefinitions",
+      "Sid": "DeployTheStagingLambda",
       "Effect": "Allow",
-      "Action": ["ecs:DescribeTaskDefinition", "ecs:RegisterTaskDefinition"],
-      "Resource": "*"
-    },
-    {
-      "Sid": "DeployOnlyTheStagingService",
-      "Effect": "Allow",
-      "Action": ["ecs:DescribeServices", "ecs:UpdateService"],
-      "Resource": "arn:aws:ecs:ap-south-1:908027418886:service/default/dear-diary-sync-staging"
-    },
-    {
-      "Sid": "PassOnlyExistingEcsTaskRoles",
-      "Effect": "Allow",
-      "Action": "iam:PassRole",
-      "Resource": [
-        "arn:aws:iam::908027418886:role/DearDiarySyncTaskRole",
-        "arn:aws:iam::908027418886:role/DearDiaryEcsTaskExecutionRole"
+      "Action": [
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetFunctionUrlConfig",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration"
       ],
-      "Condition": {
-        "StringEquals": {
-          "iam:PassedToService": "ecs-tasks.amazonaws.com"
-        }
-      }
+      "Resource": "arn:aws:lambda:ap-south-1:908027418886:function:dear-diary-sync-staging"
     },
     {
-      "Sid": "ReadTheStagingRollbackAlarm",
+      "Sid": "ReadStagingParametersForLambda",
       "Effect": "Allow",
-      "Action": "cloudwatch:DescribeAlarms",
-      "Resource": "*"
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:ap-south-1:908027418886:parameter/dear-diary/staging/*"
     },
     {
       "Sid": "RunAndInspectAmplifyStagingJobs",
