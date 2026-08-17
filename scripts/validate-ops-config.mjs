@@ -114,15 +114,15 @@ await access('.github/workflows/security.yml');
 
 const stagingTask = JSON.parse(await readFile('ops/aws/ecs/task-definition.staging.json', 'utf8'));
 if (
-  stagingTask.cpu !== '512' ||
+  stagingTask.cpu !== '256' ||
   stagingTask.memory !== '1024' ||
   stagingTask.runtimePlatform?.cpuArchitecture !== 'ARM64'
 ) {
-  throw new Error('Staging ECS task must use the approved 0.5 vCPU, 1 GiB ARM64 profile.');
+  throw new Error('Staging ECS task must use the approved 0.25 vCPU, 1 GiB ARM64 profile.');
 }
 
 const stagingContainer = stagingTask.containerDefinitions?.find(({ name }) => name === 'Main');
-if (stagingContainer?.cpu !== 512 || stagingContainer?.memoryReservation !== 1024) {
+if (stagingContainer?.cpu !== 256 || stagingContainer?.memoryReservation !== 1024) {
   throw new Error('Staging container resources must match the ARM64 task profile.');
 }
 
@@ -169,6 +169,9 @@ const stagingWorkflow = await readFile('.github/workflows/deploy-staging.yml', '
 for (const requiredDeploymentSetting of [
   '--platform linux/arm64',
   '--desired-count 1',
+  'id: staging-state',
+  'original-desired-count',
+  'Restore pre-deployment staging capacity',
   '--health-check-grace-period-seconds 300',
   '--cache-from type=gha,scope=staging-backend-arm64',
   '--cache-to type=gha,mode=max,scope=staging-backend-arm64',
@@ -194,6 +197,20 @@ for (const requiredScheduleSetting of [
 }
 if ((stagingSchedule.match(/Mode: 'OFF'/g) ?? []).length !== 2) {
   throw new Error('Scheduler flexible-window OFF values must be quoted to remain strings in YAML.');
+}
+
+const ecrLifecyclePolicy = JSON.parse(
+  await readFile('ops/aws/ecr/lifecycle-policy.staging.json', 'utf8'),
+);
+const ecrRetentionRule = ecrLifecyclePolicy.rules?.find(
+  ({ selection }) => selection?.tagStatus === 'any',
+);
+if (
+  ecrRetentionRule?.selection?.countType !== 'imageCountMoreThan' ||
+  ecrRetentionRule.selection.countNumber !== 10 ||
+  ecrRetentionRule.action?.type !== 'expire'
+) {
+  throw new Error('Staging ECR lifecycle policy must retain the latest 10 images.');
 }
 
 const stagingDeployPolicy = JSON.parse(

@@ -49,9 +49,11 @@ then verify successful CI for that PR's exact feature-head commit before deployi
 1. Authenticate to AWS with a short-lived GitHub OIDC token.
 2. Reuse the commit-tagged ECR image when present; otherwise build and push it.
 3. Wait for ECR scanning and reject Critical or High findings.
-4. Render the immutable digest into the ECS task definition.
-5. Deploy ECS and wait for service stability.
-6. Verify the active digest, public health response, and rollback alarm.
+4. Capture the service's pre-deployment desired count and wake staging for verification.
+5. Render the immutable digest into the ECS task definition.
+6. Deploy ECS and wait for service stability.
+7. Verify the active digest, public health response, and rollback alarm.
+8. Restore the pre-deployment desired count, including after a failed deployment step.
 
 ### Frontend
 
@@ -113,13 +115,22 @@ Run these steps after this workflow is available on `main`:
      --region ap-south-1
    ```
 
+7. Apply the repository-managed ECR lifecycle policy, which retains the latest 10 images:
+
+   ```powershell
+   aws ecr put-lifecycle-policy `
+     --repository-name dear-diary-sync-api `
+     --lifecycle-policy-text file://ops/aws/ecr/lifecycle-policy.staging.json `
+     --region ap-south-1
+   ```
+
 Do not enable branch protection that prevents GitHub Actions from force-updating the machine-managed
 `staging` branch.
 
 ## Staging compute schedule
 
-The backend uses a 0.5 vCPU, 1 GiB ARM64 Fargate task. GitHub Actions publishes a Linux ARM64 image
-and wakes the service before deployment verification.
+The backend uses a 0.25 vCPU, 1 GiB ARM64 Fargate task. GitHub Actions publishes a Linux ARM64 image
+and temporarily wakes the service before deployment verification.
 
 Staging normally runs from 09:00 to 21:00 Asia/Kolkata on weekdays. A daily stop also catches
 manually started weekend tasks. Deploy the version-controlled EventBridge Scheduler resources once:
@@ -133,8 +144,8 @@ aws cloudformation deploy `
 ```
 
 To override the hours, pass `StartSchedule`, `StopSchedule`, or `ScheduleTimezone` parameters to the
-stack. Deployments intentionally leave the backend running until the next scheduled stop so the
-deployed revision can be exercised.
+stack. Deployments restore the desired count captured before deployment. During off-hours, this
+prevents a deployment from leaving the backend running until the next scheduled stop.
 
 The schedule is appropriate only for the shared staging environment. Production services must not
 inherit scheduled shutdown or a single-task availability model.

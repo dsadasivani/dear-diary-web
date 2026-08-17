@@ -7,7 +7,7 @@
     {
       "name": "Main",
       "image": "908027418886.dkr.ecr.ap-south-1.amazonaws.com/dear-diary-sync-api:replaced-by-deploy-workflow",
-      "cpu": 512,
+      "cpu": 256,
       "memoryReservation": 1024,
       "portMappings": [
         {
@@ -141,7 +141,7 @@
     }
   ],
   "requiresCompatibilities": ["FARGATE"],
-  "cpu": "512",
+  "cpu": "256",
   "memory": "1024",
   "runtimePlatform": {
     "cpuArchitecture": "ARM64",

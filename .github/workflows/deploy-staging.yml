@@ -368,8 +368,25 @@ jobs:
             exit 1
           fi
 
+      - name: Capture pre-deployment staging capacity
+        id: staging-state
+        shell: bash
+        run: |
+          set -euo pipefail
+          original_desired_count=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].desiredCount' \
+            --output text)
+          if [[ ! "$original_desired_count" =~ ^[0-9]+$ ]]; then
+            echo "ECS returned an invalid desired count: $original_desired_count" >&2
+            exit 1
+          fi
+          echo "original-desired-count=$original_desired_count" >> "$GITHUB_OUTPUT"
+
       - name: Wake staging for deployment verification
         run: |
+          set -euo pipefail
           aws ecs update-service \
             --cluster "$ECS_CLUSTER" \
             --service "$ECS_SERVICE" \
@@ -434,6 +451,19 @@ jobs:
           fi
 
           echo "active-task-definition=$active_task_definition" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pre-deployment staging capacity
+        if: always() && steps.staging-state.outputs.original-desired-count != ''
+        env:
+          ORIGINAL_DESIRED_COUNT: ${{ steps.staging-state.outputs.original-desired-count }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --desired-count "$ORIGINAL_DESIRED_COUNT" \
+            --no-cli-pager
 
   frontend:
     name: Deploy web
