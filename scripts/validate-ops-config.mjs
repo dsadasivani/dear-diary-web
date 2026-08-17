@@ -164,6 +164,18 @@ const webHeaders = await readFile('customHttp.yml', 'utf8');
 if (!webHeaders.includes('https://*.grafana.net')) {
   throw new Error('The web Content Security Policy must allow the Grafana Faro collector.');
 }
+const stagingEnvFile = await readFile('.env.staging', 'utf8');
+const stagingSyncApiMatch = stagingEnvFile.match(/^VITE_SYNC_API_URL=["']?([^"'\r\n]+)["']?$/m);
+if (!stagingSyncApiMatch) {
+  throw new Error('The staging sync API URL must be configured.');
+}
+const stagingSyncApiOrigin = new URL(stagingSyncApiMatch[1]).origin;
+if (!webHeaders.includes(stagingSyncApiOrigin)) {
+  throw new Error(`The web Content Security Policy must allow ${stagingSyncApiOrigin}.`);
+}
+if (webHeaders.includes('https://*.ecs.ap-south-1.on.aws')) {
+  throw new Error('The web Content Security Policy must not retain the retired ECS origin.');
+}
 
 const stagingWorkflow = await readFile('.github/workflows/deploy-staging.yml', 'utf8');
 for (const requiredDeploymentSetting of [

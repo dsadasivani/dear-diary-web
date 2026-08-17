@@ -2,7 +2,7 @@ customHeaders:
   - pattern: '**'
     headers:
       - key: 'Content-Security-Policy'
-        value: "default-src 'self'; base-uri 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://www.googleapis.com https://*.ecs.ap-south-1.on.aws https://*.s3.ap-south-1.amazonaws.com https://*.grafana.net; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob: https:; manifest-src 'self'; media-src 'self' data: blob:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
+        value: "default-src 'self'; base-uri 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://www.googleapis.com https://cjjnusubck6oaonuav4brynf640ksfal.lambda-url.ap-south-1.on.aws https://*.s3.ap-south-1.amazonaws.com https://*.grafana.net; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob: https:; manifest-src 'self'; media-src 'self' data: blob:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
       - key: 'Cross-Origin-Opener-Policy'
         value: 'same-origin-allow-popups'
       - key: 'Cross-Origin-Resource-Policy'
