@@ -113,7 +113,8 @@ Run these steps after this workflow is available on `main`:
      --region ap-south-1
    ```
 
-7. Apply the repository-managed ECR lifecycle policy, which retains the latest 10 images:
+7. Apply the repository-managed ECR lifecycle policy, which retains the active image and two
+   additional rollback candidates as the latest three images:
 
    ```powershell
    aws ecr put-lifecycle-policy `
@@ -140,6 +141,16 @@ Run these steps after this workflow is available on `main`:
      --parameter-overrides "ImageUri=$imageUri" "DbUrl=$dbUrl" "DbUsername=$dbUsername" "DbPassword=$dbPassword"
    ```
 
+9. Deploy the weekday Lambda warm-up schedules:
+
+   ```powershell
+   aws cloudformation deploy `
+     --region $region `
+     --stack-name dear-diary-staging-lambda-warmup `
+     --template-file ops/aws/scheduler/staging-lambda-warmup.yml `
+     --capabilities CAPABILITY_NAMED_IAM
+   ```
+
 Do not enable branch protection that prevents GitHub Actions from force-updating the machine-managed
 `staging` branch.
 
@@ -150,10 +161,18 @@ Lambda concurrency quota of 10, and each instance uses a two-connection database
 Adapter exposes the unchanged Spring Boot server on port 8080. CloudWatch retains logs for 14 days;
 the Lambda-specific runtime disables duplicate OTLP export.
 
+The frontend allows 60 seconds for API requests so a measured 20–24 second Spring Boot cold start
+can complete. EventBridge Scheduler invokes `/actuator/health` at 08:55 IST on weekdays and every ten
+minutes from 09:00 through 20:50 IST. The first invocation absorbs the expected morning cold start;
+the remaining invocations reduce, but cannot eliminate, later cold starts caused by AWS recycling an
+execution environment. Scheduled asynchronous events have a 60-second maximum age and zero retries,
+so an invocation racing with vacation-mode shutdown cannot remain queued for a later restart.
+
 The former ECS Express service, managed ALB, target groups, public IPv4 addresses, security group,
-rollback alarm, and scheduler stack were retired after the Lambda cutover passed health,
-authentication, CORS, and published-asset verification. The disabled scheduler template and ECS task
-definition remain only as reconstruction references; they are not deployed and incur no charge.
+rollback alarm, and ECS scheduler stack were retired after the Lambda cutover passed health,
+authentication, CORS, and published-asset verification. The disabled ECS scheduler template and task
+definition remain only as reconstruction references; they are not deployed and incur no charge. The
+active Lambda warmer is defined separately in `ops/aws/scheduler/staging-lambda-warmup.yml`.
 
 Lambda rollback uses the previous immutable ECR digest with `aws lambda update-function-code`. A
 return to ECS requires creating a new Express Gateway service rather than waking an existing service.
@@ -162,15 +181,20 @@ return to ECS requires creating a new Express Gateway service rather than waking
 
 Use **Actions > Staging vacation mode > Run workflow** and select one of:
 
-- `off`: change the Function URL to AWS IAM authentication and set reserved concurrency to zero.
-  Public API requests return `403` and Lambda cannot start containers.
-- `on`: remove the concurrency lock, restore the public Function URL, and wait for health to return.
+- `off`: disable both warm-up schedules, change the Function URL to AWS IAM authentication, and set
+  reserved concurrency to zero. Public API requests return `403` and Lambda cannot start containers.
+- `on`: remove the concurrency lock, restore the public Function URL, enable both warm-up schedules,
+  and wait for health to return.
 - `status`: report the current state without changing it.
 
 Vacation mode does not delete data or images. Amplify continues serving the static web application,
 and S3/ECR retain stored objects, but these services do not have an always-running compute charge.
 Backend deployments are intentionally blocked while vacation mode is off so a deployment cannot
 silently re-enable or partially verify the API.
+
+The vacation workflow treats the API controls and both warm-up schedules as a single state. A mix of
+enabled and disabled settings is reported as `INCONSISTENT` instead of silently claiming that staging
+is on or off.
 
 ## One-time GitHub setup
 

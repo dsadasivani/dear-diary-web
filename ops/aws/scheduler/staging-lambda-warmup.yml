@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Weekday Lambda warm-up schedules for the Dear Diary staging sync API
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: dear-diary-sync-staging
+  BootstrapSchedule:
+    Type: String
+    Default: cron(55 8 ? * MON-FRI *)
+    Description: Initial weekday warm-up before the 09:00 IST working window.
+  KeepWarmSchedule:
+    Type: String
+    Default: cron(0/10 9-20 ? * MON-FRI *)
+    Description: Ten-minute weekday warm-up cadence from 09:00 through 20:50 IST.
+  ScheduleTimezone:
+    Type: String
+    Default: Asia/Kolkata
+
+Resources:
+  WarmupSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DearDiaryStagingWarmupSchedulerRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeOnlyDearDiaryStagingLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}
+      Tags:
+        - Key: Project
+          Value: DearDiary
+        - Key: Environment
+          Value: Staging
+
+  WarmupAsyncInvocationPolicy:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref FunctionName
+      Qualifier: $LATEST
+      MaximumEventAgeInSeconds: 60
+      MaximumRetryAttempts: 0
+
+  WeekdayBootstrapSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: dear-diary-staging-warmup-bootstrap
+      Description: Warm the staging API five minutes before weekday working hours.
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      ScheduleExpression: !Ref BootstrapSchedule
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      State: ENABLED
+      Target:
+        Arn: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}
+        RoleArn: !GetAtt WarmupSchedulerRole.Arn
+        Input: >-
+          {"version":"2.0","routeKey":"GET /actuator/health","rawPath":"/actuator/health","rawQueryString":"","headers":{"accept":"application/json","host":"scheduler.internal","user-agent":"DearDiaryStagingWarmup/1.0","x-forwarded-proto":"https"},"requestContext":{"accountId":"scheduler","apiId":"scheduler","domainName":"scheduler.internal","domainPrefix":"scheduler","http":{"method":"GET","path":"/actuator/health","protocol":"HTTP/1.1","sourceIp":"127.0.0.1","userAgent":"DearDiaryStagingWarmup/1.0"},"requestId":"staging-warmup","routeKey":"GET /actuator/health","stage":"$default","time":"01/Jan/1970:00:00:00 +0000","timeEpoch":0},"isBase64Encoded":false}
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 60
+          MaximumRetryAttempts: 0
+
+  WeekdayKeepWarmSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: dear-diary-staging-warmup-keepalive
+      Description: Invoke staging health every ten minutes during weekday working hours.
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      ScheduleExpression: !Ref KeepWarmSchedule
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      State: ENABLED
+      Target:
+        Arn: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}
+        RoleArn: !GetAtt WarmupSchedulerRole.Arn
+        Input: >-
+          {"version":"2.0","routeKey":"GET /actuator/health","rawPath":"/actuator/health","rawQueryString":"","headers":{"accept":"application/json","host":"scheduler.internal","user-agent":"DearDiaryStagingWarmup/1.0","x-forwarded-proto":"https"},"requestContext":{"accountId":"scheduler","apiId":"scheduler","domainName":"scheduler.internal","domainPrefix":"scheduler","http":{"method":"GET","path":"/actuator/health","protocol":"HTTP/1.1","sourceIp":"127.0.0.1","userAgent":"DearDiaryStagingWarmup/1.0"},"requestId":"staging-warmup","routeKey":"GET /actuator/health","stage":"$default","time":"01/Jan/1970:00:00:00 +0000","timeEpoch":0},"isBase64Encoded":false}
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 60
+          MaximumRetryAttempts: 0
+
+Outputs:
+  BootstrapScheduleName:
+    Value: !Ref WeekdayBootstrapSchedule
+  KeepWarmScheduleName:
+    Value: !Ref WeekdayKeepWarmSchedule

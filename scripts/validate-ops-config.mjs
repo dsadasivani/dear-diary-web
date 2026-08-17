@@ -205,6 +205,32 @@ if ((stagingSchedule.match(/State: DISABLED/g) ?? []).length !== 2) {
   throw new Error('Both legacy ECS schedules must remain disabled after the Lambda migration.');
 }
 
+const lambdaWarmupSchedule = await readFile('ops/aws/scheduler/staging-lambda-warmup.yml', 'utf8');
+for (const requiredWarmupSetting of [
+  'cron(55 8 ? * MON-FRI *)',
+  'cron(0/10 9-20 ? * MON-FRI *)',
+  'Asia/Kolkata',
+  'dear-diary-staging-warmup-bootstrap',
+  'dear-diary-staging-warmup-keepalive',
+  'RoleName: DearDiaryStagingWarmupSchedulerRole',
+  'GET /actuator/health',
+  'Type: AWS::Lambda::EventInvokeConfig',
+  'MaximumEventAgeInSeconds: 60',
+  'MaximumRetryAttempts: 0',
+]) {
+  if (!lambdaWarmupSchedule.includes(requiredWarmupSetting)) {
+    throw new Error(`Missing staging Lambda warm-up setting: ${requiredWarmupSetting}`);
+  }
+}
+if ((lambdaWarmupSchedule.match(/Mode: 'OFF'/g) ?? []).length !== 2) {
+  throw new Error('Both Lambda warm-up schedules must use exact, non-flexible delivery windows.');
+}
+
+const requestTimeout = await readFile('src/infrastructure/http/requestTimeout.ts', 'utf8');
+if (!requestTimeout.includes('DEFAULT_REQUEST_TIMEOUT_MS = 60_000')) {
+  throw new Error('The default request timeout must cover the measured Lambda cold start.');
+}
+
 const ecrLifecyclePolicy = JSON.parse(
   await readFile('ops/aws/ecr/lifecycle-policy.staging.json', 'utf8'),
 );
@@ -213,10 +239,10 @@ const ecrRetentionRule = ecrLifecyclePolicy.rules?.find(
 );
 if (
   ecrRetentionRule?.selection?.countType !== 'imageCountMoreThan' ||
-  ecrRetentionRule.selection.countNumber !== 10 ||
+  ecrRetentionRule.selection.countNumber !== 3 ||
   ecrRetentionRule.action?.type !== 'expire'
 ) {
-  throw new Error('Staging ECR lifecycle policy must retain the latest 10 images.');
+  throw new Error('Staging ECR lifecycle policy must retain the latest 3 images.');
 }
 
 const lambdaTemplate = await readFile('ops/aws/lambda/sync-api.staging.yml', 'utf8');
@@ -285,6 +311,26 @@ for (const action of [
     throw new Error(`Staging deployment role is missing ${action}.`);
   }
 }
+const stagingWarmupActions =
+  stagingDeployPolicy.Statement.find(({ Sid }) => Sid === 'ManageStagingWarmupSchedules')?.Action ??
+  [];
+for (const action of ['scheduler:GetSchedule', 'scheduler:UpdateSchedule']) {
+  if (!stagingWarmupActions.includes(action)) {
+    throw new Error(`Staging deployment role is missing ${action}.`);
+  }
+}
+const stagingWarmupPassRole = stagingDeployPolicy.Statement.find(
+  ({ Sid }) => Sid === 'PassOnlyTheStagingWarmupSchedulerRole',
+);
+if (
+  stagingWarmupPassRole?.Action !== 'iam:PassRole' ||
+  stagingWarmupPassRole.Resource !==
+    'arn:aws:iam::908027418886:role/DearDiaryStagingWarmupSchedulerRole' ||
+  stagingWarmupPassRole.Condition?.StringEquals?.['iam:PassedToService'] !==
+    'scheduler.amazonaws.com'
+) {
+  throw new Error('Staging may pass only the warm-up role to EventBridge Scheduler.');
+}
 
 const vacationWorkflow = await readFile('.github/workflows/staging-vacation-mode.yml', 'utf8');
 for (const requiredVacationSetting of [
@@ -293,6 +339,8 @@ for (const requiredVacationSetting of [
   '--reserved-concurrent-executions 0',
   'delete-function-concurrency',
   '--auth-type NONE',
+  'set_warmup_state "$WARMUP_BOOTSTRAP_SCHEDULE" DISABLED',
+  'set_warmup_state "$WARMUP_KEEPALIVE_SCHEDULE" ENABLED',
   'mode=INCONSISTENT',
 ]) {
   if (!vacationWorkflow.includes(requiredVacationSetting)) {

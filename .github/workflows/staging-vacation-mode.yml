@@ -25,6 +25,8 @@ env:
   AWS_ACCOUNT_ID: '908027418886'
   AWS_REGION: ap-south-1
   LAMBDA_FUNCTION: dear-diary-sync-staging
+  WARMUP_BOOTSTRAP_SCHEDULE: dear-diary-staging-warmup-bootstrap
+  WARMUP_KEEPALIVE_SCHEDULE: dear-diary-staging-warmup-keepalive
 
 jobs:
   control:
@@ -57,6 +59,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          set_warmup_state() {
+            local name="$1"
+            local state="$2"
+            local schedule target flexible expression timezone
+            schedule=$(aws scheduler get-schedule --name "$name" --output json)
+            target=$(jq -c '.Target' <<< "$schedule")
+            flexible=$(jq -c '.FlexibleTimeWindow' <<< "$schedule")
+            expression=$(jq -r '.ScheduleExpression' <<< "$schedule")
+            timezone=$(jq -r '.ScheduleExpressionTimezone' <<< "$schedule")
+            aws scheduler update-schedule \
+              --name "$name" \
+              --description "$(jq -r '.Description' <<< "$schedule")" \
+              --schedule-expression "$expression" \
+              --schedule-expression-timezone "$timezone" \
+              --flexible-time-window "$flexible" \
+              --target "$target" \
+              --state "$state" \
+              --action-after-completion NONE \
+              --query 'State' \
+              --output text
+          }
+
+          set_warmup_state "$WARMUP_BOOTSTRAP_SCHEDULE" DISABLED
+          set_warmup_state "$WARMUP_KEEPALIVE_SCHEDULE" DISABLED
           aws lambda update-function-url-config \
             --function-name "$LAMBDA_FUNCTION" \
             --auth-type AWS_IAM \
@@ -84,6 +111,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          set_warmup_state() {
+            local name="$1"
+            local state="$2"
+            local schedule target flexible expression timezone
+            schedule=$(aws scheduler get-schedule --name "$name" --output json)
+            target=$(jq -c '.Target' <<< "$schedule")
+            flexible=$(jq -c '.FlexibleTimeWindow' <<< "$schedule")
+            expression=$(jq -r '.ScheduleExpression' <<< "$schedule")
+            timezone=$(jq -r '.ScheduleExpressionTimezone' <<< "$schedule")
+            aws scheduler update-schedule \
+              --name "$name" \
+              --description "$(jq -r '.Description' <<< "$schedule")" \
+              --schedule-expression "$expression" \
+              --schedule-expression-timezone "$timezone" \
+              --flexible-time-window "$flexible" \
+              --target "$target" \
+              --state "$state" \
+              --action-after-completion NONE \
+              --query 'State' \
+              --output text
+          }
+
           if ! error=$(aws lambda delete-function-concurrency \
             --function-name "$LAMBDA_FUNCTION" 2>&1); then
             if [[ "$error" != *ResourceNotFoundException* ]]; then
@@ -96,6 +146,9 @@ jobs:
             --auth-type NONE \
             --query 'FunctionUrl' \
             --output text
+
+          set_warmup_state "$WARMUP_BOOTSTRAP_SCHEDULE" ENABLED
+          set_warmup_state "$WARMUP_KEEPALIVE_SCHEDULE" ENABLED
 
           function_url=$(aws lambda get-function-url-config \
             --function-name "$LAMBDA_FUNCTION" \
@@ -123,10 +176,20 @@ jobs:
           if [[ -z "$reserved" || "$reserved" == "None" ]]; then
             reserved=unreserved
           fi
+          bootstrap_state=$(aws scheduler get-schedule \
+            --name "$WARMUP_BOOTSTRAP_SCHEDULE" \
+            --query 'State' \
+            --output text)
+          keepalive_state=$(aws scheduler get-schedule \
+            --name "$WARMUP_KEEPALIVE_SCHEDULE" \
+            --query 'State' \
+            --output text)
 
-          if [[ "$auth_type" == "AWS_IAM" && "$reserved" == "0" ]]; then
+          if [[ "$auth_type" == "AWS_IAM" && "$reserved" == "0" && \
+                "$bootstrap_state" == "DISABLED" && "$keepalive_state" == "DISABLED" ]]; then
             mode=OFF
-          elif [[ "$auth_type" == "NONE" && "$reserved" == "unreserved" ]]; then
+          elif [[ "$auth_type" == "NONE" && "$reserved" == "unreserved" && \
+                  "$bootstrap_state" == "ENABLED" && "$keepalive_state" == "ENABLED" ]]; then
             mode=ON
           else
             mode=INCONSISTENT
@@ -139,6 +202,8 @@ jobs:
             echo "- Mode: \`$mode\`"
             echo "- Function URL authentication: \`$auth_type\`"
             echo "- Reserved concurrency: \`$reserved\`"
+            echo "- Bootstrap warm-up: \`$bootstrap_state\`"
+            echo "- Keep-alive warm-up: \`$keepalive_state\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "$mode" == "INCONSISTENT" ]]; then

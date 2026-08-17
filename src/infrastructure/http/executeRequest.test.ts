@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mapSupabaseError } from '../../sync/errors';
 import { executeRequest } from './executeRequest';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from './requestTimeout';
+
+test('allows a Lambda cold start within the default request deadline', () => {
+  assert.equal(DEFAULT_REQUEST_TIMEOUT_MS, 60_000);
+});
 
 test('retries retryable responses and preserves a correlation identifier', async () => {
   const correlations: string[] = [];

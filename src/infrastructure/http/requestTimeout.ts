@@ -1,6 +1,6 @@
 import { SyncError } from '../../sync/errors';
 
-export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 export interface RequestDeadline {
   signal: AbortSignal;
