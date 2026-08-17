@@ -177,6 +177,8 @@ for (const requiredDeploymentSetting of [
   'aws lambda update-function-configuration',
   'aws lambda wait function-updated',
   'aws ssm get-parameter',
+  'Require staging vacation mode to be off',
+  'aws lambda get-function-concurrency',
   'Protected endpoint returned $auth_status without a JWT; expected 401.',
 ]) {
   if (!stagingWorkflow.includes(requiredDeploymentSetting)) {
@@ -271,12 +273,30 @@ const stagingLambdaActions =
   stagingDeployPolicy.Statement.find(({ Sid }) => Sid === 'DeployTheStagingLambda')?.Action ?? [];
 for (const action of [
   'lambda:GetFunction',
+  'lambda:GetFunctionConcurrency',
   'lambda:GetFunctionUrlConfig',
+  'lambda:PutFunctionConcurrency',
+  'lambda:DeleteFunctionConcurrency',
   'lambda:UpdateFunctionCode',
   'lambda:UpdateFunctionConfiguration',
+  'lambda:UpdateFunctionUrlConfig',
 ]) {
   if (!stagingLambdaActions.includes(action)) {
     throw new Error(`Staging deployment role is missing ${action}.`);
+  }
+}
+
+const vacationWorkflow = await readFile('.github/workflows/staging-vacation-mode.yml', 'utf8');
+for (const requiredVacationSetting of [
+  'Staging vacation mode',
+  '--auth-type AWS_IAM',
+  '--reserved-concurrent-executions 0',
+  'delete-function-concurrency',
+  '--auth-type NONE',
+  'mode=INCONSISTENT',
+]) {
+  if (!vacationWorkflow.includes(requiredVacationSetting)) {
+    throw new Error(`Missing staging vacation-mode setting: ${requiredVacationSetting}`);
   }
 }
 if (

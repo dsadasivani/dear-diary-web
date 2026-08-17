@@ -158,6 +158,20 @@ definition remain only as reconstruction references; they are not deployed and i
 Lambda rollback uses the previous immutable ECR digest with `aws lambda update-function-code`. A
 return to ECS requires creating a new Express Gateway service rather than waking an existing service.
 
+## Vacation mode
+
+Use **Actions > Staging vacation mode > Run workflow** and select one of:
+
+- `off`: change the Function URL to AWS IAM authentication and set reserved concurrency to zero.
+  Public API requests return `403` and Lambda cannot start containers.
+- `on`: remove the concurrency lock, restore the public Function URL, and wait for health to return.
+- `status`: report the current state without changing it.
+
+Vacation mode does not delete data or images. Amplify continues serving the static web application,
+and S3/ECR retain stored objects, but these services do not have an always-running compute charge.
+Backend deployments are intentionally blocked while vacation mode is off so a deployment cannot
+silently re-enable or partially verify the API.
+
 ## One-time GitHub setup
 
 Under **Repository settings > Environments > staging**:

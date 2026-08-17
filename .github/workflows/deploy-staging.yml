@@ -260,6 +260,23 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Require staging vacation mode to be off
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth_type=$(aws lambda get-function-url-config \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'AuthType' \
+            --output text)
+          reserved=$(aws lambda get-function-concurrency \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'ReservedConcurrentExecutions' \
+            --output text)
+          if [[ "$auth_type" != "NONE" || "$reserved" == "0" ]]; then
+            echo "Staging vacation mode is enabled. Run the Staging vacation mode workflow with action=on before deploying the backend." >&2
+            exit 1
+          fi
+
       - name: Set up QEMU for ARM64 image builds
         uses: docker/setup-qemu-action@v3
         with:
