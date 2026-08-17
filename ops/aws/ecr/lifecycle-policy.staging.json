@@ -2,11 +2,11 @@
   "rules": [
     {
       "rulePriority": 1,
-      "description": "Retain the latest 10 staging images",
+      "description": "Retain the latest 3 staging images",
       "selection": {
         "tagStatus": "any",
         "countType": "imageCountMoreThan",
-        "countNumber": 10
+        "countNumber": 3
       },
       "action": {
         "type": "expire"
